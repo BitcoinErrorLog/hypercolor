@@ -583,7 +583,9 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
             .toString()
     }
 
-    private fun resolveMap(promise: Promise, builder: WritableMap.() -> Unit) {
+    // Inline so callers may invoke suspend functions inside the builder lambda
+    // from within the module's coroutine bodies.
+    private inline fun resolveMap(promise: Promise, builder: WritableMap.() -> Unit) {
         promise.resolve(Arguments.createMap().apply(builder))
     }
 

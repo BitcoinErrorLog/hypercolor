@@ -1,32 +1,18 @@
 apply plugin: 'com.android.library'
-apply plugin: 'kotlin-android'
-apply plugin: 'expo-module'
+apply plugin: 'expo-module-gradle-plugin'
+
+group = 'expo.modules.meshtransport'
+version = '1.0.0'
 
 android {
   namespace 'expo.modules.meshtransport'
-  compileSdkVersion safeExtGet("compileSdkVersion", 35)
-
-  defaultConfig {
-    minSdkVersion safeExtGet("minSdkVersion", 26)
-    targetSdkVersion safeExtGet("targetSdkVersion", 35)
-  }
 
   buildFeatures {
     buildConfig true
   }
 
-  compileOptions {
-    sourceCompatibility JavaVersion.VERSION_17
-    targetCompatibility JavaVersion.VERSION_17
+  defaultConfig {
+    versionCode 1
+    versionName "1.0.0"
   }
-
-  kotlinOptions {
-    jvmTarget = JavaVersion.VERSION_17.toString()
-  }
-}
-
-dependencies {
-  implementation project(':expo-modules-core')
-  implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk8:${kotlinVersion}"
-  // CoreBluetooth equivalent is built into Android — no extra AAR needed.
 }
