@@ -14,6 +14,7 @@ import {
   LINK_RECEIVER_PATH,
   PAYKIT_MESSAGING_CAPABILITY,
   PUBKY_APP_DM_KIND,
+  type LinkMessage,
   type LinkReceiver,
   type LinkRecord,
 } from '../../../types/link';
@@ -63,7 +64,9 @@ jest.mock('../../StorageService', () => ({
     getAllLinks: jest.fn(),
     updateLinkSnapshot: jest.fn(),
     incrementLinkConsecutiveFailures: jest.fn(),
+    resetLinkConsecutiveFailures: jest.fn(),
     deleteLink: jest.fn(),
+    deleteLinkReceiver: jest.fn(),
     saveLinkMessage: jest.fn(),
     persistLinkSendIntent: jest.fn(),
     finalizeLinkSend: jest.fn(),
@@ -160,6 +163,24 @@ function givenEstablishedLink(): void {
   mockedNative.restoreLink.mockResolvedValue({ linkId: 'handle-1' });
 }
 
+function sendingRow(overrides: Partial<LinkMessage> = {}): LinkMessage {
+  return {
+    ownerPubky: OWNER,
+    eventId: EVENT_ID,
+    conversationId: CONVERSATION_ID,
+    peerPubky: PEER,
+    senderPubky: OWNER,
+    direction: 'sent',
+    kind: CHAT_MESSAGE_KIND,
+    rawJson: wireMessage(EVENT_ID),
+    body: 'hello',
+    sentAt: NOW,
+    receivedAt: null,
+    deliveryState: 'sending',
+    ...overrides,
+  };
+}
+
 function expectedJson(eventId = EVENT_ID, body = 'hello'): string {
   return JSON.stringify({
     version: 1,
@@ -193,6 +214,7 @@ describe('LinkService', () => {
     mockedStorage.hasLinkMessage.mockResolvedValue(false);
     mockedStorage.getUnprocessedLinkStreamItems.mockResolvedValue([]);
     mockedStorage.incrementLinkConsecutiveFailures.mockResolvedValue(1);
+    mockedStorage.getLinkMessage.mockResolvedValue(sendingRow());
     mockedRetryQueue.getDue.mockResolvedValue([]);
 
     await LinkService.clearSession();
@@ -314,6 +336,41 @@ describe('LinkService', () => {
         RECEIVER_ALIAS,
         LINK_RECEIVER_PATH,
       );
+    });
+
+    it('regenerates the receiver when getReceiverPublicKey rejects the stored alias', async () => {
+      mockedNative.startAuthFlow.mockResolvedValue({
+        flowId: 'flow-1',
+        authorizationUrl: 'pubkyauth://grant',
+      });
+      mockedNative.awaitAuthApproval.mockResolvedValue({
+        sessionAlias: SESSION_ALIAS,
+        pubky: OWNER,
+      });
+      mockedNative.getReceiverPublicKey.mockRejectedValue({
+        code: 'validation',
+        message: 'unknown receiver alias',
+      });
+      mockedNative.generateReceiverKey.mockResolvedValue({
+        receiverAlias: 'recv-healed',
+        noisePublicKey: 'noise-healed',
+      });
+
+      const flow = await LinkService.enable();
+      const enabled = await flow.awaitEnabled();
+
+      expect(mockedStorage.deleteLinkReceiver).toHaveBeenCalledWith(OWNER);
+      expect(mockedNative.generateReceiverKey).toHaveBeenCalled();
+      expect(mockedNative.publishReceiverMarker).toHaveBeenCalledWith(
+        SESSION_ALIAS,
+        'recv-healed',
+        LINK_RECEIVER_PATH,
+      );
+      expect(enabled).toEqual({
+        pubky: OWNER,
+        receiverPath: LINK_RECEIVER_PATH,
+        noisePublicKey: 'noise-healed',
+      });
     });
   });
 
@@ -501,6 +558,22 @@ describe('LinkService', () => {
       expect(mockedNative.probeInboundLink).toHaveBeenCalledTimes(1);
       expect(mockedNative.initiateLink).not.toHaveBeenCalled();
     });
+
+    it('clears the outbox and retries when a protocol probe fails with no stored link', async () => {
+      mockedStorage.getLink.mockResolvedValue(null);
+      mockedNative.probeInboundLink.mockRejectedValueOnce({
+        code: 'protocol',
+        message: 'stale msg1',
+      });
+      mockedNative.clearLinkOutbox.mockResolvedValue(1);
+      mockedNative.initiateLink.mockResolvedValue({ linkId: 'hs-handle', snapshot: 'hs-1' });
+      mockedNative.advanceHandshake.mockResolvedValue({ status: 'pending', snapshot: 'hs-2' });
+
+      await expect(LinkService.ensureLinkWith(PEER)).resolves.toBe('handshaking-initiator');
+
+      expect(mockedNative.clearLinkOutbox).toHaveBeenCalled();
+      expect(mockedNative.initiateLink).toHaveBeenCalled();
+    });
   });
 
   describe('ensureLinkWith — crossed-handshake tiebreak', () => {
@@ -589,6 +662,43 @@ describe('LinkService', () => {
       mockedNative.clearLinkOutbox.mockResolvedValue(0);
 
       await LinkService.ensureLinkWith(PEER);
+
+      expect(mockedStorage.deleteLink).toHaveBeenCalledWith(OWNER, PEER);
+      expect(mockedNative.clearLinkOutbox).toHaveBeenCalled();
+      expect(mockedNative.initiateLink).toHaveBeenCalled();
+    });
+
+    it('does not increment or wipe an established link on repeated network restore failures', async () => {
+      mockedStorage.getLink.mockResolvedValue(
+        storedLink({ status: 'established', snapshot: 'est-1', consecutiveFailures: 4 }),
+      );
+      mockedNative.restoreLink.mockRejectedValue({ code: 'network', message: 'homeserver down' });
+      mockedStorage.incrementLinkConsecutiveFailures.mockResolvedValue(HANDSHAKE_FAILURE_LIMIT);
+
+      await expect(LinkService.ensureLinkWith(PEER)).resolves.toBe('ready');
+      await expect(LinkService.ensureLinkWith(PEER)).resolves.toBe('ready');
+
+      expect(mockedStorage.incrementLinkConsecutiveFailures).not.toHaveBeenCalled();
+      expect(mockedStorage.deleteLink).not.toHaveBeenCalled();
+      expect(mockedNative.clearLinkOutbox).not.toHaveBeenCalled();
+    });
+
+    it('wipes an established link immediately on a protocol restore error', async () => {
+      mockedStorage.getLink
+        .mockResolvedValueOnce(storedLink({ status: 'established', snapshot: 'est-1' }))
+        .mockResolvedValue(null);
+      mockedNative.restoreLink.mockRejectedValueOnce({
+        code: 'protocol',
+        message: 'decrypt failed',
+      });
+      mockedNative.initiateLink.mockResolvedValue({ linkId: 'fresh-hs', snapshot: 'hs-fresh' });
+      mockedNative.advanceHandshake.mockResolvedValue({
+        status: 'pending',
+        snapshot: 'hs-fresh-2',
+      });
+      mockedNative.clearLinkOutbox.mockResolvedValue(0);
+
+      await expect(LinkService.ensureLinkWith(PEER)).resolves.toBe('handshaking-initiator');
 
       expect(mockedStorage.deleteLink).toHaveBeenCalledWith(OWNER, PEER);
       expect(mockedNative.clearLinkOutbox).toHaveBeenCalled();
@@ -946,6 +1056,56 @@ describe('LinkService', () => {
       );
     });
 
+    it('skips a queued item whose message is no longer sending and does not send again', async () => {
+      givenEstablishedLink();
+      mockedRetryQueue.getDue.mockResolvedValue([linkItem]);
+      mockedStorage.getLinkMessage.mockResolvedValue(sendingRow({ deliveryState: 'sent' }));
+
+      await LinkService.drainRetries();
+
+      expect(mockedNative.sendPrivateMessageJson).not.toHaveBeenCalled();
+      expect(mockedRetryQueue.recordSuccess).toHaveBeenCalledWith('q-link');
+      expect(mockedRetryQueue.recordFailure).not.toHaveBeenCalled();
+    });
+
+    it('defers without burning an attempt when ensureLinkLocked throws a network error', async () => {
+      mockedStorage.getLink.mockResolvedValue(null);
+      mockedNative.getReceiverMarker.mockRejectedValue({ code: 'network', message: 'timeout' });
+      mockedRetryQueue.getDue.mockResolvedValue([linkItem]);
+
+      await LinkService.drainRetries();
+
+      expect(mockedRetryQueue.defer).toHaveBeenCalledWith('q-link', 2);
+      expect(mockedRetryQueue.recordFailure).not.toHaveBeenCalled();
+      expect(mockedNative.sendPrivateMessageJson).not.toHaveBeenCalled();
+    });
+
+    it('leaves a foreign-owner queued item untouched', async () => {
+      givenEstablishedLink();
+      const foreignOwned: DeliveryQueueItem = {
+        ...linkItem,
+        payload: JSON.stringify({
+          type: LINK_RETRY_PAYLOAD_TYPE,
+          ownerPubky: OTHER_OWNER,
+          peerPubky: PEER,
+          senderPubky: OTHER_OWNER,
+          kind: CHAT_MESSAGE_KIND,
+          eventId: EVENT_ID,
+          rawJson: wireMessage(EVENT_ID),
+        }),
+      };
+      mockedRetryQueue.getDue.mockResolvedValue([foreignOwned]);
+      mockedStorage.listDeliveryQueue.mockResolvedValue([foreignOwned]);
+
+      await LinkService.drainRetries();
+      await LinkService.recoverPendingSends();
+
+      expect(mockedNative.sendPrivateMessageJson).not.toHaveBeenCalled();
+      expect(mockedRetryQueue.recordFailure).not.toHaveBeenCalled();
+      expect(mockedRetryQueue.recordSuccess).not.toHaveBeenCalled();
+      expect(mockedRetryQueue.defer).not.toHaveBeenCalled();
+    });
+
     it('recoverPendingSends replays the exact queued rawJson for sending rows', async () => {
       givenEstablishedLink();
       const exact = wireMessage(EVENT_ID, 'exact-body');
@@ -1027,6 +1187,13 @@ describe('LinkService', () => {
       await LinkService.clearSession();
 
       expect(mockedNative.closeLink).toHaveBeenCalledWith('handle-1');
+      expect(mockedNative.removeReceiverMarker).toHaveBeenCalledWith(
+        SESSION_ALIAS,
+        LINK_RECEIVER_PATH,
+      );
+      const unpublishOrder = mockedNative.removeReceiverMarker.mock.invocationCallOrder[0]!;
+      const signOutOrder = mockedNative.signOutSession.mock.invocationCallOrder[0]!;
+      expect(unpublishOrder).toBeLessThan(signOutOrder);
       expect(mockedNative.signOutSession).toHaveBeenCalledWith(SESSION_ALIAS);
       expect(mockedStorage.clearAccountData).toHaveBeenCalledWith(OWNER);
       expect(mockedStorage.removeFromQueue).toHaveBeenCalledWith('q-mine');

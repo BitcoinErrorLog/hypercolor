@@ -51,7 +51,11 @@ import type { DeliveryQueueItem, PubkyKey } from '../../types';
 /** Discriminator for this transport's items in the shared `delivery_queue`. */
 export const LINK_RETRY_PAYLOAD_TYPE = 'link.chat.message';
 
-/** Consecutive advance/restore failures before the wedged-handshake wipe. */
+/**
+ * Consecutive handshake advance/restore failures before the wedged wipe.
+ * Established links never increment this on `network`; only `protocol`
+ * (decrypt) failures wipe an established session.
+ */
 export const HANDSHAKE_FAILURE_LIMIT = 5;
 
 export const LINK_RETRY_DRAIN_INTERVAL_MS = 30_000;
@@ -124,7 +128,10 @@ export const LinkService = {
     stopLinkRetryDrain();
     const owner = session?.pubky ?? KeyStore.getPubky();
     const alias = session?.alias ?? KeyStore.getLinkSession();
+    let markerPath = LINK_RECEIVER_PATH;
     if (owner) {
+      const receiver = await StorageService.getLinkReceiver(owner);
+      if (receiver) markerPath = coerceReceiverPath(receiver.receiverPath);
       const links = await StorageService.getAllLinks(owner);
       for (const link of links) {
         const live = liveHandles.get(linkKey(owner, link.peerPubky));
@@ -140,6 +147,11 @@ export const LinkService = {
       await StorageService.clearAccountData(owner);
     }
     if (alias) {
+      try {
+        await PaykitLinkNative.removeReceiverMarker(alias, markerPath);
+      } catch {
+        // Best-effort: peers should stop handshaking into a dead inbox.
+      }
       try {
         await PaykitLinkNative.signOutSession(alias);
       } catch {
@@ -296,7 +308,7 @@ export const LinkService = {
     const items = await StorageService.listDeliveryQueue();
     for (const item of items) {
       const payload = parseRetryPayload(item.payload);
-      if (!payload) continue;
+      if (!payload || !isCurrentOwner(payload.ownerPubky)) continue;
       const row = await StorageService.getLinkMessage(
         payload.ownerPubky,
         payload.senderPubky,
@@ -317,7 +329,7 @@ export const LinkService = {
     const due = await RetryQueue.getDue();
     for (const item of due) {
       const payload = parseRetryPayload(item.payload);
-      if (!payload) continue;
+      if (!payload || !isCurrentOwner(payload.ownerPubky)) continue;
       await deliverQueuedPayload(item, payload);
     }
   },
@@ -428,22 +440,24 @@ async function provisionReceiver(
   pubky: PubkyKey,
 ): Promise<{ pubky: string; receiverPath: string; noisePublicKey: string }> {
   const receiverPath = assertValidReceiverPath(LINK_RECEIVER_PATH);
-  let receiver = await StorageService.getLinkReceiver(pubky);
-  let noisePublicKey: string;
+  const existing = await StorageService.getLinkReceiver(pubky);
   let receiverAlias: string;
-  if (!receiver) {
-    const generated = await PaykitLinkNative.generateReceiverKey();
-    receiverAlias = generated.receiverAlias;
-    noisePublicKey = generated.noisePublicKey;
-    await StorageService.upsertLinkReceiver({
-      ownerPubky: pubky,
-      receiverAlias,
-      receiverPath,
-      markerPublished: false,
-    });
+  let noisePublicKey: string;
+  if (existing) {
+    try {
+      receiverAlias = existing.receiverAlias;
+      noisePublicKey = await PaykitLinkNative.getReceiverPublicKey(receiverAlias);
+    } catch (err) {
+      if (!isUnusableReceiverAliasError(err)) throw err;
+      await StorageService.deleteLinkReceiver(pubky);
+      const minted = await mintReceiver(pubky, receiverPath);
+      receiverAlias = minted.receiverAlias;
+      noisePublicKey = minted.noisePublicKey;
+    }
   } else {
-    receiverAlias = receiver.receiverAlias;
-    noisePublicKey = await PaykitLinkNative.getReceiverPublicKey(receiverAlias);
+    const minted = await mintReceiver(pubky, receiverPath);
+    receiverAlias = minted.receiverAlias;
+    noisePublicKey = minted.noisePublicKey;
   }
   await PaykitLinkNative.publishReceiverMarker(sessionAlias, receiverAlias, receiverPath);
   await StorageService.upsertLinkReceiver({
@@ -453,6 +467,27 @@ async function provisionReceiver(
     markerPublished: true,
   });
   return { pubky, receiverPath, noisePublicKey };
+}
+
+async function mintReceiver(
+  pubky: PubkyKey,
+  receiverPath: string,
+): Promise<{ receiverAlias: string; noisePublicKey: string }> {
+  const generated = await PaykitLinkNative.generateReceiverKey();
+  await StorageService.upsertLinkReceiver({
+    ownerPubky: pubky,
+    receiverAlias: generated.receiverAlias,
+    receiverPath,
+    markerPublished: false,
+  });
+  return generated;
+}
+
+/** Native rejects a JS-keychain leftover or deleted alias — regenerate. */
+function isUnusableReceiverAliasError(err: unknown): boolean {
+  if (!isLinkNativeError(err)) return false;
+  if (err.code === 'validation' || err.code === 'protocol') return true;
+  return /not found/i.test(err.message);
 }
 
 // ─── State machine internals ──────────────────────────────────────────────────
@@ -498,14 +533,32 @@ async function ensureLinkLocked(
   const marker = await PaykitLinkNative.getReceiverMarker(peerPubky, localPath);
   if (marker === null) return allowInitiate ? 'not-enrolled' : 'idle';
 
-  const inbound = await probeInbound(
-    activeSession,
-    receiver,
-    ownerPubky,
-    peerPubky,
-    marker,
-    localPath,
-  );
+  let inbound: Extract<LinkProbeResult, { result: 'pending' | 'established' }> | null;
+  try {
+    inbound = await probeInbound(activeSession, receiver, ownerPubky, peerPubky, marker, localPath);
+  } catch (err) {
+    if (isLinkNativeError(err) && err.code === 'protocol') {
+      await clearPeerOutboxBestEffort(
+        activeSession,
+        receiver,
+        peerPubky,
+        marker.noisePublicKey,
+        localPath,
+        LINK_RECEIVER_PATH,
+      );
+      if (!allowInitiate) return 'idle';
+      return initiateHandshake(
+        activeSession,
+        receiver,
+        ownerPubky,
+        peerPubky,
+        marker,
+        localPath,
+        alreadyRecovered,
+      );
+    }
+    throw err;
+  }
   if (inbound !== null) {
     return adoptInboundHandshake(ownerPubky, peerPubky, marker, localPath, inbound);
   }
@@ -545,6 +598,7 @@ async function restoreEstablished(
       status: 'established',
       linkId,
     });
+    await StorageService.resetLinkConsecutiveFailures(stored.ownerPubky, stored.peerPubky);
     return 'ready';
   } catch (err) {
     return handleLinkFailure(err, stored, alreadyRecovered, true);
@@ -831,7 +885,15 @@ async function handleLinkFailure(
     session = null;
     return 'needs-enable';
   }
+  const established = stored.status === 'established';
   if (isLinkNativeError(err) && err.code === 'network') {
+    if (established) {
+      console.warn(
+        `[LinkService] Established link restore deferred for ${stored.peerPubky}:`,
+        errorMessage(err),
+      );
+      return 'ready';
+    }
     const failures = await StorageService.incrementLinkConsecutiveFailures(
       stored.ownerPubky,
       stored.peerPubky,
@@ -843,6 +905,14 @@ async function handleLinkFailure(
   }
   if (isLinkNativeError(err) && err.code === 'protocol') {
     return recoverWedgedLink(stored, alreadyRecovered, allowInitiate, err);
+  }
+
+  if (established) {
+    console.warn(
+      `[LinkService] Established link step failed for ${stored.peerPubky}:`,
+      errorMessage(err),
+    );
+    return 'ready';
   }
 
   const failures = await StorageService.incrementLinkConsecutiveFailures(
@@ -857,10 +927,9 @@ async function handleLinkFailure(
 }
 
 /**
- * Protocol error or N consecutive advance/restore failures: delete the link
- * row, clear the outbox, and restart a fresh handshake (initiator via the
- * usual probe-then-initiate tiebreak). If the peer marker's noise key
- * changed, this is re-enrollment — same wipe, then re-handshake.
+ * Protocol/decrypt error, or N consecutive handshake (not established-network)
+ * failures: delete the link row, clear the outbox, and restart a fresh
+ * handshake. If the peer marker's noise key changed, this is re-enrollment.
  */
 async function recoverWedgedLink(
   stored: LinkRecord,
@@ -1003,11 +1072,22 @@ async function deliverQueuedPayload(
   payload: LinkRetryPayload,
 ): Promise<void> {
   await withQueue(payload.peerPubky, async () => {
+    const row = await StorageService.getLinkMessage(
+      payload.ownerPubky,
+      payload.senderPubky,
+      payload.kind,
+      payload.eventId,
+    );
+    if (!row || row.deliveryState !== 'sending') {
+      await RetryQueue.recordSuccess(item.id);
+      return;
+    }
+
     let outcome: EnsureOutcome;
     try {
       outcome = await ensureLinkLocked(payload.peerPubky, true, false);
     } catch (err) {
-      if (isLinkNativeError(err) && err.code === 'unavailable') {
+      if (isTransientLinkError(err)) {
         await RetryQueue.defer(item.id, item.attempts);
         return;
       }
@@ -1034,11 +1114,19 @@ async function deliverQueuedPayload(
         queueId: item.id,
       });
       await RetryQueue.recordSuccess(item.id);
-    } catch {
+    } catch (err) {
+      if (isTransientLinkError(err)) {
+        await RetryQueue.defer(item.id, item.attempts);
+        return;
+      }
       const dropped = await RetryQueue.recordFailure(item.id, item.attempts);
       if (dropped) await markFailed(payload);
     }
   });
+}
+
+function isTransientLinkError(err: unknown): boolean {
+  return isLinkNativeError(err) && (err.code === 'unavailable' || err.code === 'network');
 }
 
 async function markFailed(payload: LinkRetryPayload): Promise<void> {
@@ -1110,9 +1198,39 @@ function requireOwner(): PubkyKey {
 function requireEstablishedHandle(ownerPubky: PubkyKey, peerPubky: PubkyKey): string {
   const live = liveHandles.get(linkKey(ownerPubky, peerPubky));
   if (!live || live.status !== 'established') {
-    throw new Error(`LinkService: missing established link handle for ${peerPubky}`);
+    throw createLinkNativeError(
+      'network',
+      `LinkService: missing established link handle for ${peerPubky}`,
+    );
   }
   return live.linkId;
+}
+
+function isCurrentOwner(ownerPubky: PubkyKey): boolean {
+  const current = session?.pubky ?? KeyStore.getPubky();
+  return current !== null && current === ownerPubky;
+}
+
+async function clearPeerOutboxBestEffort(
+  activeSession: ActiveSession,
+  receiver: LinkReceiver,
+  peerPubky: PubkyKey,
+  remoteNoisePublicKey: string,
+  localPath: string,
+  remotePath: string,
+): Promise<void> {
+  try {
+    await PaykitLinkNative.clearLinkOutbox(
+      activeSession.alias,
+      receiver.receiverAlias,
+      peerPubky,
+      remoteNoisePublicKey,
+      coerceReceiverPath(localPath),
+      coerceReceiverPath(remotePath),
+    );
+  } catch {
+    // Best-effort: a missing outbox is the desired end state.
+  }
 }
 
 function linkKey(ownerPubky: PubkyKey, peerPubky: PubkyKey): string {

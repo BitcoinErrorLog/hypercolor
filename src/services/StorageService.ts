@@ -474,6 +474,11 @@ export const StorageService = {
     return rowToLinkReceiver(row);
   },
 
+  async deleteLinkReceiver(ownerPubky: PubkyKey): Promise<void> {
+    const db = await getDb();
+    db.executeSync('DELETE FROM link_receivers WHERE owner_pubky = ?', [ownerPubky]);
+  },
+
   // ── Links (Paykit Encrypted Links) ────────────────────────────────────────
 
   async upsertLink(link: LinkRecordInput): Promise<void> {
@@ -541,6 +546,16 @@ export const StorageService = {
        SET snapshot = ?, status = ?, consecutive_failures = 0, updated_at = ?
        WHERE owner_pubky = ? AND peer_pubky = ?`,
       [snapshot, status, now(), ownerPubky, peerPubky],
+    );
+  },
+
+  async resetLinkConsecutiveFailures(ownerPubky: PubkyKey, peerPubky: PubkyKey): Promise<void> {
+    const db = await getDb();
+    db.executeSync(
+      `UPDATE links
+       SET consecutive_failures = 0, updated_at = ?
+       WHERE owner_pubky = ? AND peer_pubky = ?`,
+      [now(), ownerPubky, peerPubky],
     );
   },
 

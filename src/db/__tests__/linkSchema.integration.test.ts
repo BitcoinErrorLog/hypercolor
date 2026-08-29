@@ -22,60 +22,69 @@ const PEER = 'z'.repeat(52);
 const OTHER = 'b'.repeat(52);
 const EVENT = '00000000-0000-4000-8000-000000000001';
 
+function applyV3(db: ReturnType<typeof openMemoryDb>): void {
+  for (const statement of [
+    ...SCHEMA_V1_STATEMENTS,
+    ...SCHEMA_V2_STATEMENTS,
+    ...SCHEMA_V3_STATEMENTS,
+  ]) {
+    db.executeSync(statement);
+  }
+  db.executeSync('PRAGMA user_version = 3');
+}
+
+function seedV3LinkRows(db: ReturnType<typeof openMemoryDb>): void {
+  db.executeSync(
+    `INSERT INTO links (peer_pubky, role, status, snapshot, created_at, updated_at)
+     VALUES (?, 'initiator', 'established', 'opaque-cipher', 1, 1)`,
+    [PEER],
+  );
+  db.executeSync(
+    `INSERT INTO link_messages
+      (event_id, conversation_id, peer_pubky, direction, kind, raw_json,
+       body, sent_at, received_at, delivery_state, created_at, updated_at)
+     VALUES (?, ?, ?, 'received', ?, '{}', 'hi', 10, 11, 'delivered', 1, 1)`,
+    [EVENT, `dm:${PEER}`, PEER, CHAT_MESSAGE_KIND],
+  );
+  db.executeSync(
+    `INSERT INTO link_read_cursors (conversation_id, last_read_at, updated_at)
+     VALUES (?, 10, 1)`,
+    [`dm:${PEER}`],
+  );
+}
+
 describe('link schema v4 (real SQL via better-sqlite3)', () => {
   afterEach(() => {
     setDbForTests(null);
   });
 
-  it('migrates v3 rows onto the v4 shape (wallet path, owner scope, sender dedup)', async () => {
+  it('enforces foreign_keys like production getDb()', () => {
     const db = openMemoryDb();
-    for (const statement of [
-      ...SCHEMA_V1_STATEMENTS,
-      ...SCHEMA_V2_STATEMENTS,
-      ...SCHEMA_V3_STATEMENTS,
-    ]) {
-      db.executeSync(statement);
-    }
-    db.executeSync('PRAGMA user_version = 3');
+    db.executeSync('PRAGMA journal_mode = WAL');
+    db.executeSync('PRAGMA foreign_keys = ON');
+    expect(db.executeSync('PRAGMA foreign_keys').rows?.[0]?.foreign_keys).toBe(1);
+  });
 
+  it('does not copy v3 secret_ref as a receiver alias (force re-provision)', async () => {
+    const db = openMemoryDb();
+    applyV3(db);
     db.executeSync(
       `INSERT INTO link_receivers
         (owner_pubky, secret_ref, app, runtime, marker_published, created_at, updated_at)
        VALUES (?, ?, ?, ?, 1, 1, 1)`,
-      [OWNER, 'legacy-ref', 'hypercolor', 'mobile'],
+      [OWNER, 'hypercolor-link-receiver-secret', 'hypercolor', 'mobile'],
     );
-    db.executeSync(
-      `INSERT INTO links (peer_pubky, role, status, snapshot, created_at, updated_at)
-       VALUES (?, 'initiator', 'established', 'opaque-cipher', 1, 1)`,
-      [PEER],
-    );
-    db.executeSync(
-      `INSERT INTO link_messages
-        (event_id, conversation_id, peer_pubky, direction, kind, raw_json,
-         body, sent_at, received_at, delivery_state, created_at, updated_at)
-       VALUES (?, ?, ?, 'received', ?, '{}', 'hi', 10, 11, 'delivered', 1, 1)`,
-      [EVENT, `dm:${PEER}`, PEER, CHAT_MESSAGE_KIND],
-    );
-    db.executeSync(
-      `INSERT INTO link_read_cursors (conversation_id, last_read_at, updated_at)
-       VALUES (?, 10, 1)`,
-      [`dm:${PEER}`],
-    );
+    seedV3LinkRows(db);
 
     await runMigrations(db);
 
-    const version = db.executeSync('PRAGMA user_version').rows?.[0]?.user_version;
-    expect(version).toBe(4);
-
-    const receiver = db.executeSync('SELECT * FROM link_receivers').rows?.[0];
-    expect(receiver).toEqual(
-      expect.objectContaining({
-        owner_pubky: OWNER,
-        receiver_alias: 'legacy-ref',
-        receiver_path: 'hypercolor/wallet',
-        marker_published: 1,
-      }),
-    );
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(4);
+    expect(db.executeSync('SELECT * FROM link_receivers').rows).toEqual([]);
+    expect(
+      db.executeSync(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'link_receivers'",
+      ).rows,
+    ).toHaveLength(1);
 
     const link = db.executeSync('SELECT * FROM links').rows?.[0];
     expect(link).toEqual(
@@ -87,9 +96,7 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
         consecutive_failures: 0,
       }),
     );
-
-    const message = db.executeSync('SELECT * FROM link_messages').rows?.[0];
-    expect(message).toEqual(
+    expect(db.executeSync('SELECT * FROM link_messages').rows?.[0]).toEqual(
       expect.objectContaining({
         owner_pubky: OWNER,
         sender_pubky: PEER,
@@ -97,16 +104,37 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
         event_id: EVENT,
       }),
     );
-
-    const cursor = db.executeSync('SELECT * FROM link_read_cursors').rows?.[0];
-    expect(cursor).toEqual(
+    expect(db.executeSync('SELECT * FROM link_read_cursors').rows?.[0]).toEqual(
       expect.objectContaining({ owner_pubky: OWNER, conversation_id: `dm:${PEER}` }),
     );
+    expect(
+      db.executeSync(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'link_stream_items'",
+      ).rows,
+    ).toHaveLength(1);
+  });
 
-    const stream = db.executeSync(
-      "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'link_stream_items'",
-    );
-    expect(stream.rows).toHaveLength(1);
+  it('does not leave empty-owner rows when v3 has no receiver', async () => {
+    const db = openMemoryDb();
+    applyV3(db);
+    seedV3LinkRows(db);
+
+    await runMigrations(db);
+
+    expect(db.executeSync('SELECT * FROM link_receivers').rows).toEqual([]);
+    expect(db.executeSync('SELECT * FROM links').rows).toEqual([]);
+    expect(db.executeSync('SELECT * FROM link_messages').rows).toEqual([]);
+    expect(db.executeSync('SELECT * FROM link_read_cursors').rows).toEqual([]);
+    expect(
+      db.executeSync("SELECT COUNT(*) AS n FROM links WHERE owner_pubky = ''").rows?.[0]?.n,
+    ).toBe(0);
+    expect(
+      db.executeSync("SELECT COUNT(*) AS n FROM link_messages WHERE owner_pubky = ''").rows?.[0]?.n,
+    ).toBe(0);
+    expect(
+      db.executeSync("SELECT COUNT(*) AS n FROM link_read_cursors WHERE owner_pubky = ''").rows?.[0]
+        ?.n,
+    ).toBe(0);
   });
 
   it('runs StorageService statements: scoped dedup, send protocol, sign-out wipe', async () => {

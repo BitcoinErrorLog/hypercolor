@@ -18,6 +18,24 @@
  * items, and (owner, sender, kind, event_id) dedup. v3 is committed history
  * and is not rewritten; this migration rebuilds the v3 tables.
  *
+ * Combined v4 data policy (do not carry unreachable or native-incompatible
+ * rows):
+ * - Receivers are NOT copied. v3 `secret_ref` is the JS keychain service
+ *   name (`hypercolor-link-receiver-secret`), not a native-minted alias.
+ *   Copying it into `receiver_alias` makes `getReceiverPublicKey` reject
+ *   forever with no delete path. The table is created empty; the next
+ *   `enable()` / `provisionReceiver` mints a real native alias (and
+ *   self-heals if a stale row is ever present).
+ * - Links, messages, and cursors are copied ONLY when a v3 receiver row
+ *   exists with a non-empty `owner_pubky`. The previous COALESCE(..., '')
+ *   fallback created rows no real-owner query (or `clearAccountData`)
+ *   could ever see. With no receiver, those tables are created empty.
+ * - Copied v3 `links.snapshot` values are plaintext JS snapshots. Native
+ *   AEAD restore rejects them as `protocol`; `handleLinkFailure` wipes
+ *   the row and re-handshakes. That is the intended self-heal — we still
+ *   copy owned link rows so the wipe/re-handshake runs against a real
+ *   owner instead of leaving silent orphans.
+ *
  * SENSITIVITY:
  * - The receiver Noise SECRET and homeserver bearer NEVER enter SQLite (or
  *   JS). Rows store only opaque aliases minted by native.
@@ -27,7 +45,7 @@
  *   plaintext message history, local to this device. Bodies never enter logs.
  */
 export const SCHEMA_V4_STATEMENTS: readonly string[] = [
-  // ── Receivers: app/runtime → official receiver_path, secret_ref is an alias
+  // ── Receivers: native alias + official path. Never copy v3 secret_ref.
   `CREATE TABLE IF NOT EXISTS link_receivers_v4 (
     owner_pubky       TEXT    NOT NULL PRIMARY KEY,
     receiver_alias    TEXT    NOT NULL,   -- opaque native alias; NEVER a secret
@@ -36,21 +54,8 @@ export const SCHEMA_V4_STATEMENTS: readonly string[] = [
     created_at        INTEGER NOT NULL,
     updated_at        INTEGER NOT NULL
   )`,
-  `INSERT OR IGNORE INTO link_receivers_v4
-     (owner_pubky, receiver_alias, receiver_path, marker_published, created_at, updated_at)
-   SELECT
-     owner_pubky,
-     secret_ref,
-     CASE
-       WHEN runtime = 'mobile' THEN app || '/wallet'
-       ELSE app || '/' || runtime
-     END,
-     marker_published,
-     created_at,
-     updated_at
-   FROM link_receivers`,
-  `DROP TABLE IF EXISTS link_receivers`,
-  `ALTER TABLE link_receivers_v4 RENAME TO link_receivers`,
+  // v3 receivers stay in place until owned links/messages/cursors are copied,
+  // then the v3 table is dropped without copying secret_ref.
 
   // ── Links: owner-scoped PK, remote noise key, both paths, failure counter
   `CREATE TABLE IF NOT EXISTS links_v4 (
@@ -72,7 +77,7 @@ export const SCHEMA_V4_STATEMENTS: readonly string[] = [
       remote_noise_public_key, local_receiver_path, remote_receiver_path,
       consecutive_failures, created_at, updated_at)
    SELECT
-     COALESCE((SELECT owner_pubky FROM link_receivers LIMIT 1), ''),
+     (SELECT owner_pubky FROM link_receivers LIMIT 1),
      peer_pubky,
      role,
      status,
@@ -83,7 +88,8 @@ export const SCHEMA_V4_STATEMENTS: readonly string[] = [
      0,
      created_at,
      updated_at
-   FROM links`,
+   FROM links
+   WHERE EXISTS (SELECT 1 FROM link_receivers WHERE owner_pubky != '')`,
   `DROP TABLE IF EXISTS links`,
   `ALTER TABLE links_v4 RENAME TO links`,
   `CREATE INDEX IF NOT EXISTS idx_links_owner ON links(owner_pubky, updated_at DESC)`,
@@ -111,10 +117,10 @@ export const SCHEMA_V4_STATEMENTS: readonly string[] = [
       direction, raw_json, body, sent_at, received_at, delivery_state,
       created_at, updated_at)
    SELECT
-     COALESCE((SELECT owner_pubky FROM link_receivers LIMIT 1), ''),
+     (SELECT owner_pubky FROM link_receivers LIMIT 1),
      CASE
        WHEN direction = 'sent'
-         THEN COALESCE((SELECT owner_pubky FROM link_receivers LIMIT 1), '')
+         THEN (SELECT owner_pubky FROM link_receivers LIMIT 1)
        ELSE peer_pubky
      END,
      kind,
@@ -129,7 +135,8 @@ export const SCHEMA_V4_STATEMENTS: readonly string[] = [
      delivery_state,
      created_at,
      updated_at
-   FROM link_messages`,
+   FROM link_messages
+   WHERE EXISTS (SELECT 1 FROM link_receivers WHERE owner_pubky != '')`,
   `DROP TABLE IF EXISTS link_messages`,
   `ALTER TABLE link_messages_v4 RENAME TO link_messages`,
   `CREATE INDEX IF NOT EXISTS idx_link_messages_conversation
@@ -148,13 +155,19 @@ export const SCHEMA_V4_STATEMENTS: readonly string[] = [
   `INSERT OR IGNORE INTO link_read_cursors_v4
      (owner_pubky, conversation_id, last_read_at, updated_at)
    SELECT
-     COALESCE((SELECT owner_pubky FROM link_receivers LIMIT 1), ''),
+     (SELECT owner_pubky FROM link_receivers LIMIT 1),
      conversation_id,
      last_read_at,
      updated_at
-   FROM link_read_cursors`,
+   FROM link_read_cursors
+   WHERE EXISTS (SELECT 1 FROM link_receivers WHERE owner_pubky != '')`,
   `DROP TABLE IF EXISTS link_read_cursors`,
   `ALTER TABLE link_read_cursors_v4 RENAME TO link_read_cursors`,
+
+  // Drop v3 receivers last so the copies above can read a real owner, then
+  // replace with an empty v4 table (force native re-provision).
+  `DROP TABLE IF EXISTS link_receivers`,
+  `ALTER TABLE link_receivers_v4 RENAME TO link_receivers`,
 
   // ── Inbound stream (every raw item, before snapshot advance)
   `CREATE TABLE IF NOT EXISTS link_stream_items (

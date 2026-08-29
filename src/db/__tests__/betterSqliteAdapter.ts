@@ -8,6 +8,10 @@ import type { SqlExecutor, SqlParams, SqlValue } from '../sql';
  */
 export function openMemoryDb(): SqlExecutor & { raw: Database.Database } {
   const db = new Database(':memory:');
+  // Match production `getDb()` connection preamble so FK-dependent SQL
+  // behaves as it does on device.
+  db.pragma('journal_mode = WAL');
+  db.pragma('foreign_keys = ON');
   return {
     raw: db,
     executeSync(query: string, params: SqlParams | SqlValue[] = []) {
@@ -23,6 +27,18 @@ export function openMemoryDb(): SqlExecutor & { raw: Database.Database } {
       if (/^PRAGMA\s+user_version\s*$/i.test(sql)) {
         const value = db.pragma('user_version', { simple: true }) as number;
         return { rows: [{ user_version: value }] };
+      }
+      if (/^PRAGMA\s+foreign_keys\s*=/i.test(sql)) {
+        db.exec(sql);
+        return { rows: [] };
+      }
+      if (/^PRAGMA\s+foreign_keys\s*$/i.test(sql)) {
+        const value = db.pragma('foreign_keys', { simple: true }) as number;
+        return { rows: [{ foreign_keys: value }] };
+      }
+      if (/^PRAGMA\s+journal_mode\s*=/i.test(sql)) {
+        db.exec(sql);
+        return { rows: [] };
       }
       const stmt = db.prepare(sql);
       if (stmt.reader) {
