@@ -72,6 +72,10 @@ target 'hypercolor' do
         'hypercolor/PubkyNoise.swift',
         'hypercolor/PubkyNoiseModule.swift',
         'hypercolor/PubkyNoiseModule.m',
+        'hypercolor/paykit.swift',
+        'hypercolor/PaykitPublicKeys.swift',
+        'hypercolor/PaykitLinkModule.swift',
+        'hypercolor/PaykitLinkModule.m',
       ]
 
       source_group = main_project.main_group.find_subpath('hypercolor', true)
@@ -82,16 +86,16 @@ target 'hypercolor' do
       end
 
       # --- XCFramework embed ---
-      xcfw_rel = 'PubkyNoise.xcframework'
-      unless main_project.files.any? { |f| f.path&.include?('PubkyNoise.xcframework') }
+      embed_phase = target.build_phases.find { |p| p.is_a?(Xcodeproj::Project::Object::PBXCopyFilesBuildPhase) && p.name == 'Embed Frameworks' }
+      if embed_phase.nil?
+        embed_phase = target.new_copy_files_build_phase('Embed Frameworks')
+        embed_phase.symbol_dst_subfolder_spec = :frameworks
+      end
+
+      ['PubkyNoise.xcframework', 'Paykit.xcframework'].each do |xcfw_rel|
+        next if main_project.files.any? { |f| f.path&.include?(xcfw_rel) }
         xcfw_ref = main_project.new_file(xcfw_rel)
         target.frameworks_build_phase.add_file_reference(xcfw_ref)
-
-        embed_phase = target.build_phases.find { |p| p.is_a?(Xcodeproj::Project::Object::PBXCopyFilesBuildPhase) && p.name == 'Embed Frameworks' }
-        if embed_phase.nil?
-          embed_phase = target.new_copy_files_build_phase('Embed Frameworks')
-          embed_phase.symbol_dst_subfolder_spec = :frameworks
-        end
         embed_file = embed_phase.add_file_reference(xcfw_ref)
         embed_file.settings = { 'ATTRIBUTES' => ['CodeSignOnCopy', 'RemoveHeadersOnCopy'] }
       end
@@ -106,19 +110,27 @@ target 'hypercolor' do
         xcfw_lib = is_simulator \
           ? '$(SRCROOT)/PubkyNoise.xcframework/ios-arm64_x86_64-simulator' \
           : '$(SRCROOT)/PubkyNoise.xcframework/ios-arm64'
+        paykit_lib = is_simulator \
+          ? '$(SRCROOT)/Paykit.xcframework/ios-arm64-simulator' \
+          : '$(SRCROOT)/Paykit.xcframework/ios-arm64'
 
         existing_swift = config.build_settings['SWIFT_INCLUDE_PATHS'] || ''
-        unless existing_swift.to_s.include?('PubkyNoise.xcframework')
-          config.build_settings['SWIFT_INCLUDE_PATHS'] = "$(inherited) #{xcfw_modules}"
+        swift_paths = existing_swift.to_s
+        unless swift_paths.include?('PubkyNoise.xcframework')
+          swift_paths = "$(inherited) #{xcfw_modules}"
         end
+        # Paykit's xcframework already exposes paykitFFI via Headers/paykitFFI/module.modulemap.
+        # Do not add SWIFT_INCLUDE_PATHS or HEADER_SEARCH_PATHS for it — that redefines the module.
+        config.build_settings['SWIFT_INCLUDE_PATHS'] = swift_paths
+        # Paykit.xcframework ships arm64 + arm64-simulator only (no x86_64).
+        config.build_settings['EXCLUDED_ARCHS[sdk=iphonesimulator*]'] = 'x86_64'
 
         lib_paths = config.build_settings['LIBRARY_SEARCH_PATHS'] || []
         lib_paths = [lib_paths] if lib_paths.is_a?(String)
-        unless lib_paths.any? { |p| p.to_s.include?('PubkyNoise.xcframework') }
-          lib_paths << '$(inherited)'
-          lib_paths << xcfw_lib
-          config.build_settings['LIBRARY_SEARCH_PATHS'] = lib_paths
-        end
+        lib_paths << '$(inherited)' unless lib_paths.any? { |p| p.to_s.include?('$(inherited)') }
+        lib_paths << xcfw_lib unless lib_paths.any? { |p| p.to_s.include?('PubkyNoise.xcframework') }
+        lib_paths << paykit_lib unless lib_paths.any? { |p| p.to_s.include?('Paykit.xcframework') }
+        config.build_settings['LIBRARY_SEARCH_PATHS'] = lib_paths
 
         ld_flags = config.build_settings['OTHER_LDFLAGS'] || []
         ld_flags = [ld_flags] if ld_flags.is_a?(String)
@@ -126,8 +138,16 @@ target 'hypercolor' do
           ld_flags << '$(inherited)'
           ld_flags << '-force_load'
           ld_flags << "#{xcfw_lib}/libpubky_noise.a"
-          config.build_settings['OTHER_LDFLAGS'] = ld_flags
         end
+        # Do not -force_load libpaykit.a: PubkyNoise already force-loads a Rust
+        # static archive that provides compiler-rt LSE + overlapping rustc
+        # helpers. force-loading Paykit as well duplicates those symbols.
+        # The xcframework Frameworks entry supplies -lpaykit for UniFFI refs.
+        %w[Security SystemConfiguration Network].each do |fw|
+          flag = "-framework #{fw}"
+          ld_flags << flag unless ld_flags.any? { |f| f.to_s.include?(flag) }
+        end
+        config.build_settings['OTHER_LDFLAGS'] = ld_flags
       end
     end
 

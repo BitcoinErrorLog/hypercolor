@@ -245,9 +245,7 @@ export const PaykitLinkNative: PaykitLinkNativeApi = {
   },
 
   startAuthFlow(capabilities: string, relayUrl?: string): Promise<AuthFlowStart> {
-    return relayUrl === undefined
-      ? invoke('startAuthFlow', capabilities)
-      : invoke('startAuthFlow', capabilities, relayUrl);
+    return invoke('startAuthFlow', capabilities, relayUrl ?? null);
   },
 
   awaitAuthApproval(flowId: string): Promise<AuthSessionResult> {

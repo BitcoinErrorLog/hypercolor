@@ -25,6 +25,7 @@ class MainApplication : Application(), ReactApplication {
         override fun getPackages(): List<ReactPackage> =
             PackageList(this).packages.apply {
               add(PubkyNoisePackage())
+              add(PaykitLinkPackage())
             }
 
           override fun getJSMainModuleName(): String = ".expo/.virtual-metro-entry"
