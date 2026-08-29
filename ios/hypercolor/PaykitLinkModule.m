@@ -22,6 +22,12 @@ RCT_EXTERN_METHOD(signinWithSecret:(NSString *)identitySecretHex
                   resolver:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject)
 
+RCT_EXTERN_METHOD(signupWithSecret:(NSString *)identitySecretHex
+                  homeserverPublicKey:(NSString *)homeserverPublicKey
+                  signupToken:(id)signupToken
+                  resolver:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
+
 RCT_EXTERN_METHOD(restoreSession:(NSString *)sessionAlias
                   resolver:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject)

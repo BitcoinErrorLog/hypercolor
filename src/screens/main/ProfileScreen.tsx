@@ -1,10 +1,16 @@
 import React from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, SafeAreaView, Alert } from 'react-native';
+import { useNavigation } from '@react-navigation/native';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useAuthStore } from '../../stores/authStore';
 import { PubkyService } from '../../services/PubkyService';
 import { MessageRouter } from '../../services/MessageRouter';
+import type { RootStackParamList } from '../../types';
+
+type Nav = NativeStackNavigationProp<RootStackParamList>;
 
 export default function ProfileScreen() {
+  const nav = useNavigation<Nav>();
   const { profile, pubky, clearSession } = useAuthStore();
 
   async function handleSignOut() {
@@ -30,6 +36,9 @@ export default function ProfileScreen() {
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
         <Text style={styles.title}>Profile</Text>
+        <TouchableOpacity onPress={() => nav.navigate('Settings')}>
+          <Text style={styles.settings}>Settings</Text>
+        </TouchableOpacity>
       </View>
 
       <View style={styles.content}>
@@ -62,12 +71,16 @@ export default function ProfileScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#0a0a0a' },
   header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
     paddingHorizontal: 20,
     paddingVertical: 16,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: '#1a1a1a',
   },
   title: { fontSize: 24, fontWeight: '700', color: '#f9fafb' },
+  settings: { fontSize: 16, color: '#7c3aed', fontWeight: '600' },
   content: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 16 },
   avatar: {
     width: 80,

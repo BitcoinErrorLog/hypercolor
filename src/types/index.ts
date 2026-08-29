@@ -114,4 +114,5 @@ export type RootStackParamList = {
   ChannelScreen: { channelId: string };
   ContactSearch: undefined;
   Settings: undefined;
+  EnableMessaging: undefined;
 };

@@ -145,6 +145,16 @@ export interface PaykitLinkNativeApi {
    */
   signinWithSecret(identitySecretHex: string): Promise<AuthSessionResult>;
   /**
+   * Dev/e2e only. Signs up a fresh identity on a homeserver with a raw
+   * 32-byte secret (64-char hex). Native stores the bearer under
+   * `sessionAlias`. The secret is not persisted in JS.
+   */
+  signupWithSecret(
+    identitySecretHex: string,
+    homeserverPublicKey: string,
+    signupToken?: string,
+  ): Promise<AuthSessionResult>;
+  /**
    * Native loads and refreshes the bearer. Rejects with `auth` iff the
    * session is revoked or expired; `network` keeps the alias usable.
    */
@@ -254,6 +264,14 @@ export const PaykitLinkNative: PaykitLinkNativeApi = {
 
   signinWithSecret(identitySecretHex: string): Promise<AuthSessionResult> {
     return invoke('signinWithSecret', identitySecretHex);
+  },
+
+  signupWithSecret(
+    identitySecretHex: string,
+    homeserverPublicKey: string,
+    signupToken?: string,
+  ): Promise<AuthSessionResult> {
+    return invoke('signupWithSecret', identitySecretHex, homeserverPublicKey, signupToken ?? null);
   },
 
   restoreSession(sessionAlias: string): Promise<RestoredSession> {

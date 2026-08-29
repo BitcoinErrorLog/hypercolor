@@ -66,6 +66,12 @@ export type LinkEnableFlow = {
   cancel: () => void;
 };
 
+/**
+ * Device-level messaging enablement (not a per-peer {@link LinkStatus}).
+ * Used by the Ring-auth enable surface.
+ */
+export type LinkEnableStatus = 'native-missing' | 'needs-enable' | 'session-offline' | 'enabled';
+
 interface LinkRetryPayload {
   type: typeof LINK_RETRY_PAYLOAD_TYPE;
   ownerPubky: PubkyKey;
@@ -118,6 +124,25 @@ export const LinkService = {
 
   hasSession(): boolean {
     return session !== null;
+  },
+
+  /**
+   * Device-level enablement: native module, restored session, and a
+   * published receiver marker. Does not probe any counterparty.
+   */
+  async getEnableStatus(): Promise<LinkEnableStatus> {
+    if (!PaykitLinkNative.isAvailable()) return 'native-missing';
+    try {
+      const lookup = await sessionOrRestore();
+      if (lookup && 'status' in lookup && lookup.status === 'offline') return 'session-offline';
+      if (!isActiveSession(lookup)) return 'needs-enable';
+      const receiver = await StorageService.getLinkReceiver(lookup.pubky);
+      if (!receiver?.markerPublished) return 'needs-enable';
+      return 'enabled';
+    } catch (err) {
+      if (isLinkNativeError(err) && err.code === 'unavailable') return 'native-missing';
+      throw err;
+    }
   },
 
   /**

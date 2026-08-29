@@ -28,6 +28,7 @@ jest.mock('../PaykitLinkNative', () => ({
     startAuthFlow: jest.fn(),
     awaitAuthApproval: jest.fn(),
     signinWithSecret: jest.fn(),
+    signupWithSecret: jest.fn(),
     restoreSession: jest.fn(),
     signOutSession: jest.fn(),
     publishReceiverMarker: jest.fn(),
@@ -253,6 +254,29 @@ describe('LinkService', () => {
 
       expect(mockedKeyStore.deleteLinkSession).toHaveBeenCalled();
       expect(LinkService.hasSession()).toBe(false);
+    });
+
+    it('reports getEnableStatus from native, session, and receiver marker', async () => {
+      mockedNative.isAvailable.mockReturnValue(false);
+      await expect(LinkService.getEnableStatus()).resolves.toBe('native-missing');
+
+      mockedNative.isAvailable.mockReturnValue(true);
+      await expect(LinkService.getEnableStatus()).resolves.toBe('enabled');
+
+      mockedStorage.getLinkReceiver.mockResolvedValueOnce({
+        ...receiverRow,
+        markerPublished: false,
+      });
+      await expect(LinkService.getEnableStatus()).resolves.toBe('needs-enable');
+
+      await LinkService.clearSession();
+      mockedKeyStore.getLinkSession.mockReturnValue(null);
+      mockedKeyStore.getPubky.mockReturnValue(null);
+      await expect(LinkService.getEnableStatus()).resolves.toBe('needs-enable');
+
+      mockedKeyStore.getLinkSession.mockReturnValue(SESSION_ALIAS);
+      mockedNative.restoreSession.mockRejectedValue({ code: 'network', message: 'timeout' });
+      await expect(LinkService.getEnableStatus()).resolves.toBe('session-offline');
     });
 
     it('keeps the stored alias on a network restore error', async () => {

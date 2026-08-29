@@ -99,6 +99,26 @@ class PaykitLinkModule: NSObject {
         }
     }
 
+    @objc func signupWithSecret(
+        _ identitySecretHex: String,
+        homeserverPublicKey: String,
+        signupToken: Any?,
+        resolver resolve: @escaping RCTPromiseResolveBlock,
+        rejecter reject: @escaping RCTPromiseRejectBlock
+    ) {
+        runAsync(resolve, reject) {
+            let secret = try Self.requireText(identitySecretHex, name: "identitySecretHex")
+            let homeserver = try Self.requireText(homeserverPublicKey, name: "homeserverPublicKey")
+            let token = Self.optionalText(signupToken)
+            let session = try await self.chatClient().signupWithSecret(
+                identitySecretKeyHex: secret,
+                homeserverPublicKey: homeserver,
+                signupToken: token
+            )
+            return try self.persistSession(session)
+        }
+    }
+
     @objc func restoreSession(
         _ sessionAlias: String,
         resolver resolve: @escaping RCTPromiseResolveBlock,
@@ -704,7 +724,7 @@ class PaykitLinkModule: NSObject {
         switch code {
         case "transport_error", "send_failed", "receive_failed":
             return "network"
-        case "signin_failed", "session_restore_failed", "auth_flow_failed", "capabilities_missing":
+        case "signin_failed", "signup_failed", "session_restore_failed", "auth_flow_failed", "capabilities_missing":
             return "auth"
         case "validation":
             return "validation"

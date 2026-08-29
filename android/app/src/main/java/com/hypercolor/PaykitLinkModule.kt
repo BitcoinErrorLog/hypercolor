@@ -116,6 +116,25 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
     }
 
     @ReactMethod
+    fun signupWithSecret(
+        identitySecretHex: String,
+        homeserverPublicKey: String,
+        signupToken: String?,
+        promise: Promise,
+    ) {
+        launch(promise) {
+            persistSession(
+                chatClient().signupWithSecret(
+                    requireText(identitySecretHex, "identitySecretHex"),
+                    requireText(homeserverPublicKey, "homeserverPublicKey"),
+                    optionalText(signupToken),
+                ),
+                promise,
+            )
+        }
+    }
+
+    @ReactMethod
     fun restoreSession(sessionAlias: String, promise: Promise) {
         launch(promise) {
             val session = session(requireText(sessionAlias, "sessionAlias"))
@@ -624,7 +643,7 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
 
     private fun mapFfiCode(code: String): String = when (code) {
         "transport_error", "send_failed", "receive_failed" -> "network"
-        "signin_failed", "session_restore_failed", "auth_flow_failed", "capabilities_missing" -> "auth"
+        "signin_failed", "signup_failed", "session_restore_failed", "auth_flow_failed", "capabilities_missing" -> "auth"
         "validation" -> "validation"
         "consumed" -> "consumed"
         else -> "protocol"

@@ -16,6 +16,7 @@ const Stack = createNativeStackNavigator<RootStackParamList>();
 
 const ContactSearchScreen = React.lazy(() => import('../screens/main/ContactSearchScreen'));
 const SettingsScreen = React.lazy(() => import('../screens/main/SettingsScreen'));
+const EnableMessagingScreen = React.lazy(() => import('../screens/main/EnableMessagingScreen'));
 
 /**
  * Deep link config for React Navigation.
@@ -111,6 +112,11 @@ export function RootNavigator() {
                 name="Settings"
                 component={SettingsScreen}
                 options={{ animation: 'slide_from_bottom', headerShown: false }}
+              />
+              <Stack.Screen
+                name="EnableMessaging"
+                component={EnableMessagingScreen}
+                options={{ animation: 'slide_from_right', headerShown: false }}
               />
             </>
           ) : (
