@@ -1,5 +1,5 @@
 import React, { Suspense, useEffect, useCallback } from 'react';
-import { View, ActivityIndicator, StyleSheet, Alert } from 'react-native';
+import { View, ActivityIndicator, StyleSheet, Alert, Linking } from 'react-native';
 import { NavigationContainer, type LinkingOptions } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../types';
@@ -72,8 +72,6 @@ export function RootNavigator() {
   );
 
   useEffect(() => {
-    const { Linking } = require('react-native');
-
     // Handle deep link if app was opened via one
     Linking.getInitialURL().then((url: string | null) => {
       if (url) handleDeepLink(url);
@@ -106,12 +104,12 @@ export function RootNavigator() {
               />
               <Stack.Screen
                 name="ContactSearch"
-                component={ContactSearchScreen as React.ComponentType<any>}
+                component={ContactSearchScreen}
                 options={{ animation: 'slide_from_bottom', headerShown: false }}
               />
               <Stack.Screen
                 name="Settings"
-                component={SettingsScreen as React.ComponentType<any>}
+                component={SettingsScreen}
                 options={{ animation: 'slide_from_bottom', headerShown: false }}
               />
             </>

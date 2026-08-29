@@ -92,7 +92,9 @@ export const MeshService = {
 
     const transportKeypair = await KeyStore.getTransportKeypair();
     if (!transportKeypair) {
-      throw new Error('MeshService: no TransportKeypair in KeyStore. Authorize with pubky-ring first.');
+      throw new Error(
+        'MeshService: no TransportKeypair in KeyStore. Authorize with pubky-ring first.',
+      );
     }
 
     localPubkyHash = truncatedSha256Hex(localPubky);
@@ -249,13 +251,12 @@ async function onMessageReceived(event: MessageReceivedEvent): Promise<void> {
         await handleAppMsg(state, payload);
         break;
       default:
-        console.warn(`[MeshService] Unknown frame type 0x${frameType.toString(16)} from ${pubkyHash}`);
+        console.warn(
+          `[MeshService] Unknown frame type 0x${frameType.toString(16)} from ${pubkyHash}`,
+        );
     }
   } catch (err) {
-    console.warn(
-      `[MeshService] Error processing frame from ${pubkyHash}:`,
-      (err as Error).message,
-    );
+    console.warn(`[MeshService] Error processing frame from ${pubkyHash}:`, (err as Error).message);
   }
 }
 

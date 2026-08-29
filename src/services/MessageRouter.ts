@@ -281,7 +281,7 @@ async function handleIncomingMeshMessage(
     if (envelope.senderPubky !== senderPubky) {
       console.warn(
         `[MessageRouter] BLE sender mismatch: envelope claims ${envelope.senderPubky}, ` +
-        `Noise says ${senderPubky}. Rejecting.`,
+          `Noise says ${senderPubky}. Rejecting.`,
       );
       return;
     }
@@ -405,8 +405,7 @@ async function computeMessageId(
       .join('');
   }
 
-  // Fallback: use Buffer-based simple hash if SubtleCrypto is unavailable
-  // (should not happen on RN 0.76+, but kept as safety net)
-  const { createHash } = require('crypto');
-  return createHash('sha256').update(input).digest('hex');
+  // Node's 'crypto' module does not exist in the RN/Hermes runtime, so there
+  // is no meaningful JS fallback; fail loudly rather than dedup incorrectly.
+  throw new Error('SHA-256 unavailable: SubtleCrypto is not present in this runtime');
 }

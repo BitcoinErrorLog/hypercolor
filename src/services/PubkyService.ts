@@ -65,16 +65,12 @@ async function getAppSkOrThrow(): Promise<string> {
   // Check AppCert validity before using AppKey
   const certValid = await KeyStore.isAppCertValid();
   if (!certValid) {
-    throw new Error(
-      'AppCert has expired. Re-authorize Hypercolor with pubky-ring.',
-    );
+    throw new Error('AppCert has expired. Re-authorize Hypercolor with pubky-ring.');
   }
 
   const keypair = await KeyStore.getAppKeypair();
   if (!keypair) {
-    throw new Error(
-      'No delegated AppKey found. Connect Hypercolor to pubky-ring first.',
-    );
+    throw new Error('No delegated AppKey found. Connect Hypercolor to pubky-ring first.');
   }
   return keypair.secretKey;
 }
@@ -259,16 +255,17 @@ export const PubkyService = {
       transport_keys: transportKeypair
         ? [{ x25519_pub: transportKeypair.publicKey, key_version: 0 }]
         : [],
-      app_keys: appKeypair && appCert
-        ? [
-            {
-              ed25519_pub: appKeypair.publicKey,
-              cert_id: appCert.certIdHex,
-              cert_body: appCert.certBodyHex,
-              cert_sig: appCert.sigHex,
-            },
-          ]
-        : [],
+      app_keys:
+        appKeypair && appCert
+          ? [
+              {
+                ed25519_pub: appKeypair.publicKey,
+                cert_id: appCert.certIdHex,
+                cert_body: appCert.certBodyHex,
+                cert_sig: appCert.sigHex,
+              },
+            ]
+          : [],
       published_at: Math.floor(Date.now() / 1000),
     };
 

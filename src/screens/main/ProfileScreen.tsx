@@ -1,12 +1,5 @@
 import React from 'react';
-import {
-  View,
-  Text,
-  TouchableOpacity,
-  StyleSheet,
-  SafeAreaView,
-  Alert,
-} from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, SafeAreaView, Alert } from 'react-native';
 import { useAuthStore } from '../../stores/authStore';
 import { PubkyService } from '../../services/PubkyService';
 import { MessageRouter } from '../../services/MessageRouter';
@@ -54,9 +47,7 @@ export default function ProfileScreen() {
           </Text>
         ) : null}
 
-        <Text style={styles.keystoreNote}>
-          Keys managed by pubky-ring
-        </Text>
+        <Text style={styles.keystoreNote}>Keys managed by pubky-ring</Text>
       </View>
 
       <View style={styles.actions}>

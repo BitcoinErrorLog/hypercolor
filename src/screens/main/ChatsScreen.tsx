@@ -1,12 +1,5 @@
 import React, { useEffect, useCallback } from 'react';
-import {
-  View,
-  Text,
-  FlatList,
-  TouchableOpacity,
-  StyleSheet,
-  SafeAreaView,
-} from 'react-native';
+import { View, Text, FlatList, TouchableOpacity, StyleSheet, SafeAreaView } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { RootStackParamList, Thread } from '../../types';
@@ -26,9 +19,7 @@ export default function ChatsScreen() {
     });
   }, []);
 
-  const sorted = [...threads].sort(
-    (a, b) => (b.lastMessageAt ?? 0) - (a.lastMessageAt ?? 0),
-  );
+  const sorted = [...threads].sort((a, b) => (b.lastMessageAt ?? 0) - (a.lastMessageAt ?? 0));
 
   const handlePress = useCallback(
     (thread: Thread) => {
@@ -44,9 +35,7 @@ export default function ChatsScreen() {
     ({ item }: { item: Thread }) => (
       <TouchableOpacity style={styles.threadRow} onPress={() => handlePress(item)}>
         <View style={styles.avatar}>
-          <Text style={styles.avatarLetter}>
-            {item.participantPubky.charAt(0).toUpperCase()}
-          </Text>
+          <Text style={styles.avatarLetter}>{item.participantPubky.charAt(0).toUpperCase()}</Text>
         </View>
         <View style={styles.threadBody}>
           <View style={styles.threadHeader}>
@@ -86,9 +75,7 @@ export default function ChatsScreen() {
       {sorted.length === 0 ? (
         <View style={styles.empty}>
           <Text style={styles.emptyText}>No conversations yet.</Text>
-          <Text style={styles.emptyHint}>
-            Search for a contact to start chatting.
-          </Text>
+          <Text style={styles.emptyHint}>Search for a contact to start chatting.</Text>
         </View>
       ) : (
         <FlatList

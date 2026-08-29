@@ -1,10 +1,6 @@
 import { Linking } from 'react-native';
 import { get as rnGet } from '@synonymdev/react-native-pubky';
-import {
-  x25519GenerateKeypair,
-  sb2VerifySignature,
-  sb2Decrypt,
-} from '../utils/PubkyNoiseModule';
+import { x25519GenerateKeypair, sb2VerifySignature, sb2Decrypt } from '../utils/PubkyNoiseModule';
 import { KeyStore } from './KeyStore';
 
 /**
@@ -44,8 +40,7 @@ let _pending: PendingHandoff | null = null;
  * @param deviceId - An identifier for this device/session, e.g. "hypercolor-{timestamp}"
  */
 export async function requestDelegation(deviceId: string): Promise<void> {
-  const { secretKey: ephemeralSkHex, publicKey: ephemeralPkHex } =
-    await x25519GenerateKeypair();
+  const { secretKey: ephemeralSkHex, publicKey: ephemeralPkHex } = await x25519GenerateKeypair();
 
   _pending = { ephemeralSkHex };
 
@@ -132,7 +127,7 @@ export async function handleRingCallback(url: string): Promise<DelegationResult>
   if (!payload.app_key) {
     throw new Error(
       'pubky-ring handoff does not include an app_key. ' +
-      'Ensure pubky-ring supports AppKey delegation (v3 handoff).',
+        'Ensure pubky-ring supports AppKey delegation (v3 handoff).',
     );
   }
 

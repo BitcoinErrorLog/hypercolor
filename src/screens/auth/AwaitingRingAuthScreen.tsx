@@ -1,5 +1,12 @@
-import React, { useEffect } from 'react';
-import { View, Text, ActivityIndicator, TouchableOpacity, StyleSheet, SafeAreaView } from 'react-native';
+import React from 'react';
+import {
+  View,
+  Text,
+  ActivityIndicator,
+  TouchableOpacity,
+  StyleSheet,
+  SafeAreaView,
+} from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { AuthStackParamList } from '../../types';
@@ -21,7 +28,7 @@ export default function AwaitingRingAuthScreen() {
         <Text style={styles.title}>Waiting for pubky-ring</Text>
         <Text style={styles.description}>
           Approve the authorization in pubky-ring to continue.{'\n'}
-          You'll be redirected back here automatically.
+          You&apos;ll be redirected back here automatically.
         </Text>
       </View>
 

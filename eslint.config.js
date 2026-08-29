@@ -8,6 +8,10 @@ const prettierConfig = require('eslint-config-prettier');
 /** @type {import('eslint').Linter.Config[]} */
 module.exports = [
   {
+    // macOS AppleDouble metadata files created on exFAT volumes
+    ignores: ['**/._*'],
+  },
+  {
     files: ['**/*.{ts,tsx}'],
     languageOptions: {
       parser: tsParser,

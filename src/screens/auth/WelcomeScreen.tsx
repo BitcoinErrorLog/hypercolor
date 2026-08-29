@@ -54,8 +54,7 @@ export default function WelcomeScreen() {
 
       <View style={styles.actions}>
         <Text style={styles.hint}>
-          Your identity is managed by{' '}
-          <Text style={styles.hintBold}>pubky-ring</Text>.{'\n'}
+          Your identity is managed by <Text style={styles.hintBold}>pubky-ring</Text>.{'\n'}
           Hypercolor never holds your private key.
         </Text>
 

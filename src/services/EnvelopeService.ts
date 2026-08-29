@@ -93,7 +93,8 @@ export const EnvelopeService = {
     cursorMs: number,
   ): Promise<string> {
     const appKeypair = await KeyStore.getAppKeypair();
-    if (!appKeypair) throw new Error('EnvelopeService: no AppKey. Authorize with pubky-ring first.');
+    if (!appKeypair)
+      throw new Error('EnvelopeService: no AppKey. Authorize with pubky-ring first.');
 
     const appCert = await KeyStore.getAppCert();
     if (!appCert) throw new Error('EnvelopeService: no AppCert. Authorize with pubky-ring first.');
@@ -111,19 +112,19 @@ export const EnvelopeService = {
       sb2ContextIdHex,
       envelope.messageId,
       'dm',
-      ownerPubky,             // ownerPeeridHex — root pubky, NOT AppKey
-      appKeypair.publicKey,   // senderPeeridHex — delegated AppKey
-      recipientPubky,         // recipientPeeridHex
+      ownerPubky, // ownerPeeridHex — root pubky, NOT AppKey
+      appKeypair.publicKey, // senderPeeridHex — delegated AppKey
+      recipientPubky, // recipientPeeridHex
       canonicalPath,
       Math.floor(envelope.createdAt / 1000),
       null,
-      appCert.certIdHex,      // cert_id — signals delegated signature
+      appCert.certIdHex, // cert_id — signals delegated signature
     );
 
     const signedBase64 = await sb2Sign(
       envelopeBase64,
       appKeypair.secretKey,
-      ownerPubky,             // ownerPeeridHex — root pubky for AAD
+      ownerPubky, // ownerPeeridHex — root pubky for AAD
       canonicalPath,
     );
 
@@ -159,7 +160,7 @@ export const EnvelopeService = {
       if (header.inboxKidHex && header.inboxKidHex !== localKid) {
         throw new Error(
           `EnvelopeService: inbox_kid mismatch — envelope targets ${header.inboxKidHex}, ` +
-          `local is ${localKid}. Rejecting.`,
+            `local is ${localKid}. Rejecting.`,
         );
       }
     } catch (e) {
@@ -173,12 +174,7 @@ export const EnvelopeService = {
       if (!valid) throw new Error('EnvelopeService: SB2 signature verification failed');
     }
 
-    const result = await sb2Decrypt(
-      envelopeBase64,
-      recipientInboxSkHex,
-      ownerPubky,
-      canonicalPath,
-    );
+    const result = await sb2Decrypt(envelopeBase64, recipientInboxSkHex, ownerPubky, canonicalPath);
 
     const plaintext = Buffer.from(result.plaintext, 'hex').toString('utf8');
     return JSON.parse(plaintext) as PlainEnvelope;
