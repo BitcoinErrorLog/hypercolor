@@ -10,6 +10,17 @@ import type {
   DeliveryStatus,
   PubkyKey,
 } from '../types';
+import type {
+  LinkDeliveryState,
+  LinkMessage,
+  LinkMessageDirection,
+  LinkReceiver,
+  LinkReceiverInput,
+  LinkRecord,
+  LinkRecordInput,
+  LinkRole,
+  StoredLinkStatus,
+} from '../types/link';
 
 /**
  * StorageService — the single point of access for all SQLite persistence.
@@ -399,6 +410,176 @@ export const StorageService = {
       ],
     );
   },
+
+  // ── Link receivers (Paykit Encrypted Links) ───────────────────────────────
+
+  async upsertLinkReceiver(receiver: LinkReceiverInput): Promise<void> {
+    const db = await getDb();
+    db.executeSync(
+      `INSERT INTO link_receivers
+        (owner_pubky, secret_ref, app, runtime, marker_published, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(owner_pubky) DO UPDATE SET
+         secret_ref       = excluded.secret_ref,
+         app              = excluded.app,
+         runtime          = excluded.runtime,
+         marker_published = excluded.marker_published,
+         updated_at       = excluded.updated_at`,
+      [
+        receiver.ownerPubky,
+        receiver.secretRef,
+        receiver.app,
+        receiver.runtime,
+        receiver.markerPublished ? 1 : 0,
+        now(),
+        now(),
+      ],
+    );
+  },
+
+  async getLinkReceiver(ownerPubky: PubkyKey): Promise<LinkReceiver | null> {
+    const db = await getDb();
+    const result = db.executeSync('SELECT * FROM link_receivers WHERE owner_pubky = ?', [
+      ownerPubky,
+    ]);
+    const row = result.rows?.[0];
+    if (!row) return null;
+    return rowToLinkReceiver(row);
+  },
+
+  // ── Links (Paykit Encrypted Links) ────────────────────────────────────────
+
+  async upsertLink(link: LinkRecordInput): Promise<void> {
+    const db = await getDb();
+    db.executeSync(
+      `INSERT INTO links (peer_pubky, role, status, snapshot, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT(peer_pubky) DO UPDATE SET
+         role       = excluded.role,
+         status     = excluded.status,
+         snapshot   = excluded.snapshot,
+         updated_at = excluded.updated_at`,
+      [link.peerPubky, link.role, link.status, link.snapshot, now(), now()],
+    );
+  },
+
+  async getLink(peerPubky: PubkyKey): Promise<LinkRecord | null> {
+    const db = await getDb();
+    const result = db.executeSync('SELECT * FROM links WHERE peer_pubky = ?', [peerPubky]);
+    const row = result.rows?.[0];
+    if (!row) return null;
+    return rowToLink(row);
+  },
+
+  async getAllLinks(): Promise<LinkRecord[]> {
+    const db = await getDb();
+    const result = db.executeSync('SELECT * FROM links ORDER BY updated_at DESC');
+    return (result.rows ?? []).map(rowToLink);
+  },
+
+  async updateLinkSnapshot(
+    peerPubky: PubkyKey,
+    snapshot: string,
+    status: StoredLinkStatus,
+  ): Promise<void> {
+    const db = await getDb();
+    db.executeSync(
+      'UPDATE links SET snapshot = ?, status = ?, updated_at = ? WHERE peer_pubky = ?',
+      [snapshot, status, now(), peerPubky],
+    );
+  },
+
+  async deleteLink(peerPubky: PubkyKey): Promise<void> {
+    const db = await getDb();
+    db.executeSync('DELETE FROM links WHERE peer_pubky = ?', [peerPubky]);
+  },
+
+  // ── Link messages (Paykit Encrypted Links) ────────────────────────────────
+
+  async saveLinkMessage(message: LinkMessage): Promise<void> {
+    const db = await getDb();
+    // event_id is the PK — replayed deliveries after a snapshot restore are
+    // expected and must dedupe instead of duplicating or clobbering state.
+    db.executeSync(
+      `INSERT OR IGNORE INTO link_messages
+        (event_id, conversation_id, peer_pubky, direction, kind, raw_json,
+         body, sent_at, received_at, delivery_state, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        message.eventId,
+        message.conversationId,
+        message.peerPubky,
+        message.direction,
+        message.kind,
+        message.rawJson,
+        message.body,
+        message.sentAt,
+        message.receivedAt,
+        message.deliveryState,
+        now(),
+        now(),
+      ],
+    );
+  },
+
+  async hasLinkMessage(eventId: string): Promise<boolean> {
+    const db = await getDb();
+    const result = db.executeSync('SELECT 1 FROM link_messages WHERE event_id = ? LIMIT 1', [
+      eventId,
+    ]);
+    return (result.rows?.length ?? 0) > 0;
+  },
+
+  async getLinkMessagesForConversation(
+    conversationId: string,
+    limit = 50,
+    beforeMs?: number,
+  ): Promise<LinkMessage[]> {
+    const db = await getDb();
+    const result =
+      beforeMs !== undefined
+        ? db.executeSync(
+            'SELECT * FROM link_messages WHERE conversation_id = ? AND sent_at < ? ORDER BY sent_at DESC LIMIT ?',
+            [conversationId, beforeMs, limit],
+          )
+        : db.executeSync(
+            'SELECT * FROM link_messages WHERE conversation_id = ? ORDER BY sent_at DESC LIMIT ?',
+            [conversationId, limit],
+          );
+    return (result.rows ?? []).map(rowToLinkMessage).reverse();
+  },
+
+  async updateLinkMessageDeliveryState(eventId: string, state: LinkDeliveryState): Promise<void> {
+    const db = await getDb();
+    db.executeSync(
+      'UPDATE link_messages SET delivery_state = ?, updated_at = ? WHERE event_id = ?',
+      [state, now(), eventId],
+    );
+  },
+
+  // ── Link read cursors (Paykit Encrypted Links) ────────────────────────────
+
+  async getLinkReadCursor(conversationId: string): Promise<number | null> {
+    const db = await getDb();
+    const result = db.executeSync(
+      'SELECT last_read_at FROM link_read_cursors WHERE conversation_id = ?',
+      [conversationId],
+    );
+    const value = result.rows?.[0]?.last_read_at;
+    return typeof value === 'number' ? value : null;
+  },
+
+  async setLinkReadCursor(conversationId: string, lastReadAt: number): Promise<void> {
+    const db = await getDb();
+    db.executeSync(
+      `INSERT INTO link_read_cursors (conversation_id, last_read_at, updated_at)
+       VALUES (?, ?, ?)
+       ON CONFLICT(conversation_id) DO UPDATE SET
+         last_read_at = MAX(last_read_at, excluded.last_read_at),
+         updated_at   = excluded.updated_at`,
+      [conversationId, lastReadAt, now()],
+    );
+  },
 };
 
 // ─── Row mappers ──────────────────────────────────────────────────────────
@@ -476,5 +657,44 @@ function rowToQueueItem(row: any): DeliveryQueueItem {
     attempts: row.attempts,
     nextRetryAt: row.next_retry_at,
     createdAt: row.created_at,
+  };
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function rowToLinkReceiver(row: any): LinkReceiver {
+  return {
+    ownerPubky: row.owner_pubky,
+    secretRef: row.secret_ref,
+    app: row.app,
+    runtime: row.runtime,
+    markerPublished: row.marker_published === 1,
+    updatedAt: row.updated_at,
+  };
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function rowToLink(row: any): LinkRecord {
+  return {
+    peerPubky: row.peer_pubky,
+    role: row.role as LinkRole,
+    status: row.status as StoredLinkStatus,
+    snapshot: row.snapshot,
+    updatedAt: row.updated_at,
+  };
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function rowToLinkMessage(row: any): LinkMessage {
+  return {
+    eventId: row.event_id,
+    conversationId: row.conversation_id,
+    peerPubky: row.peer_pubky,
+    direction: row.direction as LinkMessageDirection,
+    kind: row.kind,
+    rawJson: row.raw_json,
+    body: row.body,
+    sentAt: row.sent_at,
+    receivedAt: row.received_at ?? null,
+    deliveryState: row.delivery_state as LinkDeliveryState,
   };
 }

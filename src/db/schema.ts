@@ -14,6 +14,71 @@
  */
 
 /**
+ * Schema v3 — Paykit Encrypted Links messaging (replaces the research-stack
+ * envelope transport for DMs).
+ *
+ * SENSITIVITY:
+ * - The receiver Noise SECRET key is NEVER stored in SQLite. It lives in the
+ *   OS keychain via KeyStore; `link_receivers.secret_ref` only names that
+ *   keychain entry.
+ * - `links.snapshot` JSON serializes UNENCRYPTED and contains Noise key
+ *   material. Device-local only — never sync, export, or log it.
+ * - `link_messages.body` / `raw_json` are plaintext message history, local to
+ *   this device by design. Bodies never enter logs or telemetry.
+ */
+export const SCHEMA_V3_STATEMENTS: readonly string[] = [
+  // ── Link receivers (one per account) ─────────────────────────────────────
+  `CREATE TABLE IF NOT EXISTS link_receivers (
+    owner_pubky       TEXT    NOT NULL PRIMARY KEY,
+    secret_ref        TEXT    NOT NULL,   -- KeyStore keychain service name, never the secret
+    app               TEXT    NOT NULL,   -- receiver path segment: app
+    runtime           TEXT    NOT NULL,   -- receiver path segment: runtime
+    marker_published  INTEGER NOT NULL DEFAULT 0,
+    created_at        INTEGER NOT NULL,
+    updated_at        INTEGER NOT NULL
+  )`,
+
+  // ── Encrypted Links (one per counterparty) ───────────────────────────────
+  `CREATE TABLE IF NOT EXISTS links (
+    peer_pubky   TEXT    NOT NULL PRIMARY KEY,
+    role         TEXT    NOT NULL,        -- 'initiator' | 'responder'
+    status       TEXT    NOT NULL,        -- 'handshaking' | 'established'
+    snapshot     TEXT    NOT NULL,        -- snapshot JSON; contains key material, device-local only
+    created_at   INTEGER NOT NULL,
+    updated_at   INTEGER NOT NULL
+  )`,
+
+  // ── Link messages (event_id-deduped history) ─────────────────────────────
+  `CREATE TABLE IF NOT EXISTS link_messages (
+    event_id        TEXT    NOT NULL PRIMARY KEY,  -- sender-minted UUID, the dedup key
+    conversation_id TEXT    NOT NULL,              -- dm:{counterpartyPubky}
+    peer_pubky      TEXT    NOT NULL,
+    direction       TEXT    NOT NULL,              -- 'sent' | 'received'
+    kind            TEXT    NOT NULL,              -- e.g. 'chat.message.v0'
+    raw_json        TEXT    NOT NULL,              -- full wire envelope
+    body            TEXT    NOT NULL,
+    sent_at         INTEGER NOT NULL,              -- sender wall clock (Unix ms)
+    received_at     INTEGER,                       -- local arrival time; NULL for sent messages
+    delivery_state  TEXT    NOT NULL,              -- 'sending' | 'sent' | 'delivered' | 'read'
+    created_at      INTEGER NOT NULL,
+    updated_at      INTEGER NOT NULL
+  )`,
+
+  `CREATE INDEX IF NOT EXISTS idx_link_messages_conversation
+    ON link_messages(conversation_id, sent_at DESC)`,
+
+  // ── Per-conversation read cursors ────────────────────────────────────────
+  // Device-local read checkpoint: the newest timestamp this device has shown
+  // the user for a conversation. Drives the honest local unread badge — it
+  // counts only messages that already arrived on THIS device.
+  `CREATE TABLE IF NOT EXISTS link_read_cursors (
+    conversation_id TEXT    NOT NULL PRIMARY KEY,
+    last_read_at    INTEGER NOT NULL,
+    updated_at      INTEGER NOT NULL
+  )`,
+];
+
+/**
  * Schema v2 — add noise_context_id to threads for SB2 per-thread context binding.
  * Column repurposed: channel_key_base64 in channels now stores X25519 inbox pk hex.
  */

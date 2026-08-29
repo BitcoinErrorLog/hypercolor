@@ -27,11 +27,19 @@ const TRANSPORT_KEY_SERVICE = 'hypercolor-transport-key';
 const APP_CERT_SERVICE = 'hypercolor-app-cert';
 const KEYCHAIN_USERNAME = 'identity';
 
+/**
+ * Keychain service holding the Paykit Encrypted Links receiver Noise secret.
+ * Exported so SQLite rows can REFERENCE the keychain entry by name — the
+ * secret itself never enters the database.
+ */
+export const LINK_RECEIVER_SECRET_SERVICE = 'hypercolor-link-receiver-secret';
+
 // ─── MMKV metadata keys ───────────────────────────────────────────────────────
 
 const PUBKY_KEY = 'pubky';
 const HOMESERVER_KEY = 'homeserver';
 const SESSION_SECRET_KEY = 'session_secret';
+const LINK_SESSION_KEY = 'link_session';
 
 const MMKV_KEY_SERVICE = 'hypercolor-mmkv-encryption-key';
 let _store: MMKV | null = null;
@@ -173,6 +181,29 @@ export async function getTransportKeypair(): Promise<TransportKeypair | null> {
   }
 }
 
+// ─── Link receiver secret (Paykit Encrypted Links Noise key) ─────────────────
+// Receiver-scoped Noise secret for encrypted DMs. Whoever holds it (plus the
+// link snapshots in SQLite) can decrypt this user's conversations, so it
+// lives in the OS keychain — SQLite only stores LINK_RECEIVER_SECRET_SERVICE
+// as a reference. Losing it breaks every Encrypted Link the account has.
+
+export async function setLinkReceiverSecret(secretHex: string): Promise<void> {
+  await Keychain.setGenericPassword(KEYCHAIN_USERNAME, secretHex, {
+    service: LINK_RECEIVER_SECRET_SERVICE,
+    accessible: Keychain.ACCESSIBLE.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
+  });
+}
+
+export async function getLinkReceiverSecret(): Promise<string | null> {
+  const result = await Keychain.getGenericPassword({ service: LINK_RECEIVER_SECRET_SERVICE });
+  if (result === false) return null;
+  return result.password;
+}
+
+export async function deleteLinkReceiverSecret(): Promise<void> {
+  await Keychain.resetGenericPassword({ service: LINK_RECEIVER_SECRET_SERVICE });
+}
+
 // ─── AppCert (delegation proof from pubky-ring) ───────────────────────────────
 
 export async function setAppCert(cert: AppCert): Promise<void> {
@@ -222,6 +253,20 @@ export function getSessionSecret(): string | null {
   return store().getString(SESSION_SECRET_KEY) ?? null;
 }
 
+// ─── Link session (sync, MMKV — exported Paykit session, session-token tier) ─
+
+export function setLinkSession(exportedSession: string): void {
+  store().set(LINK_SESSION_KEY, exportedSession);
+}
+
+export function getLinkSession(): string | null {
+  return store().getString(LINK_SESSION_KEY) ?? null;
+}
+
+export function deleteLinkSession(): void {
+  store().remove(LINK_SESSION_KEY);
+}
+
 // ─── Session / cert validity ──────────────────────────────────────────────────
 
 export async function hasPersistedSession(): Promise<boolean> {
@@ -248,10 +293,12 @@ export async function clear(): Promise<void> {
     Keychain.resetGenericPassword({ service: INBOX_KEY_SERVICE }),
     Keychain.resetGenericPassword({ service: TRANSPORT_KEY_SERVICE }),
     Keychain.resetGenericPassword({ service: APP_CERT_SERVICE }),
+    deleteLinkReceiverSecret(),
   ]);
   store().remove(PUBKY_KEY);
   store().remove(HOMESERVER_KEY);
   store().remove(SESSION_SECRET_KEY);
+  store().remove(LINK_SESSION_KEY);
 }
 
 export const KeyStore = {
@@ -267,6 +314,14 @@ export const KeyStore = {
   // Transport keypair (X25519)
   setTransportKeypair,
   getTransportKeypair,
+  // Link receiver secret (Paykit Encrypted Links)
+  setLinkReceiverSecret,
+  getLinkReceiverSecret,
+  deleteLinkReceiverSecret,
+  // Link session (Paykit Encrypted Links)
+  setLinkSession,
+  getLinkSession,
+  deleteLinkSession,
   // AppCert
   setAppCert,
   getAppCert,

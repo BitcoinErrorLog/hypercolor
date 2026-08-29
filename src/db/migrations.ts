@@ -1,5 +1,5 @@
 import type { DB } from '@op-engineering/op-sqlite';
-import { SCHEMA_V1_STATEMENTS, SCHEMA_V2_STATEMENTS } from './schema';
+import { SCHEMA_V1_STATEMENTS, SCHEMA_V2_STATEMENTS, SCHEMA_V3_STATEMENTS } from './schema';
 
 /**
  * Migration runner for Hypercolor SQLite database.
@@ -13,7 +13,7 @@ import { SCHEMA_V1_STATEMENTS, SCHEMA_V2_STATEMENTS } from './schema';
  * - After adding a migration, bump CURRENT_VERSION.
  */
 
-const CURRENT_VERSION = 2;
+const CURRENT_VERSION = 3;
 
 type Migration = {
   version: number;
@@ -23,6 +23,7 @@ type Migration = {
 const MIGRATIONS: readonly Migration[] = [
   { version: 1, statements: SCHEMA_V1_STATEMENTS },
   { version: 2, statements: SCHEMA_V2_STATEMENTS },
+  { version: 3, statements: SCHEMA_V3_STATEMENTS },
 ];
 
 export async function runMigrations(db: DB): Promise<void> {
