@@ -1,0 +1,21 @@
+{
+  "name": "mesh-transport",
+  "version": "0.1.0",
+  "description": "Expo native module for BLE mesh peer discovery and direct delivery (iOS CoreBluetooth + Android BLE APIs)",
+  "main": "src/index",
+  "types": "src/index",
+  "scripts": {
+    "build": "expo-module build",
+    "clean": "expo-module clean",
+    "typecheck": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "expo": "*",
+    "expo-modules-core": "*",
+    "react-native": "*"
+  },
+  "expo": {
+    "name": "MeshTransport",
+    "platforms": ["ios", "android"]
+  }
+}

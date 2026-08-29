@@ -1,0 +1,53 @@
+import type { DB } from '@op-engineering/op-sqlite';
+import { SCHEMA_V1_STATEMENTS, SCHEMA_V2_STATEMENTS } from './schema';
+
+/**
+ * Migration runner for Hypercolor SQLite database.
+ *
+ * Each migration is a list of SQL statements applied atomically inside a
+ * transaction. Versions are stored in the SQLite user_version pragma.
+ *
+ * Rules:
+ * - Never modify an existing migration. Add a new one instead.
+ * - Every statement must be idempotent (use IF NOT EXISTS / IF EXISTS).
+ * - After adding a migration, bump CURRENT_VERSION.
+ */
+
+const CURRENT_VERSION = 2;
+
+type Migration = {
+  version: number;
+  statements: readonly string[];
+};
+
+const MIGRATIONS: readonly Migration[] = [
+  { version: 1, statements: SCHEMA_V1_STATEMENTS },
+  { version: 2, statements: SCHEMA_V2_STATEMENTS },
+];
+
+export async function runMigrations(db: DB): Promise<void> {
+  // Read current schema version
+  const versionResult = db.executeSync('PRAGMA user_version');
+  const currentVersion: number = (versionResult.rows?.[0]?.user_version as number) ?? 0;
+
+  if (currentVersion >= CURRENT_VERSION) {
+    return; // Already up to date
+  }
+
+  const pending = MIGRATIONS.filter(m => m.version > currentVersion);
+
+  for (const migration of pending) {
+    db.executeSync('BEGIN');
+    try {
+      for (const statement of migration.statements) {
+        db.executeSync(statement);
+      }
+      // Commit and advance the schema version
+      db.executeSync(`PRAGMA user_version = ${migration.version}`);
+      db.executeSync('COMMIT');
+    } catch (err) {
+      db.executeSync('ROLLBACK');
+      throw new Error(`Migration v${migration.version} failed: ${(err as Error).message}`);
+    }
+  }
+}

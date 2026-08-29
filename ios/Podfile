@@ -1,0 +1,136 @@
+require File.join(File.dirname(`node --print "require.resolve('expo/package.json')"`), "scripts/autolinking")
+require File.join(File.dirname(`node --print "require.resolve('react-native/package.json')"`), "scripts/react_native_pods")
+
+require 'json'
+podfile_properties = JSON.parse(File.read(File.join(__dir__, 'Podfile.properties.json'))) rescue {}
+
+def ccache_enabled?(podfile_properties)
+  # Environment variable takes precedence
+  return ENV['USE_CCACHE'] == '1' if ENV['USE_CCACHE']
+  
+  # Fall back to Podfile properties
+  podfile_properties['apple.ccacheEnabled'] == 'true'
+end
+
+ENV['RCT_NEW_ARCH_ENABLED'] ||= '0' if podfile_properties['newArchEnabled'] == 'false'
+ENV['EX_DEV_CLIENT_NETWORK_INSPECTOR'] ||= podfile_properties['EX_DEV_CLIENT_NETWORK_INSPECTOR']
+ENV['RCT_USE_RN_DEP'] ||= '1' if podfile_properties['ios.buildReactNativeFromSource'] != 'true' && podfile_properties['newArchEnabled'] != 'false'
+ENV['RCT_USE_PREBUILT_RNCORE'] ||= '1' if podfile_properties['ios.buildReactNativeFromSource'] != 'true' && podfile_properties['newArchEnabled'] != 'false'
+platform :ios, podfile_properties['ios.deploymentTarget'] || '15.1'
+
+prepare_react_native_project!
+
+target 'hypercolor' do
+  use_expo_modules!
+
+  if ENV['EXPO_USE_COMMUNITY_AUTOLINKING'] == '1'
+    config_command = ['node', '-e', "process.argv=['', '', 'config'];require('@react-native-community/cli').run()"];
+  else
+    config_command = [
+      'node',
+      '--no-warnings',
+      '--eval',
+      'require(\'expo/bin/autolinking\')',
+      'expo-modules-autolinking',
+      'react-native-config',
+      '--json',
+      '--platform',
+      'ios'
+    ]
+  end
+
+  config = use_native_modules!(config_command)
+
+  use_frameworks! :linkage => podfile_properties['ios.useFrameworks'].to_sym if podfile_properties['ios.useFrameworks']
+  use_frameworks! :linkage => ENV['USE_FRAMEWORKS'].to_sym if ENV['USE_FRAMEWORKS']
+
+  use_react_native!(
+    :path => config[:reactNativePath],
+    :hermes_enabled => podfile_properties['expo.jsEngine'] == nil || podfile_properties['expo.jsEngine'] == 'hermes',
+    # An absolute path to your application root.
+    :app_path => "#{Pod::Config.instance.installation_root}/..",
+    :privacy_file_aggregation_enabled => podfile_properties['apple.privacyManifestAggregationEnabled'] != 'false',
+  )
+
+  post_install do |installer|
+    react_native_post_install(
+      installer,
+      config[:reactNativePath],
+      :mac_catalyst_enabled => false,
+      :ccache_enabled => ccache_enabled?(podfile_properties),
+    )
+
+    # Wire PubkyNoise XCFramework and source files into the hypercolor Xcode target
+    main_project_path = File.join(installer.sandbox.root.parent, 'hypercolor.xcodeproj')
+    main_project = Xcodeproj::Project.open(main_project_path)
+
+    main_project.targets.each do |target|
+      next unless target.name == 'hypercolor'
+
+      # --- Source files ---
+      source_files = [
+        'hypercolor/PubkyNoise.swift',
+        'hypercolor/PubkyNoiseModule.swift',
+        'hypercolor/PubkyNoiseModule.m',
+      ]
+
+      source_group = main_project.main_group.find_subpath('hypercolor', true)
+      source_files.each do |rel_path|
+        next if main_project.files.any? { |f| f.path&.include?(File.basename(rel_path)) }
+        file_ref = main_project.new_file(rel_path)
+        target.add_file_references([file_ref])
+      end
+
+      # --- XCFramework embed ---
+      xcfw_rel = 'PubkyNoise.xcframework'
+      unless main_project.files.any? { |f| f.path&.include?('PubkyNoise.xcframework') }
+        xcfw_ref = main_project.new_file(xcfw_rel)
+        target.frameworks_build_phase.add_file_reference(xcfw_ref)
+
+        embed_phase = target.build_phases.find { |p| p.is_a?(Xcodeproj::Project::Object::PBXCopyFilesBuildPhase) && p.name == 'Embed Frameworks' }
+        if embed_phase.nil?
+          embed_phase = target.new_copy_files_build_phase('Embed Frameworks')
+          embed_phase.symbol_dst_subfolder_spec = :frameworks
+        end
+        embed_file = embed_phase.add_file_reference(xcfw_ref)
+        embed_file.settings = { 'ATTRIBUTES' => ['CodeSignOnCopy', 'RemoveHeadersOnCopy'] }
+      end
+
+      # --- Build settings: SWIFT_INCLUDE_PATHS, LIBRARY_SEARCH_PATHS, OTHER_LDFLAGS ---
+      target.build_configurations.each do |config|
+        is_simulator = config.name.downcase.include?('debug')
+
+        xcfw_modules = is_simulator \
+          ? '$(SRCROOT)/PubkyNoise.xcframework/ios-arm64_x86_64-simulator/Modules' \
+          : '$(SRCROOT)/PubkyNoise.xcframework/ios-arm64/Modules'
+        xcfw_lib = is_simulator \
+          ? '$(SRCROOT)/PubkyNoise.xcframework/ios-arm64_x86_64-simulator' \
+          : '$(SRCROOT)/PubkyNoise.xcframework/ios-arm64'
+
+        existing_swift = config.build_settings['SWIFT_INCLUDE_PATHS'] || ''
+        unless existing_swift.to_s.include?('PubkyNoise.xcframework')
+          config.build_settings['SWIFT_INCLUDE_PATHS'] = "$(inherited) #{xcfw_modules}"
+        end
+
+        lib_paths = config.build_settings['LIBRARY_SEARCH_PATHS'] || []
+        lib_paths = [lib_paths] if lib_paths.is_a?(String)
+        unless lib_paths.any? { |p| p.to_s.include?('PubkyNoise.xcframework') }
+          lib_paths << '$(inherited)'
+          lib_paths << xcfw_lib
+          config.build_settings['LIBRARY_SEARCH_PATHS'] = lib_paths
+        end
+
+        ld_flags = config.build_settings['OTHER_LDFLAGS'] || []
+        ld_flags = [ld_flags] if ld_flags.is_a?(String)
+        unless ld_flags.any? { |f| f.to_s.include?('pubky_noise') }
+          ld_flags << '$(inherited)'
+          ld_flags << '-force_load'
+          ld_flags << "#{xcfw_lib}/libpubky_noise.a"
+          config.build_settings['OTHER_LDFLAGS'] = ld_flags
+        end
+      end
+    end
+
+    main_project.save
+  end
+end
