@@ -1,12 +1,18 @@
 import {
+  assertValidReceiverPath,
   buildChatMessageEnvelope,
   buildDmConversationId,
   CHAT_MESSAGE_KIND,
   CHAT_REACTION_KIND,
   CHAT_RECEIPT_KIND,
   decodeChatMessageEnvelope,
+  decodeLinkEnvelope,
+  decodePubkyAppDmEnvelope,
+  isValidReceiverPath,
   LINK_MESSAGE_MAX_BYTES,
+  LINK_RECEIVER_PATH,
   parseDmConversationId,
+  PUBKY_APP_DM_KIND,
 } from '../../../types/link';
 
 const EVENT_ID = '00000000-0000-4000-8000-000000000001';
@@ -17,8 +23,25 @@ describe('link wire contracts', () => {
   describe('kind constants', () => {
     it('locks the wire kind identifiers', () => {
       expect(CHAT_MESSAGE_KIND).toBe('chat.message.v0');
+      expect(PUBKY_APP_DM_KIND).toBe('pubky_app.dm.v0');
       expect(CHAT_RECEIPT_KIND).toBe('chat.receipt.v0');
       expect(CHAT_REACTION_KIND).toBe('chat.reaction.v0');
+    });
+  });
+
+  describe('receiver path', () => {
+    it('uses the official hypercolor/wallet path', () => {
+      expect(LINK_RECEIVER_PATH).toBe('hypercolor/wallet');
+      expect(isValidReceiverPath(LINK_RECEIVER_PATH)).toBe(true);
+    });
+
+    it('rejects the invalid hypercolor/mobile path', () => {
+      expect(isValidReceiverPath('hypercolor/mobile')).toBe(false);
+      expect(() => assertValidReceiverPath('hypercolor/mobile')).toThrow('{app}/wallet');
+    });
+
+    it('accepts {app}/server', () => {
+      expect(isValidReceiverPath('pubky-app/server')).toBe(true);
     });
   });
 
@@ -131,6 +154,70 @@ describe('link wire contracts', () => {
 
     it('returns null for an empty body', () => {
       expect(decodeChatMessageEnvelope(JSON.stringify({ ...valid, body: '  ' }))).toBeNull();
+    });
+
+    it('accepts ISO-8601 sent_at and normalizes to epoch ms', () => {
+      const iso = '2026-01-01T00:00:00.000Z';
+      const decoded = decodeChatMessageEnvelope(JSON.stringify({ ...valid, sent_at: iso }));
+      expect(decoded?.sent_at).toBe(Date.parse(iso));
+    });
+  });
+
+  describe('dual-kind decode', () => {
+    const iso = '2026-01-15T12:00:00.000Z';
+
+    it('decodes pubky_app.dm.v0 with ISO sent_at into the internal model', () => {
+      const raw = JSON.stringify({
+        version: 1,
+        kind: PUBKY_APP_DM_KIND,
+        event_id: EVENT_ID,
+        sent_at: iso,
+        body: 'from web',
+      });
+      expect(decodePubkyAppDmEnvelope(raw)).toEqual({
+        version: 1,
+        kind: PUBKY_APP_DM_KIND,
+        event_id: EVENT_ID,
+        sent_at: Date.parse(iso),
+        body: 'from web',
+      });
+      expect(decodeLinkEnvelope(raw)?.kind).toBe(PUBKY_APP_DM_KIND);
+    });
+
+    it('decodes pubky_app.dm.v0 with epoch-ms sent_at', () => {
+      const raw = JSON.stringify({
+        version: 1,
+        kind: PUBKY_APP_DM_KIND,
+        event_id: EVENT_ID,
+        sent_at: SENT_AT,
+        body: 'from web',
+      });
+      expect(decodeLinkEnvelope(raw)?.sent_at).toBe(SENT_AT);
+    });
+
+    it('decodes chat.message.v0 with either timestamp form', () => {
+      expect(
+        decodeLinkEnvelope(
+          JSON.stringify({
+            version: 1,
+            kind: CHAT_MESSAGE_KIND,
+            event_id: EVENT_ID,
+            sent_at: SENT_AT,
+            body: 'hi',
+          }),
+        )?.sent_at,
+      ).toBe(SENT_AT);
+      expect(
+        decodeLinkEnvelope(
+          JSON.stringify({
+            version: 1,
+            kind: CHAT_MESSAGE_KIND,
+            event_id: EVENT_ID,
+            sent_at: iso,
+            body: 'hi',
+          }),
+        )?.sent_at,
+      ).toBe(Date.parse(iso));
     });
   });
 

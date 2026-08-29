@@ -70,3 +70,6 @@ yarn.lock
 # macOS AppleDouble files (exFAT volume)
 ._*
 **/._*
+
+# temporary review reference material
+.ai-review-refs/

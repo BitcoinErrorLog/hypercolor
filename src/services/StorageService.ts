@@ -10,6 +10,7 @@ import type {
   DeliveryStatus,
   PubkyKey,
 } from '../types';
+import type { SqlExecutor } from '../db/sql';
 import type {
   LinkDeliveryState,
   LinkMessage,
@@ -19,6 +20,8 @@ import type {
   LinkRecord,
   LinkRecordInput,
   LinkRole,
+  LinkStreamItem,
+  LinkStreamItemInput,
   StoredLinkStatus,
 } from '../types/link';
 
@@ -30,6 +33,21 @@ import type {
  */
 
 const now = () => Date.now();
+
+function transact(db: SqlExecutor, fn: () => void): void {
+  db.executeSync('BEGIN IMMEDIATE');
+  try {
+    fn();
+    db.executeSync('COMMIT');
+  } catch (err) {
+    try {
+      db.executeSync('ROLLBACK');
+    } catch {
+      // Rollback can fail if the connection already aborted the txn.
+    }
+    throw err;
+  }
+}
 
 // ─── Contacts ─────────────────────────────────────────────────────────────
 
@@ -367,6 +385,17 @@ export const StorageService = {
     );
   },
 
+  async deferQueueItem(id: string, nextRetryAt: number): Promise<void> {
+    const db = await getDb();
+    db.executeSync('UPDATE delivery_queue SET next_retry_at = ? WHERE id = ?', [nextRetryAt, id]);
+  },
+
+  async listDeliveryQueue(): Promise<DeliveryQueueItem[]> {
+    const db = await getDb();
+    const result = db.executeSync('SELECT * FROM delivery_queue ORDER BY created_at ASC');
+    return (result.rows ?? []).map(rowToQueueItem);
+  },
+
   async removeFromQueue(id: string): Promise<void> {
     const db = await getDb();
     db.executeSync('DELETE FROM delivery_queue WHERE id = ?', [id]);
@@ -417,19 +446,17 @@ export const StorageService = {
     const db = await getDb();
     db.executeSync(
       `INSERT INTO link_receivers
-        (owner_pubky, secret_ref, app, runtime, marker_published, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)
+        (owner_pubky, receiver_alias, receiver_path, marker_published, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?)
        ON CONFLICT(owner_pubky) DO UPDATE SET
-         secret_ref       = excluded.secret_ref,
-         app              = excluded.app,
-         runtime          = excluded.runtime,
+         receiver_alias   = excluded.receiver_alias,
+         receiver_path    = excluded.receiver_path,
          marker_published = excluded.marker_published,
          updated_at       = excluded.updated_at`,
       [
         receiver.ownerPubky,
-        receiver.secretRef,
-        receiver.app,
-        receiver.runtime,
+        receiver.receiverAlias,
+        receiver.receiverPath,
         receiver.markerPublished ? 1 : 0,
         now(),
         now(),
@@ -452,85 +479,189 @@ export const StorageService = {
   async upsertLink(link: LinkRecordInput): Promise<void> {
     const db = await getDb();
     db.executeSync(
-      `INSERT INTO links (peer_pubky, role, status, snapshot, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?)
-       ON CONFLICT(peer_pubky) DO UPDATE SET
-         role       = excluded.role,
-         status     = excluded.status,
-         snapshot   = excluded.snapshot,
-         updated_at = excluded.updated_at`,
-      [link.peerPubky, link.role, link.status, link.snapshot, now(), now()],
-    );
-  },
-
-  async getLink(peerPubky: PubkyKey): Promise<LinkRecord | null> {
-    const db = await getDb();
-    const result = db.executeSync('SELECT * FROM links WHERE peer_pubky = ?', [peerPubky]);
-    const row = result.rows?.[0];
-    if (!row) return null;
-    return rowToLink(row);
-  },
-
-  async getAllLinks(): Promise<LinkRecord[]> {
-    const db = await getDb();
-    const result = db.executeSync('SELECT * FROM links ORDER BY updated_at DESC');
-    return (result.rows ?? []).map(rowToLink);
-  },
-
-  async updateLinkSnapshot(
-    peerPubky: PubkyKey,
-    snapshot: string,
-    status: StoredLinkStatus,
-  ): Promise<void> {
-    const db = await getDb();
-    db.executeSync(
-      'UPDATE links SET snapshot = ?, status = ?, updated_at = ? WHERE peer_pubky = ?',
-      [snapshot, status, now(), peerPubky],
-    );
-  },
-
-  async deleteLink(peerPubky: PubkyKey): Promise<void> {
-    const db = await getDb();
-    db.executeSync('DELETE FROM links WHERE peer_pubky = ?', [peerPubky]);
-  },
-
-  // ── Link messages (Paykit Encrypted Links) ────────────────────────────────
-
-  async saveLinkMessage(message: LinkMessage): Promise<void> {
-    const db = await getDb();
-    // event_id is the PK — replayed deliveries after a snapshot restore are
-    // expected and must dedupe instead of duplicating or clobbering state.
-    db.executeSync(
-      `INSERT OR IGNORE INTO link_messages
-        (event_id, conversation_id, peer_pubky, direction, kind, raw_json,
-         body, sent_at, received_at, delivery_state, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO links
+        (owner_pubky, peer_pubky, role, status, snapshot,
+         remote_noise_public_key, local_receiver_path, remote_receiver_path,
+         consecutive_failures, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(owner_pubky, peer_pubky) DO UPDATE SET
+         role                    = excluded.role,
+         status                  = excluded.status,
+         snapshot                = excluded.snapshot,
+         remote_noise_public_key = excluded.remote_noise_public_key,
+         local_receiver_path     = excluded.local_receiver_path,
+         remote_receiver_path    = excluded.remote_receiver_path,
+         consecutive_failures    = excluded.consecutive_failures,
+         updated_at              = excluded.updated_at`,
       [
-        message.eventId,
-        message.conversationId,
-        message.peerPubky,
-        message.direction,
-        message.kind,
-        message.rawJson,
-        message.body,
-        message.sentAt,
-        message.receivedAt,
-        message.deliveryState,
+        link.ownerPubky,
+        link.peerPubky,
+        link.role,
+        link.status,
+        link.snapshot,
+        link.remoteNoisePublicKey,
+        link.localReceiverPath,
+        link.remoteReceiverPath,
+        link.consecutiveFailures,
         now(),
         now(),
       ],
     );
   },
 
-  async hasLinkMessage(eventId: string): Promise<boolean> {
+  async getLink(ownerPubky: PubkyKey, peerPubky: PubkyKey): Promise<LinkRecord | null> {
     const db = await getDb();
-    const result = db.executeSync('SELECT 1 FROM link_messages WHERE event_id = ? LIMIT 1', [
-      eventId,
+    const result = db.executeSync('SELECT * FROM links WHERE owner_pubky = ? AND peer_pubky = ?', [
+      ownerPubky,
+      peerPubky,
     ]);
+    const row = result.rows?.[0];
+    if (!row) return null;
+    return rowToLink(row);
+  },
+
+  async getAllLinks(ownerPubky: PubkyKey): Promise<LinkRecord[]> {
+    const db = await getDb();
+    const result = db.executeSync(
+      'SELECT * FROM links WHERE owner_pubky = ? ORDER BY updated_at DESC',
+      [ownerPubky],
+    );
+    return (result.rows ?? []).map(rowToLink);
+  },
+
+  async updateLinkSnapshot(
+    ownerPubky: PubkyKey,
+    peerPubky: PubkyKey,
+    snapshot: string,
+    status: StoredLinkStatus,
+  ): Promise<void> {
+    const db = await getDb();
+    db.executeSync(
+      `UPDATE links
+       SET snapshot = ?, status = ?, consecutive_failures = 0, updated_at = ?
+       WHERE owner_pubky = ? AND peer_pubky = ?`,
+      [snapshot, status, now(), ownerPubky, peerPubky],
+    );
+  },
+
+  async incrementLinkConsecutiveFailures(
+    ownerPubky: PubkyKey,
+    peerPubky: PubkyKey,
+  ): Promise<number> {
+    const db = await getDb();
+    const ts = now();
+    db.executeSync(
+      `UPDATE links
+       SET consecutive_failures = consecutive_failures + 1, updated_at = ?
+       WHERE owner_pubky = ? AND peer_pubky = ?`,
+      [ts, ownerPubky, peerPubky],
+    );
+    const result = db.executeSync(
+      'SELECT consecutive_failures FROM links WHERE owner_pubky = ? AND peer_pubky = ?',
+      [ownerPubky, peerPubky],
+    );
+    return (result.rows?.[0]?.consecutive_failures as number) ?? 0;
+  },
+
+  async deleteLink(ownerPubky: PubkyKey, peerPubky: PubkyKey): Promise<void> {
+    const db = await getDb();
+    db.executeSync('DELETE FROM links WHERE owner_pubky = ? AND peer_pubky = ?', [
+      ownerPubky,
+      peerPubky,
+    ]);
+  },
+
+  // ── Link messages (Paykit Encrypted Links) ────────────────────────────────
+
+  async saveLinkMessage(message: LinkMessage): Promise<void> {
+    const db = await getDb();
+    insertLinkMessage(db, message);
+  },
+
+  /**
+   * Atomic pre-send persist: the `sending` row AND the retry item that
+   * carries the exact serialized envelope. Closes the crash window where a
+   * row exists with no replayable rawJson (or vice versa).
+   */
+  async persistLinkSendIntent(input: {
+    message: LinkMessage;
+    queueItem: DeliveryQueueItem;
+  }): Promise<void> {
+    const db = await getDb();
+    transact(db, () => {
+      insertLinkMessage(db, input.message);
+      insertQueueItem(db, input.queueItem);
+    });
+  },
+
+  /**
+   * Atomic post-send persist: advanced snapshot + delivery `sent` + dequeue.
+   * Native has already used the Noise nonce; this commit is the JS-side
+   * checkpoint that `recoverPendingSends` treats as "already sent".
+   */
+  async finalizeLinkSend(input: {
+    ownerPubky: PubkyKey;
+    peerPubky: PubkyKey;
+    senderPubky: PubkyKey;
+    kind: string;
+    eventId: string;
+    snapshot: string;
+    queueId: string;
+  }): Promise<void> {
+    const db = await getDb();
+    const ts = now();
+    transact(db, () => {
+      db.executeSync(
+        `UPDATE link_messages
+         SET delivery_state = 'sent', updated_at = ?
+         WHERE owner_pubky = ? AND sender_pubky = ? AND kind = ? AND event_id = ?`,
+        [ts, input.ownerPubky, input.senderPubky, input.kind, input.eventId],
+      );
+      db.executeSync(
+        `UPDATE links
+         SET snapshot = ?, status = 'established', consecutive_failures = 0, updated_at = ?
+         WHERE owner_pubky = ? AND peer_pubky = ?`,
+        [input.snapshot, ts, input.ownerPubky, input.peerPubky],
+      );
+      db.executeSync('DELETE FROM delivery_queue WHERE id = ?', [input.queueId]);
+    });
+  },
+
+  async hasLinkMessage(
+    ownerPubky: PubkyKey,
+    senderPubky: PubkyKey,
+    kind: string,
+    eventId: string,
+  ): Promise<boolean> {
+    const db = await getDb();
+    const result = db.executeSync(
+      `SELECT 1 FROM link_messages
+       WHERE owner_pubky = ? AND sender_pubky = ? AND kind = ? AND event_id = ?
+       LIMIT 1`,
+      [ownerPubky, senderPubky, kind, eventId],
+    );
     return (result.rows?.length ?? 0) > 0;
   },
 
+  async getLinkMessage(
+    ownerPubky: PubkyKey,
+    senderPubky: PubkyKey,
+    kind: string,
+    eventId: string,
+  ): Promise<LinkMessage | null> {
+    const db = await getDb();
+    const result = db.executeSync(
+      `SELECT * FROM link_messages
+       WHERE owner_pubky = ? AND sender_pubky = ? AND kind = ? AND event_id = ?`,
+      [ownerPubky, senderPubky, kind, eventId],
+    );
+    const row = result.rows?.[0];
+    if (!row) return null;
+    return rowToLinkMessage(row);
+  },
+
   async getLinkMessagesForConversation(
+    ownerPubky: PubkyKey,
     conversationId: string,
     limit = 50,
     beforeMs?: number,
@@ -539,46 +670,121 @@ export const StorageService = {
     const result =
       beforeMs !== undefined
         ? db.executeSync(
-            'SELECT * FROM link_messages WHERE conversation_id = ? AND sent_at < ? ORDER BY sent_at DESC LIMIT ?',
-            [conversationId, beforeMs, limit],
+            `SELECT * FROM link_messages
+             WHERE owner_pubky = ? AND conversation_id = ? AND sent_at < ?
+             ORDER BY sent_at DESC LIMIT ?`,
+            [ownerPubky, conversationId, beforeMs, limit],
           )
         : db.executeSync(
-            'SELECT * FROM link_messages WHERE conversation_id = ? ORDER BY sent_at DESC LIMIT ?',
-            [conversationId, limit],
+            `SELECT * FROM link_messages
+             WHERE owner_pubky = ? AND conversation_id = ?
+             ORDER BY sent_at DESC LIMIT ?`,
+            [ownerPubky, conversationId, limit],
           );
     return (result.rows ?? []).map(rowToLinkMessage).reverse();
   },
 
-  async updateLinkMessageDeliveryState(eventId: string, state: LinkDeliveryState): Promise<void> {
+  async updateLinkMessageDeliveryState(
+    ownerPubky: PubkyKey,
+    senderPubky: PubkyKey,
+    kind: string,
+    eventId: string,
+    state: LinkDeliveryState,
+  ): Promise<void> {
     const db = await getDb();
     db.executeSync(
-      'UPDATE link_messages SET delivery_state = ?, updated_at = ? WHERE event_id = ?',
-      [state, now(), eventId],
+      `UPDATE link_messages
+       SET delivery_state = ?, updated_at = ?
+       WHERE owner_pubky = ? AND sender_pubky = ? AND kind = ? AND event_id = ?`,
+      [state, now(), ownerPubky, senderPubky, kind, eventId],
     );
+  },
+
+  // ── Link stream items (inbound raw, before snapshot) ──────────────────────
+
+  async saveLinkStreamItems(items: LinkStreamItemInput[]): Promise<void> {
+    if (items.length === 0) return;
+    const db = await getDb();
+    transact(db, () => {
+      for (const item of items) {
+        db.executeSync(
+          `INSERT OR IGNORE INTO link_stream_items
+            (id, owner_pubky, peer_pubky, kind, raw_json, received_at, processed, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, 0, ?)`,
+          [
+            item.id,
+            item.ownerPubky,
+            item.peerPubky,
+            item.kind,
+            item.rawJson,
+            item.receivedAt,
+            item.receivedAt,
+          ],
+        );
+      }
+    });
+  },
+
+  async getUnprocessedLinkStreamItems(
+    ownerPubky: PubkyKey,
+    peerPubky: PubkyKey,
+  ): Promise<LinkStreamItem[]> {
+    const db = await getDb();
+    const result = db.executeSync(
+      `SELECT * FROM link_stream_items
+       WHERE owner_pubky = ? AND peer_pubky = ? AND processed = 0
+       ORDER BY received_at ASC`,
+      [ownerPubky, peerPubky],
+    );
+    return (result.rows ?? []).map(rowToLinkStreamItem);
+  },
+
+  async markLinkStreamItemProcessed(id: string): Promise<void> {
+    const db = await getDb();
+    db.executeSync('UPDATE link_stream_items SET processed = 1 WHERE id = ?', [id]);
   },
 
   // ── Link read cursors (Paykit Encrypted Links) ────────────────────────────
 
-  async getLinkReadCursor(conversationId: string): Promise<number | null> {
+  async getLinkReadCursor(ownerPubky: PubkyKey, conversationId: string): Promise<number | null> {
     const db = await getDb();
     const result = db.executeSync(
-      'SELECT last_read_at FROM link_read_cursors WHERE conversation_id = ?',
-      [conversationId],
+      'SELECT last_read_at FROM link_read_cursors WHERE owner_pubky = ? AND conversation_id = ?',
+      [ownerPubky, conversationId],
     );
     const value = result.rows?.[0]?.last_read_at;
     return typeof value === 'number' ? value : null;
   },
 
-  async setLinkReadCursor(conversationId: string, lastReadAt: number): Promise<void> {
+  async setLinkReadCursor(
+    ownerPubky: PubkyKey,
+    conversationId: string,
+    lastReadAt: number,
+  ): Promise<void> {
     const db = await getDb();
     db.executeSync(
-      `INSERT INTO link_read_cursors (conversation_id, last_read_at, updated_at)
-       VALUES (?, ?, ?)
-       ON CONFLICT(conversation_id) DO UPDATE SET
+      `INSERT INTO link_read_cursors (owner_pubky, conversation_id, last_read_at, updated_at)
+       VALUES (?, ?, ?, ?)
+       ON CONFLICT(owner_pubky, conversation_id) DO UPDATE SET
          last_read_at = MAX(last_read_at, excluded.last_read_at),
          updated_at   = excluded.updated_at`,
-      [conversationId, lastReadAt, now()],
+      [ownerPubky, conversationId, lastReadAt, now()],
     );
+  },
+
+  /**
+   * Sign-out teardown: drop every Encrypted-Link row for this account.
+   * Callers must also close native handles (`closeLink` / `signOutSession`).
+   */
+  async clearAccountData(ownerPubky: PubkyKey): Promise<void> {
+    const db = await getDb();
+    transact(db, () => {
+      db.executeSync('DELETE FROM link_stream_items WHERE owner_pubky = ?', [ownerPubky]);
+      db.executeSync('DELETE FROM link_messages WHERE owner_pubky = ?', [ownerPubky]);
+      db.executeSync('DELETE FROM link_read_cursors WHERE owner_pubky = ?', [ownerPubky]);
+      db.executeSync('DELETE FROM links WHERE owner_pubky = ?', [ownerPubky]);
+      db.executeSync('DELETE FROM link_receivers WHERE owner_pubky = ?', [ownerPubky]);
+    });
   },
 };
 
@@ -660,13 +866,56 @@ function rowToQueueItem(row: any): DeliveryQueueItem {
   };
 }
 
+function insertQueueItem(db: SqlExecutor, item: DeliveryQueueItem): void {
+  db.executeSync(
+    `INSERT OR REPLACE INTO delivery_queue
+      (id, message_id, recipient_pubky, payload, attempts, next_retry_at, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    [
+      item.id,
+      item.messageId,
+      item.recipientPubky,
+      item.payload,
+      item.attempts,
+      item.nextRetryAt,
+      item.createdAt,
+    ],
+  );
+}
+
+function insertLinkMessage(db: SqlExecutor, message: LinkMessage): void {
+  const ts = now();
+  db.executeSync(
+    `INSERT OR IGNORE INTO link_messages
+      (owner_pubky, sender_pubky, kind, event_id, conversation_id, peer_pubky,
+       direction, raw_json, body, sent_at, received_at, delivery_state,
+       created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      message.ownerPubky,
+      message.senderPubky,
+      message.kind,
+      message.eventId,
+      message.conversationId,
+      message.peerPubky,
+      message.direction,
+      message.rawJson,
+      message.body,
+      message.sentAt,
+      message.receivedAt,
+      message.deliveryState,
+      ts,
+      ts,
+    ],
+  );
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function rowToLinkReceiver(row: any): LinkReceiver {
   return {
     ownerPubky: row.owner_pubky,
-    secretRef: row.secret_ref,
-    app: row.app,
-    runtime: row.runtime,
+    receiverAlias: row.receiver_alias,
+    receiverPath: row.receiver_path,
     markerPublished: row.marker_published === 1,
     updatedAt: row.updated_at,
   };
@@ -675,10 +924,15 @@ function rowToLinkReceiver(row: any): LinkReceiver {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function rowToLink(row: any): LinkRecord {
   return {
+    ownerPubky: row.owner_pubky,
     peerPubky: row.peer_pubky,
     role: row.role as LinkRole,
     status: row.status as StoredLinkStatus,
     snapshot: row.snapshot,
+    remoteNoisePublicKey: row.remote_noise_public_key,
+    localReceiverPath: row.local_receiver_path,
+    remoteReceiverPath: row.remote_receiver_path,
+    consecutiveFailures: row.consecutive_failures,
     updatedAt: row.updated_at,
   };
 }
@@ -686,9 +940,11 @@ function rowToLink(row: any): LinkRecord {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function rowToLinkMessage(row: any): LinkMessage {
   return {
+    ownerPubky: row.owner_pubky,
     eventId: row.event_id,
     conversationId: row.conversation_id,
     peerPubky: row.peer_pubky,
+    senderPubky: row.sender_pubky,
     direction: row.direction as LinkMessageDirection,
     kind: row.kind,
     rawJson: row.raw_json,
@@ -696,5 +952,18 @@ function rowToLinkMessage(row: any): LinkMessage {
     sentAt: row.sent_at,
     receivedAt: row.received_at ?? null,
     deliveryState: row.delivery_state as LinkDeliveryState,
+  };
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function rowToLinkStreamItem(row: any): LinkStreamItem {
+  return {
+    id: row.id,
+    ownerPubky: row.owner_pubky,
+    peerPubky: row.peer_pubky,
+    kind: row.kind ?? null,
+    rawJson: row.raw_json,
+    receivedAt: row.received_at,
+    processed: row.processed === 1,
   };
 }

@@ -9,6 +9,7 @@ jest.mock('../StorageService', () => ({
     dequeue: jest.fn(),
     removeFromQueue: jest.fn(),
     incrementAttempt: jest.fn(),
+    deferQueueItem: jest.fn(),
   },
 }));
 
@@ -89,11 +90,25 @@ describe('RetryQueue', () => {
     });
 
     it('drops the item permanently after the 10th attempt and records telemetry', async () => {
-      await RetryQueue.recordFailure('q1', 9);
+      await expect(RetryQueue.recordFailure('q1', 9)).resolves.toBe(true);
 
       expect(mockedStorage.removeFromQueue).toHaveBeenCalledWith('q1');
       expect(mockedStorage.incrementAttempt).not.toHaveBeenCalled();
       expect(mockedTelemetry.record).toHaveBeenCalledWith('delivery_failed_permanent');
+    });
+
+    it('returns false when the item is rescheduled', async () => {
+      await expect(RetryQueue.recordFailure('q1', 0)).resolves.toBe(false);
+    });
+  });
+
+  describe('defer', () => {
+    it('reschedules next_retry_at without incrementing attempts', async () => {
+      await RetryQueue.defer('q1', 2);
+
+      expect(mockedStorage.deferQueueItem).toHaveBeenCalledWith('q1', NOW + 60_000);
+      expect(mockedStorage.incrementAttempt).not.toHaveBeenCalled();
+      expect(mockedStorage.removeFromQueue).not.toHaveBeenCalled();
     });
   });
 

@@ -50,14 +50,25 @@ export const RetryQueue = {
   /**
    * Records a failed attempt and schedules the next retry.
    * Removes the item permanently if max attempts exceeded.
+   * Returns `true` when the item was permanently dropped.
    */
-  async recordFailure(id: string, currentAttempts: number): Promise<void> {
+  async recordFailure(id: string, currentAttempts: number): Promise<boolean> {
     if (currentAttempts + 1 >= MAX_ATTEMPTS) {
       await StorageService.removeFromQueue(id);
       Telemetry.record('delivery_failed_permanent');
-    } else {
-      await StorageService.incrementAttempt(id, nextRetryMs(currentAttempts + 1));
+      return true;
     }
+    await StorageService.incrementAttempt(id, nextRetryMs(currentAttempts + 1));
+    return false;
+  },
+
+  /**
+   * Reschedules `next_retry_at` WITHOUT incrementing attempts. Use when the
+   * link is not ready (still handshaking / peer offline) so a drain does not
+   * burn a retry. `recordFailure` is reserved for actual send failures.
+   */
+  async defer(id: string, currentAttempts: number): Promise<void> {
+    await StorageService.deferQueueItem(id, nextRetryMs(currentAttempts));
   },
 
   /**

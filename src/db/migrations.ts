@@ -1,5 +1,10 @@
-import type { DB } from '@op-engineering/op-sqlite';
-import { SCHEMA_V1_STATEMENTS, SCHEMA_V2_STATEMENTS, SCHEMA_V3_STATEMENTS } from './schema';
+import {
+  SCHEMA_V1_STATEMENTS,
+  SCHEMA_V2_STATEMENTS,
+  SCHEMA_V3_STATEMENTS,
+  SCHEMA_V4_STATEMENTS,
+} from './schema';
+import type { SqlExecutor } from './sql';
 
 /**
  * Migration runner for Hypercolor SQLite database.
@@ -13,7 +18,7 @@ import { SCHEMA_V1_STATEMENTS, SCHEMA_V2_STATEMENTS, SCHEMA_V3_STATEMENTS } from
  * - After adding a migration, bump CURRENT_VERSION.
  */
 
-const CURRENT_VERSION = 3;
+const CURRENT_VERSION = 4;
 
 type Migration = {
   version: number;
@@ -24,9 +29,10 @@ const MIGRATIONS: readonly Migration[] = [
   { version: 1, statements: SCHEMA_V1_STATEMENTS },
   { version: 2, statements: SCHEMA_V2_STATEMENTS },
   { version: 3, statements: SCHEMA_V3_STATEMENTS },
+  { version: 4, statements: SCHEMA_V4_STATEMENTS },
 ];
 
-export async function runMigrations(db: DB): Promise<void> {
+export async function runMigrations(db: SqlExecutor): Promise<void> {
   // Read current schema version
   const versionResult = db.executeSync('PRAGMA user_version');
   const currentVersion: number = (versionResult.rows?.[0]?.user_version as number) ?? 0;

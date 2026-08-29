@@ -1,49 +1,131 @@
 import { NativeModules } from 'react-native';
 
 /**
- * PaykitLinkNative — typed bridge to the PaykitLinkModule Rust UniFFI native
- * module implementing official Paykit Encrypted Links (Noise XX over pubky
- * homeserver outboxes).
+ * PaykitLinkNative — typed JS bridge to the PaykitLinkModule native
+ * implementation (Swift/Kotlin, built later).
  *
- * This file defines the FIXED contract the native side exposes. Snapshots,
- * sessions, and markers are opaque JSON strings owned by the Rust layer; the
- * TypeScript state machine never parses them, it only persists and passes
- * them back.
+ * Design principle: secret material NEVER crosses the JS bridge. Native owns
+ * keychain storage for the receiver Noise secret and the homeserver bearer.
+ * JS references those only by opaque alias. Snapshots cross the bridge ONLY
+ * as AEAD ciphertext (base64) encrypted natively under a per-install device
+ * key, with AAD binding
+ * `{ownerPubky, peerPubky, localReceiverPath, remoteReceiverPath, role}`.
+ * TypeScript must never parse a snapshot — persist it and pass it back.
  *
- * Contract semantics the state machine relies on:
- * - `acceptLink` resolves ONLY when an inbound handshake from the peer is
- *   queued (it consumes handshake message 1 and answers, or completes an
- *   already-advanced exchange); it REJECTS when there is nothing inbound.
- * - `advanceHandshake` is safe to call with an already-established snapshot:
- *   it reports `status: 'established'` without corrupting state, which is how
- *   snapshots returned by `acceptLink` are classified.
- * - `receivePrivateMessages` advances the link's read checkpoint past every
- *   returned message — callers MUST persist messages before the snapshot.
+ * `signinWithSecret` is the sole exception that accepts a secret: it is the
+ * dev/e2e test-harness path. Production uses `startAuthFlow` / `awaitAuthApproval`.
+ *
+ * Every method (except sync `isAvailable`) can reject with a {@link LinkNativeError}.
  */
 
-/** One advance step of a Noise XX handshake. */
+export const LINK_NATIVE_ERROR_CODES = [
+  'network',
+  'auth',
+  'protocol',
+  'consumed',
+  'validation',
+  'unavailable',
+] as const;
+
+export type LinkNativeErrorCode = (typeof LINK_NATIVE_ERROR_CODES)[number];
+
+/** Typed rejection from the native module (or the JS wrapper). */
+export type LinkNativeError = {
+  code: LinkNativeErrorCode;
+  message: string;
+};
+
+export function isLinkNativeErrorCode(value: unknown): value is LinkNativeErrorCode {
+  return (
+    typeof value === 'string' && (LINK_NATIVE_ERROR_CODES as readonly string[]).includes(value)
+  );
+}
+
+export function isLinkNativeError(err: unknown): err is LinkNativeError {
+  if (typeof err !== 'object' || err === null) return false;
+  const rec = err as { code?: unknown; message?: unknown };
+  return isLinkNativeErrorCode(rec.code) && typeof rec.message === 'string';
+}
+
+export function createLinkNativeError(code: LinkNativeErrorCode, message: string): LinkNativeError {
+  return { code, message };
+}
+
+export function toLinkNativeError(err: unknown): LinkNativeError {
+  if (isLinkNativeError(err)) return err;
+  const message = err instanceof Error ? err.message : String(err);
+  if (typeof err === 'object' && err !== null) {
+    const rec = err as { code?: unknown; userInfo?: { code?: unknown } };
+    if (isLinkNativeErrorCode(rec.code)) return { code: rec.code, message };
+    if (isLinkNativeErrorCode(rec.userInfo?.code)) {
+      return { code: rec.userInfo.code, message };
+    }
+  }
+  return { code: 'protocol', message };
+}
+
+export interface ReceiverKeyResult {
+  receiverAlias: string;
+  noisePublicKey: string;
+}
+
+export interface AuthFlowStart {
+  flowId: string;
+  authorizationUrl: string;
+}
+
+export interface AuthSessionResult {
+  sessionAlias: string;
+  pubky: string;
+}
+
+export interface RestoredSession {
+  pubky: string;
+}
+
+export interface ReceiverMarker {
+  noisePublicKey: string;
+  capabilitiesJson: string;
+}
+
+export interface LinkInitiateResult {
+  linkId: string;
+  snapshot: string;
+}
+
+export type LinkProbeResult =
+  | { result: 'none' }
+  | { result: 'pending'; linkId: string; snapshot: string }
+  | { result: 'established'; linkId: string; snapshot: string };
+
 export interface LinkAdvanceResult {
   status: 'pending' | 'established';
   snapshot: string;
 }
 
-/** The advanced link snapshot after a successful send. */
+export interface LinkRestoreHandshakeResult {
+  linkId: string;
+  status: 'pending' | 'established';
+}
+
+export interface LinkRestoreResult {
+  linkId: string;
+}
+
 export interface LinkSendResult {
   snapshot: string;
 }
 
 /**
- * One inbound Private Application Message. `rawJson` is the full wire
- * envelope; `kind`/`eventId` are best-effort hints extracted by the native
- * layer (`null` when the payload does not parse as a known envelope shape).
+ * One inbound Private Application Message. `event_id` is NOT a native field —
+ * parse it from `rawJson` in TypeScript.
  */
 export interface LinkInboundMessage {
-  rawJson: string;
+  version: number | null;
   kind: string | null;
-  eventId: string | null;
+  rawJson: string;
 }
 
-/** Drained inbound messages plus the advanced link snapshot. */
 export interface LinkReceiveResult {
   messages: LinkInboundMessage[];
   snapshot: string;
@@ -52,57 +134,101 @@ export interface LinkReceiveResult {
 export interface PaykitLinkNativeApi {
   /** True when the native module is linked into this build. */
   isAvailable(): boolean;
-  /** Generates a fresh receiver-scoped Noise secret key (hex). */
-  generateReceiverSecret(): Promise<string>;
-  /** Derives the receiver Noise public key (hex) from the secret. */
-  receiverPublicKey(secretHex: string): Promise<string>;
-  /** Signs in to the homeserver; returns the exported session JSON. */
-  signinWithSecret(secretKeyHex: string): Promise<string>;
-  /** Revalidates a persisted session; returns the refreshed exported session JSON. */
-  restoreSession(exportedSession: string): Promise<string>;
-  /** Publishes this account's receiver marker under the app/runtime path. */
-  publishReceiverMarker(
-    session: string,
-    receiverSecretHex: string,
-    app: string,
-    runtime: string,
-  ): Promise<void>;
-  /** Fetches a peer's receiver marker JSON, or `null` when the peer has not enabled messaging. */
-  getReceiverMarker(
-    session: string,
-    peerPubky: string,
-    app: string,
-    runtime: string,
-  ): Promise<string | null>;
-  /** Starts an outbound Noise XX handshake; returns the handshake snapshot JSON. */
-  initiateLink(
-    session: string,
-    receiverSecretHex: string,
-    peerPubky: string,
-    peerMarkerJson: string,
-  ): Promise<string>;
+  /** Generates a receiver Noise secret natively and stores it under an alias. */
+  generateReceiverKey(): Promise<ReceiverKeyResult>;
+  getReceiverPublicKey(receiverAlias: string): Promise<string>;
+  startAuthFlow(capabilities: string, relayUrl?: string): Promise<AuthFlowStart>;
+  awaitAuthApproval(flowId: string): Promise<AuthSessionResult>;
   /**
-   * Answers a queued inbound handshake; returns a handshake or established
-   * snapshot JSON. Rejects when the peer has nothing inbound to answer.
+   * Dev/e2e only. Signs in with an identity secret; native stores the bearer
+   * under `sessionAlias`. The secret is not persisted in JS.
    */
-  acceptLink(session: string, receiverSecretHex: string, peerPubky: string): Promise<string>;
-  /** Advances a handshake by one poll step. */
-  advanceHandshake(session: string, handshakeSnapshot: string): Promise<LinkAdvanceResult>;
-  /** Restores an established link; returns the in-memory link handle id. */
-  restoreLink(session: string, establishedSnapshot: string): Promise<string>;
-  /** Sends one Private Application Message over an established link. */
-  sendPrivateMessageJson(linkHandle: string, rawJson: string): Promise<LinkSendResult>;
-  /** Drains pending inbound messages on an established link. */
-  receivePrivateMessages(linkHandle: string): Promise<LinkReceiveResult>;
+  signinWithSecret(identitySecretHex: string): Promise<AuthSessionResult>;
+  /**
+   * Native loads and refreshes the bearer. Rejects with `auth` iff the
+   * session is revoked or expired; `network` keeps the alias usable.
+   */
+  restoreSession(sessionAlias: string): Promise<RestoredSession>;
+  signOutSession(sessionAlias: string): Promise<void>;
+  publishReceiverMarker(
+    sessionAlias: string,
+    receiverAlias: string,
+    receiverPath: string,
+  ): Promise<void>;
+  getReceiverMarker(peerPubky: string, receiverPath: string): Promise<ReceiverMarker | null>;
+  removeReceiverMarker(sessionAlias: string, receiverPath: string): Promise<void>;
+  initiateLink(
+    sessionAlias: string,
+    receiverAlias: string,
+    peerPubky: string,
+    peerNoisePublicKey: string,
+    localReceiverPath: string,
+    remoteReceiverPath: string,
+  ): Promise<LinkInitiateResult>;
+  /**
+   * Atomic inbound probe. `none` is NOT an error — nothing inbound, prior
+   * state must be left untouched.
+   */
+  probeInboundLink(
+    sessionAlias: string,
+    receiverAlias: string,
+    peerPubky: string,
+    peerNoisePublicKey: string,
+    localReceiverPath: string,
+    remoteReceiverPath: string,
+  ): Promise<LinkProbeResult>;
+  advanceHandshake(linkId: string): Promise<LinkAdvanceResult>;
+  restoreHandshake(
+    sessionAlias: string,
+    receiverAlias: string,
+    peerPubky: string,
+    peerNoisePublicKey: string,
+    localReceiverPath: string,
+    remoteReceiverPath: string,
+    snapshot: string,
+  ): Promise<LinkRestoreHandshakeResult>;
+  restoreLink(
+    sessionAlias: string,
+    receiverAlias: string,
+    peerPubky: string,
+    peerNoisePublicKey: string,
+    localReceiverPath: string,
+    remoteReceiverPath: string,
+    snapshot: string,
+  ): Promise<LinkRestoreResult>;
+  sendPrivateMessageJson(linkId: string, rawJson: string): Promise<LinkSendResult>;
+  receivePrivateMessages(linkId: string): Promise<LinkReceiveResult>;
+  clearLinkOutbox(
+    sessionAlias: string,
+    receiverAlias: string,
+    peerPubky: string,
+    peerNoisePublicKey: string,
+    localReceiverPath: string,
+    remoteReceiverPath: string,
+  ): Promise<number>;
+  closeLink(linkId: string): Promise<void>;
 }
 
 const { PaykitLinkModule } = NativeModules;
 
-function requireModule() {
+function requireModule(): Record<string, (...args: unknown[]) => unknown> {
   if (PaykitLinkModule == null) {
-    throw new Error('PaykitLinkModule native module is not available');
+    throw createLinkNativeError('unavailable', 'PaykitLinkModule native module is not available');
   }
-  return PaykitLinkModule;
+  return PaykitLinkModule as Record<string, (...args: unknown[]) => unknown>;
+}
+
+async function invoke<T>(method: string, ...args: unknown[]): Promise<T> {
+  const mod = requireModule();
+  const fn = mod[method];
+  if (typeof fn !== 'function') {
+    throw createLinkNativeError('unavailable', `PaykitLinkModule.${method} is not available`);
+  }
+  try {
+    return (await fn(...args)) as T;
+  } catch (err) {
+    throw toLinkNativeError(err);
+  }
 }
 
 export const PaykitLinkNative: PaykitLinkNativeApi = {
@@ -110,66 +236,164 @@ export const PaykitLinkNative: PaykitLinkNativeApi = {
     return PaykitLinkModule != null;
   },
 
-  generateReceiverSecret(): Promise<string> {
-    return requireModule().generateReceiverSecret();
+  generateReceiverKey(): Promise<ReceiverKeyResult> {
+    return invoke('generateReceiverKey');
   },
 
-  receiverPublicKey(secretHex: string): Promise<string> {
-    return requireModule().receiverPublicKey(secretHex);
+  getReceiverPublicKey(receiverAlias: string): Promise<string> {
+    return invoke('getReceiverPublicKey', receiverAlias);
   },
 
-  signinWithSecret(secretKeyHex: string): Promise<string> {
-    return requireModule().signinWithSecret(secretKeyHex);
+  startAuthFlow(capabilities: string, relayUrl?: string): Promise<AuthFlowStart> {
+    return relayUrl === undefined
+      ? invoke('startAuthFlow', capabilities)
+      : invoke('startAuthFlow', capabilities, relayUrl);
   },
 
-  restoreSession(exportedSession: string): Promise<string> {
-    return requireModule().restoreSession(exportedSession);
+  awaitAuthApproval(flowId: string): Promise<AuthSessionResult> {
+    return invoke('awaitAuthApproval', flowId);
+  },
+
+  signinWithSecret(identitySecretHex: string): Promise<AuthSessionResult> {
+    return invoke('signinWithSecret', identitySecretHex);
+  },
+
+  restoreSession(sessionAlias: string): Promise<RestoredSession> {
+    return invoke('restoreSession', sessionAlias);
+  },
+
+  signOutSession(sessionAlias: string): Promise<void> {
+    return invoke('signOutSession', sessionAlias);
   },
 
   publishReceiverMarker(
-    session: string,
-    receiverSecretHex: string,
-    app: string,
-    runtime: string,
+    sessionAlias: string,
+    receiverAlias: string,
+    receiverPath: string,
   ): Promise<void> {
-    return requireModule().publishReceiverMarker(session, receiverSecretHex, app, runtime);
+    return invoke('publishReceiverMarker', sessionAlias, receiverAlias, receiverPath);
   },
 
-  getReceiverMarker(
-    session: string,
-    peerPubky: string,
-    app: string,
-    runtime: string,
-  ): Promise<string | null> {
-    return requireModule().getReceiverMarker(session, peerPubky, app, runtime);
+  getReceiverMarker(peerPubky: string, receiverPath: string): Promise<ReceiverMarker | null> {
+    return invoke('getReceiverMarker', peerPubky, receiverPath);
+  },
+
+  removeReceiverMarker(sessionAlias: string, receiverPath: string): Promise<void> {
+    return invoke('removeReceiverMarker', sessionAlias, receiverPath);
   },
 
   initiateLink(
-    session: string,
-    receiverSecretHex: string,
+    sessionAlias: string,
+    receiverAlias: string,
     peerPubky: string,
-    peerMarkerJson: string,
-  ): Promise<string> {
-    return requireModule().initiateLink(session, receiverSecretHex, peerPubky, peerMarkerJson);
+    peerNoisePublicKey: string,
+    localReceiverPath: string,
+    remoteReceiverPath: string,
+  ): Promise<LinkInitiateResult> {
+    return invoke(
+      'initiateLink',
+      sessionAlias,
+      receiverAlias,
+      peerPubky,
+      peerNoisePublicKey,
+      localReceiverPath,
+      remoteReceiverPath,
+    );
   },
 
-  acceptLink(session: string, receiverSecretHex: string, peerPubky: string): Promise<string> {
-    return requireModule().acceptLink(session, receiverSecretHex, peerPubky);
+  probeInboundLink(
+    sessionAlias: string,
+    receiverAlias: string,
+    peerPubky: string,
+    peerNoisePublicKey: string,
+    localReceiverPath: string,
+    remoteReceiverPath: string,
+  ): Promise<LinkProbeResult> {
+    return invoke(
+      'probeInboundLink',
+      sessionAlias,
+      receiverAlias,
+      peerPubky,
+      peerNoisePublicKey,
+      localReceiverPath,
+      remoteReceiverPath,
+    );
   },
 
-  advanceHandshake(session: string, handshakeSnapshot: string): Promise<LinkAdvanceResult> {
-    return requireModule().advanceHandshake(session, handshakeSnapshot);
+  advanceHandshake(linkId: string): Promise<LinkAdvanceResult> {
+    return invoke('advanceHandshake', linkId);
   },
 
-  restoreLink(session: string, establishedSnapshot: string): Promise<string> {
-    return requireModule().restoreLink(session, establishedSnapshot);
+  restoreHandshake(
+    sessionAlias: string,
+    receiverAlias: string,
+    peerPubky: string,
+    peerNoisePublicKey: string,
+    localReceiverPath: string,
+    remoteReceiverPath: string,
+    snapshot: string,
+  ): Promise<LinkRestoreHandshakeResult> {
+    return invoke(
+      'restoreHandshake',
+      sessionAlias,
+      receiverAlias,
+      peerPubky,
+      peerNoisePublicKey,
+      localReceiverPath,
+      remoteReceiverPath,
+      snapshot,
+    );
   },
 
-  sendPrivateMessageJson(linkHandle: string, rawJson: string): Promise<LinkSendResult> {
-    return requireModule().sendPrivateMessageJson(linkHandle, rawJson);
+  restoreLink(
+    sessionAlias: string,
+    receiverAlias: string,
+    peerPubky: string,
+    peerNoisePublicKey: string,
+    localReceiverPath: string,
+    remoteReceiverPath: string,
+    snapshot: string,
+  ): Promise<LinkRestoreResult> {
+    return invoke(
+      'restoreLink',
+      sessionAlias,
+      receiverAlias,
+      peerPubky,
+      peerNoisePublicKey,
+      localReceiverPath,
+      remoteReceiverPath,
+      snapshot,
+    );
   },
 
-  receivePrivateMessages(linkHandle: string): Promise<LinkReceiveResult> {
-    return requireModule().receivePrivateMessages(linkHandle);
+  sendPrivateMessageJson(linkId: string, rawJson: string): Promise<LinkSendResult> {
+    return invoke('sendPrivateMessageJson', linkId, rawJson);
+  },
+
+  receivePrivateMessages(linkId: string): Promise<LinkReceiveResult> {
+    return invoke('receivePrivateMessages', linkId);
+  },
+
+  clearLinkOutbox(
+    sessionAlias: string,
+    receiverAlias: string,
+    peerPubky: string,
+    peerNoisePublicKey: string,
+    localReceiverPath: string,
+    remoteReceiverPath: string,
+  ): Promise<number> {
+    return invoke(
+      'clearLinkOutbox',
+      sessionAlias,
+      receiverAlias,
+      peerPubky,
+      peerNoisePublicKey,
+      localReceiverPath,
+      remoteReceiverPath,
+    );
+  },
+
+  closeLink(linkId: string): Promise<void> {
+    return invoke('closeLink', linkId);
   },
 };
