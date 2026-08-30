@@ -27,6 +27,7 @@ import {
   generatePartySecrets,
   pollUntil,
   requirePartyField,
+  requireRingAppCert,
   requireText,
   resolveClock,
   signupParty,
@@ -34,6 +35,7 @@ import {
   type LiveProofConfig,
   type LiveProofReport,
   type ProductLiveProofDeps,
+  type RingKeyStoreApi,
 } from './liveProofShared';
 
 export type AttachmentLiveProofDeps = ProductLiveProofDeps & {
@@ -41,6 +43,7 @@ export type AttachmentLiveProofDeps = ProductLiveProofDeps & {
   writeFixtureFile?: (standardB64: string, fileName: string) => Promise<string>;
   readCacheFile?: (uri: string) => Promise<string>;
   getHomeserverBlob?: (url: string) => Promise<string | null>;
+  keyStore?: RingKeyStoreApi;
 };
 
 const FIXTURE_BODY = 'liveproof-attachment-v1';
@@ -62,6 +65,7 @@ export async function runAttachmentLiveProof(
   const writeFixture = deps.writeFixtureFile ?? defaultWriteFixture;
   const readCache = deps.readCacheFile ?? defaultReadCache;
   const getBlob = deps.getHomeserverBlob ?? ((url: string) => PubkyService.get(url));
+  const keyStore = deps.keyStore ?? KeyStore;
   const partyA = emptyParty('A');
   const partyB = emptyParty('B');
   const redactSecrets = [config.signupTokenA, config.signupTokenB];
@@ -80,9 +84,24 @@ export async function runAttachmentLiveProof(
     }
 
     if (
+      !(await record('require-ring-appcert', async () => {
+        const ring = await requireRingAppCert(keyStore);
+        partyA.pubky = ring.pubky;
+        partyA.sessionAlias = ring.sessionAlias;
+        if (!partyA.sessionAlias) {
+          throw new Error(
+            'Ring session alias is missing. Run p6 (startAuthFlow / awaitAuthApproval) before p3.',
+          );
+        }
+        return ring.pubky;
+      }))
+    ) {
+      return failed();
+    }
+
+    if (
       !(await record('validate-config', async () => {
         requireText(config.homeserverPubky, 'homeserverPubky');
-        requireText(config.signupTokenA, 'signupTokenA');
         requireText(config.signupTokenB, 'signupTokenB');
         return 'ok';
       }))
@@ -92,15 +111,12 @@ export async function runAttachmentLiveProof(
 
     if (
       !(await record('generate-identities', async () =>
-        generatePartySecrets([partyA, partyB], randomBytes, redactSecrets),
+        generatePartySecrets([partyB], randomBytes, redactSecrets),
       ))
     ) {
       return failed();
     }
 
-    if (!(await signupParty(record, native, config.homeserverPubky, partyA, config.signupTokenA))) {
-      return failed();
-    }
     if (!(await signupParty(record, native, config.homeserverPubky, partyB, config.signupTokenB))) {
       return failed();
     }

@@ -1,5 +1,12 @@
 import React, { useEffect, useState } from 'react';
-import { View, ActivityIndicator, StyleSheet, AppState, type AppStateStatus } from 'react-native';
+import {
+  View,
+  ActivityIndicator,
+  StyleSheet,
+  AppState,
+  Linking,
+  type AppStateStatus,
+} from 'react-native';
 import { RootNavigator } from './src/navigation/RootNavigator';
 import { KeyStore } from './src/services/KeyStore';
 import { LinkService, startLinkRetryDrain } from './src/services/link/LinkService';
@@ -10,7 +17,7 @@ export default function App() {
   useEffect(() => {
     // Dev-only, env-gated live-proof auto-runner. EXPO_PUBLIC_LIVEPROOF is
     // "<homeserverPubky>,<tokenA>,<tokenB>[,<tokenC>]". Expo inlines
-    // EXPO_PUBLIC_* at bundle time. EXPO_PUBLIC_LIVEPROOF_ROWS selects P0–P5;
+    // EXPO_PUBLIC_* at bundle time. EXPO_PUBLIC_LIVEPROOF_ROWS selects P0–P6;
     // EXPO_PUBLIC_LIVEPROOF_NATIVE=1 also runs the native diagnostic. Logs
     // are redacted so tokens and identity secrets never hit the console.
     if (__DEV__ && process.env.EXPO_PUBLIC_LIVEPROOF) {
@@ -25,13 +32,20 @@ export default function App() {
           const secrets = [signupTokenA, signupTokenB, signupTokenC].filter(
             token => token.length > 0,
           );
-          return runNamedLiveProofs({
-            homeserverPubky,
-            signupTokenA,
-            signupTokenB,
-            ...(signupTokenC.length > 0 ? { signupTokenC } : {}),
-            rows,
-          }).then(result =>
+          return runNamedLiveProofs(
+            {
+              homeserverPubky,
+              signupTokenA,
+              signupTokenB,
+              ...(signupTokenC.length > 0 ? { signupTokenC } : {}),
+              rows,
+            },
+            {
+              openWalletUri: uri => Linking.openURL(uri),
+              canOpenWalletUri: uri => Linking.canOpenURL(uri),
+              openAuthUrl: url => Linking.openURL(url),
+            },
+          ).then(result =>
             console.log(
               '[liveproof] REPORT',
               redactLiveProofForLog(JSON.stringify(result), secrets),

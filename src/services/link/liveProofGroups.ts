@@ -10,6 +10,7 @@ import { GroupService } from '../group/GroupService';
 import { applyGroupInbound } from '../group/applyGroupInbound';
 import { StorageService } from '../StorageService';
 import {
+  addPastedContact,
   adoptAndProvision,
   cleanupProductParties,
   createLiveProofRecorder,
@@ -104,6 +105,20 @@ export async function runGroupLiveProof(
     const pubkyA = requirePartyField(partyA.pubky, 'A.pubky');
     const pubkyB = requirePartyField(partyB.pubky, 'B.pubky');
     const pubkyC = requirePartyField(partyC.pubky, 'C.pubky');
+
+    if (
+      !(await record('add-contacts-paste', async () => {
+        await addPastedContact(storage, pubkyA, pubkyB, now);
+        await addPastedContact(storage, pubkyB, pubkyA, now);
+        await addPastedContact(storage, pubkyA, pubkyC, now);
+        await addPastedContact(storage, pubkyC, pubkyA, now);
+        await addPastedContact(storage, pubkyB, pubkyC, now);
+        await addPastedContact(storage, pubkyC, pubkyB, now);
+        return 'A↔B A↔C B↔C addedManually';
+      }))
+    ) {
+      return failed();
+    }
 
     if (
       !(await record('establish-ab', async () =>

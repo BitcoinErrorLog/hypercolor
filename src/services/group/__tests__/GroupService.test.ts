@@ -119,6 +119,31 @@ describe('GroupService', () => {
     expect(chat?.body).toBe('hello all');
   });
 
+  it('applies an inbound create so the receiver stores the founder-bound channel', async () => {
+    const channelId = `${PEER_A}:00000000-0000-4000-8000-00000000aaaa`;
+    const built = buildGroupMembershipEnvelope({
+      channelId,
+      eventId: EVENT,
+      sentAt: NOW,
+      op: 'create',
+      name: 'Inbound',
+      members: [OWNER, PEER_A],
+    });
+    await applyGroupInbound({
+      ownerPubky: OWNER,
+      senderPubky: PEER_A,
+      envelope: built.envelope,
+      rawJson: built.json,
+      receivedAt: NOW,
+    });
+    const channel = await StorageService.getGroupChannel(OWNER, channelId);
+    expect(channel?.createdBy).toBe(PEER_A);
+    expect(channel?.name).toBe('Inbound');
+    expect(await StorageService.getGroupMember(OWNER, channelId, OWNER)).toEqual(
+      expect.objectContaining({ status: 'active', memberPubky: OWNER }),
+    );
+  });
+
   it('applies a membership op from an admin and rejects one from a non-admin', async () => {
     const channelId = await createPrivateGroup();
 

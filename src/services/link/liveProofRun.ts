@@ -1,3 +1,4 @@
+import { runRingAuthLiveProof } from './liveProofAuth';
 import { runAttachmentLiveProof } from './liveProofAttachments';
 import { runBackupLiveProof } from './liveProofBackup';
 import { runContactsLiveProof } from './liveProofContacts';
@@ -6,6 +7,7 @@ import { runLinkLiveProof } from './liveProof';
 import { runPaymentHandoffLiveProof, type PaymentLiveProofDeps } from './liveProofPayments';
 import { runLinkServiceLiveProof } from './liveProofProduct';
 import type {
+  AuthLiveProofDeps,
   LiveProofReport,
   NamedLiveProofConfig,
   ProductLiveProofDeps,
@@ -19,6 +21,7 @@ export {
   redactLiveProofForLog,
 } from './liveProofShared';
 export { runLinkLiveProof } from './liveProof';
+export { runRingAuthLiveProof } from './liveProofAuth';
 export { runAttachmentLiveProof } from './liveProofAttachments';
 export { runBackupLiveProof } from './liveProofBackup';
 export { runContactsLiveProof } from './liveProofContacts';
@@ -26,10 +29,10 @@ export { runGroupLiveProof } from './liveProofGroups';
 export { runPaymentHandoffLiveProof } from './liveProofPayments';
 export { runLinkServiceLiveProof } from './liveProofProduct';
 
-export type NamedLiveProofDeps = ProductLiveProofDeps & PaymentLiveProofDeps;
+export type NamedLiveProofDeps = ProductLiveProofDeps & PaymentLiveProofDeps & AuthLiveProofDeps;
 
 /**
- * Dispatch named P0–P5 (and optional native diagnostic) rows. Each row is
+ * Dispatch named P0–P6 (and optional native diagnostic) rows. Each row is
  * a separate report so a native dummy-proof close cannot paint P4 green.
  */
 export async function runNamedLiveProofs(
@@ -74,6 +77,11 @@ export async function runNamedLiveProofs(
     }
     if (row === 'p5') {
       rows.push({ row, report: await runBackupLiveProof(twoParty, deps) });
+      continue;
+    }
+    if (row === 'p6') {
+      rows.push({ row, report: await runRingAuthLiveProof({}, deps) });
+      continue;
     }
   }
 

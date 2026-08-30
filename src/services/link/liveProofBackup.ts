@@ -12,6 +12,7 @@ import {
   emptyParty,
   generatePartySecrets,
   requirePartyField,
+  requireRingAppCert,
   requireText,
   resolveClock,
   signupParty,
@@ -19,6 +20,7 @@ import {
   type LiveProofConfig,
   type LiveProofReport,
   type ProductLiveProofDeps,
+  type RingKeyStoreApi,
 } from './liveProofShared';
 
 const SNAPSHOT_MARKER = 'LIVEPROOF-DEVICE-SNAPSHOT';
@@ -28,10 +30,8 @@ const ATTACHMENT_KEY_MARKER = 'LIVEPROOF-ATTACHMENT-KEY';
 
 export type BackupLiveProofDeps = ProductLiveProofDeps & {
   backup?: Pick<typeof BackupService, 'exportBackup' | 'restoreBackup'>;
-  keyStore?: Pick<
-    typeof KeyStore,
-    'setPubky' | 'deleteLinkSession' | 'clearAttachmentSecretsForOwner' | 'getAttachmentSecret'
-  >;
+  keyStore?: RingKeyStoreApi &
+    Pick<typeof KeyStore, 'deleteLinkSession' | 'clearAttachmentSecretsForOwner' | 'getAttachmentSecret'>;
 };
 
 /**
@@ -66,9 +66,20 @@ export async function runBackupLiveProof(
     }
 
     if (
+      !(await record('require-ring-appcert', async () => {
+        const ring = await requireRingAppCert(keyStore);
+        partyA.pubky = ring.pubky;
+        partyA.sessionAlias = ring.sessionAlias;
+        keyStore.setPubky(ring.pubky);
+        return ring.pubky;
+      }))
+    ) {
+      return failed();
+    }
+
+    if (
       !(await record('validate-config', async () => {
         requireText(config.homeserverPubky, 'homeserverPubky');
-        requireText(config.signupTokenA, 'signupTokenA');
         requireText(config.signupTokenB, 'signupTokenB');
         return 'ok';
       }))
@@ -78,19 +89,15 @@ export async function runBackupLiveProof(
 
     if (
       !(await record('generate-identities', async () =>
-        generatePartySecrets([partyA, partyB], randomBytes, redactSecrets),
+        generatePartySecrets([partyB], randomBytes, redactSecrets),
       ))
     ) {
       return failed();
     }
 
-    if (!(await signupParty(record, native, config.homeserverPubky, partyA, config.signupTokenA))) {
-      return failed();
-    }
     if (!(await signupParty(record, native, config.homeserverPubky, partyB, config.signupTokenB))) {
       return failed();
     }
-    if (!(await adoptAndProvision(record, link, partyA))) return failed();
 
     const pubkyA = requirePartyField(partyA.pubky, 'A.pubky');
     const pubkyB = requirePartyField(partyB.pubky, 'B.pubky');

@@ -1,7 +1,8 @@
 import { PaykitLinkNative, isLinkNativeError, type PaykitLinkNativeApi } from './PaykitLinkNative';
 import { LINK_RECEIVER_PATH } from '../../types/link';
-import { LinkService } from './LinkService';
+import { LinkService, type LinkEnableFlow } from './LinkService';
 import { StorageService } from '../StorageService';
+import { KeyStore } from '../KeyStore';
 
 export type LiveProofConfig = {
   homeserverPubky: string;
@@ -35,7 +36,7 @@ export type LiveProofDeps = {
   pollIntervalMs?: number;
 };
 
-export type NamedLiveProofRow = 'native' | 'p0' | 'p1' | 'p2' | 'p3' | 'p4' | 'p5';
+export type NamedLiveProofRow = 'native' | 'p0' | 'p1' | 'p2' | 'p3' | 'p4' | 'p5' | 'p6';
 
 export type NamedLiveProofConfig = {
   homeserverPubky: string;
@@ -70,6 +71,21 @@ export type LiveProofLinkApi = {
 
 export type ProductLiveProofDeps = LiveProofDeps & {
   link?: LiveProofLinkApi;
+};
+
+export type RingKeyStoreApi = Pick<
+  typeof KeyStore,
+  'isAppCertValid' | 'getPubky' | 'getLinkSession' | 'setPubky'
+>;
+
+export type AuthLiveProofDeps = ProductLiveProofDeps & {
+  /**
+   * Parent attaches this so the pubkyauth URL is opened on-device as-is
+   * (`Linking.openURL(authorizationUrl)`). Do not wrap the URL.
+   */
+  openAuthUrl?: (url: string) => Promise<void>;
+  enable?: () => Promise<LinkEnableFlow>;
+  keyStore?: RingKeyStoreApi;
 };
 
 export const DEFAULT_HANDSHAKE_TIMEOUT_MS = 60_000;
@@ -157,7 +173,7 @@ export function parseLiveProofTokenList(
 
 export function parseNamedLiveProofRows(raw: string | undefined): NamedLiveProofRow[] {
   if (raw === undefined || raw.trim().length === 0) return ['p0'];
-  const allowed: readonly NamedLiveProofRow[] = ['native', 'p0', 'p1', 'p2', 'p3', 'p4', 'p5'];
+  const allowed: readonly NamedLiveProofRow[] = ['native', 'p0', 'p1', 'p2', 'p3', 'p4', 'p5', 'p6'];
   const rows: NamedLiveProofRow[] = [];
   for (const part of raw.split(',')) {
     const trimmed = part.trim().toLowerCase() as NamedLiveProofRow;
@@ -490,4 +506,46 @@ export async function cleanupProductParties(
     await native.clearAllNativeSecrets();
     return 'cleared';
   });
+}
+
+/** Paste/QR contact so WoT auto-accepts inbound from that peer. */
+export async function addPastedContact(
+  storage: Pick<typeof StorageService, 'upsertContact'>,
+  ownerPubky: string,
+  contactPubky: string,
+  now: () => number,
+): Promise<void> {
+  await storage.upsertContact({
+    pubky: contactPubky,
+    ownerPubky,
+    trustScore: 0,
+    isFollowing: false,
+    isFollower: false,
+    isMutual: false,
+    addedManually: true,
+    firstSeenAt: now(),
+  });
+}
+
+/**
+ * Owner writes (attachments / backup) require a Ring-delegated AppCert.
+ * Fail fast before signup so P3/P5 do not spend tokens then hit the
+ * generic AppCert throw.
+ */
+export async function requireRingAppCert(
+  keyStore: RingKeyStoreApi,
+): Promise<{ pubky: string; sessionAlias: string | null }> {
+  const valid = await keyStore.isAppCertValid();
+  if (!valid) {
+    throw new Error(
+      'Ring AppCert is missing or expired. Run p6 (startAuthFlow / awaitAuthApproval) before this row, then re-authorize Hypercolor with pubky-ring.',
+    );
+  }
+  const pubky = keyStore.getPubky();
+  if (!pubky || pubky.trim().length === 0) {
+    throw new Error(
+      'Ring AppCert is valid but no pubky is stored. Re-authorize Hypercolor with pubky-ring.',
+    );
+  }
+  return { pubky, sessionAlias: keyStore.getLinkSession() };
 }

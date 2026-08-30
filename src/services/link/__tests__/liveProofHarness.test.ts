@@ -3,7 +3,12 @@ import { runMigrations } from '../../../db/migrations';
 import { openMemoryDb } from '../../../db/__tests__/betterSqliteAdapter';
 import { ATTACHMENT_MAX_BYTES } from '../../../flags/config';
 import { CHAT_MESSAGE_KIND, LINK_RECEIVER_PATH } from '../../../types/link';
+import {
+  buildGroupMembershipEnvelope,
+  decodeGroupEnvelope,
+} from '../../../types/group';
 import { StorageService } from '../../StorageService';
+import { applyGroupInbound } from '../../group/applyGroupInbound';
 import { classifyInboundPeer, wotInputFromContact } from '../wotGate';
 import {
   runAttachmentLiveProof,
@@ -13,6 +18,7 @@ import {
   runLinkServiceLiveProof,
   runNamedLiveProofs,
   runPaymentHandoffLiveProof,
+  runRingAuthLiveProof,
 } from '../liveProofRun';
 import type { LiveProofLinkApi, ProductLiveProofDeps } from '../liveProofShared';
 import type { PaykitLinkNativeApi } from '../PaykitLinkNative';
@@ -61,8 +67,10 @@ jest.mock('../../KeyStore', () => ({
   KeyStore: {
     getPubky: jest.fn(),
     setPubky: jest.fn(),
+    getLinkSession: jest.fn(),
     setLinkSession: jest.fn(),
     deleteLinkSession: jest.fn(),
+    isAppCertValid: jest.fn(),
     getAttachmentSecret: jest.fn(),
     setAttachmentSecret: jest.fn(),
     clearAttachmentSecretsForOwner: jest.fn().mockResolvedValue([]),
@@ -98,6 +106,8 @@ jest.mock('../PaykitLinkNative', () => ({
   PaykitLinkNative: {
     isAvailable: jest.fn(),
     signupWithSecret: jest.fn(),
+    startAuthFlow: jest.fn(),
+    awaitAuthApproval: jest.fn(),
     generateReceiverKey: jest.fn(),
     publishReceiverMarker: jest.fn(),
     getReceiverMarker: jest.fn(),
@@ -161,13 +171,20 @@ function mockSignup(): void {
   mockedNative.closeLink.mockResolvedValue(undefined);
   mockedNative.clearAllNativeSecrets.mockResolvedValue(undefined);
   mockedNative.attachmentDecrypt.mockRejectedValue(new Error('aad mismatch'));
+  mockedKeyStore.isAppCertValid.mockResolvedValue(true);
+  mockedKeyStore.getLinkSession.mockReturnValue('session-a');
+  mockedKeyStore.getPubky.mockReturnValue(PUBKY_A);
 }
 
 type Queued = { eventId: string; body: string; sender: string };
+type GroupQueued = { rawJson: string; sender: string };
 
-function createProductLink(): LiveProofLinkApi {
+function createProductLink(): LiveProofLinkApi & {
+  enqueueGroup: (to: string, from: string, rawJson: string) => void;
+} {
   let owner = '';
   const inbox = new Map<string, Queued[]>();
+  const groupInbox = new Map<string, GroupQueued[]>();
   let seq = 0;
   const nextId = (): string => {
     seq += 1;
@@ -175,7 +192,28 @@ function createProductLink(): LiveProofLinkApi {
   };
   const key = (to: string, from: string): string => `${to}<-${from}`;
 
+  const applyQueuedGroups = async (to: string, from: string): Promise<void> => {
+    const queued = groupInbox.get(key(to, from)) ?? [];
+    groupInbox.set(key(to, from), []);
+    for (const item of queued) {
+      const envelope = decodeGroupEnvelope(item.rawJson);
+      if (!envelope) continue;
+      await applyGroupInbound({
+        ownerPubky: to,
+        senderPubky: item.sender,
+        envelope,
+        rawJson: item.rawJson,
+        receivedAt: Date.now(),
+      });
+    }
+  };
+
   return {
+    enqueueGroup: (to, from, rawJson) => {
+      const queued = groupInbox.get(key(to, from)) ?? [];
+      queued.push({ rawJson, sender: from });
+      groupInbox.set(key(to, from), queued);
+    },
     adoptHarnessSession: async (_alias, pubky) => {
       owner = pubky;
       mockedKeyStore.getPubky.mockReturnValue(pubky);
@@ -252,10 +290,12 @@ function createProductLink(): LiveProofLinkApi {
               remoteReceiverPath: LINK_RECEIVER_PATH,
               consecutiveFailures: 0,
             });
+            await applyQueuedGroups(owner, peer);
             continue;
           }
         }
         if (existing?.status === 'pending' && !isNewInbound) {
+          await applyQueuedGroups(owner, peer);
           continue;
         }
         await StorageService.upsertLink({
@@ -294,6 +334,7 @@ function createProductLink(): LiveProofLinkApi {
           });
           delivered.push({ eventId: item.eventId, body: item.body });
         }
+        await applyQueuedGroups(owner, peer);
       }
       return delivered;
     },
@@ -412,30 +453,38 @@ describe('product live-proof step machines', () => {
     const groups = {
       createChannel: jest.fn(async (name: string, members: string[]) => {
         channelId = `${PUBKY_A}:00000000-0000-4000-8000-00000000aaaa`;
-        for (const owner of [PUBKY_A, PUBKY_B, PUBKY_C]) {
-          await StorageService.upsertGroupChannel({
-            ownerPubky: owner,
+        await StorageService.upsertGroupChannel({
+          ownerPubky: PUBKY_A,
+          channelId,
+          name,
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+          createdBy: PUBKY_A,
+          isPublic: false,
+          lastMessageAt: Date.now(),
+          membershipEpoch: 0,
+        });
+        for (const member of [PUBKY_A, ...members]) {
+          await StorageService.upsertGroupMember({
+            ownerPubky: PUBKY_A,
             channelId,
-            name,
-            createdAt: Date.now(),
-            updatedAt: Date.now(),
-            createdBy: PUBKY_A,
-            isPublic: false,
-            lastMessageAt: Date.now(),
-            membershipEpoch: 0,
+            memberPubky: member,
+            role: member === PUBKY_A ? 'admin' : 'member',
+            addedAt: Date.now(),
+            removedAt: null,
+            status: 'active',
           });
-          for (const member of [PUBKY_A, ...members]) {
-            await StorageService.upsertGroupMember({
-              ownerPubky: owner,
-              channelId,
-              memberPubky: member,
-              role: member === PUBKY_A ? 'admin' : 'member',
-              addedAt: Date.now(),
-              removedAt: null,
-              status: 'active',
-            });
-          }
         }
+        const packed = buildGroupMembershipEnvelope({
+          channelId,
+          eventId: '00000000-0000-4000-8000-00000000aaaa',
+          sentAt: Date.now(),
+          op: 'create',
+          name,
+          members: [PUBKY_A, ...members],
+        });
+        link.enqueueGroup(PUBKY_B, PUBKY_A, packed.json);
+        link.enqueueGroup(PUBKY_C, PUBKY_A, packed.json);
         return {
           ownerPubky: PUBKY_A,
           channelId,
@@ -528,6 +577,7 @@ describe('product live-proof step machines', () => {
     expect(report.ok).toBe(true);
     expect(report.steps.map(step => step.step)).toEqual(
       expect.arrayContaining([
+        'add-contacts-paste',
         'create-channel-a',
         'membership-fanout',
         'group-message-a',
@@ -644,6 +694,7 @@ describe('product live-proof step machines', () => {
     expect(report.ok).toBe(true);
     expect(report.steps.map(step => step.step)).toEqual(
       expect.arrayContaining([
+        'require-ring-appcert',
         'send-attachment-a',
         'resolve-attachment-b',
         'attachment-invariants',
@@ -651,6 +702,7 @@ describe('product live-proof step machines', () => {
         'over-limit-rejected',
       ]),
     );
+    expect(report.steps.some(step => step.step === 'signup-a')).toBe(false);
     expect(ATTACHMENT_MAX_BYTES).toBe(8 * 1024 * 1024);
   });
 
@@ -720,11 +772,15 @@ describe('product live-proof step machines', () => {
         await StorageService.importOwnerBackup(owner, JSON.parse(snapshotJson));
       }),
     };
+    mockedKeyStore.getPubky.mockReturnValue(PUBKY_A);
     const report = await runBackupLiveProof(TWO, {
       native: mockedNative as unknown as PaykitLinkNativeApi,
       link,
       backup,
       keyStore: {
+        isAppCertValid: async () => true,
+        getPubky: () => mockedKeyStore.getPubky() ?? PUBKY_A,
+        getLinkSession: () => 'session-a',
         setPubky: pubky => {
           mockedKeyStore.getPubky.mockReturnValue(pubky);
         },
@@ -737,6 +793,7 @@ describe('product live-proof step machines', () => {
     expect(report.ok).toBe(true);
     expect(report.steps.map(step => step.step)).toEqual(
       expect.arrayContaining([
+        'require-ring-appcert',
         'export-backup',
         'wipe-local',
         'restore-backup',
@@ -747,6 +804,58 @@ describe('product live-proof step machines', () => {
     const logged = jest.mocked(console.log).mock.calls.map(args => args.join(' '));
     expect(logged.some(line => line.includes('RECOVERYCODE1234'))).toBe(false);
     expect(report.steps.some(step => step.detail.includes('RECOVERYCODE1234'))).toBe(false);
+  });
+
+  it('P3 fails fast at require-ring-appcert without signup', async () => {
+    mockedKeyStore.isAppCertValid.mockResolvedValue(false);
+    const link = createProductLink();
+    const report = await runAttachmentLiveProof(TWO, {
+      native: mockedNative as unknown as PaykitLinkNativeApi,
+      link,
+      ...clockDeps(),
+    });
+    expect(report.ok).toBe(false);
+    expect(report.steps.find(step => step.step === 'require-ring-appcert')?.ok).toBe(false);
+    expect(report.steps.some(step => step.step === 'signup-a')).toBe(false);
+    expect(report.steps.some(step => step.step === 'signup-b')).toBe(false);
+    expect(mockedNative.signupWithSecret).not.toHaveBeenCalled();
+  });
+
+  it('P6 opens pubkyauth as-is, awaits approval, and does not call signupWithSecret', async () => {
+    const opened: string[] = [];
+    const authUrl = 'pubkyauth:///?caps=&secret=&relay=';
+    const enable = jest.fn(async () => ({
+      authorizationUrl: authUrl,
+      cancel: () => undefined,
+      awaitEnabled: async () => ({
+        pubky: PUBKY_A,
+        receiverPath: LINK_RECEIVER_PATH,
+        noisePublicKey: 'noise-a',
+      }),
+    }));
+    const report = await runRingAuthLiveProof(
+      {},
+      {
+        native: mockedNative as unknown as PaykitLinkNativeApi,
+        enable,
+        openAuthUrl: async url => {
+          opened.push(url);
+        },
+        ...clockDeps(),
+      },
+    );
+    expect(report.ok).toBe(true);
+    expect(opened).toEqual([authUrl]);
+    expect(mockedNative.signupWithSecret).not.toHaveBeenCalled();
+    expect(report.steps.map(step => step.step)).toEqual(
+      expect.arrayContaining([
+        'start-auth-flow',
+        'open-auth-url',
+        'await-auth-approval',
+        'assert-appcert',
+        'preserve-ring-session',
+      ]),
+    );
   });
 
   it('runNamedLiveProofs dispatches p0 without running native sendPrivateMessageJson', async () => {

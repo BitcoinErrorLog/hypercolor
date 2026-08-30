@@ -4,6 +4,7 @@ import { StorageService } from '../../StorageService';
 import { KeyStore } from '../../KeyStore';
 import { RetryQueue } from '../../RetryQueue';
 import { LINK_RECEIVER_PATH, type LinkReceiver, type LinkRecord } from '../../../types/link';
+import { buildGroupMembershipEnvelope } from '../../../types/group';
 import type { Contact, MessageRequest } from '../../../types';
 
 jest.mock('../PaykitLinkNative', () => ({
@@ -75,6 +76,11 @@ jest.mock('../../StorageService', () => ({
     getContact: jest.fn(),
     getAllContacts: jest.fn(),
     getMessageRequest: jest.fn(),
+    hasGroupEvent: jest.fn(),
+    getGroupChannel: jest.fn(),
+    insertInboundPrivateCreate: jest.fn(),
+    saveGroupMessage: jest.fn(),
+    markGroupEventSeen: jest.fn(),
     upsertMessageRequest: jest.fn(),
     listMessageRequests: jest.fn(),
     countPendingMessageRequests: jest.fn(),
@@ -204,6 +210,46 @@ describe('LinkService message requests', () => {
     );
     expect(mockedStorage.saveLinkMessage).not.toHaveBeenCalled();
     expect(mockedNative.initiateLink).not.toHaveBeenCalled();
+  });
+
+  it('applies group membership while holding a stranger DM as a request', async () => {
+    const channelId = `${PEER}:00000000-0000-4000-8000-00000000aaaa`;
+    const packed = buildGroupMembershipEnvelope({
+      channelId,
+      eventId: '00000000-0000-4000-8000-000000000001',
+      sentAt: NOW,
+      op: 'create',
+      name: 'held-group',
+      members: [OWNER, PEER],
+    });
+    let held: Array<{ id: string; rawJson: string; kind: string | null; receivedAt: number; processed?: boolean }> =
+      [];
+    mockedStorage.saveLinkStreamItems.mockImplementation(async items => {
+      held = items.map(item => ({ ...item, processed: false }));
+    });
+    mockedStorage.getUnprocessedLinkStreamItems.mockImplementation(async () =>
+      held.filter(item => !item.processed),
+    );
+    mockedStorage.markLinkStreamItemProcessed.mockImplementation(async id => {
+      held = held.map(item => (item.id === id ? { ...item, processed: true } : item));
+    });
+    mockedStorage.hasGroupEvent.mockResolvedValue(false);
+    mockedStorage.getGroupChannel.mockResolvedValue(null);
+    mockedStorage.insertInboundPrivateCreate.mockResolvedValue('inserted');
+    mockedStorage.saveGroupMessage.mockResolvedValue(true);
+    mockedNative.receivePrivateMessages.mockResolvedValue({
+      messages: [{ version: 1, kind: packed.envelope.kind, rawJson: packed.json }],
+      snapshot: 'est-in',
+    });
+
+    const received = await LinkService.syncInbox([PEER]);
+
+    expect(received).toEqual([]);
+    expect(mockedStorage.upsertMessageRequest).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'pending' }),
+    );
+    expect(mockedStorage.insertInboundPrivateCreate).toHaveBeenCalled();
+    expect(mockedStorage.saveLinkMessage).not.toHaveBeenCalled();
   });
 
   it('auto-accepts inbound from someone I already follow', async () => {

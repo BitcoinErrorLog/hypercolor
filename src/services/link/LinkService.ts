@@ -1368,6 +1368,49 @@ async function persistInboundWithoutRouting(
     await StorageService.saveLinkStreamItems(streamItems);
   }
   await StorageService.updateLinkSnapshot(ownerPubky, peerPubky, snapshot, 'established');
+  // Group fan-out is not a DM inbox item. WoT holds chat messages as a
+  // request; membership still applies on an established Encrypted Link.
+  await routeHeldGroupInbound(ownerPubky, peerPubky);
+}
+
+/**
+ * Applies group PAMs that arrived while a message request is pending.
+ * Chat / attachment / payment items stay unprocessed until accept.
+ */
+async function routeHeldGroupInbound(ownerPubky: PubkyKey, peerPubky: PubkyKey): Promise<void> {
+  const items = await StorageService.getUnprocessedLinkStreamItems(ownerPubky, peerPubky);
+  for (const item of items) {
+    if (shouldDropOversizedKnownInbound(item.rawJson, item.kind)) {
+      const peekedOver = peekEnvelopeKind(item.rawJson);
+      if (peekedOver !== null && isGroupWireKind(peekedOver)) {
+        const groupEnvelope = decodeGroupEnvelope(item.rawJson);
+        if (groupEnvelope) {
+          await StorageService.markGroupEventSeen(
+            ownerPubky,
+            groupEnvelope.channel_id,
+            peerPubky,
+            groupEnvelope.event_id,
+            item.receivedAt,
+          );
+        }
+      }
+      await StorageService.markLinkStreamItemProcessed(item.id);
+      continue;
+    }
+    const peeked = peekEnvelopeKind(item.rawJson);
+    if (peeked === null || !isGroupWireKind(peeked)) continue;
+    const groupEnvelope = decodeGroupEnvelope(item.rawJson);
+    if (groupEnvelope) {
+      await applyGroupInbound({
+        ownerPubky,
+        senderPubky: peerPubky,
+        envelope: groupEnvelope,
+        rawJson: item.rawJson,
+        receivedAt: item.receivedAt,
+      });
+    }
+    await StorageService.markLinkStreamItemProcessed(item.id);
+  }
 }
 
 async function holdAsMessageRequest(ownerPubky: PubkyKey, peerPubky: PubkyKey): Promise<void> {

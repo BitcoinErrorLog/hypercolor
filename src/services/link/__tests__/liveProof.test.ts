@@ -256,6 +256,7 @@ describe('parseNamedLiveProofRows', () => {
   it('defaults to p0 and de-duplicates named rows', () => {
     expect(parseNamedLiveProofRows(undefined)).toEqual(['p0']);
     expect(parseNamedLiveProofRows('p0,p4,p0,native')).toEqual(['p0', 'p4', 'native']);
+    expect(parseNamedLiveProofRows('p6,p3,p5')).toEqual(['p6', 'p3', 'p5']);
   });
 });
 
