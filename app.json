@@ -13,7 +13,6 @@
         }
       ],
       "expo-document-picker",
-      "expo-image-manipulator",
       "expo-file-system"
     ],
     "ios": {
