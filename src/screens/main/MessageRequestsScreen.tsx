@@ -131,10 +131,20 @@ export function MessageRequestsContent({
               <ActivityIndicator color="#7c3aed" />
             ) : (
               <>
-                <TouchableOpacity style={styles.accept} onPress={() => onAccept(peer)}>
+                <TouchableOpacity
+                  testID="messageRequestAccept"
+                  accessibilityLabel="Accept message request"
+                  style={styles.accept}
+                  onPress={() => onAccept(peer)}
+                >
                   <Text style={styles.acceptText}>Accept</Text>
                 </TouchableOpacity>
-                <TouchableOpacity style={styles.decline} onPress={() => onDecline(peer)}>
+                <TouchableOpacity
+                  testID="messageRequestDecline"
+                  accessibilityLabel="Decline message request"
+                  style={styles.decline}
+                  onPress={() => onDecline(peer)}
+                >
                   <Text style={styles.declineText}>Decline</Text>
                 </TouchableOpacity>
               </>
@@ -147,9 +157,9 @@ export function MessageRequestsContent({
   );
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={styles.container} testID="messageRequestsScreen">
       <View style={styles.header}>
-        <TouchableOpacity onPress={onBack}>
+        <TouchableOpacity testID="messageRequestsBack" accessibilityLabel="Back" onPress={onBack}>
           <Text style={styles.back}>← Back</Text>
         </TouchableOpacity>
         <Text style={styles.title}>Message requests</Text>

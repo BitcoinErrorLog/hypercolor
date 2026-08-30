@@ -1,0 +1,18 @@
+appId: ${APP_ID}
+---
+- tapOn:
+    id: tabChats
+- tapOn:
+    id: chatsNew
+- tapOn:
+    id: contactSearchInput
+- eraseText
+- inputText: ${PEER_PUBKY}
+- hideKeyboard
+- tapOn:
+    id: contactSearchAdd
+- tapOn: Chat
+- extendedWaitUntil:
+    visible:
+      id: threadScreen
+    timeout: 60000

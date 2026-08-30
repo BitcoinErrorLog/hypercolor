@@ -1,10 +1,19 @@
 import React from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, SafeAreaView, Alert } from 'react-native';
+import {
+  View,
+  Text,
+  TouchableOpacity,
+  StyleSheet,
+  SafeAreaView,
+  ScrollView,
+  Alert,
+} from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useAuthStore } from '../../stores/authStore';
 import { PubkyService } from '../../services/PubkyService';
 import type { RootStackParamList } from '../../types';
+import { DebugSignupPanel } from '../auth/DebugSignupPanel';
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
 
@@ -31,37 +40,56 @@ export default function ProfileScreen() {
   }
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={styles.container} testID="profileScreen">
       <View style={styles.header}>
         <Text style={styles.title}>Profile</Text>
-        <TouchableOpacity onPress={() => nav.navigate('Settings')}>
+        <TouchableOpacity
+          testID="profileSettings"
+          accessibilityLabel="Settings"
+          onPress={() => nav.navigate('Settings')}
+        >
           <Text style={styles.settings}>Settings</Text>
         </TouchableOpacity>
       </View>
 
-      <View style={styles.content}>
-        <View style={styles.avatar}>
-          <Text style={styles.avatarText}>
-            {profile?.displayName?.charAt(0).toUpperCase() ?? '?'}
-          </Text>
+      <ScrollView contentContainerStyle={styles.scroll}>
+        <View style={styles.content}>
+          <View style={styles.avatar}>
+            <Text style={styles.avatarText}>
+              {profile?.displayName?.charAt(0).toUpperCase() ?? '?'}
+            </Text>
+          </View>
+
+          <Text style={styles.displayName}>{profile?.displayName ?? 'Unnamed'}</Text>
+
+          {pubky ? (
+            <Text
+              testID="profilePubky"
+              accessibilityLabel="Profile pubky"
+              style={styles.pubkyKey}
+              selectable
+            >
+              {pubky}
+            </Text>
+          ) : null}
+
+          <Text style={styles.keystoreNote}>Keys managed by pubky-ring</Text>
         </View>
 
-        <Text style={styles.displayName}>{profile?.displayName ?? 'Unnamed'}</Text>
-
-        {pubky ? (
-          <Text style={styles.pubkyKey} numberOfLines={1} ellipsizeMode="middle">
-            {pubky}
-          </Text>
-        ) : null}
-
-        <Text style={styles.keystoreNote}>Keys managed by pubky-ring</Text>
-      </View>
-
-      <View style={styles.actions}>
-        <TouchableOpacity style={styles.dangerButton} onPress={handleSignOut}>
-          <Text style={styles.dangerButtonText}>Disconnect pubky-ring</Text>
-        </TouchableOpacity>
-      </View>
+        <View style={styles.actions}>
+          {__DEV__ ? (
+            <DebugSignupPanel title="Switch debug account" submitLabel="Switch debug account" />
+          ) : null}
+          <TouchableOpacity
+            testID="profileSignOut"
+            accessibilityLabel="Disconnect pubky-ring"
+            style={styles.dangerButton}
+            onPress={handleSignOut}
+          >
+            <Text style={styles.dangerButtonText}>Disconnect pubky-ring</Text>
+          </TouchableOpacity>
+        </View>
+      </ScrollView>
     </SafeAreaView>
   );
 }
@@ -79,7 +107,14 @@ const styles = StyleSheet.create({
   },
   title: { fontSize: 24, fontWeight: '700', color: '#f9fafb' },
   settings: { fontSize: 16, color: '#7c3aed', fontWeight: '600' },
-  content: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 16 },
+  scroll: { flexGrow: 1 },
+  content: {
+    flexGrow: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 16,
+    paddingVertical: 24,
+  },
   avatar: {
     width: 80,
     height: 80,
@@ -101,7 +136,7 @@ const styles = StyleSheet.create({
     color: '#7c3aed',
     marginTop: 4,
   },
-  actions: { paddingHorizontal: 32, paddingBottom: 48 },
+  actions: { paddingHorizontal: 32, paddingBottom: 48, gap: 16 },
   dangerButton: {
     borderWidth: 1,
     borderColor: '#ef4444',

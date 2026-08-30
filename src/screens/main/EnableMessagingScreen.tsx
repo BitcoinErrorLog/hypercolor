@@ -74,9 +74,13 @@ export default function EnableMessagingScreen() {
     state.phase === 'error' || state.phase === 'session-offline' || state.phase === 'enabled';
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={styles.container} testID="enableMessagingScreen">
       <View style={styles.header}>
-        <TouchableOpacity onPress={handleCancel}>
+        <TouchableOpacity
+          testID="enableMessagingBack"
+          accessibilityLabel="Back"
+          onPress={handleCancel}
+        >
           <Text style={styles.back}>← Back</Text>
         </TouchableOpacity>
         <Text style={styles.title}>Messaging</Text>
@@ -93,7 +97,9 @@ export default function EnableMessagingScreen() {
 
         <View style={styles.statusCard}>
           <Text style={styles.statusLabel}>Status</Text>
-          <Text style={styles.statusValue}>{statusLabel(state)}</Text>
+          <Text testID="enableMessagingStatus" style={styles.statusValue}>
+            {statusLabel(state)}
+          </Text>
           {state.message ? <Text style={styles.statusMessage}>{state.message}</Text> : null}
           {state.pubky ? (
             <Text style={styles.mono} numberOfLines={1} ellipsizeMode="middle">
@@ -120,6 +126,8 @@ export default function EnableMessagingScreen() {
               {state.authorizationUrl}
             </Text>
             <TouchableOpacity
+              testID="enableMessagingOpenRing"
+              accessibilityLabel="Open Pubky Ring"
               style={styles.primaryButton}
               onPress={() => {
                 void controllerRef.current?.openRing();
@@ -147,6 +155,8 @@ export default function EnableMessagingScreen() {
 
         {canRetry ? (
           <TouchableOpacity
+            testID="enableMessagingRetry"
+            accessibilityLabel={state.phase === 'enabled' ? 'Authorize again' : 'Try again'}
             style={styles.primaryButton}
             onPress={() => {
               void controllerRef.current?.beginAuth();

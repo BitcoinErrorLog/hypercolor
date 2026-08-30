@@ -1,0 +1,18 @@
+appId: ${APP_ID}
+---
+- tapOn:
+    id: tabProfile
+- tapOn:
+    id: profileSettings
+- tapOn:
+    id: settingsEnableMessaging
+- extendedWaitUntil:
+    visible: Already enabled
+    timeout: 60000
+- assertVisible:
+    id: enableMessagingStatus
+- assertVisible: Already enabled
+- tapOn:
+    id: enableMessagingBack
+- tapOn:
+    id: settingsBack

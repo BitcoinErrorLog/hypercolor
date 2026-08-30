@@ -59,9 +59,13 @@ export default function ContactSearchScreen() {
   }
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={styles.container} testID="contactSearchScreen">
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => nav.goBack()}>
+        <TouchableOpacity
+          testID="contactSearchCancel"
+          accessibilityLabel="Cancel"
+          onPress={() => nav.goBack()}
+        >
           <Text style={styles.cancel}>Cancel</Text>
         </TouchableOpacity>
         <Text style={styles.title}>Find Contact</Text>
@@ -70,6 +74,8 @@ export default function ContactSearchScreen() {
 
       <View style={styles.content}>
         <TextInput
+          testID="contactSearchInput"
+          accessibilityLabel="Paste Pubky key"
           style={styles.input}
           value={pubkyKey}
           onChangeText={setPubkyKey}
@@ -87,6 +93,8 @@ export default function ContactSearchScreen() {
           </Text>
         ) : null}
         <TouchableOpacity
+          testID="contactSearchAdd"
+          accessibilityLabel="Add contact"
           style={[styles.button, (!valid || loading) && styles.buttonDisabled]}
           onPress={() => {
             void handleAdd();

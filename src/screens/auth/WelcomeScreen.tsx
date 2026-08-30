@@ -5,6 +5,7 @@ import {
   TouchableOpacity,
   StyleSheet,
   SafeAreaView,
+  ScrollView,
   Alert,
   ActivityIndicator,
 } from 'react-native';
@@ -12,6 +13,7 @@ import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { AuthStackParamList } from '../../types';
 import { PubkyRingAuthService } from '../../services/PubkyRingAuthService';
+import { DebugSignupPanel } from './DebugSignupPanel';
 
 type Nav = NativeStackNavigationProp<AuthStackParamList, 'Welcome'>;
 
@@ -46,30 +48,36 @@ export default function WelcomeScreen() {
   }
 
   return (
-    <SafeAreaView style={styles.container}>
-      <View style={styles.content}>
-        <Text style={styles.logo}>hypercolor</Text>
-        <Text style={styles.tagline}>Private. Decentralized. Yours.</Text>
-      </View>
+    <SafeAreaView style={styles.container} testID="welcomeScreen">
+      <ScrollView contentContainerStyle={styles.scroll}>
+        <View style={styles.content}>
+          <Text style={styles.logo}>hypercolor</Text>
+          <Text style={styles.tagline}>Private. Decentralized. Yours.</Text>
+        </View>
 
-      <View style={styles.actions}>
-        <Text style={styles.hint}>
-          Your identity is managed by <Text style={styles.hintBold}>pubky-ring</Text>.{'\n'}
-          Hypercolor never holds your private key.
-        </Text>
+        <View style={styles.actions}>
+          <Text style={styles.hint}>
+            Your identity is managed by <Text style={styles.hintBold}>pubky-ring</Text>.{'\n'}
+            Hypercolor never holds your private key.
+          </Text>
 
-        <TouchableOpacity
-          style={[styles.primaryButton, loading && styles.buttonDisabled]}
-          onPress={handleConnect}
-          disabled={loading}
-        >
-          {loading ? (
-            <ActivityIndicator color="#fff" />
-          ) : (
-            <Text style={styles.primaryButtonText}>Connect with pubky-ring</Text>
-          )}
-        </TouchableOpacity>
-      </View>
+          <TouchableOpacity
+            testID="welcomeConnectRing"
+            accessibilityLabel="Connect with pubky-ring"
+            style={[styles.primaryButton, loading && styles.buttonDisabled]}
+            onPress={handleConnect}
+            disabled={loading}
+          >
+            {loading ? (
+              <ActivityIndicator color="#fff" />
+            ) : (
+              <Text style={styles.primaryButtonText}>Connect with pubky-ring</Text>
+            )}
+          </TouchableOpacity>
+
+          {__DEV__ ? <DebugSignupPanel title="Debug signup" submitLabel="Debug signup" /> : null}
+        </View>
+      </ScrollView>
     </SafeAreaView>
   );
 }
@@ -79,11 +87,15 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#0a0a0a',
   },
+  scroll: {
+    flexGrow: 1,
+  },
   content: {
-    flex: 1,
+    flexGrow: 1,
     justifyContent: 'center',
     alignItems: 'center',
     paddingHorizontal: 32,
+    paddingTop: 48,
   },
   logo: {
     fontSize: 40,

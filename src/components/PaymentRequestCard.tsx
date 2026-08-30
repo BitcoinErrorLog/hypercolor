@@ -39,9 +39,9 @@ export function PaymentRequestCard({
   const isPayer = !isPayee;
 
   return (
-    <View style={styles.card}>
+    <View testID="paymentRequestCard" style={styles.card}>
       <Text style={styles.title}>Payment request</Text>
-      <Text style={styles.amount}>
+      <Text testID="paymentRequestAmount" style={styles.amount}>
         {record.amountValue} {record.amountAsset.toUpperCase()}
       </Text>
       <Text style={styles.reference}>{formatPaymentDisplayText(record.paymentReference)}</Text>

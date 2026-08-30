@@ -18,10 +18,12 @@ export function PaymentComposeSheet({
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
       <View style={styles.backdrop}>
-        <View style={styles.sheet}>
+        <View testID="paymentComposeSheet" style={styles.sheet}>
           <Text style={styles.title}>Request payment</Text>
           <Text style={styles.label}>Amount (BTC)</Text>
           <TextInput
+            testID="paymentComposeAmount"
+            accessibilityLabel="Payment amount in BTC"
             style={styles.input}
             value={amount}
             onChangeText={setAmount}
@@ -32,6 +34,8 @@ export function PaymentComposeSheet({
           />
           <Text style={styles.label}>Reference</Text>
           <TextInput
+            testID="paymentComposeReference"
+            accessibilityLabel="Payment reference"
             style={styles.input}
             value={reference}
             onChangeText={setReference}
@@ -40,10 +44,18 @@ export function PaymentComposeSheet({
             autoCapitalize="none"
           />
           <View style={styles.actions}>
-            <TouchableOpacity style={styles.secondary} onPress={onClose} disabled={busy}>
+            <TouchableOpacity
+              testID="paymentComposeCancel"
+              accessibilityLabel="Cancel payment request"
+              style={styles.secondary}
+              onPress={onClose}
+              disabled={busy}
+            >
               <Text style={styles.secondaryText}>Cancel</Text>
             </TouchableOpacity>
             <TouchableOpacity
+              testID="paymentComposeSubmit"
+              accessibilityLabel="Send request"
               style={[styles.primary, busy && styles.disabled]}
               onPress={() => onSubmit(amount.trim(), reference.trim())}
               disabled={busy}

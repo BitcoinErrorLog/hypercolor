@@ -89,9 +89,10 @@ Payment *PAM* lifecycle on staging is already green. This row is execution:
 
 ### P7 — UI end-to-end
 
-- Add a Detox or Maestro suite (pick one; do not add both).
-- Flows: launch → (debug signup or Ring) → enable messaging → send/receive a DM on the product screens → open a payment-request bubble and confirm the displayed amount matches the request.
+- Maestro suite only (no Detox). Flows live in `.maestro/`.
+- Flows: launch → debug signup (secret import; not Ring / P6) → enable messaging → send/receive a DM on ThreadScreen / Chats → open a payment-request bubble and confirm the displayed amount matches the request.
 - This is the ThreadScreen / navigation proof. Service-only live proofs do not close this row.
+- A live `maestro test` on a simulator/device is what closes the row. Jest + `tsc` do not.
 
 ## Harness rules (all live rows)
 
@@ -137,3 +138,25 @@ All runners live under `src/services/link/liveProof*.ts`. `App.tsx` dynamic-impo
 Programmatic dispatch: `runNamedLiveProofs({ homeserverPubky, signupTokenA, signupTokenB, signupTokenC, rows })`.
 
 Cleanup: each product row closes links, removes markers, signs out, `clearAccountData` per owner, then `clearAllNativeSecrets`. Logs go through `redactLiveProofForLog`.
+
+## P7 harness (Maestro)
+
+One suite, Maestro only. Requires a **debug / expo-dev-client** native build (`org.name.hypercolor` on iOS, `com.hypercolor` on Android). Release builds reject secret import, and the debug signup panel is `__DEV__` only. Do not drive Ring (P6).
+
+Debug signup uses `signupWithSecret` / `signinWithSecret` and `provisionHarnessReceiver`, then the flow opens the product Enable Messaging screen and asserts **Already enabled**. Account switch is the Profile debug panel — not `Disconnect pubky-ring` — so the previous party's homeserver receiver marker stays published for send/receive on one device.
+
+Tokens are single-use staging signup tokens. Never commit them. Identity secrets are optional 64-char hex; if omitted the app generates them and the flow copies the values from `debugSignupPubky` / `debugSignupSecretValue`.
+
+```bash
+cd /Users/johncarvalho/work/hypercolor
+maestro test .maestro/p7-product.yaml \
+  -e HOMESERVER_PUBKY='<staging homeserver pubky>' \
+  -e SIGNUP_TOKEN_A='<single-use>' \
+  -e SIGNUP_TOKEN_B='<single-use>' \
+  -e DM_BODY=maestro-p7-dm \
+  -e PAYMENT_AMOUNT=0.001
+```
+
+Android: add `--app-id com.hypercolor` (or `-e APP_ID=com.hypercolor`). Optional: `-e IDENTITY_SECRET_A='<64 hex>'` and `-e IDENTITY_SECRET_B='<64 hex>'`. Same command: `npm run test:e2e` with those `-e` values forwarded, or invoke `maestro test` directly.
+
+The suite: launch → debug signup A → Enable Messaging → switch to B → Enable Messaging → A adds B → B sends `DM_BODY` on ThreadScreen and a payment request for `PAYMENT_AMOUNT` → assert the bubble shows `{PAYMENT_AMOUNT} BTC` → switch to A → open the thread → assert the same DM body and amount.

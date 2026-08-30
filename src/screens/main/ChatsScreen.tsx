@@ -59,7 +59,12 @@ export default function ChatsScreen() {
 
   const renderThread = useCallback(
     ({ item }: { item: LinkConversationSummary }) => (
-      <TouchableOpacity style={styles.threadRow} onPress={() => handlePress(item)}>
+      <TouchableOpacity
+        testID="chatRow"
+        accessibilityLabel={item.participantPubky}
+        style={styles.threadRow}
+        onPress={() => handlePress(item)}
+      >
         <View style={styles.avatar}>
           <Text style={styles.avatarLetter}>{item.participantPubky.charAt(0).toUpperCase()}</Text>
         </View>
@@ -91,16 +96,24 @@ export default function ChatsScreen() {
   );
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={styles.container} testID="chatsScreen">
       <View style={styles.header}>
         <Text style={styles.title}>Chats</Text>
         <View style={styles.headerActions}>
-          <TouchableOpacity onPress={() => nav.navigate('MessageRequests')}>
+          <TouchableOpacity
+            testID="chatsRequests"
+            accessibilityLabel="Message requests"
+            onPress={() => nav.navigate('MessageRequests')}
+          >
             <Text style={styles.requests}>
               Requests{pendingRequests > 0 ? ` (${pendingRequests})` : ''}
             </Text>
           </TouchableOpacity>
-          <TouchableOpacity onPress={() => nav.navigate('ContactSearch')}>
+          <TouchableOpacity
+            testID="chatsNew"
+            accessibilityLabel="New chat"
+            onPress={() => nav.navigate('ContactSearch')}
+          >
             <Text style={styles.newChat}>+</Text>
           </TouchableOpacity>
         </View>

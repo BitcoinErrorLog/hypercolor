@@ -47,9 +47,13 @@ export default function SettingsScreen() {
   }
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={styles.container} testID="settingsScreen">
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => nav.goBack()}>
+        <TouchableOpacity
+          testID="settingsBack"
+          accessibilityLabel="Back"
+          onPress={() => nav.goBack()}
+        >
           <Text style={styles.back}>← Back</Text>
         </TouchableOpacity>
         <Text style={styles.title}>Settings</Text>
@@ -184,7 +188,12 @@ export default function SettingsScreen() {
 
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Messaging</Text>
-          <TouchableOpacity style={styles.row} onPress={() => nav.navigate('EnableMessaging')}>
+          <TouchableOpacity
+            testID="settingsEnableMessaging"
+            accessibilityLabel="Enable encrypted messaging"
+            style={styles.row}
+            onPress={() => nav.navigate('EnableMessaging')}
+          >
             <View>
               <Text style={styles.rowLabel}>Enable encrypted messaging</Text>
               <Text style={styles.rowHint}>Authorize Pubky Ring for Paykit links</Text>

@@ -25,22 +25,22 @@ export function MainTabs() {
       <Tab.Screen
         name="Chats"
         component={ChatsScreen as React.ComponentType}
-        options={{ tabBarLabel: 'Chats' }}
+        options={{ tabBarLabel: 'Chats', tabBarButtonTestID: 'tabChats' }}
       />
       <Tab.Screen
         name="Channels"
         component={ChannelsScreen as React.ComponentType}
-        options={{ tabBarLabel: 'Channels' }}
+        options={{ tabBarLabel: 'Channels', tabBarButtonTestID: 'tabChannels' }}
       />
       <Tab.Screen
         name="Contacts"
         component={ContactsScreen as React.ComponentType}
-        options={{ tabBarLabel: 'Contacts' }}
+        options={{ tabBarLabel: 'Contacts', tabBarButtonTestID: 'tabContacts' }}
       />
       <Tab.Screen
         name="Profile"
         component={ProfileScreen as React.ComponentType}
-        options={{ tabBarLabel: 'Profile' }}
+        options={{ tabBarLabel: 'Profile', tabBarButtonTestID: 'tabProfile' }}
       />
     </Tab.Navigator>
   );

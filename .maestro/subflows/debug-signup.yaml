@@ -1,0 +1,42 @@
+appId: ${APP_ID}
+---
+- scrollUntilVisible:
+    element:
+      id: debugSignupHomeserver
+    direction: DOWN
+    timeout: 15000
+- tapOn:
+    id: debugSignupHomeserver
+- eraseText
+- inputText: ${HOMESERVER_PUBKY}
+- tapOn:
+    id: debugSignupToken
+- eraseText
+- runFlow:
+    when:
+      true: ${SIGNUP_TOKEN}
+    commands:
+      - inputText: ${SIGNUP_TOKEN}
+- tapOn:
+    id: debugSignupSecret
+- eraseText
+- runFlow:
+    when:
+      true: ${IDENTITY_SECRET}
+    commands:
+      - inputText: ${IDENTITY_SECRET}
+- hideKeyboard
+- tapOn:
+    id: debugSignupSubmit
+- extendedWaitUntil:
+    visible:
+      id: debugSignupContinue
+    timeout: 120000
+- copyTextFrom:
+    id: debugSignupPubky
+- evalScript: ${output.pubky = maestro.copiedText}
+- copyTextFrom:
+    id: debugSignupSecretValue
+- evalScript: ${output.secret = maestro.copiedText}
+- tapOn:
+    id: debugSignupContinue

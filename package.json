@@ -12,6 +12,7 @@
     "lint:fix": "eslint 'src/**/*.{ts,tsx}' 'modules/**/*.{ts,tsx}' --fix",
     "format": "prettier --write 'src/**/*.{ts,tsx,json}' 'modules/**/*.{ts,tsx}'",
     "test": "jest",
+    "test:e2e": "maestro test .maestro/p7-product.yaml",
     "prepare": "husky"
   },
   "lint-staged": {

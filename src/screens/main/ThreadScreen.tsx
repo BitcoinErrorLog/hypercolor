@@ -223,7 +223,10 @@ export function ThreadScreenContent({
       if (item.kind === 'payment') {
         const isMine = item.record.direction === 'sent';
         return (
-          <View style={[styles.bubble, isMine ? styles.mine : styles.theirs]}>
+          <View
+            testID="threadPaymentBubble"
+            style={[styles.bubble, isMine ? styles.mine : styles.theirs]}
+          >
             {localPubky ? (
               <PaymentRequestBubble
                 record={item.record}
@@ -250,7 +253,11 @@ export function ThreadScreenContent({
       }
       const isMine = item.message.senderPubky === localPubky;
       return (
-        <View style={[styles.bubble, isMine ? styles.mine : styles.theirs]}>
+        <View
+          testID={isMine ? 'threadBubbleMine' : 'threadBubbleTheirs'}
+          accessibilityLabel={item.message.body}
+          style={[styles.bubble, isMine ? styles.mine : styles.theirs]}
+        >
           <Text style={[styles.bubbleText, isMine ? styles.mineText : styles.theirsText]}>
             {item.message.body}
           </Text>
@@ -265,15 +272,31 @@ export function ThreadScreenContent({
   );
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={styles.container} testID="threadScreen">
       <View style={styles.header}>
-        <TouchableOpacity onPress={onBack} style={styles.backBtn}>
+        <TouchableOpacity
+          testID="threadBack"
+          accessibilityLabel="Back"
+          onPress={onBack}
+          style={styles.backBtn}
+        >
           <Text style={styles.backText}>←</Text>
         </TouchableOpacity>
-        <Text style={styles.title} numberOfLines={1} ellipsizeMode="middle">
+        <Text
+          testID="threadTitle"
+          accessibilityLabel={participantPubky}
+          style={styles.title}
+          numberOfLines={1}
+          ellipsizeMode="middle"
+        >
           {participantPubky}
         </Text>
-        <TouchableOpacity onPress={onOpenPaymentCompose} style={styles.backBtn}>
+        <TouchableOpacity
+          testID="threadRequestPay"
+          accessibilityLabel="Request payment"
+          onPress={onOpenPaymentCompose}
+          style={styles.backBtn}
+        >
           <Text style={styles.requestPay}>₿</Text>
         </TouchableOpacity>
       </View>
@@ -315,6 +338,8 @@ export function ThreadScreenContent({
             onSent={onAttachSent}
           />
           <TextInput
+            testID="threadComposer"
+            accessibilityLabel="Message"
             style={styles.input}
             value={draft}
             onChangeText={onChangeDraft}
@@ -325,6 +350,8 @@ export function ThreadScreenContent({
             returnKeyType="default"
           />
           <TouchableOpacity
+            testID="threadSend"
+            accessibilityLabel="Send message"
             style={[styles.sendBtn, (!draft.trim() || sending) && styles.sendBtnDisabled]}
             onPress={onSend}
             disabled={!draft.trim() || sending}

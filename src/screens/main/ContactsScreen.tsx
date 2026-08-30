@@ -122,7 +122,12 @@ export function ContactsScreenContent({
 }) {
   const renderContact = useCallback(
     ({ item }: { item: Contact }) => (
-      <TouchableOpacity style={styles.row} onPress={() => onOpenChat(item.pubky)}>
+      <TouchableOpacity
+        testID="contactRow"
+        accessibilityLabel={item.pubky}
+        style={styles.row}
+        onPress={() => onOpenChat(item.pubky)}
+      >
         <View style={styles.avatar}>
           <Text style={styles.avatarLetter}>
             {(item.displayName ?? item.pubky).charAt(0).toUpperCase()}
@@ -149,11 +154,16 @@ export function ContactsScreenContent({
   );
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={styles.container} testID="contactsScreen">
       <View style={styles.header}>
         <Text style={styles.title}>Contacts</Text>
         <View style={styles.headerActions}>
-          <TouchableOpacity onPress={onRequests} style={styles.requestsBtn}>
+          <TouchableOpacity
+            testID="contactsRequests"
+            accessibilityLabel="Message requests"
+            onPress={onRequests}
+            style={styles.requestsBtn}
+          >
             <Text style={styles.requestsLabel}>Requests</Text>
             {pendingCount > 0 ? (
               <View style={styles.countBadge}>
@@ -163,7 +173,7 @@ export function ContactsScreenContent({
               </View>
             ) : null}
           </TouchableOpacity>
-          <TouchableOpacity onPress={onAdd}>
+          <TouchableOpacity testID="contactsAdd" accessibilityLabel="Add contact" onPress={onAdd}>
             <Text style={styles.add}>+</Text>
           </TouchableOpacity>
         </View>

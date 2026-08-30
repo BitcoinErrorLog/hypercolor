@@ -57,7 +57,7 @@ export function PaymentRequestBubble({
     : null;
 
   return (
-    <View>
+    <View testID="paymentRequestBubble">
       <PaymentRequestCard
         record={record}
         isPayee={isPayee}
