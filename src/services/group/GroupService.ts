@@ -580,6 +580,38 @@ export const GroupService = {
     if (!parsed) return null;
     return buildPublicChannelInvite(parsed.hostPubky, parsed.localId);
   },
+
+  /**
+   * Fans out a caller-built PAM (e.g. `chat.attachment.v0`) to active
+   * private-group members. Same persist/queue protocol as text messages.
+   */
+  async sendPreparedFanout(input: {
+    channelId: string;
+    kind: string;
+    eventId: string;
+    sentAt: number;
+    body: string;
+    rawJson: string;
+  }): Promise<GroupMessage> {
+    const owner = requireOwner();
+    await requireActiveMember(owner, input.channelId, owner);
+    const channel = await requirePrivateChannel(owner, input.channelId);
+    const message = await fanOutEnvelope({
+      ownerPubky: owner,
+      channelId: input.channelId,
+      senderPubky: owner,
+      kind: input.kind,
+      eventId: input.eventId,
+      sentAt: input.sentAt,
+      body: input.body,
+      rawJson: input.rawJson,
+      replyToEventId: null,
+      targetEventId: null,
+    });
+    await StorageService.touchGroupChannel(owner, channel.channelId, input.sentAt);
+    notifyGroupEvent(owner, input.channelId);
+    return message;
+  },
 };
 
 async function refreshPublicChannel(ownerPubky: PubkyKey, channel: GroupChannel): Promise<void> {

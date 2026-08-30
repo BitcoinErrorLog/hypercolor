@@ -35,6 +35,8 @@ import {
 } from '../../types/group';
 import { applyGroupInbound } from '../group/applyGroupInbound';
 import { classifyInboundPeer, wotInputFromContact } from './wotGate';
+import { CHAT_ATTACHMENT_KIND } from '../../types/attachment';
+import { applyAttachmentInbound } from '../attachments/applyAttachmentInbound';
 
 /**
  * LinkService — end-to-end-encrypted DMs over official Paykit Encrypted
@@ -307,54 +309,61 @@ export const LinkService = {
         sentAt: Date.now(),
         body,
       });
-      const queueId = uuidv4();
-      const message: LinkMessage = {
+      return dispatchPreparedDm({
         ownerPubky,
-        eventId: envelope.event_id,
-        conversationId: buildDmConversationId(peerPubky),
         peerPubky,
-        senderPubky: ownerPubky,
-        direction: 'sent',
+        outcome,
         kind: CHAT_MESSAGE_KIND,
+        eventId: envelope.event_id,
         rawJson: json,
         body: envelope.body,
         sentAt: envelope.sent_at,
-        receivedAt: null,
-        deliveryState: 'sending',
-      };
-      const ts = Date.now();
-      await StorageService.persistLinkSendIntent({
-        message,
-        queueItem: {
-          id: queueId,
-          messageId: envelope.event_id,
-          recipientPubky: peerPubky,
-          payload: JSON.stringify(retryPayload(ownerPubky, peerPubky, envelope.event_id, json)),
-          attempts: 0,
-          nextRetryAt: ts,
-          createdAt: ts,
-        },
       });
+    });
+  },
 
-      if (outcome !== 'ready') return message;
-
-      try {
-        const handle = requireEstablishedHandle(ownerPubky, peerPubky);
-        const { snapshot } = await PaykitLinkNative.sendPrivateMessageJson(handle, json);
-        await StorageService.finalizeLinkSend({
-          ownerPubky,
-          peerPubky,
-          senderPubky: ownerPubky,
-          kind: CHAT_MESSAGE_KIND,
-          eventId: envelope.event_id,
-          snapshot,
-          queueId,
-        });
-        return { ...message, deliveryState: 'sent' };
-      } catch (err) {
-        console.warn(`[LinkService] Send failed for ${peerPubky}:`, errorMessage(err));
-        return message;
+  /**
+   * Sends a caller-built PAM (e.g. `chat.attachment.v0`) over a 1:1 link
+   * using the same nonce-safe persist protocol as {@link sendDm}.
+   */
+  async sendPreparedMessage(input: {
+    peerPubky: PubkyKey;
+    kind: string;
+    eventId: string;
+    rawJson: string;
+    body: string;
+    sentAt: number;
+  }): Promise<LinkMessage> {
+    return withQueue(input.peerPubky, async () => {
+      const outcome = await ensureLinkLocked(input.peerPubky, true, false);
+      if (
+        outcome !== 'ready' &&
+        outcome !== 'handshaking-initiator' &&
+        outcome !== 'handshaking-responder'
+      ) {
+        throw new Error(
+          `LinkService.sendPreparedMessage: cannot send to ${input.peerPubky} — link status is '${outcome}'`,
+        );
       }
+      const ownerForRequest = requireOwner();
+      const pending = await StorageService.getMessageRequest(ownerForRequest, input.peerPubky);
+      if (pending?.status === 'pending') {
+        await StorageService.upsertMessageRequest({
+          ...pending,
+          status: 'accepted',
+          updatedAt: Date.now(),
+        });
+      }
+      return dispatchPreparedDm({
+        ownerPubky: requireOwner(),
+        peerPubky: input.peerPubky,
+        outcome,
+        kind: input.kind,
+        eventId: input.eventId,
+        rawJson: input.rawJson,
+        body: input.body,
+        sentAt: input.sentAt,
+      });
     });
   },
 
@@ -1358,6 +1367,18 @@ async function routeUnprocessedStreamItems(
   const seenInBatch = new Set<string>();
   for (const item of items) {
     const peeked = peekEnvelopeKind(item.rawJson);
+    if (peeked === CHAT_ATTACHMENT_KIND) {
+      const row = await applyAttachmentInbound({
+        ownerPubky,
+        senderPubky: peerPubky,
+        peerPubky,
+        rawJson: item.rawJson,
+        receivedAt: item.receivedAt,
+      });
+      await StorageService.markLinkStreamItemProcessed(item.id);
+      if (row) received.push(row);
+      continue;
+    }
     if (peeked !== null && isGroupWireKind(peeked)) {
       const groupEnvelope = decodeGroupEnvelope(item.rawJson);
       if (groupEnvelope) {
@@ -1531,16 +1552,79 @@ function retryPayload(
   peerPubky: PubkyKey,
   eventId: string,
   rawJson: string,
+  kind: string = CHAT_MESSAGE_KIND,
 ): LinkRetryPayload {
   return {
     type: LINK_RETRY_PAYLOAD_TYPE,
     ownerPubky,
     peerPubky,
     senderPubky: ownerPubky,
-    kind: CHAT_MESSAGE_KIND,
+    kind,
     eventId,
     rawJson,
   };
+}
+
+async function dispatchPreparedDm(input: {
+  ownerPubky: PubkyKey;
+  peerPubky: PubkyKey;
+  outcome: EnsureOutcome;
+  kind: string;
+  eventId: string;
+  rawJson: string;
+  body: string;
+  sentAt: number;
+}): Promise<LinkMessage> {
+  const queueId = uuidv4();
+  const message: LinkMessage = {
+    ownerPubky: input.ownerPubky,
+    eventId: input.eventId,
+    conversationId: buildDmConversationId(input.peerPubky),
+    peerPubky: input.peerPubky,
+    senderPubky: input.ownerPubky,
+    direction: 'sent',
+    kind: input.kind,
+    rawJson: input.rawJson,
+    body: input.body,
+    sentAt: input.sentAt,
+    receivedAt: null,
+    deliveryState: 'sending',
+  };
+  const ts = Date.now();
+  await StorageService.persistLinkSendIntent({
+    message,
+    queueItem: {
+      id: queueId,
+      messageId: input.eventId,
+      recipientPubky: input.peerPubky,
+      payload: JSON.stringify(
+        retryPayload(input.ownerPubky, input.peerPubky, input.eventId, input.rawJson, input.kind),
+      ),
+      attempts: 0,
+      nextRetryAt: ts,
+      createdAt: ts,
+    },
+  });
+
+  if (input.outcome !== 'ready') return message;
+
+  try {
+    const handle = requireEstablishedHandle(input.ownerPubky, input.peerPubky);
+    const { snapshot } = await PaykitLinkNative.sendPrivateMessageJson(handle, input.rawJson);
+    await StorageService.finalizeLinkSend({
+      ownerPubky: input.ownerPubky,
+      peerPubky: input.peerPubky,
+      senderPubky: input.ownerPubky,
+      kind: input.kind,
+      eventId: input.eventId,
+      snapshot,
+      queueId,
+    });
+    return { ...message, deliveryState: 'sent' };
+  } catch (err) {
+    console.warn(`[LinkService] Send failed for ${input.peerPubky}:`, errorMessage(err));
+    return message;
+  }
 }
 
 function parseRetryPayload(payload: string): AnyLinkRetryPayload | null {

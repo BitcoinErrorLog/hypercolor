@@ -116,4 +116,20 @@ RCT_EXTERN_METHOD(closeLink:(NSString *)linkId
                   resolver:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject)
 
+RCT_EXTERN_METHOD(generateAttachmentKey:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
+
+RCT_EXTERN_METHOD(attachmentEncrypt:(NSString *)plaintextB64
+                  keyB64:(NSString *)keyB64
+                  aad:(id)aad
+                  resolver:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
+
+RCT_EXTERN_METHOD(attachmentDecrypt:(NSString *)ciphertextB64
+                  keyB64:(NSString *)keyB64
+                  nonceB64:(NSString *)nonceB64
+                  aad:(id)aad
+                  resolver:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
+
 @end

@@ -34,6 +34,9 @@ import type {
   GroupMessage,
 } from '../types/group';
 import { GROUP_DEFERRED_QUOTA_PER_SENDER, GROUP_DEFERRED_TTL_MS } from '../flags/config';
+import type { AttachmentRecord, AttachmentResolveState } from '../types/attachment';
+import { KeyStore } from './KeyStore';
+import { deleteCacheFiles } from './attachments/fileIo';
 
 /**
  * StorageService — the single point of access for all SQLite persistence.
@@ -979,10 +982,20 @@ export const StorageService = {
   /**
    * Sign-out teardown: drop every Encrypted-Link row for this account.
    * Callers must also close native handles (`closeLink` / `signOutSession`).
+   * Also wipes attachment rows, KeyStore attachment keys, and cache files.
    */
   async clearAccountData(ownerPubky: PubkyKey): Promise<void> {
     const db = await getDb();
+    const attachmentRows =
+      db.executeSync('SELECT event_id, local_cache_path FROM attachments WHERE owner_pubky = ?', [
+        ownerPubky,
+      ]).rows ?? [];
+    const eventIds = attachmentRows.map(row => String(row.event_id));
+    const cachePaths = attachmentRows.map(row =>
+      typeof row.local_cache_path === 'string' ? row.local_cache_path : null,
+    );
     transact(db, () => {
+      db.executeSync('DELETE FROM attachments WHERE owner_pubky = ?', [ownerPubky]);
       db.executeSync('DELETE FROM group_deferred_events WHERE owner_pubky = ?', [ownerPubky]);
       db.executeSync('DELETE FROM group_seen_events WHERE owner_pubky = ?', [ownerPubky]);
       db.executeSync('DELETE FROM group_messages WHERE owner_pubky = ?', [ownerPubky]);
@@ -996,6 +1009,108 @@ export const StorageService = {
       db.executeSync('DELETE FROM message_requests WHERE owner_pubky = ?', [ownerPubky]);
       db.executeSync('DELETE FROM contacts WHERE owner_pubky = ?', [ownerPubky]);
     });
+    try {
+      await KeyStore.deleteAttachmentSecrets(ownerPubky, eventIds);
+    } catch {
+      // Keychain is unavailable in some unit tests; SQL wipe still happened.
+    }
+    try {
+      await deleteCacheFiles(cachePaths);
+    } catch {
+      // Cache wipe is best-effort.
+    }
+  },
+
+  // ── Attachments (M4) ──────────────────────────────────────────────────────
+
+  async saveAttachment(record: AttachmentRecord): Promise<void> {
+    const db = await getDb();
+    insertAttachment(db, record);
+  },
+
+  async getAttachment(ownerPubky: PubkyKey, eventId: string): Promise<AttachmentRecord | null> {
+    const db = await getDb();
+    const result = db.executeSync(
+      'SELECT * FROM attachments WHERE owner_pubky = ? AND event_id = ?',
+      [ownerPubky, eventId],
+    );
+    const row = result.rows?.[0];
+    if (!row) return null;
+    return rowToAttachment(row);
+  },
+
+  async hasAttachment(ownerPubky: PubkyKey, eventId: string): Promise<boolean> {
+    const db = await getDb();
+    const result = db.executeSync(
+      'SELECT 1 FROM attachments WHERE owner_pubky = ? AND event_id = ? LIMIT 1',
+      [ownerPubky, eventId],
+    );
+    return (result.rows?.length ?? 0) > 0;
+  },
+
+  async listAttachmentsForConversation(
+    ownerPubky: PubkyKey,
+    conversationId: string,
+  ): Promise<AttachmentRecord[]> {
+    const db = await getDb();
+    const result = db.executeSync(
+      `SELECT * FROM attachments
+       WHERE owner_pubky = ? AND conversation_id = ?
+       ORDER BY created_at ASC`,
+      [ownerPubky, conversationId],
+    );
+    return (result.rows ?? []).map(rowToAttachment);
+  },
+
+  async listAttachmentsForChannel(
+    ownerPubky: PubkyKey,
+    channelId: string,
+  ): Promise<AttachmentRecord[]> {
+    const db = await getDb();
+    const result = db.executeSync(
+      `SELECT * FROM attachments
+       WHERE owner_pubky = ? AND channel_id = ?
+       ORDER BY created_at ASC`,
+      [ownerPubky, channelId],
+    );
+    return (result.rows ?? []).map(rowToAttachment);
+  },
+
+  async updateAttachmentResolve(
+    ownerPubky: PubkyKey,
+    eventId: string,
+    patch: { resolveState: AttachmentResolveState; localCachePath?: string | null },
+  ): Promise<void> {
+    const db = await getDb();
+    if (patch.localCachePath !== undefined) {
+      db.executeSync(
+        `UPDATE attachments
+         SET resolve_state = ?, local_cache_path = ?, updated_at = ?
+         WHERE owner_pubky = ? AND event_id = ?`,
+        [patch.resolveState, patch.localCachePath, now(), ownerPubky, eventId],
+      );
+      return;
+    }
+    db.executeSync(
+      `UPDATE attachments
+       SET resolve_state = ?, updated_at = ?
+       WHERE owner_pubky = ? AND event_id = ?`,
+      [patch.resolveState, now(), ownerPubky, eventId],
+    );
+  },
+
+  async updateAttachmentDelivery(
+    ownerPubky: PubkyKey,
+    eventId: string,
+    deliveryState: AttachmentRecord['deliveryState'],
+  ): Promise<void> {
+    const db = await getDb();
+    db.executeSync(
+      `UPDATE attachments
+       SET delivery_state = ?, updated_at = ?
+       WHERE owner_pubky = ? AND event_id = ?`,
+      [deliveryState, now(), ownerPubky, eventId],
+    );
   },
 
   // ── Group channels (M3, owner-scoped) ─────────────────────────────────────
@@ -1913,5 +2028,56 @@ function rowToGroupDeferred(row: any): GroupDeferredEvent {
     receivedAt: row.received_at,
     targetEventId: row.target_event_id,
     targetAuthorPubky: row.target_author_pubky,
+  };
+}
+
+function insertAttachment(db: SqlExecutor, record: AttachmentRecord): void {
+  const ts = now();
+  db.executeSync(
+    `INSERT OR IGNORE INTO attachments
+      (owner_pubky, event_id, conversation_id, channel_id, sender_pubky, direction,
+       location, key_ref, content_type, size, thumbnail_location, local_cache_path,
+       created_at, updated_at, delivery_state, resolve_state)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      record.ownerPubky,
+      record.eventId,
+      record.conversationId,
+      record.channelId,
+      record.senderPubky,
+      record.direction,
+      record.location,
+      record.keyRef,
+      record.contentType,
+      record.size,
+      record.thumbnailLocation,
+      record.localCachePath,
+      record.createdAt || ts,
+      record.updatedAt || ts,
+      record.deliveryState,
+      record.resolveState,
+    ],
+  );
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function rowToAttachment(row: any): AttachmentRecord {
+  return {
+    ownerPubky: row.owner_pubky,
+    eventId: row.event_id,
+    conversationId: row.conversation_id ?? null,
+    channelId: row.channel_id ?? null,
+    senderPubky: row.sender_pubky,
+    direction: row.direction,
+    location: row.location,
+    keyRef: row.key_ref,
+    contentType: row.content_type,
+    size: row.size,
+    thumbnailLocation: row.thumbnail_location ?? null,
+    localCachePath: row.local_cache_path ?? null,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    deliveryState: row.delivery_state,
+    resolveState: row.resolve_state,
   };
 }

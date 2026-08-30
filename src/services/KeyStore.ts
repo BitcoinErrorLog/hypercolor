@@ -33,6 +33,7 @@ const KEYCHAIN_USERNAME = 'identity';
  * entries on `KeyStore.clear()`. Do not read or write secrets here.
  */
 const LEGACY_LINK_RECEIVER_SECRET_SERVICE = 'hypercolor-link-receiver-secret';
+const ATTACHMENT_KEY_SERVICE_PREFIX = 'hypercolor-attachment-key';
 
 // ─── MMKV metadata keys ───────────────────────────────────────────────────────
 
@@ -248,6 +249,70 @@ export function deleteLinkSession(): void {
   store().remove(LINK_SESSION_KEY);
 }
 
+// ─── Attachment AEAD material (OS Keychain, keyed by owner + event_id) ───────
+
+export interface AttachmentSecretMaterial {
+  key: string;
+  nonce: string;
+  algorithm: string;
+  thumbnail?: { key: string; nonce: string };
+}
+
+function attachmentKeyService(ownerPubky: string, eventId: string): string {
+  return `${ATTACHMENT_KEY_SERVICE_PREFIX}:${ownerPubky}:${eventId}`;
+}
+
+/**
+ * Stores the attachment key/nonce that arrived over the Encrypted Link.
+ * Ciphertext is world-readable; this material is the only secret.
+ * One Keychain service per (owner, event) — a shared service would
+ * overwrite earlier keys.
+ */
+export async function setAttachmentSecret(
+  ownerPubky: string,
+  eventId: string,
+  material: AttachmentSecretMaterial,
+): Promise<void> {
+  await Keychain.setGenericPassword(KEYCHAIN_USERNAME, JSON.stringify(material), {
+    service: attachmentKeyService(ownerPubky, eventId),
+    accessible: Keychain.ACCESSIBLE.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
+  });
+}
+
+export async function getAttachmentSecret(
+  ownerPubky: string,
+  eventId: string,
+): Promise<AttachmentSecretMaterial | null> {
+  try {
+    const result = await Keychain.getGenericPassword({
+      service: attachmentKeyService(ownerPubky, eventId),
+    });
+    if (result === false) return null;
+    return JSON.parse(result.password) as AttachmentSecretMaterial;
+  } catch {
+    return null;
+  }
+}
+
+export async function deleteAttachmentSecret(ownerPubky: string, eventId: string): Promise<void> {
+  try {
+    await Keychain.resetGenericPassword({
+      service: attachmentKeyService(ownerPubky, eventId),
+    });
+  } catch {
+    // Best-effort: row wipe still proceeds.
+  }
+}
+
+export async function deleteAttachmentSecrets(
+  ownerPubky: string,
+  eventIds: readonly string[],
+): Promise<void> {
+  for (const eventId of eventIds) {
+    await deleteAttachmentSecret(ownerPubky, eventId);
+  }
+}
+
 // ─── Session / cert validity ──────────────────────────────────────────────────
 
 export async function hasPersistedSession(): Promise<boolean> {
@@ -299,6 +364,10 @@ export const KeyStore = {
   setLinkSession,
   getLinkSession,
   deleteLinkSession,
+  setAttachmentSecret,
+  getAttachmentSecret,
+  deleteAttachmentSecret,
+  deleteAttachmentSecrets,
   // AppCert
   setAppCert,
   getAppCert,

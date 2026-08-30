@@ -2,6 +2,7 @@ import { createMMKV, type MMKV } from 'react-native-mmkv';
 import { DEFAULT_NEXUS_BASE_URL, WOT_AUTO_ACCEPT_TRUST_THRESHOLD } from './config';
 
 export {
+  ATTACHMENT_MAX_BYTES,
   DEFAULT_NEXUS_BASE_URL,
   GROUP_DEFERRED_QUOTA_PER_SENDER,
   GROUP_DEFERRED_TTL_MS,

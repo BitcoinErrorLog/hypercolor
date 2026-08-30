@@ -7476,6 +7476,107 @@ public func FfiConverterTypeSdkStateBlobStore_lower(_ value: SdkStateBlobStore) 
 
 
 /**
+ * Encrypted attachment blob returned by [`attachment_encrypt`].
+ */
+public struct AttachmentCiphertext {
+    /**
+     * Fresh 24-byte XChaCha20-Poly1305 nonce, base64url (no padding).
+     */
+    public var nonceB64: String
+    /**
+     * Authenticated ciphertext (ciphertext || tag), base64url (no padding).
+     */
+    public var ciphertextB64: String
+    /**
+     * Algorithm label. Always `XChaCha20Poly1305`.
+     */
+    public var algorithm: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * Fresh 24-byte XChaCha20-Poly1305 nonce, base64url (no padding).
+         */nonceB64: String,
+        /**
+         * Authenticated ciphertext (ciphertext || tag), base64url (no padding).
+         */ciphertextB64: String,
+        /**
+         * Algorithm label. Always `XChaCha20Poly1305`.
+         */algorithm: String) {
+        self.nonceB64 = nonceB64
+        self.ciphertextB64 = ciphertextB64
+        self.algorithm = algorithm
+    }
+}
+
+#if compiler(>=6)
+extension AttachmentCiphertext: Sendable {}
+#endif
+
+
+extension AttachmentCiphertext: Equatable, Hashable {
+    public static func ==(lhs: AttachmentCiphertext, rhs: AttachmentCiphertext) -> Bool {
+        if lhs.nonceB64 != rhs.nonceB64 {
+            return false
+        }
+        if lhs.ciphertextB64 != rhs.ciphertextB64 {
+            return false
+        }
+        if lhs.algorithm != rhs.algorithm {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(nonceB64)
+        hasher.combine(ciphertextB64)
+        hasher.combine(algorithm)
+    }
+}
+
+extension AttachmentCiphertext: Codable {}
+
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeAttachmentCiphertext: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> AttachmentCiphertext {
+        return
+            try AttachmentCiphertext(
+                nonceB64: FfiConverterString.read(from: &buf),
+                ciphertextB64: FfiConverterString.read(from: &buf),
+                algorithm: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: AttachmentCiphertext, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.nonceB64, into: &buf)
+        FfiConverterString.write(value.ciphertextB64, into: &buf)
+        FfiConverterString.write(value.algorithm, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeAttachmentCiphertext_lift(_ buf: RustBuffer) throws -> AttachmentCiphertext {
+    return try FfiConverterTypeAttachmentCiphertext.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeAttachmentCiphertext_lower(_ value: AttachmentCiphertext) -> RustBuffer {
+    return FfiConverterTypeAttachmentCiphertext.lower(value)
+}
+
+
+/**
  * Time interval a recurring Payment Proof applies to.
  */
 public struct BillingPeriod {
@@ -19838,6 +19939,43 @@ fileprivate func uniffiFutureContinuationCallback(handle: UInt64, pollResult: In
     }
 }
 /**
+ * Decrypt `ciphertext_b64` with `key_b64` and `nonce_b64`.
+ *
+ * `aad` must match the associated data used at encrypt time. Returns the
+ * plaintext encoded as base64url (no padding). Authentication failure maps to
+ * `protocol/decrypt_failed` with a fixed redacted context.
+ *
+ * The platform caller must minimize its own copies of `key_b64`.
+ */
+public func attachmentDecrypt(ciphertextB64: String, keyB64: String, nonceB64: String, aad: String?)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypePaykitError_lift) {
+    uniffi_paykit_fn_func_attachment_decrypt(
+        FfiConverterString.lower(ciphertextB64),
+        FfiConverterString.lower(keyB64),
+        FfiConverterString.lower(nonceB64),
+        FfiConverterOptionString.lower(aad),$0
+    )
+})
+}
+/**
+ * Encrypt `plaintext_b64` (base64url, no padding) with `key_b64`.
+ *
+ * A fresh random 24-byte nonce is generated for every call. When `aad` is
+ * `Some`, those UTF-8 bytes are bound as associated data (the app should pass
+ * the canonical homeserver path); `None` uses empty associated data.
+ *
+ * The platform caller must minimize its own copies of `key_b64`.
+ */
+public func attachmentEncrypt(plaintextB64: String, keyB64: String, aad: String?)throws  -> AttachmentCiphertext  {
+    return try  FfiConverterTypeAttachmentCiphertext_lift(try rustCallWithError(FfiConverterTypePaykitError_lift) {
+    uniffi_paykit_fn_func_attachment_encrypt(
+        FfiConverterString.lower(plaintextB64),
+        FfiConverterString.lower(keyB64),
+        FfiConverterOptionString.lower(aad),$0
+    )
+})
+}
+/**
  * Decode an SDK state blob snapshot previously encoded by Paykit FFI.
  */
 public func decodeSdkStateBlobSnapshot(bytes: Data)throws  -> SdkStateBlobSnapshot  {
@@ -19873,6 +20011,18 @@ public func encodeSdkStateBlobSnapshot(snapshot: SdkStateBlobSnapshot)throws  ->
     return try  FfiConverterData.lift(try rustCallWithError(FfiConverterTypePaykitError_lift) {
     uniffi_paykit_fn_func_encode_sdk_state_blob_snapshot(
         FfiConverterTypeSdkStateBlobSnapshot_lower(snapshot),$0
+    )
+})
+}
+/**
+ * Generate a random 32-byte attachment key, encoded as base64url (no padding).
+ *
+ * Store it in platform secure storage. The platform caller must minimize its
+ * own copies of the returned key.
+ */
+public func generateAttachmentKey() -> String  {
+    return try!  FfiConverterString.lift(try! rustCall() {
+    uniffi_paykit_fn_func_generate_attachment_key($0
     )
 })
 }
@@ -20031,6 +20181,12 @@ private let initializationResult: InitializationResult = {
     if bindings_contract_version != scaffolding_contract_version {
         return InitializationResult.contractVersionMismatch
     }
+    if (uniffi_paykit_checksum_func_attachment_decrypt() != 35692) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_paykit_checksum_func_attachment_encrypt() != 62116) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_paykit_checksum_func_decode_sdk_state_blob_snapshot() != 4823) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -20041,6 +20197,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_paykit_checksum_func_encode_sdk_state_blob_snapshot() != 49508) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_paykit_checksum_func_generate_attachment_key() != 16172) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_paykit_checksum_func_generate_receipt_id() != 34487) {

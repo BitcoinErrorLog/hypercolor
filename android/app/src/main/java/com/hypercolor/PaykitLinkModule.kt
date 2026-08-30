@@ -17,8 +17,12 @@ import com.synonym.paykit.ChatLinkHandshake
 import com.synonym.paykit.ChatProbeResult
 import com.synonym.paykit.ChatReceiverCapabilities
 import com.synonym.paykit.ChatSession
+import com.synonym.paykit.AttachmentCiphertext
 import com.synonym.paykit.PaykitAndroid
 import com.synonym.paykit.PaykitException
+import com.synonym.paykit.attachmentDecrypt as paykitAttachmentDecrypt
+import com.synonym.paykit.attachmentEncrypt as paykitAttachmentEncrypt
+import com.synonym.paykit.generateAttachmentKey as paykitGenerateAttachmentKey
 import com.synonym.paykit.generateReceiverNoiseSecretKeyHex
 import com.synonym.paykit.receiverNoisePublicKeyFromSecretHex
 import java.nio.charset.StandardCharsets
@@ -510,6 +514,49 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
             val link = (handle?.kind as? LinkKind.Established)?.link
             link?.closeLink()
             promise.resolve(null)
+        }
+    }
+
+    @ReactMethod
+    fun generateAttachmentKey(promise: Promise) {
+        launch(promise) {
+            promise.resolve(paykitGenerateAttachmentKey())
+        }
+    }
+
+    @ReactMethod
+    fun attachmentEncrypt(plaintextB64: String, keyB64: String, aad: String?, promise: Promise) {
+        launch(promise) {
+            val sealed: AttachmentCiphertext = paykitAttachmentEncrypt(
+                requireText(plaintextB64, "plaintextB64"),
+                requireText(keyB64, "keyB64"),
+                optionalText(aad),
+            )
+            resolveMap(promise) {
+                putString("nonceB64", sealed.nonceB64)
+                putString("ciphertextB64", sealed.ciphertextB64)
+                putString("algorithm", sealed.algorithm)
+            }
+        }
+    }
+
+    @ReactMethod
+    fun attachmentDecrypt(
+        ciphertextB64: String,
+        keyB64: String,
+        nonceB64: String,
+        aad: String?,
+        promise: Promise,
+    ) {
+        launch(promise) {
+            promise.resolve(
+                paykitAttachmentDecrypt(
+                    requireText(ciphertextB64, "ciphertextB64"),
+                    requireText(keyB64, "keyB64"),
+                    requireText(nonceB64, "nonceB64"),
+                    optionalText(aad),
+                ),
+            )
         }
     }
 

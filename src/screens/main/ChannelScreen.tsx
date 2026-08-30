@@ -23,10 +23,13 @@ import {
   GroupServiceError,
   isGroupTimelineVisible,
 } from '../../types/group';
+import { CHAT_ATTACHMENT_KIND, type AttachmentRecord } from '../../types/attachment';
 import { PRIVATE_GROUP_MEMBER_CAP } from '../../flags/config';
 import { useAuthStore } from '../../stores/authStore';
 import { StorageService } from '../../services/StorageService';
 import { GroupService, subscribeGroupEvents } from '../../services/group/GroupService';
+import { AttachmentBubble } from '../../components/AttachmentBubble';
+import { ComposerAttachButton } from '../../components/ComposerAttachButton';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'ChannelScreen'>;
 
@@ -39,6 +42,7 @@ export default function ChannelScreen({ route }: Props) {
   const ownerPubky = useAuthStore(s => s.pubky);
   const [channel, setChannel] = useState<GroupChannel | null>(null);
   const [messages, setMessages] = useState<GroupMessage[]>([]);
+  const [attachments, setAttachments] = useState<AttachmentRecord[]>([]);
   const [members, setMembers] = useState<GroupMember[]>([]);
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [draft, setDraft] = useState('');
@@ -50,14 +54,18 @@ export default function ChannelScreen({ route }: Props) {
   const [editingEventId, setEditingEventId] = useState<string | null>(null);
 
   const reload = useCallback(async () => {
-    const [ch, msgs, mems] = await Promise.all([
+    const [ch, msgs, mems, atts] = await Promise.all([
       GroupService.getChannel(channelId),
       GroupService.listMessages(channelId),
       GroupService.listMembers(channelId),
+      ownerPubky
+        ? StorageService.listAttachmentsForChannel(ownerPubky, channelId)
+        : Promise.resolve([] as AttachmentRecord[]),
     ]);
     setChannel(ch);
     setMessages(msgs);
     setMembers(mems);
+    setAttachments(atts);
     if (ownerPubky) {
       setContacts(await StorageService.getAllContacts(ownerPubky));
     }
@@ -115,6 +123,7 @@ export default function ChannelScreen({ route }: Props) {
     <ChannelScreenContent
       channel={channel}
       messages={messages}
+      attachments={attachments}
       members={members}
       contacts={contacts}
       localPubky={localPubky}
@@ -131,6 +140,9 @@ export default function ChannelScreen({ route }: Props) {
       onChangeDraft={setDraft}
       onSend={() => {
         void handleSend();
+      }}
+      onAttachSent={() => {
+        void reload();
       }}
       onReply={setReplyTo}
       onClearReply={() => setReplyTo(null)}
@@ -207,6 +219,7 @@ export default function ChannelScreen({ route }: Props) {
 export function ChannelScreenContent({
   channel,
   messages,
+  attachments,
   members,
   contacts,
   localPubky,
@@ -222,6 +235,7 @@ export function ChannelScreenContent({
   onBack,
   onChangeDraft,
   onSend,
+  onAttachSent,
   onReply,
   onClearReply,
   onToggleMembers,
@@ -236,6 +250,7 @@ export function ChannelScreenContent({
 }: {
   channel: GroupChannel | null;
   messages: GroupMessage[];
+  attachments: AttachmentRecord[];
   members: GroupMember[];
   contacts: Contact[];
   localPubky: string | null;
@@ -251,6 +266,7 @@ export function ChannelScreenContent({
   onBack: () => void;
   onChangeDraft: (value: string) => void;
   onSend: () => void;
+  onAttachSent: () => void;
   onReply: (message: GroupMessage) => void;
   onClearReply: () => void;
   onToggleMembers: () => void;
@@ -301,6 +317,7 @@ export function ChannelScreenContent({
       const isMine = item.senderPubky === localPubky;
       const parent = item.replyToEventId ? byId.get(item.replyToEventId) : undefined;
       const reactions = reactionsByTarget.get(`${item.senderPubky}:${item.eventId}`);
+      const attachment = attachments.find(a => a.eventId === item.eventId);
       return (
         <View style={[styles.bubble, isMine ? styles.mine : styles.theirs]}>
           {!isMine && (
@@ -313,9 +330,13 @@ export function ChannelScreenContent({
               ↳ {parent.deleted ? 'deleted' : parent.body}
             </Text>
           ) : null}
-          <Text style={[styles.bubbleText, isMine ? styles.mineText : styles.theirsText]}>
-            {item.deleted ? 'Message deleted' : item.body}
-          </Text>
+          {item.kind === CHAT_ATTACHMENT_KIND && attachment && !item.deleted ? (
+            <AttachmentBubble record={attachment} isMine={isMine} />
+          ) : (
+            <Text style={[styles.bubbleText, isMine ? styles.mineText : styles.theirsText]}>
+              {item.deleted ? 'Message deleted' : item.body}
+            </Text>
+          )}
           <View style={styles.meta}>
             <Text style={styles.time}>{formatTime(item.sentAt)}</Text>
             {item.editedAt ? <Text style={styles.time}> · edited</Text> : null}
@@ -360,7 +381,18 @@ export function ChannelScreenContent({
         </View>
       );
     },
-    [localPubky, byId, reactionsByTarget, isPublic, selfActive, onReply, onReact, onEdit, onDelete],
+    [
+      attachments,
+      localPubky,
+      byId,
+      reactionsByTarget,
+      isPublic,
+      selfActive,
+      onReply,
+      onReact,
+      onEdit,
+      onDelete,
+    ],
   );
 
   return (
@@ -463,6 +495,13 @@ export function ChannelScreenContent({
             </View>
           ) : null}
           <View style={styles.composer}>
+            {!isPublic && channel ? (
+              <ComposerAttachButton
+                target={{ type: 'channel', channelId: channel.channelId }}
+                disabled={sending}
+                onSent={onAttachSent}
+              />
+            ) : null}
             <TextInput
               style={styles.input}
               value={draft}

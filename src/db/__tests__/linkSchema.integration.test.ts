@@ -10,6 +10,16 @@ jest.mock('@op-engineering/op-sqlite', () => ({
   },
 }));
 
+jest.mock('../../services/KeyStore', () => ({
+  KeyStore: {
+    deleteAttachmentSecrets: jest.fn().mockResolvedValue(undefined),
+  },
+}));
+
+jest.mock('../../services/attachments/fileIo', () => ({
+  deleteCacheFiles: jest.fn().mockResolvedValue(undefined),
+}));
+
 import { setDbForTests } from '../index';
 import { runMigrations } from '../migrations';
 import {
@@ -22,6 +32,7 @@ import {
   SCHEMA_V7_STATEMENTS,
 } from '../schema';
 import { StorageService } from '../../services/StorageService';
+import { KeyStore } from '../../services/KeyStore';
 import { CHAT_MESSAGE_KIND } from '../../types/link';
 import { openMemoryDb } from './betterSqliteAdapter';
 
@@ -86,7 +97,7 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
 
     await runMigrations(db);
 
-    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(8);
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(9);
     expect(db.executeSync('SELECT * FROM link_receivers').rows).toEqual([]);
     expect(
       db.executeSync(
@@ -321,7 +332,7 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
     setDbForTests(db);
     await runMigrations(db);
 
-    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(8);
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(9);
     const cols = db.executeSync('PRAGMA table_info(contacts)').rows ?? [];
     const names = cols.map(row => row.name);
     expect(names).toEqual(
@@ -572,7 +583,7 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
     setDbForTests(db);
     await runMigrations(db);
 
-    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(8);
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(9);
     for (const name of [
       'group_channels',
       'group_members',
@@ -723,7 +734,7 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
 
     await runMigrations(db);
 
-    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(8);
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(9);
     const row = db.executeSync('SELECT * FROM group_messages').rows?.[0];
     expect(row).toEqual(
       expect.objectContaining({
@@ -742,6 +753,91 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
       'sender_pubky',
       'event_id',
     ]);
+  });
+
+  it('creates v9 attachments table, wipes them on clearAccountData, and isolates accounts', async () => {
+    const db = openMemoryDb();
+    setDbForTests(db);
+    await runMigrations(db);
+
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(9);
+    expect(
+      db.executeSync("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'attachments'")
+        .rows,
+    ).toHaveLength(1);
+    const pk = db.executeSync('PRAGMA table_info(attachments)').rows ?? [];
+    expect(pk.filter(col => Number(col.pk) > 0).map(col => col.name)).toEqual([
+      'owner_pubky',
+      'event_id',
+    ]);
+    expect(pk.map(col => col.name)).toEqual(
+      expect.arrayContaining([
+        'conversation_id',
+        'channel_id',
+        'location',
+        'key_ref',
+        'content_type',
+        'size',
+        'thumbnail_location',
+        'local_cache_path',
+        'delivery_state',
+        'resolve_state',
+      ]),
+    );
+
+    const eventA = '00000000-0000-4000-8000-0000000000a1';
+    const eventB = '00000000-0000-4000-8000-0000000000b1';
+    await StorageService.saveAttachment({
+      ownerPubky: OWNER,
+      eventId: eventA,
+      conversationId: `dm:${PEER}`,
+      channelId: null,
+      senderPubky: OWNER,
+      direction: 'sent',
+      location: `pubky://${OWNER}/pub/hypercolor.app/v1/attachments/${eventA}`,
+      keyRef: `att:${OWNER}:${eventA}`,
+      contentType: 'image/jpeg',
+      size: 12,
+      thumbnailLocation: null,
+      localCachePath: 'file:///cache/a',
+      createdAt: 10,
+      updatedAt: 10,
+      deliveryState: 'sent',
+      resolveState: 'ready',
+    });
+    await StorageService.saveAttachment({
+      ownerPubky: OTHER,
+      eventId: eventB,
+      conversationId: `dm:${PEER}`,
+      channelId: null,
+      senderPubky: OTHER,
+      direction: 'sent',
+      location: `pubky://${OTHER}/pub/hypercolor.app/v1/attachments/${eventB}`,
+      keyRef: `att:${OTHER}:${eventB}`,
+      contentType: 'application/pdf',
+      size: 20,
+      thumbnailLocation: null,
+      localCachePath: 'file:///cache/b',
+      createdAt: 11,
+      updatedAt: 11,
+      deliveryState: 'sent',
+      resolveState: 'ready',
+    });
+
+    expect(await StorageService.getAttachment(OWNER, eventA)).toEqual(
+      expect.objectContaining({ eventId: eventA, keyRef: `att:${OWNER}:${eventA}` }),
+    );
+    expect(await StorageService.getAttachment(OTHER, eventB)).toEqual(
+      expect.objectContaining({ eventId: eventB }),
+    );
+
+    await StorageService.clearAccountData(OWNER);
+
+    expect(await StorageService.getAttachment(OWNER, eventA)).toBeNull();
+    expect(await StorageService.getAttachment(OTHER, eventB)).toEqual(
+      expect.objectContaining({ eventId: eventB, contentType: 'application/pdf' }),
+    );
+    expect(KeyStore.deleteAttachmentSecrets).toHaveBeenCalledWith(OWNER, [eventA]);
   });
 });
 

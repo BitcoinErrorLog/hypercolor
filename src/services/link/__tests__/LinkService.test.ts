@@ -20,11 +20,16 @@ import {
 } from '../../../types/link';
 import type { DeliveryQueueItem } from '../../../types';
 import { applyGroupInbound } from '../../group/applyGroupInbound';
+import { applyAttachmentInbound } from '../../attachments/applyAttachmentInbound';
 import { GROUP_MESSAGE_KIND } from '../../../types/group';
+import { CHAT_ATTACHMENT_KIND } from '../../../types/attachment';
 
 jest.mock('../PaykitLinkNative', () => ({
   PaykitLinkNative: {
     isAvailable: jest.fn(),
+    generateAttachmentKey: jest.fn(),
+    attachmentEncrypt: jest.fn(),
+    attachmentDecrypt: jest.fn(),
     generateReceiverKey: jest.fn(),
     getReceiverPublicKey: jest.fn(),
     startAuthFlow: jest.fn(),
@@ -99,11 +104,20 @@ jest.mock('../../StorageService', () => ({
     finalizeGroupFanoutSend: jest.fn(),
     countDeliveryQueueForMessage: jest.fn(),
     updateGroupMessageDeliveryState: jest.fn(),
+    saveAttachment: jest.fn(),
+    getAttachment: jest.fn(),
+    hasAttachment: jest.fn(),
+    updateAttachmentResolve: jest.fn(),
+    updateAttachmentDelivery: jest.fn(),
   },
 }));
 
 jest.mock('../../group/applyGroupInbound', () => ({
   applyGroupInbound: jest.fn().mockResolvedValue(undefined),
+}));
+
+jest.mock('../../attachments/applyAttachmentInbound', () => ({
+  applyAttachmentInbound: jest.fn().mockResolvedValue(null),
 }));
 
 jest.mock('../../KeyStore', () => ({
@@ -113,6 +127,9 @@ jest.mock('../../KeyStore', () => ({
     getLinkSession: jest.fn(),
     setLinkSession: jest.fn(),
     deleteLinkSession: jest.fn(),
+    setAttachmentSecret: jest.fn(),
+    getAttachmentSecret: jest.fn(),
+    deleteAttachmentSecrets: jest.fn(),
   },
 }));
 
@@ -1056,6 +1073,64 @@ describe('LinkService', () => {
       );
       expect(mockedStorage.markLinkStreamItemProcessed).toHaveBeenCalledWith('sg');
       expect(mockedStorage.saveLinkMessage).not.toHaveBeenCalled();
+    });
+
+    it('routes chat.attachment.v0 through applyAttachmentInbound and marks processed', async () => {
+      givenEstablishedLink();
+      const attJson = JSON.stringify({
+        version: 1,
+        kind: CHAT_ATTACHMENT_KIND,
+        event_id: EVENT_ID,
+        sent_at: NOW,
+        location: `pubky://${PEER}/pub/hypercolor.app/v1/attachments/${EVENT_ID}`,
+        key: 'k',
+        nonce: 'n',
+        algorithm: 'XChaCha20Poly1305',
+        contentType: 'image/jpeg',
+        size: 12,
+      });
+      mockedNative.receivePrivateMessages.mockResolvedValue({
+        messages: [{ rawJson: attJson, kind: CHAT_ATTACHMENT_KIND, version: 1 }],
+        snapshot: 'est-2',
+      });
+      mockedStorage.getUnprocessedLinkStreamItems.mockResolvedValueOnce([]).mockResolvedValueOnce([
+        {
+          id: 'sa',
+          ownerPubky: OWNER,
+          peerPubky: PEER,
+          kind: CHAT_ATTACHMENT_KIND,
+          rawJson: attJson,
+          receivedAt: NOW,
+          processed: false,
+        },
+      ]);
+      const attRow = {
+        ownerPubky: OWNER,
+        eventId: EVENT_ID,
+        conversationId: CONVERSATION_ID,
+        peerPubky: PEER,
+        senderPubky: PEER,
+        direction: 'received' as const,
+        kind: CHAT_ATTACHMENT_KIND,
+        rawJson: attJson,
+        body: '[attachment]',
+        sentAt: NOW,
+        receivedAt: NOW,
+        deliveryState: 'delivered' as const,
+      };
+      (applyAttachmentInbound as jest.Mock).mockResolvedValueOnce(attRow);
+
+      const received = await LinkService.syncInbox([PEER]);
+
+      expect(applyAttachmentInbound).toHaveBeenCalledWith(
+        expect.objectContaining({
+          ownerPubky: OWNER,
+          senderPubky: PEER,
+          rawJson: attJson,
+        }),
+      );
+      expect(mockedStorage.markLinkStreamItemProcessed).toHaveBeenCalledWith('sa');
+      expect(received).toEqual([attRow]);
     });
 
     it('does not persist a snapshot when the drain returned nothing', async () => {

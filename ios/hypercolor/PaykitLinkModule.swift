@@ -8,6 +8,26 @@ struct PaykitLinkBridgeError: Error {
     let message: String
 }
 
+/// File-level wrappers so the RCT method names do not shadow the UniFFI free functions.
+private enum PaykitAttachmentAead {
+    static func generateKey() -> String {
+        generateAttachmentKey()
+    }
+
+    static func encrypt(plaintextB64: String, keyB64: String, aad: String?) throws -> AttachmentCiphertext {
+        try attachmentEncrypt(plaintextB64: plaintextB64, keyB64: keyB64, aad: aad)
+    }
+
+    static func decrypt(ciphertextB64: String, keyB64: String, nonceB64: String, aad: String?) throws -> String {
+        try attachmentDecrypt(
+            ciphertextB64: ciphertextB64,
+            keyB64: keyB64,
+            nonceB64: nonceB64,
+            aad: aad
+        )
+    }
+}
+
 @objc(PaykitLinkModule)
 class PaykitLinkModule: NSObject {
     private let lock = NSLock()
@@ -548,6 +568,63 @@ class PaykitLinkModule: NSObject {
                 try await link.closeLink()
             }
             return NSNull()
+        }
+    }
+
+    // MARK: - Attachment AEAD (free UniFFI functions)
+
+    @objc func generateAttachmentKey(
+        _ resolve: @escaping RCTPromiseResolveBlock,
+        rejecter reject: @escaping RCTPromiseRejectBlock
+    ) {
+        runAsync(resolve, reject) {
+            PaykitAttachmentAead.generateKey()
+        }
+    }
+
+    @objc func attachmentEncrypt(
+        _ plaintextB64: String,
+        keyB64: String,
+        aad: Any?,
+        resolver resolve: @escaping RCTPromiseResolveBlock,
+        rejecter reject: @escaping RCTPromiseRejectBlock
+    ) {
+        runAsync(resolve, reject) {
+            let plaintext = try Self.requireText(plaintextB64, name: "plaintextB64")
+            let key = try Self.requireText(keyB64, name: "keyB64")
+            let boundAad = Self.optionalText(aad)
+            let sealed = try PaykitAttachmentAead.encrypt(
+                plaintextB64: plaintext,
+                keyB64: key,
+                aad: boundAad
+            )
+            return [
+                "nonceB64": sealed.nonceB64,
+                "ciphertextB64": sealed.ciphertextB64,
+                "algorithm": sealed.algorithm,
+            ]
+        }
+    }
+
+    @objc func attachmentDecrypt(
+        _ ciphertextB64: String,
+        keyB64: String,
+        nonceB64: String,
+        aad: Any?,
+        resolver resolve: @escaping RCTPromiseResolveBlock,
+        rejecter reject: @escaping RCTPromiseRejectBlock
+    ) {
+        runAsync(resolve, reject) {
+            let ciphertext = try Self.requireText(ciphertextB64, name: "ciphertextB64")
+            let key = try Self.requireText(keyB64, name: "keyB64")
+            let nonce = try Self.requireText(nonceB64, name: "nonceB64")
+            let boundAad = Self.optionalText(aad)
+            return try PaykitAttachmentAead.decrypt(
+                ciphertextB64: ciphertext,
+                keyB64: key,
+                nonceB64: nonce,
+                aad: boundAad
+            )
         }
     }
 

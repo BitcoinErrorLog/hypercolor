@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState, useCallback } from 'react';
+import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
@@ -14,12 +14,29 @@ import {
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList, Message } from '../../types';
+import { CHAT_ATTACHMENT_KIND, type AttachmentRecord } from '../../types/attachment';
+import type { LinkMessage } from '../../types/link';
+import { buildDmConversationId } from '../../types/link';
 import { useMessageStore } from '../../stores/messageStore';
 import { useAuthStore } from '../../stores/authStore';
 import { StorageService } from '../../services/StorageService';
 import { MessageRouter } from '../../services/MessageRouter';
+import { LinkService } from '../../services/link/LinkService';
+import { AttachmentBubble } from '../../components/AttachmentBubble';
+import { ComposerAttachButton } from '../../components/ComposerAttachButton';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Thread'>;
+
+type ThreadItem =
+  | { id: string; sentAt: number; kind: 'legacy'; message: Message }
+  | { id: string; sentAt: number; kind: 'link'; message: LinkMessage }
+  | {
+      id: string;
+      sentAt: number;
+      kind: 'attachment';
+      record: AttachmentRecord;
+      message?: LinkMessage;
+    };
 
 export default function ThreadScreen({ route }: Props) {
   const { threadId, participantPubky } = route.params;
@@ -29,9 +46,21 @@ export default function ThreadScreen({ route }: Props) {
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
   const [loading, setLoading] = useState(true);
-  const flatListRef = useRef<FlatList<Message>>(null);
+  const [linkMessages, setLinkMessages] = useState<LinkMessage[]>([]);
+  const [attachments, setAttachments] = useState<AttachmentRecord[]>([]);
 
-  // Load initial messages from SQLite
+  const conversationId = buildDmConversationId(participantPubky);
+
+  const reloadEncrypted = useCallback(async () => {
+    if (!localPubky) return;
+    const [msgs, atts] = await Promise.all([
+      StorageService.getLinkMessagesForConversation(localPubky, conversationId, 200),
+      StorageService.listAttachmentsForConversation(localPubky, conversationId),
+    ]);
+    setLinkMessages(msgs);
+    setAttachments(atts);
+  }, [conversationId, localPubky]);
+
   useEffect(() => {
     StorageService.getMessagesForThread(threadId, 50).then(msgs => {
       msgs.forEach(m => useMessageStore.getState().addMessage(threadId, m));
@@ -40,12 +69,16 @@ export default function ThreadScreen({ route }: Props) {
     });
   }, [threadId]);
 
-  // Scroll to bottom when new messages arrive
   useEffect(() => {
-    if (storeMessages.length > 0) {
-      flatListRef.current?.scrollToEnd({ animated: true });
-    }
-  }, [storeMessages.length]);
+    void reloadEncrypted();
+  }, [reloadEncrypted]);
+
+  useEffect(() => {
+    if (!localPubky) return;
+    return LinkService.subscribeInboxSynced(owner => {
+      if (owner === localPubky) void reloadEncrypted();
+    });
+  }, [localPubky, reloadEncrypted]);
 
   const handleSend = useCallback(async () => {
     const text = draft.trim();
@@ -59,17 +92,105 @@ export default function ThreadScreen({ route }: Props) {
     }
   }, [draft, sending, participantPubky, threadId]);
 
-  const renderMessage = useCallback(
-    ({ item }: { item: Message }) => {
-      const isMine = item.senderPubky === localPubky;
+  return (
+    <ThreadScreenContent
+      participantPubky={participantPubky}
+      localPubky={localPubky}
+      draft={draft}
+      sending={sending}
+      loading={loading}
+      storeMessages={storeMessages}
+      linkMessages={linkMessages}
+      attachments={attachments}
+      onBack={() => nav.goBack()}
+      onChangeDraft={setDraft}
+      onSend={() => {
+        void handleSend();
+      }}
+      onAttachSent={() => {
+        void reloadEncrypted();
+      }}
+    />
+  );
+}
+
+export function ThreadScreenContent({
+  participantPubky,
+  localPubky,
+  draft,
+  sending,
+  loading,
+  storeMessages,
+  linkMessages,
+  attachments,
+  onBack,
+  onChangeDraft,
+  onSend,
+  onAttachSent,
+}: {
+  participantPubky: string;
+  localPubky: string | null;
+  draft: string;
+  sending: boolean;
+  loading: boolean;
+  storeMessages: Message[];
+  linkMessages: LinkMessage[];
+  attachments: AttachmentRecord[];
+  onBack: () => void;
+  onChangeDraft: (value: string) => void;
+  onSend: () => void;
+  onAttachSent: () => void;
+}) {
+  const flatListRef = useRef<FlatList<ThreadItem>>(null);
+  const items = useMemo(
+    () => mergeThreadItems(storeMessages, linkMessages, attachments),
+    [storeMessages, linkMessages, attachments],
+  );
+
+  useEffect(() => {
+    if (items.length > 0) {
+      flatListRef.current?.scrollToEnd({ animated: true });
+    }
+  }, [items.length]);
+
+  const renderItem = useCallback(
+    ({ item }: { item: ThreadItem }) => {
+      if (item.kind === 'attachment') {
+        const isMine = item.record.senderPubky === localPubky;
+        return (
+          <View style={[styles.bubble, isMine ? styles.mine : styles.theirs]}>
+            <AttachmentBubble record={item.record} isMine={isMine} />
+            <View style={styles.meta}>
+              <Text style={styles.time}>{formatTime(item.sentAt)}</Text>
+            </View>
+          </View>
+        );
+      }
+      if (item.kind === 'link') {
+        const isMine = item.message.senderPubky === localPubky;
+        return (
+          <View style={[styles.bubble, isMine ? styles.mine : styles.theirs]}>
+            <Text style={[styles.bubbleText, isMine ? styles.mineText : styles.theirsText]}>
+              {item.message.body}
+            </Text>
+            <View style={styles.meta}>
+              <Text style={styles.time}>{formatTime(item.message.sentAt)}</Text>
+              {isMine ? <Text style={styles.status}>{item.message.deliveryState}</Text> : null}
+            </View>
+          </View>
+        );
+      }
+      const isMine = item.message.senderPubky === localPubky;
       return (
         <View style={[styles.bubble, isMine ? styles.mine : styles.theirs]}>
           <Text style={[styles.bubbleText, isMine ? styles.mineText : styles.theirsText]}>
-            {item.content}
+            {item.message.content}
           </Text>
           <View style={styles.meta}>
-            <Text style={styles.time}>{formatTime(item.createdAt)}</Text>
-            {isMine && <Text style={styles.status}>{statusIcon(item.deliveryStatus)}</Text>}
+            <Text style={styles.time}>{formatTime(item.message.createdAt)}</Text>
+            {isMine ? (
+              <Text style={styles.status}>{statusIcon(item.message.deliveryStatus)}</Text>
+            ) : null}
           </View>
         </View>
       );
@@ -80,7 +201,7 @@ export default function ThreadScreen({ route }: Props) {
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => nav.goBack()} style={styles.backBtn}>
+        <TouchableOpacity onPress={onBack} style={styles.backBtn}>
           <Text style={styles.backText}>←</Text>
         </TouchableOpacity>
         <Text style={styles.title} numberOfLines={1} ellipsizeMode="middle">
@@ -96,9 +217,9 @@ export default function ThreadScreen({ route }: Props) {
       ) : (
         <FlatList
           ref={flatListRef}
-          data={storeMessages}
+          data={items}
           keyExtractor={item => item.id}
-          renderItem={renderMessage}
+          renderItem={renderItem}
           contentContainerStyle={styles.messageList}
           onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: false })}
         />
@@ -109,10 +230,15 @@ export default function ThreadScreen({ route }: Props) {
         keyboardVerticalOffset={0}
       >
         <View style={styles.composer}>
+          <ComposerAttachButton
+            target={{ type: 'conversation', peerPubky: participantPubky }}
+            disabled={sending}
+            onSent={onAttachSent}
+          />
           <TextInput
             style={styles.input}
             value={draft}
-            onChangeText={setDraft}
+            onChangeText={onChangeDraft}
             placeholder="Message…"
             placeholderTextColor="#4b5563"
             multiline
@@ -121,7 +247,7 @@ export default function ThreadScreen({ route }: Props) {
           />
           <TouchableOpacity
             style={[styles.sendBtn, (!draft.trim() || sending) && styles.sendBtnDisabled]}
-            onPress={handleSend}
+            onPress={onSend}
             disabled={!draft.trim() || sending}
           >
             {sending ? (
@@ -134,6 +260,52 @@ export default function ThreadScreen({ route }: Props) {
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
+}
+
+function mergeThreadItems(
+  legacy: Message[],
+  linkMessages: LinkMessage[],
+  attachments: AttachmentRecord[],
+): ThreadItem[] {
+  const items: ThreadItem[] = [];
+  const attachmentByEvent = new Map(attachments.map(a => [a.eventId, a]));
+  const seenAttachment = new Set<string>();
+
+  for (const message of legacy) {
+    items.push({ id: `legacy:${message.id}`, sentAt: message.createdAt, kind: 'legacy', message });
+  }
+  for (const message of linkMessages) {
+    if (message.kind === CHAT_ATTACHMENT_KIND) {
+      const record = attachmentByEvent.get(message.eventId);
+      if (record) {
+        seenAttachment.add(record.eventId);
+        items.push({
+          id: `att:${record.eventId}`,
+          sentAt: record.createdAt,
+          kind: 'attachment',
+          record,
+          message,
+        });
+      }
+      continue;
+    }
+    items.push({
+      id: `link:${message.senderPubky}:${message.eventId}`,
+      sentAt: message.sentAt,
+      kind: 'link',
+      message,
+    });
+  }
+  for (const record of attachments) {
+    if (seenAttachment.has(record.eventId)) continue;
+    items.push({
+      id: `att:${record.eventId}`,
+      sentAt: record.createdAt,
+      kind: 'attachment',
+      record,
+    });
+  }
+  return items.sort((a, b) => a.sentAt - b.sentAt);
 }
 
 function formatTime(ms: number): string {

@@ -131,6 +131,13 @@ export interface LinkReceiveResult {
   snapshot: string;
 }
 
+/** Native XChaCha20-Poly1305 attachment ciphertext (base64url, no padding). */
+export interface AttachmentCiphertext {
+  nonceB64: string;
+  ciphertextB64: string;
+  algorithm: string;
+}
+
 export interface PaykitLinkNativeApi {
   /** True when the native module is linked into this build. */
   isAvailable(): boolean;
@@ -217,6 +224,20 @@ export interface PaykitLinkNativeApi {
     remoteReceiverPath: string,
   ): Promise<number>;
   closeLink(linkId: string): Promise<void>;
+  /** Random 32-byte attachment key, base64url (no padding). */
+  generateAttachmentKey(): Promise<string>;
+  attachmentEncrypt(
+    plaintextB64: string,
+    keyB64: string,
+    aad?: string | null,
+  ): Promise<AttachmentCiphertext>;
+  /** Returns plaintext as base64url (no padding). Auth failure is `protocol`. */
+  attachmentDecrypt(
+    ciphertextB64: string,
+    keyB64: string,
+    nonceB64: string,
+    aad?: string | null,
+  ): Promise<string>;
 }
 
 const { PaykitLinkModule } = NativeModules;
@@ -411,5 +432,26 @@ export const PaykitLinkNative: PaykitLinkNativeApi = {
 
   closeLink(linkId: string): Promise<void> {
     return invoke('closeLink', linkId);
+  },
+
+  generateAttachmentKey(): Promise<string> {
+    return invoke('generateAttachmentKey');
+  },
+
+  attachmentEncrypt(
+    plaintextB64: string,
+    keyB64: string,
+    aad?: string | null,
+  ): Promise<AttachmentCiphertext> {
+    return invoke('attachmentEncrypt', plaintextB64, keyB64, aad ?? null);
+  },
+
+  attachmentDecrypt(
+    ciphertextB64: string,
+    keyB64: string,
+    nonceB64: string,
+    aad?: string | null,
+  ): Promise<string> {
+    return invoke('attachmentDecrypt', ciphertextB64, keyB64, nonceB64, aad ?? null);
   },
 };

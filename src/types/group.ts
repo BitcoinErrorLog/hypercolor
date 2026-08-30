@@ -1,6 +1,7 @@
 import type { PubkyKey } from './index';
 import type { LinkDeliveryState } from './link';
 import { LINK_MESSAGE_MAX_BYTES, parseLinkSentAt } from './link';
+import { CHAT_ATTACHMENT_KIND } from './attachment';
 
 /**
  * Wire contracts and local row types for M3 group chat.
@@ -877,6 +878,7 @@ export function isGroupTimelineVisible(message: { kind: string }): boolean {
   return (
     message.kind === GROUP_MESSAGE_KIND ||
     message.kind === PUBLIC_CHANNEL_MESSAGE_KIND ||
-    message.kind === GROUP_MEMBERSHIP_KIND
+    message.kind === GROUP_MEMBERSHIP_KIND ||
+    message.kind === CHAT_ATTACHMENT_KIND
   );
 }

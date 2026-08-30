@@ -152,3 +152,15 @@ export type {
   GroupMemberRole,
   GroupMemberStatus,
 } from './group';
+
+export type {
+  AttachmentRecord,
+  AttachmentResolveState,
+  ChatAttachmentEnvelope,
+} from './attachment';
+export {
+  ATTACHMENT_ALGORITHM,
+  CHAT_ATTACHMENT_KIND,
+  attachmentKeyRef,
+  isAttachmentKind,
+} from './attachment';

@@ -4,6 +4,16 @@ jest.mock('@op-engineering/op-sqlite', () => ({
   },
 }));
 
+jest.mock('../KeyStore', () => ({
+  KeyStore: {
+    deleteAttachmentSecrets: jest.fn().mockResolvedValue(undefined),
+  },
+}));
+
+jest.mock('../attachments/fileIo', () => ({
+  deleteCacheFiles: jest.fn().mockResolvedValue(undefined),
+}));
+
 import { setDbForTests } from '../../db';
 import { runMigrations } from '../../db/migrations';
 import { openMemoryDb } from '../../db/__tests__/betterSqliteAdapter';

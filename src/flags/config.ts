@@ -38,3 +38,11 @@ export const GROUP_DEFERRED_QUOTA_PER_SENDER = 32;
  * recorded as seen so they cannot refill the quota by replay.
  */
 export const GROUP_DEFERRED_TTL_MS = 48 * 60 * 60 * 1000;
+
+/**
+ * v1 ciphertext is read/written as a base64 string across the RN JSON bridge.
+ * 8 MiB plaintext is a conservative cap (~10.7 MiB base64). Chunking and
+ * large-media streaming are future work — do not raise this without a
+ * chunked native transfer.
+ */
+export const ATTACHMENT_MAX_BYTES = 8 * 1024 * 1024;

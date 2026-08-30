@@ -1,4 +1,46 @@
 /**
+ * Schema v9 — encrypted attachments.
+ *
+ * Ciphertext is world-readable on the sender homeserver. The AEAD key/nonce
+ * arrive over the Encrypted Link and are stored in the OS Keychain
+ * (`KeyStore` service `hypercolor-attachment-key:{owner_pubky}:{event_id}`).
+ * SQLite keeps only `key_ref` — never the key
+ * itself — matching the M1 doctrine that link snapshots stay in
+ * keychain/encrypted native storage.
+ *
+ * Plaintext bytes are never stored in SQLite. After resolve they live in a
+ * local cache file; `local_cache_path` points at that file.
+ *
+ * PK is `(owner_pubky, event_id)`. Exactly one of `conversation_id` /
+ * `channel_id` is set for a given row (application-enforced).
+ */
+export const SCHEMA_V9_STATEMENTS: readonly string[] = [
+  `CREATE TABLE IF NOT EXISTS attachments (
+    owner_pubky          TEXT    NOT NULL,
+    event_id             TEXT    NOT NULL,
+    conversation_id      TEXT,
+    channel_id           TEXT,
+    sender_pubky         TEXT    NOT NULL,
+    direction            TEXT    NOT NULL,
+    location             TEXT    NOT NULL,
+    key_ref              TEXT    NOT NULL,
+    content_type         TEXT    NOT NULL,
+    size                 INTEGER NOT NULL,
+    thumbnail_location   TEXT,
+    local_cache_path     TEXT,
+    created_at           INTEGER NOT NULL,
+    updated_at           INTEGER NOT NULL,
+    delivery_state       TEXT    NOT NULL,
+    resolve_state        TEXT    NOT NULL,
+    PRIMARY KEY (owner_pubky, event_id)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_attachments_conversation
+    ON attachments(owner_pubky, conversation_id, created_at DESC)`,
+  `CREATE INDEX IF NOT EXISTS idx_attachments_channel
+    ON attachments(owner_pubky, channel_id, created_at DESC)`,
+];
+
+/**
  * Schema v8 — sender-scoped group event identity + bounded deferred store.
  *
  * v7 is committed history and is not rewritten. This migration rebuilds
