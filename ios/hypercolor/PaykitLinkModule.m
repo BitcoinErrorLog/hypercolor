@@ -55,6 +55,19 @@ RCT_EXTERN_METHOD(removeReceiverMarker:(NSString *)sessionAlias
                   resolver:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject)
 
+RCT_EXTERN_METHOD(putPublic:(NSString *)sessionAlias
+                  url:(NSString *)url
+                  content:(NSString *)content
+                  homeserverOrigin:(NSString *)homeserverOrigin
+                  resolver:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
+
+RCT_EXTERN_METHOD(deletePublic:(NSString *)sessionAlias
+                  url:(NSString *)url
+                  homeserverOrigin:(NSString *)homeserverOrigin
+                  resolver:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
+
 RCT_EXTERN_METHOD(initiateLink:(NSString *)sessionAlias
                   receiverAlias:(NSString *)receiverAlias
                   peerPubky:(NSString *)peerPubky

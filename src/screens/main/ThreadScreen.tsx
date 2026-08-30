@@ -26,6 +26,7 @@ import { ComposerAttachButton } from '../../components/ComposerAttachButton';
 import { PaymentRequestBubble } from '../../components/PaymentRequestBubble';
 import { PaymentComposeSheet } from '../../components/PaymentComposeSheet';
 import { ThreadTipBar } from '../../components/ThreadTipBar';
+import { EnableMessagingCta } from '../../components/EnableMessagingCta';
 import { PaymentService } from '../../services/payments/PaymentService';
 import { isPaykitPaymentKind, PaymentError, type PaymentRequestRecord } from '../../types/payment';
 import type { TipEndpointRecord } from '../../types/payment';
@@ -56,6 +57,7 @@ export default function ThreadScreen({ route }: Props) {
   const [tipEndpoints, setTipEndpoints] = useState<TipEndpointRecord[]>([]);
   const [composePayment, setComposePayment] = useState(false);
   const [paymentBusy, setPaymentBusy] = useState(false);
+  const [messagingEnabled, setMessagingEnabled] = useState(LinkService.hasSession());
 
   const conversationId = buildDmConversationId(participantPubky);
 
@@ -87,6 +89,7 @@ export default function ThreadScreen({ route }: Props) {
           }
         }
         await reloadEncrypted();
+        setMessagingEnabled(LinkService.hasSession());
       })();
     }, [reloadEncrypted]),
   );
@@ -161,6 +164,8 @@ export default function ThreadScreen({ route }: Props) {
       onPaymentsChanged={() => {
         void reloadEncrypted();
       }}
+      messagingEnabled={messagingEnabled}
+      onEnableMessaging={() => nav.navigate('EnableMessaging' as never)}
     />
   );
 }
@@ -185,6 +190,8 @@ export function ThreadScreenContent({
   onClosePaymentCompose,
   onSubmitPayment,
   onPaymentsChanged,
+  messagingEnabled,
+  onEnableMessaging,
 }: {
   participantPubky: string;
   localPubky: string | null;
@@ -205,6 +212,8 @@ export function ThreadScreenContent({
   onClosePaymentCompose: () => void;
   onSubmitPayment: (amountBtc: string, reference: string) => void;
   onPaymentsChanged: () => void;
+  messagingEnabled: boolean;
+  onEnableMessaging: () => void;
 }) {
   const flatListRef = useRef<FlatList<ThreadItem>>(null);
   const items = useMemo(
@@ -305,6 +314,9 @@ export function ThreadScreenContent({
         endpoints={tipEndpoints}
         onChanged={onPaymentsChanged}
       />
+      {!messagingEnabled ? (
+        <EnableMessagingCta testID="threadEnableMessaging" onPress={onEnableMessaging} />
+      ) : null}
 
       {loading ? (
         <View style={styles.loadingContainer}>

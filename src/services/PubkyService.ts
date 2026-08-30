@@ -1,9 +1,7 @@
 import {
   signIn as rnSignIn,
   signOut as rnSignOut,
-  put as rnPut,
   get as rnGet,
-  deleteFile as rnDeleteFile,
   list as rnList,
   getHomeserver as rnGetHomeserver,
 } from '@synonymdev/react-native-pubky';
@@ -14,12 +12,13 @@ import type { UserProfile, PubkyKey } from '../types';
 /**
  * PubkyService — homeserver interaction layer.
  *
- * Hypercolor uses a delegated AppKey (from pubky-ring) for all signing.
- * The root Ed25519 secret key is never held or used here.
+ * Owner writes (attachments, backup, public channels, profile, contacts)
+ * go through the Paykit ChatSession created by `LinkService.enable()` /
+ * `startAuthFlow`. AppCert is UKD signing only — it does not authorize
+ * homeserver PUT. `signIn()` is not the attach/backup path.
  *
- * Profile / follows / public-channel / attachment / backup writes use
- * generic put/get/list. Encrypted DMs go through Paykit Encrypted Links,
- * not the research-era outbox/KeyBinding paths (removed in M6).
+ * Public reads use react-native-pubky get/list (no session). Encrypted DMs
+ * stay on Paykit Encrypted Links.
  */
 
 export const DEFAULT_HOMESERVER = 'https://demo.pubky.app';
@@ -89,9 +88,8 @@ export const PubkyService = {
   // ── Profile ────────────────────────────────────────────────────────────────
 
   async publishProfile(pubky: PubkyKey, profile: Omit<UserProfile, 'pubky'>): Promise<void> {
-    const appSk = await getAppSkOrThrow();
     const payload = JSON.stringify({ ...profile, pubky });
-    unwrap(await rnPut(profilePath(pubky), payload, appSk));
+    await PubkyService.put(profilePath(pubky), payload);
   },
 
   async getProfile(pubky: PubkyKey): Promise<UserProfile | null> {
@@ -148,16 +146,14 @@ export const PubkyService = {
   // ── Contacts ───────────────────────────────────────────────────────────────
 
   async publishContact(ownerPubky: PubkyKey, contactPubky: PubkyKey): Promise<void> {
-    const appSk = await getAppSkOrThrow();
     const payload = JSON.stringify({ pubky: contactPubky, addedAt: Date.now() });
-    unwrap(await rnPut(contactPath(ownerPubky, contactPubky), payload, appSk));
+    await PubkyService.put(contactPath(ownerPubky, contactPubky), payload);
   },
 
   // ── Generic put/get/delete/list ────────────────────────────────────────────
 
   async put(url: string, content: string): Promise<void> {
-    const appSk = await getAppSkOrThrow();
-    unwrap(await rnPut(url, content, appSk));
+    await LinkService.putOwnerDocument(url, content);
   },
 
   async get(url: string): Promise<string | null> {
@@ -169,8 +165,7 @@ export const PubkyService = {
   },
 
   async delete(url: string): Promise<void> {
-    const appSk = await getAppSkOrThrow();
-    unwrap(await rnDeleteFile(url, appSk));
+    await LinkService.deleteOwnerDocument(url);
   },
 
   async list(urlPrefix: string): Promise<HomeserverListResult> {

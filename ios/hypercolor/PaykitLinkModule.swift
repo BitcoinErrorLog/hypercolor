@@ -260,6 +260,47 @@ class PaykitLinkModule: NSObject {
         }
     }
 
+    @objc func putPublic(
+        _ sessionAlias: String,
+        url: String,
+        content: String,
+        homeserverOrigin: String,
+        resolver resolve: @escaping RCTPromiseResolveBlock,
+        rejecter reject: @escaping RCTPromiseRejectBlock
+    ) {
+        runAsync(resolve, reject) {
+            let session = try await self.session(try Self.requireText(sessionAlias, name: "sessionAlias"))
+            try await self.writePublic(
+                session: session,
+                url: try Self.requireText(url, name: "url"),
+                content: content,
+                origin: try Self.requireText(homeserverOrigin, name: "homeserverOrigin"),
+                method: "PUT"
+            )
+            return NSNull()
+        }
+    }
+
+    @objc func deletePublic(
+        _ sessionAlias: String,
+        url: String,
+        homeserverOrigin: String,
+        resolver resolve: @escaping RCTPromiseResolveBlock,
+        rejecter reject: @escaping RCTPromiseRejectBlock
+    ) {
+        runAsync(resolve, reject) {
+            let session = try await self.session(try Self.requireText(sessionAlias, name: "sessionAlias"))
+            try await self.writePublic(
+                session: session,
+                url: try Self.requireText(url, name: "url"),
+                content: nil,
+                origin: try Self.requireText(homeserverOrigin, name: "homeserverOrigin"),
+                method: "DELETE"
+            )
+            return NSNull()
+        }
+    }
+
     // MARK: - Links
 
     @objc func initiateLink(
@@ -747,6 +788,86 @@ class PaykitLinkModule: NSObject {
             localReceiverPath: try Self.requireText(localReceiverPath, name: "localReceiverPath"),
             remoteReceiverPath: try Self.requireText(remoteReceiverPath, name: "remoteReceiverPath")
         )
+    }
+
+    private func writePublic(
+        session: ChatSession,
+        url: String,
+        content: String?,
+        origin: String,
+        method: String
+    ) async throws {
+        let owner = session.pubky()
+        let path = try Self.ownerStoragePath(url: url, expectedOwner: owner)
+        var originClean = origin.trimmingCharacters(in: .whitespacesAndNewlines)
+        while originClean.hasSuffix("/") {
+            originClean.removeLast()
+        }
+        guard let httpURL = URL(string: originClean + path) else {
+            throw PaykitLinkBridgeError(code: "validation", message: "invalid homeserver origin")
+        }
+        var request = URLRequest(url: httpURL)
+        request.httpMethod = method
+        request.httpShouldHandleCookies = false
+        let bearer = Self.sessionCookieValue(session.exportSession())
+        request.setValue("\(owner)=\(bearer)", forHTTPHeaderField: "Cookie")
+        request.setValue(owner, forHTTPHeaderField: "pubky-host")
+        request.setValue("text/plain; charset=utf-8", forHTTPHeaderField: "Content-Type")
+        if let content {
+            request.httpBody = Data(content.utf8)
+        }
+        let config = URLSessionConfiguration.ephemeral
+        config.httpCookieStorage = nil
+        config.timeoutIntervalForRequest = 30
+        config.timeoutIntervalForResource = 30
+        do {
+            let (_, response) = try await URLSession(configuration: config).data(for: request)
+            guard let http = response as? HTTPURLResponse else {
+                throw PaykitLinkBridgeError(code: "network", message: "network error")
+            }
+            if http.statusCode == 401 || http.statusCode == 403 {
+                throw PaykitLinkBridgeError(code: "auth", message: "authentication failed")
+            }
+            if !(200...299).contains(http.statusCode) {
+                throw PaykitLinkBridgeError(code: "protocol", message: "protocol error")
+            }
+        } catch let bridge as PaykitLinkBridgeError {
+            throw bridge
+        } catch {
+            throw PaykitLinkBridgeError(code: "network", message: "network error")
+        }
+    }
+
+    private static func ownerStoragePath(url: String, expectedOwner: String) throws -> String {
+        let prefix = "pubky://"
+        guard url.hasPrefix(prefix) else {
+            throw PaykitLinkBridgeError(code: "validation", message: "url must be a pubky:// URI")
+        }
+        let rest = String(url.dropFirst(prefix.count))
+        guard let slash = rest.firstIndex(of: "/") else {
+            throw PaykitLinkBridgeError(code: "validation", message: "url is missing a path")
+        }
+        let owner = String(rest[..<slash])
+        let path = String(rest[slash...])
+        if owner != expectedOwner {
+            throw PaykitLinkBridgeError(code: "validation", message: "url owner does not match session")
+        }
+        if !path.hasPrefix("/pub/") {
+            throw PaykitLinkBridgeError(code: "validation", message: "url path must start with /pub/")
+        }
+        return path
+    }
+
+    private static func sessionCookieValue(_ exported: String) -> String {
+        if let data = exported.data(using: .utf8),
+           let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            for key in ["session_secret", "secret", "token", "bearer"] {
+                if let value = obj[key] as? String, !value.isEmpty {
+                    return value
+                }
+            }
+        }
+        return exported
     }
 
     private static func requireText(_ value: String?, name: String) throws -> String {

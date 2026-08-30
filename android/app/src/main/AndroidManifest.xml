@@ -7,6 +7,8 @@
   <!-- These require runtime permissions on M -->
   <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"/>
   <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"/>
+  <uses-permission android:name="android.permission.CAMERA"/>
+  <uses-permission android:name="android.permission.READ_MEDIA_IMAGES"/>
   <!-- END OPTIONAL PERMISSIONS -->
 
   <queries>
@@ -20,6 +22,14 @@
     <intent>
       <action android:name="android.intent.action.VIEW" />
       <data android:scheme="pubkyring" />
+    </intent>
+    <intent>
+      <action android:name="android.intent.action.VIEW" />
+      <data android:scheme="lightning" />
+    </intent>
+    <intent>
+      <action android:name="android.intent.action.VIEW" />
+      <data android:scheme="bitcoin" />
     </intent>
   </queries>
 

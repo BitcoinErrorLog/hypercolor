@@ -27,7 +27,7 @@ import {
   generatePartySecrets,
   pollUntil,
   requirePartyField,
-  requireRingAppCert,
+  requireLinkSession,
   requireText,
   resolveClock,
   signupParty,
@@ -84,15 +84,10 @@ export async function runAttachmentLiveProof(
     }
 
     if (
-      !(await record('require-ring-appcert', async () => {
-        const ring = await requireRingAppCert(keyStore);
+      !(await record('require-link-session', async () => {
+        const ring = requireLinkSession(keyStore);
         partyA.pubky = ring.pubky;
         partyA.sessionAlias = ring.sessionAlias;
-        if (!partyA.sessionAlias) {
-          throw new Error(
-            'Ring session alias is missing. Run p6 (startAuthFlow / awaitAuthApproval) before p3.',
-          );
-        }
         return ring.pubky;
       }))
     ) {

@@ -90,9 +90,9 @@ export default function EnableMessagingScreen() {
       <ScrollView contentContainerStyle={styles.content}>
         <Text style={styles.heading}>Enable encrypted messaging</Text>
         <Text style={styles.explanation}>
-          Encrypted DMs use Paykit Encrypted Links over your homeserver. Approve a{' '}
-          <Text style={styles.emphasis}>/pub/paykit/:rw</Text> grant in Pubky Ring. Hypercolor never
-          holds your identity secret.
+          Encrypted DMs and homeserver writes share one Paykit session. Approve{' '}
+          <Text style={styles.emphasis}>/pub/paykit/:rw,/pub/hypercolor.app/v1/:rw</Text> in Pubky
+          Ring. Hypercolor never holds your identity secret.
         </Text>
 
         <View style={styles.statusCard}>

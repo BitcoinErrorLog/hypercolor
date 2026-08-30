@@ -65,6 +65,12 @@
 	<key>LSApplicationQueriesSchemes</key>
 	<array>
 		<string>pubkyring</string>
+		<string>lightning</string>
+		<string>bitcoin</string>
 	</array>
+	<key>NSCameraUsageDescription</key>
+	<string>Hypercolor needs camera access to send encrypted photo attachments.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Hypercolor needs access to your photo library to send encrypted attachments.</string>
 </dict>
 </plist>

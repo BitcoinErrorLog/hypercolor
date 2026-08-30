@@ -1,4 +1,4 @@
-appId: ${APP_ID}
+appId: org.name.hypercolor
 name: P7 product screens
 ---
 - launchApp:

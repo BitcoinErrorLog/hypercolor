@@ -9,9 +9,10 @@ import {
 } from './PaykitLinkNative';
 import { StorageService } from '../StorageService';
 import { KeyStore } from '../KeyStore';
+import { parsePubkyOwner, resolveHomeserverOrigin } from '../homeserverOrigin';
 import { RetryQueue } from '../RetryQueue';
 import {
-  PAYKIT_MESSAGING_CAPABILITY,
+  RING_GRANT_CAPABILITIES,
   LINK_RECEIVER_PATH,
   assertValidReceiverPath,
   buildChatMessageEnvelope,
@@ -58,9 +59,10 @@ import { shouldDropOversizedKnownInbound } from './inboundEnvelope';
  *
  * ## Product wiring (v1)
  *
- * - `LinkService.enable()` — present `authorizationUrl` on the messaging-
- *   enable surface (QR / open Ring). `AwaitingRingAuthScreen` is the app-
- *   identity grant, not this `/pub/paykit/:rw` flow.
+ * - `LinkService.enable()` — one `startAuthFlow` with
+ *   `/pub/paykit/:rw,/pub/hypercolor.app/v1/:rw`. That Paykit session is
+ *   used for Encrypted Links and owner homeserver writes. Welcome
+ *   `paykit-connect` is identity/UKD AppCert only.
  * - App startup / `AppState` `'active'` (App.tsx):
  *     `await LinkService.recoverPendingSends();`
  *     `await LinkService.drainRetries();`
@@ -271,15 +273,16 @@ export const LinkService = {
   // ── Enable flow ───────────────────────────────────────────────────────────
 
   /**
-   * Ring-based enable: starts a `/pub/paykit/:rw` pubkyauth flow. The caller
-   * presents `authorizationUrl` (QR / open Ring), then `awaitEnabled`.
+   * Ring-based enable: one startAuthFlow with
+   * `/pub/paykit/:rw,/pub/hypercolor.app/v1/:rw`. The caller presents
+   * `authorizationUrl` (QR / open Ring), then `awaitEnabled`.
    */
   async enable(): Promise<LinkEnableFlow> {
     if (!PaykitLinkNative.isAvailable()) {
       throw createLinkNativeError('unavailable', 'PaykitLinkModule native module is not available');
     }
     const { flowId, authorizationUrl } = await PaykitLinkNative.startAuthFlow(
-      PAYKIT_MESSAGING_CAPABILITY,
+      RING_GRANT_CAPABILITIES,
     );
     let cancelled = false;
     return {
@@ -303,6 +306,25 @@ export const LinkService = {
         return provisionReceiver(sessionAlias, pubky);
       },
     };
+  },
+
+  /**
+   * Owner homeserver PUT via the Paykit ChatSession from `enable()` /
+   * `startAuthFlow`. Attachments, backup, public channels, profile, and
+   * contacts all go through this. AppCert is not used.
+   */
+  async putOwnerDocument(url: string, content: string): Promise<void> {
+    const alias = requireSessionAlias();
+    const owner = parsePubkyOwner(url) ?? requireOwner();
+    const origin = await resolveHomeserverOrigin(owner);
+    await PaykitLinkNative.putPublic(alias, url, content, origin);
+  },
+
+  async deleteOwnerDocument(url: string): Promise<void> {
+    const alias = requireSessionAlias();
+    const owner = parsePubkyOwner(url) ?? requireOwner();
+    const origin = await resolveHomeserverOrigin(owner);
+    await PaykitLinkNative.deletePublic(alias, url, origin);
   },
 
   // ── Links ─────────────────────────────────────────────────────────────────
@@ -2057,6 +2079,16 @@ function requireOwner(): PubkyKey {
   const owner = session?.pubky ?? KeyStore.getPubky();
   if (!owner) throw new Error('LinkService: no local pubky');
   return owner;
+}
+
+function requireSessionAlias(): string {
+  if (session) return session.alias;
+  const stored = KeyStore.getLinkSession();
+  if (stored) return stored;
+  throw createLinkNativeError(
+    'auth',
+    'Enable encrypted messaging to write to your homeserver.',
+  );
 }
 
 function requireEstablishedHandle(ownerPubky: PubkyKey, peerPubky: PubkyKey): string {

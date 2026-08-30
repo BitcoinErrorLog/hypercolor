@@ -682,6 +682,7 @@ describe('product live-proof step machines', () => {
       nonce: 'nonce',
       algorithm: 'XChaCha20Poly1305',
     });
+    mockedKeyStore.isAppCertValid.mockResolvedValue(false);
     const report = await runAttachmentLiveProof(TWO, {
       native: mockedNative as unknown as PaykitLinkNativeApi,
       link,
@@ -694,7 +695,7 @@ describe('product live-proof step machines', () => {
     expect(report.ok).toBe(true);
     expect(report.steps.map(step => step.step)).toEqual(
       expect.arrayContaining([
-        'require-ring-appcert',
+        'require-link-session',
         'send-attachment-a',
         'resolve-attachment-b',
         'attachment-invariants',
@@ -773,12 +774,12 @@ describe('product live-proof step machines', () => {
       }),
     };
     mockedKeyStore.getPubky.mockReturnValue(PUBKY_A);
+    mockedKeyStore.isAppCertValid.mockResolvedValue(false);
     const report = await runBackupLiveProof(TWO, {
       native: mockedNative as unknown as PaykitLinkNativeApi,
       link,
       backup,
       keyStore: {
-        isAppCertValid: async () => true,
         getPubky: () => mockedKeyStore.getPubky() ?? PUBKY_A,
         getLinkSession: () => 'session-a',
         setPubky: pubky => {
@@ -793,7 +794,7 @@ describe('product live-proof step machines', () => {
     expect(report.ok).toBe(true);
     expect(report.steps.map(step => step.step)).toEqual(
       expect.arrayContaining([
-        'require-ring-appcert',
+        'require-link-session',
         'export-backup',
         'wipe-local',
         'restore-backup',
@@ -806,8 +807,8 @@ describe('product live-proof step machines', () => {
     expect(report.steps.some(step => step.detail.includes('RECOVERYCODE1234'))).toBe(false);
   });
 
-  it('P3 fails fast at require-ring-appcert without signup', async () => {
-    mockedKeyStore.isAppCertValid.mockResolvedValue(false);
+  it('P3 fails fast at require-link-session without signup', async () => {
+    mockedKeyStore.getLinkSession.mockReturnValue(null);
     const link = createProductLink();
     const report = await runAttachmentLiveProof(TWO, {
       native: mockedNative as unknown as PaykitLinkNativeApi,
@@ -815,7 +816,32 @@ describe('product live-proof step machines', () => {
       ...clockDeps(),
     });
     expect(report.ok).toBe(false);
-    expect(report.steps.find(step => step.step === 'require-ring-appcert')?.ok).toBe(false);
+    const gate = report.steps.find(step => step.step === 'require-link-session');
+    expect(gate?.ok).toBe(false);
+    expect(gate?.detail).toMatch(/Enable Messaging/);
+    expect(gate?.detail).toMatch(/startAuthFlow/);
+    expect(gate?.detail).toMatch(/session/i);
+    expect(gate?.detail).not.toMatch(/AppCert/);
+    expect(report.steps.some(step => step.step === 'signup-a')).toBe(false);
+    expect(report.steps.some(step => step.step === 'signup-b')).toBe(false);
+    expect(mockedNative.signupWithSecret).not.toHaveBeenCalled();
+  });
+
+  it('P5 fails fast at require-link-session without signup', async () => {
+    mockedKeyStore.getLinkSession.mockReturnValue(null);
+    const link = createProductLink();
+    const report = await runBackupLiveProof(TWO, {
+      native: mockedNative as unknown as PaykitLinkNativeApi,
+      link,
+      ...clockDeps(),
+    });
+    expect(report.ok).toBe(false);
+    const gate = report.steps.find(step => step.step === 'require-link-session');
+    expect(gate?.ok).toBe(false);
+    expect(gate?.detail).toMatch(/Enable Messaging/);
+    expect(gate?.detail).toMatch(/startAuthFlow/);
+    expect(gate?.detail).toMatch(/session/i);
+    expect(gate?.detail).not.toMatch(/AppCert/);
     expect(report.steps.some(step => step.step === 'signup-a')).toBe(false);
     expect(report.steps.some(step => step.step === 'signup-b')).toBe(false);
     expect(mockedNative.signupWithSecret).not.toHaveBeenCalled();

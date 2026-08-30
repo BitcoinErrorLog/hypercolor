@@ -9,6 +9,7 @@ export {
   ATTACHMENT_THUMBNAIL_CIPHERTEXT_MAX_CHARS,
   ATTACHMENT_THUMBNAIL_MAX_BYTES,
   DEFAULT_NEXUS_BASE_URL,
+  PRODUCTION_NEXUS_BASE_URL,
   GROUP_DEFERRED_QUOTA_PER_SENDER,
   GROUP_DEFERRED_TTL_MS,
   PRIVATE_GROUP_MEMBER_CAP,
@@ -102,8 +103,8 @@ export const FeatureFlags = {
 
 /**
  * Runtime-overridable config that lives next to feature flags.
- * Defaults are the staging constants above; tests should inject a
- * {@link createNexusClient} instead of mutating this.
+ * Defaults are {@link DEFAULT_NEXUS_BASE_URL} (production Nexus, env-overridable).
+ * Tests should inject a {@link createNexusClient} instead of mutating this.
  */
 export const AppConfig = {
   getNexusBaseUrl(): string {

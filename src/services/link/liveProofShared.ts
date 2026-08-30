@@ -73,10 +73,7 @@ export type ProductLiveProofDeps = LiveProofDeps & {
   link?: LiveProofLinkApi;
 };
 
-export type RingKeyStoreApi = Pick<
-  typeof KeyStore,
-  'isAppCertValid' | 'getPubky' | 'getLinkSession' | 'setPubky'
->;
+export type RingKeyStoreApi = Pick<typeof KeyStore, 'getPubky' | 'getLinkSession' | 'setPubky'>;
 
 export type AuthLiveProofDeps = ProductLiveProofDeps & {
   /**
@@ -85,7 +82,7 @@ export type AuthLiveProofDeps = ProductLiveProofDeps & {
    */
   openAuthUrl?: (url: string) => Promise<void>;
   enable?: () => Promise<LinkEnableFlow>;
-  keyStore?: RingKeyStoreApi;
+  keyStore?: RingKeyStoreApi & Pick<typeof KeyStore, 'isAppCertValid'>;
 };
 
 export const DEFAULT_HANDSHAKE_TIMEOUT_MS = 60_000;
@@ -528,24 +525,26 @@ export async function addPastedContact(
 }
 
 /**
- * Owner writes (attachments / backup) require a Ring-delegated AppCert.
- * Fail fast before signup so P3/P5 do not spend tokens then hit the
- * generic AppCert throw.
+ * Owner writes (attachments / backup) require the Paykit session from
+ * Enable Messaging (`startAuthFlow`). Fail fast before signup so P3/P5
+ * do not spend tokens then hit a generic session throw.
+ *
+ * AppCert is UKD/identity only — it does not authorize homeserver put.
  */
-export async function requireRingAppCert(
-  keyStore: RingKeyStoreApi,
-): Promise<{ pubky: string; sessionAlias: string | null }> {
-  const valid = await keyStore.isAppCertValid();
-  if (!valid) {
+export function requireLinkSession(
+  keyStore: Pick<RingKeyStoreApi, 'getPubky' | 'getLinkSession'>,
+): { pubky: string; sessionAlias: string } {
+  const sessionAlias = keyStore.getLinkSession();
+  if (!sessionAlias || sessionAlias.trim().length === 0) {
     throw new Error(
-      'Ring AppCert is missing or expired. Run p6 (startAuthFlow / awaitAuthApproval) before this row, then re-authorize Hypercolor with pubky-ring.',
+      'Link session is missing. Enable Messaging (startAuthFlow) before this row so owner writes can use the Paykit session.',
     );
   }
   const pubky = keyStore.getPubky();
   if (!pubky || pubky.trim().length === 0) {
     throw new Error(
-      'Ring AppCert is valid but no pubky is stored. Re-authorize Hypercolor with pubky-ring.',
+      'Link session exists but no pubky is stored. Enable Messaging (startAuthFlow) before this row.',
     );
   }
-  return { pubky, sessionAlias: keyStore.getLinkSession() };
+  return { pubky, sessionAlias };
 }

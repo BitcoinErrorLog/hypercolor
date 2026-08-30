@@ -26,6 +26,9 @@ import com.synonym.paykit.attachmentEncrypt as paykitAttachmentEncrypt
 import com.synonym.paykit.generateAttachmentKey as paykitGenerateAttachmentKey
 import com.synonym.paykit.generateReceiverNoiseSecretKeyHex
 import com.synonym.paykit.receiverNoisePublicKeyFromSecretHex
+import java.io.IOException
+import java.net.HttpURLConnection
+import java.net.URL
 import java.nio.charset.StandardCharsets
 import java.security.KeyStore
 import java.security.SecureRandom
@@ -232,6 +235,45 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
         launch(promise) {
             session(requireText(sessionAlias, "sessionAlias"))
                 .removeReceiverMarker(requireText(receiverPath, "receiverPath"))
+            promise.resolve(null)
+        }
+    }
+
+    @ReactMethod
+    fun putPublic(
+        sessionAlias: String,
+        url: String,
+        content: String,
+        homeserverOrigin: String,
+        promise: Promise,
+    ) {
+        launch(promise) {
+            writePublic(
+                session(requireText(sessionAlias, "sessionAlias")),
+                requireText(url, "url"),
+                content,
+                requireText(homeserverOrigin, "homeserverOrigin"),
+                "PUT",
+            )
+            promise.resolve(null)
+        }
+    }
+
+    @ReactMethod
+    fun deletePublic(
+        sessionAlias: String,
+        url: String,
+        homeserverOrigin: String,
+        promise: Promise,
+    ) {
+        launch(promise) {
+            writePublic(
+                session(requireText(sessionAlias, "sessionAlias")),
+                requireText(url, "url"),
+                null,
+                requireText(homeserverOrigin, "homeserverOrigin"),
+                "DELETE",
+            )
             promise.resolve(null)
         }
     }
@@ -646,6 +688,79 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
             localReceiverPath = requireText(localReceiverPath, "localReceiverPath"),
             remoteReceiverPath = requireText(remoteReceiverPath, "remoteReceiverPath"),
         )
+    }
+
+    private fun writePublic(
+        session: ChatSession,
+        url: String,
+        content: String?,
+        origin: String,
+        method: String,
+    ) {
+        val owner = session.pubky()
+        val path = ownerStoragePath(url, owner)
+        val originClean = origin.trim().trimEnd('/')
+        val conn = (URL("$originClean$path").openConnection() as HttpURLConnection).apply {
+            requestMethod = method
+            setRequestProperty("Cookie", "$owner=${sessionCookieValue(session.exportSession())}")
+            setRequestProperty("pubky-host", owner)
+            setRequestProperty("Content-Type", "text/plain; charset=utf-8")
+            connectTimeout = 30_000
+            readTimeout = 30_000
+            instanceFollowRedirects = false
+            doInput = true
+            doOutput = content != null
+        }
+        try {
+            if (content != null) {
+                conn.outputStream.use { it.write(content.toByteArray(StandardCharsets.UTF_8)) }
+            }
+            val code = conn.responseCode
+            if (code == 401 || code == 403) {
+                throw PaykitLinkBridgeError("auth", staticMessage("auth"))
+            }
+            if (code !in 200..299) {
+                throw PaykitLinkBridgeError("protocol", staticMessage("protocol"))
+            }
+        } catch (error: PaykitLinkBridgeError) {
+            throw error
+        } catch (_: IOException) {
+            throw PaykitLinkBridgeError("network", staticMessage("network"))
+        } finally {
+            conn.disconnect()
+        }
+    }
+
+    private fun ownerStoragePath(url: String, expectedOwner: String): String {
+        val prefix = "pubky://"
+        if (!url.startsWith(prefix)) {
+            throw PaykitLinkBridgeError("validation", "url must be a pubky:// URI")
+        }
+        val rest = url.removePrefix(prefix)
+        val slash = rest.indexOf('/')
+        if (slash < 0) {
+            throw PaykitLinkBridgeError("validation", "url is missing a path")
+        }
+        val owner = rest.substring(0, slash)
+        val path = rest.substring(slash)
+        if (owner != expectedOwner) {
+            throw PaykitLinkBridgeError("validation", "url owner does not match session")
+        }
+        if (!path.startsWith("/pub/")) {
+            throw PaykitLinkBridgeError("validation", "url path must start with /pub/")
+        }
+        return path
+    }
+
+    private fun sessionCookieValue(exported: String): String {
+        return try {
+            val obj = JSONObject(exported)
+            listOf("session_secret", "secret", "token", "bearer")
+                .firstNotNullOfOrNull { key -> obj.optString(key).takeIf { it.isNotEmpty() } }
+                ?: exported
+        } catch (_: Exception) {
+            exported
+        }
     }
 
     private fun requireText(value: String?, name: String): String {

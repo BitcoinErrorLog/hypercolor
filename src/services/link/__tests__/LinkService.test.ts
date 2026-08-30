@@ -13,7 +13,7 @@ import {
   CHAT_MESSAGE_KIND,
   LINK_MESSAGE_MAX_BYTES,
   LINK_RECEIVER_PATH,
-  PAYKIT_MESSAGING_CAPABILITY,
+  RING_GRANT_CAPABILITIES,
   PUBKY_APP_DM_KIND,
   type LinkMessage,
   type LinkReceiver,
@@ -58,6 +58,8 @@ jest.mock('../PaykitLinkNative', () => ({
     receivePrivateMessages: jest.fn(),
     clearLinkOutbox: jest.fn(),
     closeLink: jest.fn(),
+    putPublic: jest.fn(),
+    deletePublic: jest.fn(),
   },
   isLinkNativeError: (err: unknown) => {
     if (typeof err !== 'object' || err === null) return false;
@@ -137,6 +139,14 @@ jest.mock('../../attachments/applyAttachmentInbound', () => ({
 
 jest.mock('../../payments/applyPaymentInbound', () => ({
   applyPaymentInbound: jest.fn().mockResolvedValue({ action: 'applied', request: null }),
+}));
+
+jest.mock('../../homeserverOrigin', () => ({
+  resolveHomeserverOrigin: async () => 'https://homeserver.example',
+  parsePubkyOwner: (url: string) => {
+    const match = /^pubky:\/\/([^/]+)/.exec(url);
+    return match?.[1] ?? null;
+  },
 }));
 
 jest.mock('../../KeyStore', () => ({
@@ -364,7 +374,7 @@ describe('LinkService', () => {
   });
 
   describe('enable (Ring path)', () => {
-    it('starts a /pub/paykit/:rw flow, then provisions a native-owned receiver', async () => {
+    it('starts a combined Paykit + Hypercolor write grant, then provisions a native-owned receiver', async () => {
       mockedStorage.getLinkReceiver.mockResolvedValue(null);
       mockedNative.startAuthFlow.mockResolvedValue({
         flowId: 'flow-1',
@@ -381,7 +391,8 @@ describe('LinkService', () => {
 
       const flow = await LinkService.enable();
       expect(flow.authorizationUrl).toBe('pubkyauth://grant');
-      expect(mockedNative.startAuthFlow).toHaveBeenCalledWith(PAYKIT_MESSAGING_CAPABILITY);
+      expect(RING_GRANT_CAPABILITIES).toBe('/pub/paykit/:rw,/pub/hypercolor.app/v1/:rw');
+      expect(mockedNative.startAuthFlow).toHaveBeenCalledWith(RING_GRANT_CAPABILITIES);
 
       const enabled = await flow.awaitEnabled();
 
@@ -1595,4 +1606,30 @@ describe('LinkService', () => {
       expect(mockedStorage.setLinkReadCursor).toHaveBeenCalledWith(OWNER, CONVERSATION_ID, NOW);
     });
   });
+
+  describe('owner homeserver writes', () => {
+    it('puts through the Paykit session alias, not an AppKey', async () => {
+      mockedNative.putPublic.mockResolvedValue(undefined);
+      const url = `pubky://${OWNER}/pub/hypercolor.app/v1/backup/latest`;
+      await LinkService.putOwnerDocument(url, 'ciphertext');
+      expect(mockedNative.putPublic).toHaveBeenCalledWith(
+        SESSION_ALIAS,
+        url,
+        'ciphertext',
+        'https://homeserver.example',
+      );
+    });
+
+    it('rejects owner writes when no Paykit session exists', async () => {
+      await LinkService.clearSession();
+      mockedKeyStore.getLinkSession.mockReturnValue(null);
+      await expect(
+        LinkService.putOwnerDocument(`pubky://${OWNER}/pub/hypercolor.app/v1/backup/latest`, 'x'),
+      ).rejects.toMatchObject({
+        code: 'auth',
+      });
+      expect(mockedNative.putPublic).not.toHaveBeenCalled();
+    });
+  });
+
 });

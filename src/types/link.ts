@@ -30,8 +30,17 @@ import type { PubkyKey } from './index';
  */
 export const LINK_RECEIVER_PATH = 'hypercolor/wallet';
 
-/** Ring grant requested when enabling Encrypted Links. */
+/** Encrypted Links grant (DMs, receiver marker). */
 export const PAYKIT_MESSAGING_CAPABILITY = '/pub/paykit/:rw';
+
+/** Owner writes: attachments, backup, public channels under `/pub/hypercolor.app/v1/`. */
+export const HYPERCOLOR_WRITE_CAPABILITY = '/pub/hypercolor.app/v1/:rw';
+
+/**
+ * One Ring grant for DMs + owner writes. Requested by Enable Messaging
+ * (`startAuthFlow`) and advertised on Welcome `paykit-connect` as `caps=`.
+ */
+export const RING_GRANT_CAPABILITIES = `${PAYKIT_MESSAGING_CAPABILITY},${HYPERCOLOR_WRITE_CAPABILITY}`;
 
 const RECEIVER_PATH_PATTERN = /^[a-z0-9][a-z0-9.-]*\/(wallet|server)$/;
 

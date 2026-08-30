@@ -8,6 +8,7 @@ import { threadRouteParams } from '../../types/link';
 import { StorageService } from '../../services/StorageService';
 import { LinkService } from '../../services/link/LinkService';
 import { useAuthStore } from '../../stores/authStore';
+import { EnableMessagingCta } from '../../components/EnableMessagingCta';
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
 
@@ -16,6 +17,7 @@ export default function ChatsScreen() {
   const ownerPubky = useAuthStore(s => s.pubky);
   const [conversations, setConversations] = useState<LinkConversationSummary[]>([]);
   const [pendingRequests, setPendingRequests] = useState(0);
+  const [messagingEnabled, setMessagingEnabled] = useState(LinkService.hasSession());
 
   const refresh = useCallback(async () => {
     if (!ownerPubky) {
@@ -36,6 +38,7 @@ export default function ChatsScreen() {
     ]);
     setConversations(rows);
     setPendingRequests(pending);
+    setMessagingEnabled(LinkService.hasSession());
   }, [ownerPubky]);
 
   useFocusEffect(
@@ -118,6 +121,12 @@ export default function ChatsScreen() {
           </TouchableOpacity>
         </View>
       </View>
+      {!messagingEnabled ? (
+        <EnableMessagingCta
+          testID="chatsEnableMessaging"
+          onPress={() => nav.navigate('EnableMessaging')}
+        />
+      ) : null}
       {conversations.length === 0 ? (
         <View style={styles.empty}>
           <Text style={styles.emptyText}>No conversations yet.</Text>

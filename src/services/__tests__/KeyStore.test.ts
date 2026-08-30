@@ -111,3 +111,37 @@ describe('KeyStore MMKV encryption key', () => {
     expect(mockCreateMMKVCalls).toEqual([]);
   });
 });
+
+describe('KeyStore session and Ring pending', () => {
+  beforeEach(() => {
+    mockKeychainStore.clear();
+    mockCreateMMKVCalls.length = 0;
+  });
+
+  it('persists the pending Ring ephemeral SK in Keychain', async () => {
+    const { initKeyStore, setPendingRingHandoff, getPendingRingHandoff, clearPendingRingHandoff } =
+      await freshKeyStore();
+    await initKeyStore();
+    await setPendingRingHandoff('deadbeef');
+    await expect(getPendingRingHandoff()).resolves.toBe('deadbeef');
+    expect(mockKeychainStore.get('hypercolor-ring-pending')).toBe('deadbeef');
+    await clearPendingRingHandoff();
+    await expect(getPendingRingHandoff()).resolves.toBeNull();
+  });
+
+  it('treats a missing AppCert expiresAt as no expiry', async () => {
+    const { initKeyStore, setAppCert, isAppCertValid } = await freshKeyStore();
+    await initKeyStore();
+    await setAppCert({ certBodyHex: 'aa', sigHex: 'bb', certIdHex: 'cc' });
+    await expect(isAppCertValid()).resolves.toBe(true);
+  });
+
+  it('reports a persisted Welcome session from AppKey + pubky', async () => {
+    const { initKeyStore, setAppKeypair, setPubky, hasPersistedSession } = await freshKeyStore();
+    await initKeyStore();
+    await expect(hasPersistedSession()).resolves.toBe(false);
+    await setAppKeypair({ secretKey: 'sk', publicKey: 'pk' });
+    setPubky('pubky-owner');
+    await expect(hasPersistedSession()).resolves.toBe(true);
+  });
+});

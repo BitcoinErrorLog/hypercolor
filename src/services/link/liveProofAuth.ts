@@ -11,8 +11,9 @@ import {
 /**
  * P6 product-path Ring auth: `startAuthFlow` / `awaitAuthApproval`
  * (`pubkyauth://` + HTTP relay), not `signupWithSecret`. After approval
- * AppCert must already be valid in KeyStore (identity grant). This row
- * does not mint an AppCert and does not wipe the Ring session.
+ * AppCert must already be valid in KeyStore (UKD/identity grant only).
+ * Owner writes use the Paykit session from this flow, not AppCert.
+ * This row does not mint an AppCert and does not wipe the session.
  */
 export async function runRingAuthLiveProof(
   _config: { homeserverPubky?: string } = {},
@@ -97,7 +98,7 @@ export async function runRingAuthLiveProof(
     }
   } finally {
     await record('preserve-ring-session', async () => {
-      return 'AppCert and session kept for owner writes';
+      return 'session kept for owner writes; AppCert kept for UKD/identity';
     });
   }
 

@@ -255,6 +255,19 @@ export interface PaykitLinkNativeApi {
     remoteReceiverPath: string,
   ): Promise<number>;
   closeLink(linkId: string): Promise<void>;
+  /**
+   * Owner homeserver PUT using the Paykit ChatSession for `sessionAlias`
+   * (same session as Encrypted Links / `publishReceiverMarker`).
+   * `homeserverOrigin` is the resolved HTTPS origin (no secret). Native
+   * authenticates with `ChatSession.exportSession()` as the cookie bearer.
+   */
+  putPublic(
+    sessionAlias: string,
+    url: string,
+    content: string,
+    homeserverOrigin: string,
+  ): Promise<void>;
+  deletePublic(sessionAlias: string, url: string, homeserverOrigin: string): Promise<void>;
   /** Random 32-byte attachment key, base64url (no padding). */
   generateAttachmentKey(): Promise<string>;
   attachmentEncrypt(
@@ -467,6 +480,19 @@ export const PaykitLinkNative: PaykitLinkNativeApi = {
 
   closeLink(linkId: string): Promise<void> {
     return invoke('closeLink', linkId);
+  },
+
+  putPublic(
+    sessionAlias: string,
+    url: string,
+    content: string,
+    homeserverOrigin: string,
+  ): Promise<void> {
+    return invoke('putPublic', sessionAlias, url, content, homeserverOrigin);
+  },
+
+  deletePublic(sessionAlias: string, url: string, homeserverOrigin: string): Promise<void> {
+    return invoke('deletePublic', sessionAlias, url, homeserverOrigin);
   },
 
   generateAttachmentKey(): Promise<string> {

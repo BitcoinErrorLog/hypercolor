@@ -12,7 +12,7 @@ import {
   emptyParty,
   generatePartySecrets,
   requirePartyField,
-  requireRingAppCert,
+  requireLinkSession,
   requireText,
   resolveClock,
   signupParty,
@@ -66,8 +66,8 @@ export async function runBackupLiveProof(
     }
 
     if (
-      !(await record('require-ring-appcert', async () => {
-        const ring = await requireRingAppCert(keyStore);
+      !(await record('require-link-session', async () => {
+        const ring = requireLinkSession(keyStore);
         partyA.pubky = ring.pubky;
         partyA.sessionAlias = ring.sessionAlias;
         keyStore.setPubky(ring.pubky);

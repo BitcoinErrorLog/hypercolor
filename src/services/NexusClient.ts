@@ -172,5 +172,5 @@ function parseUserView(body: unknown): NexusUserView | null {
   return body as NexusUserView;
 }
 
-/** Default client against staging Nexus. Inject {@link createNexusClient} in tests. */
+/** Default client against configured Nexus. Inject {@link createNexusClient} in tests. */
 export const NexusClient = createNexusClient();

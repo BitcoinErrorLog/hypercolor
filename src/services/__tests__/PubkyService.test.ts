@@ -1,0 +1,62 @@
+const mockPutOwnerDocument = jest.fn();
+const mockDeleteOwnerDocument = jest.fn();
+const mockIsAppCertValid = jest.fn();
+const mockGetAppKeypair = jest.fn();
+const mockRnPut = jest.fn();
+
+jest.mock('../link/LinkService', () => ({
+  LinkService: {
+    putOwnerDocument: (...args: unknown[]) => mockPutOwnerDocument(...args),
+    deleteOwnerDocument: (...args: unknown[]) => mockDeleteOwnerDocument(...args),
+    clearSession: jest.fn(),
+  },
+}));
+
+jest.mock('../KeyStore', () => ({
+  KeyStore: {
+    isAppCertValid: (...args: unknown[]) => mockIsAppCertValid(...args),
+    getAppKeypair: (...args: unknown[]) => mockGetAppKeypair(...args),
+    getSessionSecret: jest.fn(),
+    clear: jest.fn(),
+  },
+}));
+
+jest.mock('@synonymdev/react-native-pubky', () => ({
+  signIn: jest.fn(),
+  signOut: jest.fn(),
+  put: (...args: unknown[]) => mockRnPut(...args),
+  get: jest.fn(),
+  deleteFile: jest.fn(),
+  list: jest.fn(),
+  getHomeserver: jest.fn(),
+}));
+
+import { PubkyService } from '../PubkyService';
+
+describe('PubkyService owner writes', () => {
+  beforeEach(() => {
+    mockPutOwnerDocument.mockReset();
+    mockDeleteOwnerDocument.mockReset();
+    mockIsAppCertValid.mockReset();
+    mockGetAppKeypair.mockReset();
+    mockRnPut.mockReset();
+  });
+
+  it('routes put through the Paykit session, not AppKey / rnPut', async () => {
+    mockPutOwnerDocument.mockResolvedValue(undefined);
+    const url = 'pubky://owner/pub/hypercolor.app/v1/backup/latest';
+    await PubkyService.put(url, 'blob');
+    expect(mockPutOwnerDocument).toHaveBeenCalledWith(url, 'blob');
+    expect(mockRnPut).not.toHaveBeenCalled();
+    expect(mockIsAppCertValid).not.toHaveBeenCalled();
+    expect(mockGetAppKeypair).not.toHaveBeenCalled();
+  });
+
+  it('routes delete through the Paykit session', async () => {
+    mockDeleteOwnerDocument.mockResolvedValue(undefined);
+    const url = 'pubky://owner/pub/hypercolor.app/v1/attachments/abc';
+    await PubkyService.delete(url);
+    expect(mockDeleteOwnerDocument).toHaveBeenCalledWith(url);
+    expect(mockIsAppCertValid).not.toHaveBeenCalled();
+  });
+});

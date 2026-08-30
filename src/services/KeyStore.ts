@@ -33,6 +33,7 @@ const KEYCHAIN_USERNAME = 'identity';
  * entries on `KeyStore.clear()`. Do not read or write secrets here.
  */
 const LEGACY_LINK_RECEIVER_SECRET_SERVICE = 'hypercolor-link-receiver-secret';
+const RING_PENDING_SERVICE = 'hypercolor-ring-pending';
 const ATTACHMENT_KEY_SERVICE_PREFIX = 'hypercolor-attachment-key';
 
 // ─── MMKV metadata keys ───────────────────────────────────────────────────────
@@ -253,6 +254,30 @@ export function deleteLinkSession(): void {
   store().remove(LINK_SESSION_KEY);
 }
 
+// ─── Pending Ring handoff (OS Keychain — survives process death) ─────────────
+
+/**
+ * Ephemeral X25519 secret used to decrypt `hypercolor://ring-callback`.
+ * Must live in Keychain, not only a JS var: iOS may kill Hypercolor while
+ * Ring is in the foreground.
+ */
+export async function setPendingRingHandoff(ephemeralSkHex: string): Promise<void> {
+  await Keychain.setGenericPassword(KEYCHAIN_USERNAME, ephemeralSkHex, {
+    service: RING_PENDING_SERVICE,
+    accessible: Keychain.ACCESSIBLE.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
+  });
+}
+
+export async function getPendingRingHandoff(): Promise<string | null> {
+  const result = await Keychain.getGenericPassword({ service: RING_PENDING_SERVICE });
+  if (result === false) return null;
+  return result.password.length > 0 ? result.password : null;
+}
+
+export async function clearPendingRingHandoff(): Promise<void> {
+  await Keychain.resetGenericPassword({ service: RING_PENDING_SERVICE });
+}
+
 // ─── Attachment AEAD material (OS Keychain, keyed by owner + sender + event) ─
 
 export interface AttachmentSecretMaterial {
@@ -435,6 +460,7 @@ export async function clear(): Promise<void> {
     Keychain.resetGenericPassword({ service: TRANSPORT_KEY_SERVICE }),
     Keychain.resetGenericPassword({ service: APP_CERT_SERVICE }),
     Keychain.resetGenericPassword({ service: LEGACY_LINK_RECEIVER_SECRET_SERVICE }),
+    Keychain.resetGenericPassword({ service: RING_PENDING_SERVICE }),
   ]);
   if (owner) {
     store().remove(attachmentIndexKey(owner));
@@ -462,6 +488,9 @@ export const KeyStore = {
   setLinkSession,
   getLinkSession,
   deleteLinkSession,
+  setPendingRingHandoff,
+  getPendingRingHandoff,
+  clearPendingRingHandoff,
   setAttachmentSecret,
   getAttachmentSecret,
   deleteAttachmentSecret,

@@ -4,10 +4,22 @@
  */
 
 /**
- * Public Nexus aggregator (staging). Used only for the public social graph
- * (followers / following / friends). Never for messages.
+ * Official production Nexus (pubky-knowledge-base / shipped Pubky docs).
+ * Used only for the public social graph (followers / following / friends).
+ * Never for messages. Override with `EXPO_PUBLIC_NEXUS_URL` or
+ * `AppConfig.setNexusBaseUrl` — do not invent a host.
  */
-export const DEFAULT_NEXUS_BASE_URL = 'https://nexus.staging.pubky.app';
+export const PRODUCTION_NEXUS_BASE_URL = 'https://nexus.pubky.app';
+
+function readEnvNexusBaseUrl(): string | undefined {
+  const fromEnv = process.env.EXPO_PUBLIC_NEXUS_URL;
+  if (typeof fromEnv === 'string' && fromEnv.trim().length > 0) {
+    return fromEnv.trim().replace(/\/+$/, '');
+  }
+  return undefined;
+}
+
+export const DEFAULT_NEXUS_BASE_URL = readEnvNexusBaseUrl() ?? PRODUCTION_NEXUS_BASE_URL;
 
 /**
  * Legacy WoT numeric threshold, still readable via AppConfig so existing

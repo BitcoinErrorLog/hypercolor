@@ -10,6 +10,7 @@ import {
 import { RootNavigator } from './src/navigation/RootNavigator';
 import { KeyStore } from './src/services/KeyStore';
 import { LinkService, startLinkRetryDrain } from './src/services/link/LinkService';
+import { hydratePersistedAuth } from './src/stores/hydrateAuthSession';
 
 export default function App() {
   const [ready, setReady] = useState(false);
@@ -93,6 +94,8 @@ export default function App() {
 
     KeyStore.initKeyStore()
       .then(async () => {
+        if (disposed) return;
+        await hydratePersistedAuth();
         if (disposed) return;
         await recoverAndDrain();
         if (disposed) return;

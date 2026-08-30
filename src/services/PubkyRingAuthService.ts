@@ -1,7 +1,8 @@
 import { Linking } from 'react-native';
 import { get as rnGet } from '@synonymdev/react-native-pubky';
 import { x25519GenerateKeypair, sb2VerifySignature, sb2Decrypt } from '../utils/PubkyNoiseModule';
-import { KeyStore } from './KeyStore';
+import { RING_GRANT_CAPABILITIES } from '../types/link';
+import { KeyStore, type AppCert } from './KeyStore';
 
 /**
  * PubkyRingAuthService
@@ -43,6 +44,7 @@ export async function requestDelegation(deviceId: string): Promise<void> {
   const { secretKey: ephemeralSkHex, publicKey: ephemeralPkHex } = await x25519GenerateKeypair();
 
   _pending = { ephemeralSkHex };
+  await KeyStore.setPendingRingHandoff(ephemeralSkHex);
 
   const callbackUrl = encodeURIComponent('hypercolor://ring-callback');
 
@@ -50,14 +52,37 @@ export async function requestDelegation(deviceId: string): Promise<void> {
     `pubkyring://paykit-connect` +
     `?deviceId=${encodeURIComponent(deviceId)}` +
     `&callback=${callbackUrl}` +
-    `&ephemeralPk=${encodeURIComponent(ephemeralPkHex)}`;
+    `&ephemeralPk=${encodeURIComponent(ephemeralPkHex)}` +
+    `&caps=${encodeURIComponent(RING_GRANT_CAPABILITIES)}`;
 
   const canOpen = await Linking.canOpenURL('pubkyring://');
   if (!canOpen) {
     _pending = null;
+    await KeyStore.clearPendingRingHandoff();
     throw new Error('pubky-ring is not installed on this device.');
   }
   await Linking.openURL(deepLink);
+}
+
+/**
+ * AppCert from a Ring handoff. `payload.expires_at` is the 5-minute handoff
+ * TTL, not cert expiry — Ring `issueAppCert(..., null)` issues no expiry.
+ */
+export function certFromHandoffAppKey(appKey: NonNullable<HandoffPayload['app_key']>): AppCert {
+  return {
+    certBodyHex: appKey.cert_body,
+    sigHex: appKey.cert_sig,
+    certIdHex: appKey.cert_id,
+  };
+}
+
+export async function resolvePendingEphemeralSk(): Promise<string> {
+  if (_pending?.ephemeralSkHex) return _pending.ephemeralSkHex;
+  const persisted = await KeyStore.getPendingRingHandoff();
+  if (persisted) return persisted;
+  throw new Error(
+    'No pending delegation request. Call requestDelegation() before handling the callback.',
+  );
 }
 
 // ─── Step 2: Handle the callback from pubky-ring ─────────────────────────────
@@ -84,14 +109,8 @@ export async function handleRingCallback(url: string): Promise<DelegationResult>
   if (mode !== 'secure_handoff') {
     throw new Error(`Unsupported handoff mode: ${mode}`);
   }
-  if (!_pending) {
-    throw new Error(
-      'No pending delegation request. Call requestDelegation() before handling the callback.',
-    );
-  }
 
-  const { ephemeralSkHex } = _pending;
-  _pending = null;
+  const ephemeralSkHex = await resolvePendingEphemeralSk();
 
   // ── Fetch handoff ──
   // pubky-ring stores: { "sb2": "<base64SB2Envelope>" }
@@ -136,12 +155,7 @@ export async function handleRingCallback(url: string): Promise<DelegationResult>
     secretKey: payload.app_key.ed25519_sk,
     publicKey: payload.app_key.ed25519_pk,
   });
-  await KeyStore.setAppCert({
-    certBodyHex: payload.app_key.cert_body,
-    sigHex: payload.app_key.cert_sig,
-    certIdHex: payload.app_key.cert_id,
-    expiresAt: payload.expires_at,
-  });
+  await KeyStore.setAppCert(certFromHandoffAppKey(payload.app_key));
   await KeyStore.setInboxKeypair({
     secretKey: payload.inbox_keypair.secret_key,
     publicKey: payload.inbox_keypair.public_key,
@@ -161,6 +175,9 @@ export async function handleRingCallback(url: string): Promise<DelegationResult>
   if (payload.session_secret) {
     KeyStore.setSessionSecret(payload.session_secret);
   }
+
+  _pending = null;
+  await KeyStore.clearPendingRingHandoff();
 
   return { pubky, homeserver };
 }
