@@ -17,6 +17,7 @@ jest.mock('../PaykitLinkNative', () => ({
     signupWithSecret: jest.fn(),
     restoreSession: jest.fn(),
     signOutSession: jest.fn(),
+    clearAllNativeSecrets: jest.fn(),
     publishReceiverMarker: jest.fn(),
     getReceiverMarker: jest.fn(),
     removeReceiverMarker: jest.fn(),
@@ -156,6 +157,7 @@ describe('LinkService message requests', () => {
     mockedNative.isAvailable.mockReturnValue(true);
     mockedNative.signinWithSecret.mockResolvedValue({ sessionAlias: SESSION_ALIAS, pubky: OWNER });
     mockedNative.signOutSession.mockResolvedValue(undefined);
+    mockedNative.clearAllNativeSecrets.mockResolvedValue(undefined);
     mockedNative.closeLink.mockResolvedValue(undefined);
     mockedNative.clearLinkOutbox.mockResolvedValue(0);
     mockedNative.getReceiverMarker.mockResolvedValue({

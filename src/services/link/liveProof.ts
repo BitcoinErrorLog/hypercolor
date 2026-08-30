@@ -54,6 +54,25 @@ export type LiveProofDeps = {
 const DEFAULT_HANDSHAKE_TIMEOUT_MS = 60_000;
 const DEFAULT_RECEIVE_TIMEOUT_MS = 30_000;
 const DEFAULT_POLL_INTERVAL_MS = 500;
+const MIN_REDACT_SECRET_LENGTH = 4;
+
+/**
+ * Defense-in-depth redaction for live-proof logs and step details. Strips
+ * known signup tokens, generated identity secrets, and the inlined
+ * `EXPO_PUBLIC_LIVEPROOF` env blob so neither console output nor the
+ * report echoes credentials. Public values (pubkys, Noise keys) are kept.
+ */
+export function redactLiveProofForLog(text: string, secrets: readonly string[] = []): string {
+  let out = text;
+  const env = process.env.EXPO_PUBLIC_LIVEPROOF;
+  const extra = typeof env === 'string' && env.length > 0 ? [env] : [];
+  for (const secret of [...secrets, ...extra]) {
+    const trimmed = secret.trim();
+    if (trimmed.length < MIN_REDACT_SECRET_LENGTH) continue;
+    out = out.split(trimmed).join('[redacted]');
+  }
+  return out;
+}
 
 type Party = {
   label: 'A' | 'B';
@@ -150,11 +169,12 @@ export async function runLinkLiveProof(
   const steps: LiveProofStep[] = [];
   const partyA: Party = emptyParty('A');
   const partyB: Party = emptyParty('B');
+  const redactSecrets = [config.signupTokenA, config.signupTokenB];
 
   const record = async (step: string, body: () => Promise<string>): Promise<boolean> => {
     const started = now();
     try {
-      const detail = await body();
+      const detail = redactLiveProofForLog(await body(), redactSecrets);
       const entry: LiveProofStep = { step, ok: true, detail, elapsedMs: now() - started };
       steps.push(entry);
       console.log('[liveproof]', JSON.stringify(entry));
@@ -163,7 +183,7 @@ export async function runLinkLiveProof(
       const entry: LiveProofStep = {
         step,
         ok: false,
-        detail: errorMessage(err),
+        detail: redactLiveProofForLog(errorMessage(err), redactSecrets),
         elapsedMs: now() - started,
       };
       steps.push(entry);
@@ -207,6 +227,7 @@ export async function runLinkLiveProof(
         if (partyA.secretHex === partyB.secretHex) {
           throw new Error('generated identical identity secrets');
         }
+        redactSecrets.push(partyA.secretHex, partyB.secretHex);
         return 'two 32-byte secrets';
       }))
     ) {

@@ -1,7 +1,10 @@
 import CryptoKit
 import Foundation
+import os
 import React
 import Security
+
+private let paykitLinkLog = Logger(subsystem: "com.hypercolor", category: "PaykitLink")
 
 struct PaykitLinkBridgeError: Error {
     let code: String
@@ -112,11 +115,15 @@ class PaykitLinkModule: NSObject {
         resolver resolve: @escaping RCTPromiseResolveBlock,
         rejecter reject: @escaping RCTPromiseRejectBlock
     ) {
+        #if DEBUG
         runAsync(resolve, reject) {
             let secret = try Self.requireText(identitySecretHex, name: "identitySecretHex")
             let session = try await self.chatClient().signinWithSecret(identitySecretKeyHex: secret)
             return try self.persistSession(session)
         }
+        #else
+        reject("unavailable", "secret import is disabled in release builds", nil)
+        #endif
     }
 
     @objc func signupWithSecret(
@@ -126,6 +133,7 @@ class PaykitLinkModule: NSObject {
         resolver resolve: @escaping RCTPromiseResolveBlock,
         rejecter reject: @escaping RCTPromiseRejectBlock
     ) {
+        #if DEBUG
         runAsync(resolve, reject) {
             let secret = try Self.requireText(identitySecretHex, name: "identitySecretHex")
             let homeserver = try Self.requireText(homeserverPublicKey, name: "homeserverPublicKey")
@@ -137,6 +145,9 @@ class PaykitLinkModule: NSObject {
             )
             return try self.persistSession(session)
         }
+        #else
+        reject("unavailable", "secret import is disabled in release builds", nil)
+        #endif
     }
 
     @objc func restoreSession(
@@ -159,6 +170,22 @@ class PaykitLinkModule: NSObject {
             let alias = try Self.requireText(sessionAlias, name: "sessionAlias")
             self.lock.withLock { self.sessions.removeValue(forKey: alias) }
             try PaykitLinkStore.delete(account: PaykitLinkStore.sessionAccount(alias))
+            return NSNull()
+        }
+    }
+
+    @objc func clearAllNativeSecrets(
+        _ resolve: @escaping RCTPromiseResolveBlock,
+        rejecter reject: @escaping RCTPromiseRejectBlock
+    ) {
+        runAsync(resolve, reject) {
+            self.lock.withLock {
+                self.sessions.removeAll()
+                self.flows.removeAll()
+                self.handles.removeAll()
+                self.client = nil
+            }
+            try PaykitLinkStore.deleteAll()
             return NSNull()
         }
     }
@@ -641,15 +668,7 @@ class PaykitLinkModule: NSObject {
                 resolve(value)
             } catch {
                 let mapped = Self.mapError(error)
-                let nsError = NSError(
-                    domain: "PaykitLink",
-                    code: 0,
-                    userInfo: [
-                        NSLocalizedDescriptionKey: mapped.message,
-                        "code": mapped.code,
-                    ]
-                )
-                reject(mapped.code, mapped.message, nsError)
+                reject(mapped.code, mapped.message, nil)
             }
         }
     }
@@ -779,7 +798,8 @@ class PaykitLinkModule: NSObject {
             return bridge
         }
         guard let paykit = error as? PaykitError else {
-            return PaykitLinkBridgeError(code: "protocol", message: error.localizedDescription)
+            paykitLinkLog.debug("unmapped native error type=\(String(describing: type(of: error)), privacy: .public)")
+            return PaykitLinkBridgeError(code: "protocol", message: staticMessage("protocol"))
         }
         let (ffiCode, context): (String, String)
         switch paykit {
@@ -794,7 +814,9 @@ class PaykitLinkModule: NSObject {
             ffiCode = code
             context = ctx
         }
-        return PaykitLinkBridgeError(code: mapFfiCode(ffiCode), message: "\(ffiCode): \(context)")
+        let coarse = mapFfiCode(ffiCode)
+        paykitLinkLog.debug("Paykit FFI error code=\(ffiCode, privacy: .public) mapped=\(coarse, privacy: .public) context=\(context, privacy: .private)")
+        return PaykitLinkBridgeError(code: coarse, message: staticMessage(coarse))
     }
 
     private static func mapFfiCode(_ code: String) -> String {
@@ -809,6 +831,23 @@ class PaykitLinkModule: NSObject {
             return "consumed"
         default:
             return "protocol"
+        }
+    }
+
+    private static func staticMessage(_ code: String) -> String {
+        switch code {
+        case "network":
+            return "network error"
+        case "auth":
+            return "authentication failed"
+        case "validation":
+            return "validation failed"
+        case "consumed":
+            return "resource consumed"
+        case "unavailable":
+            return "unavailable"
+        default:
+            return "protocol error"
         }
     }
 }
@@ -859,6 +898,7 @@ struct SnapshotContext {
 enum PaykitLinkStore {
     static let service = "hypercolor.paykitlink"
     static let snapshotAccount = "snapshot-key"
+    static let attachmentServicePrefix = "hypercolor-attachment-key"
 
     static func receiverAccount(_ alias: String) -> String { "receiver.\(alias)" }
     static func sessionAccount(_ alias: String) -> String { "session.\(alias)" }
@@ -878,7 +918,7 @@ enum PaykitLinkStore {
         ]
         let status = SecItemAdd(query as CFDictionary, nil)
         if status != errSecSuccess {
-            throw PaykitLinkBridgeError(code: "protocol", message: "keychain write failed (\(status))")
+            throw PaykitLinkBridgeError(code: "protocol", message: "keychain write failed")
         }
     }
 
@@ -896,7 +936,7 @@ enum PaykitLinkStore {
             return nil
         }
         if status != errSecSuccess {
-            throw PaykitLinkBridgeError(code: "protocol", message: "keychain read failed (\(status))")
+            throw PaykitLinkBridgeError(code: "protocol", message: "keychain read failed")
         }
         return result as? Data
     }
@@ -914,7 +954,73 @@ enum PaykitLinkStore {
         ]
         let status = SecItemDelete(query as CFDictionary)
         if status != errSecSuccess && status != errSecItemNotFound {
-            throw PaykitLinkBridgeError(code: "protocol", message: "keychain delete failed (\(status))")
+            throw PaykitLinkBridgeError(code: "protocol", message: "keychain delete failed")
+        }
+    }
+
+    static func deleteAll() throws {
+        try deleteAllAccounts(forService: service)
+        try deleteServices(prefix: attachmentServicePrefix)
+    }
+
+    private static func deleteAllAccounts(forService target: String) throws {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: target,
+            kSecMatchLimit as String: kSecMatchLimitAll,
+            kSecReturnAttributes as String: true,
+        ]
+        var result: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        if status == errSecItemNotFound {
+            return
+        }
+        if status != errSecSuccess {
+            throw PaykitLinkBridgeError(code: "protocol", message: "keychain read failed")
+        }
+        let items = (result as? [[String: Any]]) ?? []
+        for item in items {
+            if let account = item[kSecAttrAccount as String] as? String {
+                try delete(account: account)
+            }
+        }
+        let wipe: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: target,
+        ]
+        let wipeStatus = SecItemDelete(wipe as CFDictionary)
+        if wipeStatus != errSecSuccess && wipeStatus != errSecItemNotFound {
+            throw PaykitLinkBridgeError(code: "protocol", message: "keychain delete failed")
+        }
+    }
+
+    private static func deleteServices(prefix: String) throws {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecMatchLimit as String: kSecMatchLimitAll,
+            kSecReturnAttributes as String: true,
+        ]
+        var result: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        if status == errSecItemNotFound {
+            return
+        }
+        if status != errSecSuccess {
+            return
+        }
+        let items = (result as? [[String: Any]]) ?? []
+        for item in items {
+            guard let svc = item[kSecAttrService as String] as? String, svc.hasPrefix(prefix) else {
+                continue
+            }
+            let del: [String: Any] = [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrService as String: svc,
+            ]
+            let delStatus = SecItemDelete(del as CFDictionary)
+            if delStatus != errSecSuccess && delStatus != errSecItemNotFound {
+                throw PaykitLinkBridgeError(code: "protocol", message: "keychain delete failed")
+            }
         }
     }
 

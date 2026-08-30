@@ -12,8 +12,10 @@ import { NativeModules } from 'react-native';
  * `{ownerPubky, peerPubky, localReceiverPath, remoteReceiverPath, role}`.
  * TypeScript must never parse a snapshot — persist it and pass it back.
  *
- * `signinWithSecret` is the sole exception that accepts a secret: it is the
- * dev/e2e test-harness path. Production uses `startAuthFlow` / `awaitAuthApproval`.
+ * `signinWithSecret` / `signupWithSecret` are the sole exceptions that accept
+ * a secret: they are the **dev/e2e-only** test-harness path and are gated out
+ * of release native builds (`BuildConfig.DEBUG` on Android, `#if DEBUG` on
+ * iOS). Production uses `startAuthFlow` / `awaitAuthApproval`.
  *
  * Every method (except sync `isAvailable`) can reject with a {@link LinkNativeError}.
  */
@@ -147,14 +149,18 @@ export interface PaykitLinkNativeApi {
   startAuthFlow(capabilities: string, relayUrl?: string): Promise<AuthFlowStart>;
   awaitAuthApproval(flowId: string): Promise<AuthSessionResult>;
   /**
-   * Dev/e2e only. Signs in with an identity secret; native stores the bearer
-   * under `sessionAlias`. The secret is not persisted in JS.
+   * Dev/e2e only — release native builds reject with `unavailable` /
+   * "secret import is disabled in release builds". Signs in with an
+   * identity secret; native stores the bearer under `sessionAlias`.
+   * The secret is not persisted in JS.
    */
   signinWithSecret(identitySecretHex: string): Promise<AuthSessionResult>;
   /**
-   * Dev/e2e only. Signs up a fresh identity on a homeserver with a raw
-   * 32-byte secret (64-char hex). Native stores the bearer under
-   * `sessionAlias`. The secret is not persisted in JS.
+   * Dev/e2e only — release native builds reject with `unavailable` /
+   * "secret import is disabled in release builds". Signs up a fresh
+   * identity on a homeserver with a raw 32-byte secret (64-char hex).
+   * Native stores the bearer under `sessionAlias`. The secret is not
+   * persisted in JS.
    */
   signupWithSecret(
     identitySecretHex: string,
@@ -167,6 +173,13 @@ export interface PaykitLinkNativeApi {
    */
   restoreSession(sessionAlias: string): Promise<RestoredSession>;
   signOutSession(sessionAlias: string): Promise<void>;
+  /**
+   * Deletes every native-owned PaykitLink secret on this device (receiver
+   * Noise secrets, session bearers, snapshot key, and attachment-key
+   * Keychain items). Per-owner tagging is not stored natively, so this
+   * wipes the entire app store. Used on sign-out / account switch.
+   */
+  clearAllNativeSecrets(): Promise<void>;
   publishReceiverMarker(
     sessionAlias: string,
     receiverAlias: string,
@@ -301,6 +314,10 @@ export const PaykitLinkNative: PaykitLinkNativeApi = {
 
   signOutSession(sessionAlias: string): Promise<void> {
     return invoke('signOutSession', sessionAlias);
+  },
+
+  clearAllNativeSecrets(): Promise<void> {
+    return invoke('clearAllNativeSecrets');
   },
 
   publishReceiverMarker(

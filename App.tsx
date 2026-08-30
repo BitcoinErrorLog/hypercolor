@@ -15,10 +15,14 @@ export default function App() {
     if (__DEV__ && process.env.EXPO_PUBLIC_LIVEPROOF) {
       const [homeserverPubky = '', signupTokenA = '', signupTokenB = ''] =
         process.env.EXPO_PUBLIC_LIVEPROOF.split(',');
-      void import('./src/services/link/liveProof').then(({ runLinkLiveProof }) =>
-        runLinkLiveProof({ homeserverPubky, signupTokenA, signupTokenB }).then((report) =>
-          console.log('[liveproof] REPORT', JSON.stringify(report)),
-        ),
+      void import('./src/services/link/liveProof').then(
+        ({ runLinkLiveProof, redactLiveProofForLog }) =>
+          runLinkLiveProof({ homeserverPubky, signupTokenA, signupTokenB }).then(report =>
+            console.log(
+              '[liveproof] REPORT',
+              redactLiveProofForLog(JSON.stringify(report), [signupTokenA, signupTokenB]),
+            ),
+          ),
       );
     }
   }, []);

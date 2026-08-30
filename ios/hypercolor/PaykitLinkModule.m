@@ -36,6 +36,9 @@ RCT_EXTERN_METHOD(signOutSession:(NSString *)sessionAlias
                   resolver:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject)
 
+RCT_EXTERN_METHOD(clearAllNativeSecrets:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
+
 RCT_EXTERN_METHOD(publishReceiverMarker:(NSString *)sessionAlias
                   receiverAlias:(NSString *)receiverAlias
                   receiverPath:(NSString *)receiverPath

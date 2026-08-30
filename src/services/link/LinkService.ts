@@ -189,7 +189,8 @@ export const LinkService = {
 
   /**
    * Sign-out / account-switch teardown: close native link handles, sign the
-   * native session out, and drop every account-scoped Encrypted-Link row.
+   * native session out, wipe every native-owned secret (receivers, sessions,
+   * snapshot key), and drop every account-scoped Encrypted-Link row.
    */
   async clearSession(): Promise<void> {
     stopLinkRetryDrain();
@@ -224,6 +225,11 @@ export const LinkService = {
       } catch {
         // Native may already have dropped the bearer.
       }
+    }
+    try {
+      await PaykitLinkNative.clearAllNativeSecrets();
+    } catch {
+      // Best-effort: leftover receiver/session aliases must not survive a switch.
     }
     session = null;
     liveHandles.clear();

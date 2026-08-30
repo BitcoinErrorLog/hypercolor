@@ -45,6 +45,7 @@ jest.mock('../PaykitLinkNative', () => ({
     signupWithSecret: jest.fn(),
     restoreSession: jest.fn(),
     signOutSession: jest.fn(),
+    clearAllNativeSecrets: jest.fn(),
     publishReceiverMarker: jest.fn(),
     getReceiverMarker: jest.fn(),
     removeReceiverMarker: jest.fn(),
@@ -256,6 +257,7 @@ describe('LinkService', () => {
     mockedNative.isAvailable.mockReturnValue(true);
     mockedNative.signinWithSecret.mockResolvedValue({ sessionAlias: SESSION_ALIAS, pubky: OWNER });
     mockedNative.signOutSession.mockResolvedValue(undefined);
+    mockedNative.clearAllNativeSecrets.mockResolvedValue(undefined);
     mockedNative.closeLink.mockResolvedValue(undefined);
     mockedNative.probeInboundLink.mockResolvedValue({ result: 'none' });
     mockedNative.getReceiverMarker.mockResolvedValue({
@@ -1545,10 +1547,30 @@ describe('LinkService', () => {
       const signOutOrder = mockedNative.signOutSession.mock.invocationCallOrder[0]!;
       expect(unpublishOrder).toBeLessThan(signOutOrder);
       expect(mockedNative.signOutSession).toHaveBeenCalledWith(SESSION_ALIAS);
+      expect(mockedNative.clearAllNativeSecrets).toHaveBeenCalled();
+      const wipeOrder = mockedNative.clearAllNativeSecrets.mock.invocationCallOrder[0]!;
+      expect(signOutOrder).toBeLessThan(wipeOrder);
       expect(mockedStorage.clearAccountData).toHaveBeenCalledWith(OWNER);
       expect(mockedStorage.removeFromQueue).toHaveBeenCalledWith('q-mine');
       expect(mockedStorage.removeFromQueue).not.toHaveBeenCalledWith('q-other');
       expect(LinkService.hasSession()).toBe(false);
+    });
+
+    it('calls clearAllNativeSecrets while the current-owner identity is still readable', async () => {
+      mockedKeyStore.deleteLinkSession.mockClear();
+      mockedNative.clearAllNativeSecrets.mockClear();
+      mockedNative.clearAllNativeSecrets.mockImplementation(async () => {
+        expect(mockedKeyStore.getPubky()).toBe(OWNER);
+        expect(mockedKeyStore.deleteLinkSession).not.toHaveBeenCalled();
+      });
+
+      await LinkService.clearSession();
+
+      expect(mockedNative.clearAllNativeSecrets).toHaveBeenCalledTimes(1);
+      expect(mockedKeyStore.deleteLinkSession).toHaveBeenCalled();
+      const wipeOrder = mockedNative.clearAllNativeSecrets.mock.invocationCallOrder[0]!;
+      const identityDropOrder = mockedKeyStore.deleteLinkSession.mock.invocationCallOrder[0]!;
+      expect(wipeOrder).toBeLessThan(identityDropOrder);
     });
   });
 

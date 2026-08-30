@@ -4,6 +4,7 @@ import android.content.Context
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
+import android.util.Log
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
@@ -111,6 +112,10 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
 
     @ReactMethod
     fun signinWithSecret(identitySecretHex: String, promise: Promise) {
+        if (!BuildConfig.DEBUG) {
+            promise.reject("unavailable", "secret import is disabled in release builds")
+            return
+        }
         launch(promise) {
             persistSession(
                 chatClient().signinWithSecret(requireText(identitySecretHex, "identitySecretHex")),
@@ -126,6 +131,10 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
         signupToken: String?,
         promise: Promise,
     ) {
+        if (!BuildConfig.DEBUG) {
+            promise.reject("unavailable", "secret import is disabled in release builds")
+            return
+        }
         launch(promise) {
             persistSession(
                 chatClient().signupWithSecret(
@@ -152,6 +161,18 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
             val alias = requireText(sessionAlias, "sessionAlias")
             sessions.remove(alias)
             store.delete(PaykitLinkStore.sessionKey(alias))
+            promise.resolve(null)
+        }
+    }
+
+    @ReactMethod
+    fun clearAllNativeSecrets(promise: Promise) {
+        launch(promise) {
+            sessions.clear()
+            flows.clear()
+            handles.clear()
+            clientMutex.withLock { client = null }
+            store.clearAll()
             promise.resolve(null)
         }
     }
@@ -566,7 +587,7 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
                 block()
             } catch (error: Throwable) {
                 val mapped = mapError(error)
-                promise.reject(mapped.code, mapped.message, error)
+                promise.reject(mapped.code, mapped.message)
             }
         }
     }
@@ -683,9 +704,12 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
                 is PaykitException.RecoveryRequired -> paykit.context
                 else -> error.message.orEmpty()
             }
-            return PaykitLinkBridgeError(mapFfiCode(code), "$code: $context")
+            val coarse = mapFfiCode(code)
+            Log.d(PAYKIT_LINK_LOG_TAG, "Paykit FFI error code=$code mapped=$coarse context=$context")
+            return PaykitLinkBridgeError(coarse, staticMessage(coarse))
         }
-        return PaykitLinkBridgeError("protocol", error.message ?: "paykit native error")
+        Log.d(PAYKIT_LINK_LOG_TAG, "unmapped native error type=${error.javaClass.name}")
+        return PaykitLinkBridgeError("protocol", staticMessage("protocol"))
     }
 
     private fun mapFfiCode(code: String): String = when (code) {
@@ -695,7 +719,18 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
         "consumed" -> "consumed"
         else -> "protocol"
     }
+
+    private fun staticMessage(code: String): String = when (code) {
+        "network" -> "network error"
+        "auth" -> "authentication failed"
+        "validation" -> "validation failed"
+        "consumed" -> "resource consumed"
+        "unavailable" -> "unavailable"
+        else -> "protocol error"
+    }
 }
+
+private const val PAYKIT_LINK_LOG_TAG = "PaykitLink"
 
 private data class PaykitLinkBridgeError(
     val code: String,
@@ -756,6 +791,25 @@ private class PaykitLinkStore(context: Context) {
 
     fun delete(key: String) {
         prefs.edit().remove(key).apply()
+    }
+
+    fun clearAll() {
+        val keys = prefs.all.keys.toList()
+        if (keys.isNotEmpty()) {
+            val editor = prefs.edit()
+            for (key in keys) {
+                editor.remove(key)
+            }
+            editor.apply()
+        }
+        try {
+            val keyStore = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
+            if (keyStore.containsAlias(MASTER_ALIAS)) {
+                keyStore.deleteEntry(MASTER_ALIAS)
+            }
+        } catch (_: Exception) {
+            // Prefs entries are already gone; snapshot key deletion is best-effort.
+        }
     }
 
     suspend fun encryptSnapshot(plaintext: String, context: SnapshotContext): String {

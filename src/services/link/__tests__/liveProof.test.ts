@@ -1,5 +1,10 @@
 import { v4 as uuidv4 } from 'uuid';
-import { runLinkLiveProof, parseLiveProofTokens, type LiveProofConfig } from '../liveProof';
+import {
+  runLinkLiveProof,
+  parseLiveProofTokens,
+  redactLiveProofForLog,
+  type LiveProofConfig,
+} from '../liveProof';
 import { PaykitLinkNative, type PaykitLinkNativeApi } from '../PaykitLinkNative';
 import { CHAT_MESSAGE_KIND, LINK_RECEIVER_PATH } from '../../../types/link';
 import { LinkService } from '../LinkService';
@@ -51,6 +56,7 @@ jest.mock('../PaykitLinkNative', () => ({
     signupWithSecret: jest.fn(),
     restoreSession: jest.fn(),
     signOutSession: jest.fn(),
+    clearAllNativeSecrets: jest.fn(),
     publishReceiverMarker: jest.fn(),
     getReceiverMarker: jest.fn(),
     removeReceiverMarker: jest.fn(),
@@ -205,6 +211,16 @@ function mockNativeHappyPath(): void {
   mockedNative.signOutSession.mockResolvedValue(undefined);
 }
 
+describe('redactLiveProofForLog', () => {
+  it('redacts known tokens and supplied identity secrets', () => {
+    const hex = 'ab'.repeat(32);
+    const text = `signup token-a failed with ${hex} and leftover`;
+    expect(redactLiveProofForLog(text, ['token-a', 'token-b', hex])).toBe(
+      'signup [redacted] failed with [redacted] and leftover',
+    );
+  });
+});
+
 describe('parseLiveProofTokens', () => {
   it('reads two fields or a comma-separated first field', () => {
     expect(parseLiveProofTokens(' a ', ' b ')).toEqual({
@@ -350,6 +366,37 @@ describe('runLinkLiveProof', () => {
     expect(mockedLinkService.enable).not.toHaveBeenCalled();
     expect(mockedLinkService.signinWithSecret).not.toHaveBeenCalled();
     expect(mockedLinkService.clearSession).not.toHaveBeenCalled();
+
+    const logged = jest.mocked(console.log).mock.calls.map(args => args.join(' '));
+    expect(logged.some(line => line.includes('token-a'))).toBe(false);
+    expect(logged.some(line => line.includes('token-b'))).toBe(false);
+    expect(logged.some(line => line.includes('01'.repeat(32)))).toBe(false);
+    expect(logged.some(line => line.includes('[liveproof]'))).toBe(true);
+  });
+
+  it('redacts a token echoed in a native error from step detail and logs', async () => {
+    mockedNative.isAvailable.mockReturnValue(true);
+    mockedNative.signupWithSecret.mockRejectedValueOnce({
+      code: 'auth',
+      message: 'signup failed for token-a',
+    });
+    mockedNative.signOutSession.mockResolvedValue(undefined);
+    mockedNative.removeReceiverMarker.mockResolvedValue(undefined);
+    mockedNative.closeLink.mockResolvedValue(undefined);
+    const secretsQueue = secrets();
+
+    const report = await runLinkLiveProof(CONFIG, {
+      native: mockedNative as unknown as PaykitLinkNativeApi,
+      randomBytes: () => secretsQueue.shift() ?? new Uint8Array(32).fill(9),
+    });
+
+    expect(report.ok).toBe(false);
+    const signup = report.steps.find(step => step.step === 'signup-a');
+    expect(signup?.ok).toBe(false);
+    expect(signup?.detail).not.toContain('token-a');
+    expect(signup?.detail).toContain('[redacted]');
+    const logged = jest.mocked(console.log).mock.calls.map(args => args.join(' '));
+    expect(logged.some(line => line.includes('token-a'))).toBe(false);
   });
 
   it('still signs out after a mid-proof failure', async () => {
