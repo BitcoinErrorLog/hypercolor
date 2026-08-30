@@ -95,6 +95,7 @@ let restoreInFlight: Promise<SessionLookup> | null = null;
 const liveHandles = new Map<string, LiveHandle>();
 const queues = new Map<string, Promise<unknown>>();
 let drainTimer: ReturnType<typeof setInterval> | null = null;
+const inboxSyncListeners = new Set<(ownerPubky: PubkyKey) => void>();
 
 export const LinkService = {
   // ── Session ───────────────────────────────────────────────────────────────
@@ -258,15 +259,6 @@ export const LinkService = {
    */
   async sendDm(peerPubky: PubkyKey, body: string): Promise<LinkMessage> {
     return withQueue(peerPubky, async () => {
-      const ownerForRequest = requireOwner();
-      const pending = await StorageService.getMessageRequest(ownerForRequest, peerPubky);
-      if (pending?.status === 'pending') {
-        await StorageService.upsertMessageRequest({
-          ...pending,
-          status: 'accepted',
-          updatedAt: Date.now(),
-        });
-      }
       const outcome = await ensureLinkLocked(peerPubky, true, false);
       if (
         outcome !== 'ready' &&
@@ -276,6 +268,15 @@ export const LinkService = {
         throw new Error(
           `LinkService.sendDm: cannot send to ${peerPubky} — link status is '${outcome}'`,
         );
+      }
+      const ownerForRequest = requireOwner();
+      const pending = await StorageService.getMessageRequest(ownerForRequest, peerPubky);
+      if (pending?.status === 'pending') {
+        await StorageService.upsertMessageRequest({
+          ...pending,
+          status: 'accepted',
+          updatedAt: Date.now(),
+        });
       }
 
       const ownerPubky = requireOwner();
@@ -397,8 +398,8 @@ export const LinkService = {
    *
    * Newly discovered inbound links (`probe` → pending/established with no
    * prior row) go through the WoT gate: mutual / following / manual-add /
-   * trust ≥ threshold auto-accept; everyone else is a pending MESSAGE
-   * REQUEST and is not returned to the main inbox until accepted.
+   * or a prior routed conversation auto-accept; everyone else is a pending
+   * MESSAGE REQUEST and is not returned to the main inbox until accepted.
    */
   async syncInbox(peers?: PubkyKey[]): Promise<LinkMessage[]> {
     const ownerPubky = requireOwner();
@@ -417,7 +418,19 @@ export const LinkService = {
     } catch (err) {
       console.warn('[LinkService] drainRetries after syncInbox failed:', errorMessage(err));
     }
+    notifyInboxSynced(ownerPubky);
     return received;
+  },
+
+  /**
+   * Fired after every {@link syncInbox} attempt (including an empty candidate
+   * set). Used by ChatsScreen to refresh the pending-request badge.
+   */
+  subscribeInboxSynced(listener: (ownerPubky: PubkyKey) => void): () => void {
+    inboxSyncListeners.add(listener);
+    return () => {
+      inboxSyncListeners.delete(listener);
+    };
   },
 
   async markRead(conversationId: string, readAt: number = Date.now()): Promise<void> {
@@ -1142,6 +1155,7 @@ async function persistInboundWithoutRouting(
 
 async function holdAsMessageRequest(ownerPubky: PubkyKey, peerPubky: PubkyKey): Promise<void> {
   const existing = await StorageService.getMessageRequest(ownerPubky, peerPubky);
+  if (existing?.status === 'declined') return;
   const ts = Date.now();
   await StorageService.upsertMessageRequest({
     ownerPubky,
@@ -1152,18 +1166,74 @@ async function holdAsMessageRequest(ownerPubky: PubkyKey, peerPubky: PubkyKey): 
   });
 }
 
+/**
+ * Decline is terminal: do not adopt a re-initiated inbound handshake, do
+ * not persist stream items, and do not rewrite the request row to pending.
+ */
+async function rejectDeclinedInbound(ownerPubky: PubkyKey, peerPubky: PubkyKey): Promise<void> {
+  const key = linkKey(ownerPubky, peerPubky);
+  const live = liveHandles.get(key);
+  if (live) {
+    await closeQuietly(live.linkId);
+    liveHandles.delete(key);
+  }
+  const leftover = await StorageService.getLink(ownerPubky, peerPubky);
+  if (leftover) {
+    await wipeLinkState(leftover);
+    return;
+  }
+  const lookup = await sessionOrRestore();
+  if (!isActiveSession(lookup)) return;
+  const receiver = await StorageService.getLinkReceiver(ownerPubky);
+  if (!receiver) return;
+  try {
+    const marker = await PaykitLinkNative.getReceiverMarker(peerPubky, LINK_RECEIVER_PATH);
+    if (!marker) return;
+    await PaykitLinkNative.clearLinkOutbox(
+      lookup.alias,
+      receiver.receiverAlias,
+      peerPubky,
+      marker.noisePublicKey,
+      coerceReceiverPath(receiver.receiverPath),
+      LINK_RECEIVER_PATH,
+    );
+  } catch {
+    // Best-effort: a missing outbox is the desired end state.
+  }
+}
+
+function notifyInboxSynced(ownerPubky: PubkyKey): void {
+  for (const listener of inboxSyncListeners) {
+    try {
+      listener(ownerPubky);
+    } catch {
+      // Badge refresh must not fail inbox sync.
+    }
+  }
+}
+
 async function syncPeerLocked(peerPubky: PubkyKey): Promise<LinkMessage[]> {
   const ownerPubky = requireOwner();
   const prior = await StorageService.getLink(ownerPubky, peerPubky);
   const existingRequest = await StorageService.getMessageRequest(ownerPubky, peerPubky);
+  if (existingRequest?.status === 'declined') {
+    await rejectDeclinedInbound(ownerPubky, peerPubky);
+    return [];
+  }
   try {
     const outcome = await ensureLinkLocked(peerPubky, false, false);
+    const priorMessageCount = await StorageService.countLinkMessagesForPeer(ownerPubky, peerPubky);
+    const hasEstablishedConversation = priorMessageCount > 0;
     const isNewInbound =
-      prior === null && (outcome === 'ready' || outcome === 'handshaking-responder');
+      prior === null &&
+      !hasEstablishedConversation &&
+      (outcome === 'ready' || outcome === 'handshaking-responder');
 
     if (isNewInbound && existingRequest?.status !== 'accepted') {
       const contact = await StorageService.getContact(peerPubky, ownerPubky);
-      const decision = classifyInboundPeer(wotInputFromContact(contact));
+      const decision = classifyInboundPeer(
+        wotInputFromContact(contact, hasEstablishedConversation),
+      );
       if (decision === 'request') {
         await holdAsMessageRequest(ownerPubky, peerPubky);
         if (outcome === 'ready') {

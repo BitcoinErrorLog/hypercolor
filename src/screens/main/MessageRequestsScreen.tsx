@@ -7,6 +7,7 @@ import {
   StyleSheet,
   SafeAreaView,
   ActivityIndicator,
+  Alert,
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -49,6 +50,12 @@ export default function MessageRequestsScreen() {
       try {
         await LinkService.acceptMessageRequest(peerPubky);
         await load();
+      } catch (err) {
+        Alert.alert(
+          'Accept failed',
+          err instanceof Error ? err.message : 'Could not accept this request.',
+        );
+        await load();
       } finally {
         setBusyPeer(null);
       }
@@ -61,6 +68,12 @@ export default function MessageRequestsScreen() {
       setBusyPeer(peerPubky);
       try {
         await LinkService.declineMessageRequest(peerPubky);
+        await load();
+      } catch (err) {
+        Alert.alert(
+          'Decline failed',
+          err instanceof Error ? err.message : 'Could not decline this request.',
+        );
         await load();
       } finally {
         setBusyPeer(null);

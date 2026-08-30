@@ -61,28 +61,24 @@ export const StorageService = {
     const ts = now();
     db.executeSync(
       `INSERT INTO contacts
-        (pubky, owner_pubky, display_name, avatar_hash, homeserver, trust_score,
+        (owner_pubky, pubky, display_name, avatar_hash, homeserver, trust_score,
          is_following, is_follower, is_mutual, added_manually,
          first_seen_at, last_interaction_at, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT(pubky) DO UPDATE SET
-         owner_pubky          = CASE
-           WHEN excluded.owner_pubky != '' THEN excluded.owner_pubky
-           ELSE owner_pubky
-         END,
+       ON CONFLICT(owner_pubky, pubky) DO UPDATE SET
          display_name         = COALESCE(excluded.display_name, display_name),
          avatar_hash          = COALESCE(excluded.avatar_hash, avatar_hash),
          homeserver           = COALESCE(excluded.homeserver, homeserver),
          trust_score          = excluded.trust_score,
-         is_following         = excluded.is_following,
-         is_follower          = excluded.is_follower,
-         is_mutual            = excluded.is_mutual,
+         is_following         = MAX(is_following, excluded.is_following),
+         is_follower          = MAX(is_follower, excluded.is_follower),
+         is_mutual            = MAX(is_mutual, excluded.is_mutual),
          added_manually       = MAX(added_manually, excluded.added_manually),
-         last_interaction_at  = excluded.last_interaction_at,
+         last_interaction_at  = COALESCE(excluded.last_interaction_at, last_interaction_at),
          updated_at           = excluded.updated_at`,
       [
-        contact.pubky,
         contact.ownerPubky,
+        contact.pubky,
         contact.displayName ?? null,
         contact.avatarHash ?? null,
         contact.homeserver ?? null,
@@ -99,29 +95,39 @@ export const StorageService = {
     );
   },
 
+  /**
+   * Owner-scoped read. The WoT gate and every account-facing caller MUST pass
+   * a non-empty `ownerPubky` — the empty-owner fallback was removed in v6.
+   * Omitting owner is a legacy unscoped lookup that only returns a row when
+   * exactly one contact exists for that pubky (MessageRouter-era callers).
+   */
   async getContact(pubky: PubkyKey, ownerPubky?: PubkyKey): Promise<Contact | null> {
     const db = await getDb();
-    const result =
-      ownerPubky !== undefined
-        ? db.executeSync(
-            `SELECT * FROM contacts
-             WHERE pubky = ? AND (owner_pubky = ? OR owner_pubky = '')
-             LIMIT 1`,
-            [pubky, ownerPubky],
-          )
-        : db.executeSync('SELECT * FROM contacts WHERE pubky = ?', [pubky]);
-    const row = result.rows?.[0];
-    if (!row) return null;
-    return rowToContact(row);
+    if (ownerPubky !== undefined) {
+      if (ownerPubky === '') return null;
+      const result = db.executeSync(
+        'SELECT * FROM contacts WHERE owner_pubky = ? AND pubky = ? LIMIT 1',
+        [ownerPubky, pubky],
+      );
+      const row = result.rows?.[0];
+      if (!row) return null;
+      return rowToContact(row);
+    }
+    const result = db.executeSync('SELECT * FROM contacts WHERE pubky = ?', [pubky]);
+    const rows = result.rows ?? [];
+    const only = rows[0];
+    if (rows.length !== 1 || !only) return null;
+    return rowToContact(only);
   },
 
   async getAllContacts(ownerPubky?: PubkyKey): Promise<Contact[]> {
     const db = await getDb();
+    if (ownerPubky !== undefined && ownerPubky === '') return [];
     const result =
       ownerPubky !== undefined
         ? db.executeSync(
             `SELECT * FROM contacts
-             WHERE owner_pubky = ? OR owner_pubky = ''
+             WHERE owner_pubky = ?
              ORDER BY last_interaction_at DESC`,
             [ownerPubky],
           )
@@ -129,24 +135,83 @@ export const StorageService = {
     return (result.rows ?? []).map(rowToContact);
   },
 
-  async updateTrustScore(pubky: PubkyKey, delta: number): Promise<void> {
+  /**
+   * Authoritative flag write — used when Nexus following is a complete 200.
+   * Unlike upsertContact, this CAN clear is_following / is_follower / is_mutual.
+   */
+  async setContactRelationshipFlags(
+    ownerPubky: PubkyKey,
+    pubky: PubkyKey,
+    flags: { isFollowing: boolean; isFollower: boolean; isMutual: boolean },
+  ): Promise<void> {
     const db = await getDb();
+    db.executeSync(
+      `UPDATE contacts
+       SET is_following = ?, is_follower = ?, is_mutual = ?, updated_at = ?
+       WHERE owner_pubky = ? AND pubky = ?`,
+      [
+        flags.isFollowing ? 1 : 0,
+        flags.isFollower ? 1 : 0,
+        flags.isMutual ? 1 : 0,
+        now(),
+        ownerPubky,
+        pubky,
+      ],
+    );
+  },
+
+  async updateTrustScore(pubky: PubkyKey, delta: number, ownerPubky?: PubkyKey): Promise<void> {
+    const db = await getDb();
+    const ts = now();
+    if (ownerPubky !== undefined && ownerPubky !== '') {
+      db.executeSync(
+        `UPDATE contacts
+         SET trust_score = MAX(0.0, MIN(1.0, trust_score + ?)),
+             updated_at = ?
+         WHERE owner_pubky = ? AND pubky = ?`,
+        [delta, ts, ownerPubky, pubky],
+      );
+      return;
+    }
     db.executeSync(
       `UPDATE contacts
        SET trust_score = MAX(0.0, MIN(1.0, trust_score + ?)),
            updated_at = ?
-       WHERE pubky = ?`,
-      [delta, now(), pubky],
+       WHERE pubky = ?
+         AND (SELECT COUNT(*) FROM contacts WHERE pubky = ?) = 1`,
+      [delta, ts, pubky, pubky],
     );
   },
 
-  async touchContactInteraction(pubky: PubkyKey): Promise<void> {
+  async touchContactInteraction(pubky: PubkyKey, ownerPubky?: PubkyKey): Promise<void> {
     const db = await getDb();
-    db.executeSync('UPDATE contacts SET last_interaction_at = ?, updated_at = ? WHERE pubky = ?', [
-      now(),
-      now(),
-      pubky,
-    ]);
+    const ts = now();
+    if (ownerPubky !== undefined && ownerPubky !== '') {
+      db.executeSync(
+        `UPDATE contacts
+         SET last_interaction_at = ?, updated_at = ?
+         WHERE owner_pubky = ? AND pubky = ?`,
+        [ts, ts, ownerPubky, pubky],
+      );
+      return;
+    }
+    db.executeSync(
+      `UPDATE contacts
+       SET last_interaction_at = ?, updated_at = ?
+       WHERE pubky = ?
+         AND (SELECT COUNT(*) FROM contacts WHERE pubky = ?) = 1`,
+      [ts, ts, pubky, pubky],
+    );
+  },
+
+  async countLinkMessagesForPeer(ownerPubky: PubkyKey, peerPubky: PubkyKey): Promise<number> {
+    const db = await getDb();
+    const result = db.executeSync(
+      `SELECT COUNT(*) AS n FROM link_messages
+       WHERE owner_pubky = ? AND peer_pubky = ?`,
+      [ownerPubky, peerPubky],
+    );
+    return (result.rows?.[0]?.n as number) ?? 0;
   },
 
   // ── Message requests (WoT inbound gate) ───────────────────────────────────
@@ -158,8 +223,14 @@ export const StorageService = {
         (owner_pubky, peer_pubky, created_at, updated_at, status)
        VALUES (?, ?, ?, ?, ?)
        ON CONFLICT(owner_pubky, peer_pubky) DO UPDATE SET
-         status     = excluded.status,
-         updated_at = excluded.updated_at`,
+         status     = CASE
+           WHEN message_requests.status = 'declined' THEN message_requests.status
+           ELSE excluded.status
+         END,
+         updated_at = CASE
+           WHEN message_requests.status = 'declined' THEN message_requests.updated_at
+           ELSE excluded.updated_at
+         END`,
       [request.ownerPubky, request.peerPubky, request.createdAt, request.updatedAt, request.status],
     );
   },
@@ -858,7 +929,7 @@ export const StorageService = {
     const result = db.executeSync(
       `SELECT * FROM link_stream_items
        WHERE owner_pubky = ? AND peer_pubky = ? AND processed = 0
-       ORDER BY received_at ASC`,
+       ORDER BY received_at ASC, rowid ASC`,
       [ownerPubky, peerPubky],
     );
     return (result.rows ?? []).map(rowToLinkStreamItem);
@@ -1051,6 +1122,12 @@ function insertLinkMessage(db: SqlExecutor, message: LinkMessage): void {
       ts,
       ts,
     ],
+  );
+  db.executeSync(
+    `UPDATE contacts
+     SET last_interaction_at = ?, updated_at = ?
+     WHERE owner_pubky = ? AND pubky = ?`,
+    [ts, ts, message.ownerPubky, message.peerPubky],
   );
 }
 

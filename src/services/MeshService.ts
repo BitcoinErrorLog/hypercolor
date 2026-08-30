@@ -207,17 +207,30 @@ function onPeerDiscovered(event: PeerDiscoveredEvent): void {
   peerStates.set(event.pubkyHash, state);
 
   if (state.pubky) {
-    StorageService.upsertContact({
-      pubky: state.pubky,
-      ownerPubky: KeyStore.getPubky() ?? '',
-      trustScore: 0.1,
-      isFollowing: false,
-      isFollower: false,
-      isMutual: false,
-      addedManually: false,
-      firstSeenAt: Date.now(),
-      lastInteractionAt: Date.now(),
-    }).catch(() => {});
+    const ownerPubky = KeyStore.getPubky();
+    if (ownerPubky) {
+      const peerPubky = state.pubky;
+      void StorageService.getContact(peerPubky, ownerPubky)
+        .then(existing =>
+          StorageService.upsertContact({
+            pubky: peerPubky,
+            ownerPubky,
+            trustScore: existing?.trustScore ?? 0.1,
+            isFollowing: existing?.isFollowing ?? false,
+            isFollower: existing?.isFollower ?? false,
+            isMutual: existing?.isMutual ?? false,
+            addedManually: existing?.addedManually ?? false,
+            firstSeenAt: existing?.firstSeenAt ?? Date.now(),
+            ...(existing?.displayName !== undefined ? { displayName: existing.displayName } : {}),
+            ...(existing?.avatarHash !== undefined ? { avatarHash: existing.avatarHash } : {}),
+            ...(existing?.homeserver !== undefined ? { homeserver: existing.homeserver } : {}),
+            ...(existing?.lastInteractionAt !== undefined
+              ? { lastInteractionAt: existing.lastInteractionAt }
+              : {}),
+          }),
+        )
+        .catch(() => {});
+    }
   }
 
   if (state.handshake === 'idle' && localNoisePkHex) {

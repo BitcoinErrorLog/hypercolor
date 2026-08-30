@@ -25,6 +25,8 @@ import type { UserProfile, PubkyKey } from '../types';
 
 export const DEFAULT_HOMESERVER = 'https://demo.pubky.app';
 
+export type HomeserverListResult = { ok: true; urls: string[] } | { ok: false; message: string };
+
 const APP_PATH = '/pub/hypercolor.app/v1';
 const APP_ID = 'hypercolor';
 
@@ -243,11 +245,14 @@ export const PubkyService = {
     unwrap(await rnDeleteFile(url, appSk));
   },
 
-  async list(urlPrefix: string): Promise<string[]> {
+  async list(urlPrefix: string): Promise<HomeserverListResult> {
     try {
-      return unwrap(await rnList(urlPrefix));
-    } catch {
-      return [];
+      return { ok: true, urls: unwrap(await rnList(urlPrefix)) };
+    } catch (err) {
+      return {
+        ok: false,
+        message: err instanceof Error ? err.message : String(err),
+      };
     }
   },
 

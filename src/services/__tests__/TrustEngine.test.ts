@@ -9,6 +9,7 @@ import { runMigrations } from '../../db/migrations';
 import { openMemoryDb } from '../../db/__tests__/betterSqliteAdapter';
 import { StorageService } from '../StorageService';
 import { TrustEngine } from '../TrustEngine';
+import { classifyInboundPeer, wotInputFromContact } from '../link/wotGate';
 
 const OWNER = 'operrr8wsbpr3ue9d4qj41ge1kcc6r7fdiy6o3ugjrrhi4y77rdo';
 const PEER = 'pxnu33x7jtpx9ar1ytsi4yxbp6a5o36gwhffs8zoxmbuptici1jy';
@@ -61,5 +62,40 @@ describe('TrustEngine social-graph scoring', () => {
     await seed({ isFollower: true });
     const explanation = await TrustEngine.explain(PEER, OWNER);
     expect(explanation.reasons.find(r => r.code === 'follower')?.contribution).toBe(0.05);
+  });
+
+  it('never reaches auto-accept for a follower-only zero-interaction contact after many explain() calls', async () => {
+    await seed({ isFollower: true });
+    let lastScore = 0;
+    for (let i = 0; i < 20; i += 1) {
+      const explanation = await TrustEngine.explain(PEER, OWNER);
+      lastScore = explanation.score;
+    }
+    const contact = await StorageService.getContact(PEER, OWNER);
+    expect(contact).not.toBeNull();
+    expect(contact?.lastInteractionAt).toBeUndefined();
+    expect(lastScore).toBeLessThan(0.5);
+    expect(classifyInboundPeer(wotInputFromContact(contact, false))).toBe('request');
+  });
+
+  it('scores interaction from routed messages and recency from lastInteractionAt only', async () => {
+    await seed({ isFollower: true });
+    await StorageService.saveLinkMessage({
+      ownerPubky: OWNER,
+      eventId: '00000000-0000-4000-8000-0000000000aa',
+      conversationId: `dm:${PEER}`,
+      peerPubky: PEER,
+      senderPubky: PEER,
+      direction: 'received',
+      kind: 'chat.message.v0',
+      rawJson: '{}',
+      body: 'hi',
+      sentAt: 1_700_000_000_000,
+      receivedAt: 1_700_000_000_000,
+      deliveryState: 'delivered',
+    });
+    const explanation = await TrustEngine.explain(PEER, OWNER);
+    expect(explanation.reasons.find(r => r.code === 'interactions')?.contribution).toBe(0.01);
+    expect(explanation.reasons.find(r => r.code === 'recency')?.contribution).toBeGreaterThan(0);
   });
 });

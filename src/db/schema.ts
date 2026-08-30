@@ -14,6 +14,129 @@
  */
 
 /**
+ * Schema v6 — per-account contacts (composite PK) + v5 owner backfill.
+ *
+ * v5 added `owner_pubky` with DEFAULT '' and kept `pubky` as the sole PK.
+ * That let two signed-in accounts clobber one row (ON CONFLICT(pubky)
+ * re-homes owner_pubky) and let `clearAccountData(B)` delete A's contacts.
+ * Queries that filtered `owner_pubky = ? OR owner_pubky = ''` also made
+ * leftover empty-owner rows readable by every account, including mesh-
+ * discovered strangers carrying a stale trust score.
+ *
+ * v6 rebuilds `contacts` with PRIMARY KEY (owner_pubky, pubky).
+ *
+ * Empty-owner backfill:
+ *   - If exactly one non-empty `link_receivers.owner_pubky` exists, re-home
+ *     `owner_pubky = ''` rows to that account (this device has a single
+ *     known messaging identity).
+ *   - If zero or several owners exist, DELETE the empty-owner rows rather
+ *     than leave them shared. Ambiguous orphans are not guessable.
+ *
+ * Mesh-created rows: retained when they already have a real owner; empty-
+ * owner mesh leftovers follow the same backfill/delete rule. MeshService
+ * must not write `owner_pubky = ''` after this migration.
+ *
+ * threads FK: v1 declared `threads.participant_pubky REFERENCES contacts(pubky)`.
+ * That FK is invalid against a composite PK (and was already invalid as a
+ * FK to a column that is no longer unique once two accounts can share a
+ * peer). The minimal correct fix is to drop the FK and enforce contact
+ * existence in application code. DMs live in `link_messages` (owner-scoped);
+ * `threads` is a v1 leftover and is not given its own owner_pubky here.
+ */
+export const SCHEMA_V6_STATEMENTS: readonly string[] = [
+  // Re-home empty-owner contacts only when this device has exactly one account.
+  `UPDATE contacts
+      SET owner_pubky = (
+        SELECT owner_pubky FROM link_receivers
+         WHERE owner_pubky != ''
+         LIMIT 1
+      )
+    WHERE owner_pubky = ''
+      AND (SELECT COUNT(*) FROM link_receivers WHERE owner_pubky != '') = 1`,
+
+  // Shared leftovers are worse than data loss: drop unscoped rows.
+  `DELETE FROM contacts WHERE owner_pubky = ''`,
+
+  // Fold relationship flags onto the newest duplicate before the PK rebuild.
+  `UPDATE contacts
+      SET is_following = (
+            SELECT MAX(c2.is_following) FROM contacts c2
+             WHERE c2.owner_pubky = contacts.owner_pubky AND c2.pubky = contacts.pubky
+          ),
+          is_follower = (
+            SELECT MAX(c2.is_follower) FROM contacts c2
+             WHERE c2.owner_pubky = contacts.owner_pubky AND c2.pubky = contacts.pubky
+          ),
+          is_mutual = (
+            SELECT MAX(c2.is_mutual) FROM contacts c2
+             WHERE c2.owner_pubky = contacts.owner_pubky AND c2.pubky = contacts.pubky
+          ),
+          added_manually = (
+            SELECT MAX(c2.added_manually) FROM contacts c2
+             WHERE c2.owner_pubky = contacts.owner_pubky AND c2.pubky = contacts.pubky
+          )
+    WHERE rowid IN (
+      SELECT MAX(rowid) FROM contacts GROUP BY owner_pubky, pubky
+    )`,
+  `DELETE FROM contacts
+    WHERE rowid NOT IN (
+      SELECT MAX(rowid) FROM contacts GROUP BY owner_pubky, pubky
+    )`,
+
+  // Drop the v1 threads→contacts(pubky) FK before rebuilding contacts.
+  `CREATE TABLE IF NOT EXISTS threads_v6 (
+    id                  TEXT    NOT NULL PRIMARY KEY,
+    participant_pubky   TEXT    NOT NULL,
+    last_message        TEXT,
+    last_message_at     INTEGER,
+    unread_count        INTEGER NOT NULL DEFAULT 0,
+    noise_context_id    TEXT,
+    created_at          INTEGER NOT NULL,
+    updated_at          INTEGER NOT NULL
+  )`,
+  `INSERT OR IGNORE INTO threads_v6
+     (id, participant_pubky, last_message, last_message_at,
+      unread_count, noise_context_id, created_at, updated_at)
+   SELECT id, participant_pubky, last_message, last_message_at,
+          unread_count, noise_context_id, created_at, updated_at
+     FROM threads`,
+  `DROP TABLE IF EXISTS threads`,
+  `ALTER TABLE threads_v6 RENAME TO threads`,
+  `CREATE INDEX IF NOT EXISTS idx_threads_last_message_at
+    ON threads(last_message_at DESC)`,
+
+  `CREATE TABLE IF NOT EXISTS contacts_v6 (
+    owner_pubky         TEXT    NOT NULL,
+    pubky               TEXT    NOT NULL,
+    display_name        TEXT,
+    avatar_hash         TEXT,
+    homeserver          TEXT,
+    trust_score         REAL    NOT NULL DEFAULT 0.0,
+    is_following        INTEGER NOT NULL DEFAULT 0,
+    is_follower         INTEGER NOT NULL DEFAULT 0,
+    is_mutual           INTEGER NOT NULL DEFAULT 0,
+    added_manually      INTEGER NOT NULL DEFAULT 0,
+    first_seen_at       INTEGER NOT NULL,
+    last_interaction_at INTEGER,
+    created_at          INTEGER NOT NULL,
+    updated_at          INTEGER NOT NULL,
+    PRIMARY KEY (owner_pubky, pubky)
+  )`,
+  `INSERT OR IGNORE INTO contacts_v6
+     (owner_pubky, pubky, display_name, avatar_hash, homeserver, trust_score,
+      is_following, is_follower, is_mutual, added_manually,
+      first_seen_at, last_interaction_at, created_at, updated_at)
+   SELECT owner_pubky, pubky, display_name, avatar_hash, homeserver, trust_score,
+          is_following, is_follower, is_mutual, added_manually,
+          first_seen_at, last_interaction_at, created_at, updated_at
+     FROM contacts
+    WHERE owner_pubky != ''`,
+  `DROP TABLE IF EXISTS contacts`,
+  `ALTER TABLE contacts_v6 RENAME TO contacts`,
+  `CREATE INDEX IF NOT EXISTS idx_contacts_owner ON contacts(owner_pubky)`,
+];
+
+/**
  * Schema v5 — contacts relationship flags + owner scope, and message requests.
  *
  * v4 is committed history and is not rewritten. Contacts keep `pubky` as the
@@ -26,6 +149,8 @@
  * mutual/following and who are below the trust threshold sit here as
  * pending until the user accepts (promote to a normal conversation) or
  * declines (wipe the link + clear the outbox).
+ *
+ * Superseded by v6 for the contacts primary key and the threads FK.
  */
 export const SCHEMA_V5_STATEMENTS: readonly string[] = [
   `ALTER TABLE contacts ADD COLUMN owner_pubky TEXT NOT NULL DEFAULT ''`,

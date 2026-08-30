@@ -91,6 +91,8 @@ jest.mock('../../StorageService', () => ({
     countPendingMessageRequests: jest.fn(),
     deleteLinkStreamItemsForPeer: jest.fn(),
     deleteLinkMessagesForPeer: jest.fn(),
+    countLinkMessagesForPeer: jest.fn(),
+    setContactRelationshipFlags: jest.fn(),
   },
 }));
 
@@ -226,6 +228,7 @@ describe('LinkService', () => {
     mockedStorage.getContact.mockResolvedValue(null);
     mockedStorage.getAllContacts.mockResolvedValue([]);
     mockedStorage.getMessageRequest.mockResolvedValue(null);
+    mockedStorage.countLinkMessagesForPeer.mockResolvedValue(0);
     mockedStorage.upsertMessageRequest.mockResolvedValue(undefined);
     mockedStorage.deleteLinkStreamItemsForPeer.mockResolvedValue(undefined);
     mockedStorage.deleteLinkMessagesForPeer.mockResolvedValue(undefined);
@@ -858,6 +861,42 @@ describe('LinkService', () => {
       await expect(LinkService.sendDm(PEER, 'hello')).rejects.toThrow("'not-enrolled'");
 
       expect(mockedStorage.persistLinkSendIntent).not.toHaveBeenCalled();
+    });
+
+    it('does not accept a pending request when sendDm cannot establish a link', async () => {
+      mockedStorage.getMessageRequest.mockResolvedValue({
+        ownerPubky: OWNER,
+        peerPubky: PEER,
+        createdAt: NOW,
+        updatedAt: NOW,
+        status: 'pending',
+      });
+      mockedNative.getReceiverMarker.mockResolvedValue(null);
+
+      await expect(LinkService.sendDm(PEER, 'hello')).rejects.toThrow("'not-enrolled'");
+
+      expect(mockedStorage.upsertMessageRequest).not.toHaveBeenCalled();
+    });
+
+    it('accepts a pending request only after ensureLinkLocked returns a sendable status', async () => {
+      givenEstablishedLink();
+      mockedNative.sendPrivateMessageJson.mockResolvedValue({ snapshot: 'est-2' });
+      mockedStorage.getMessageRequest.mockResolvedValue({
+        ownerPubky: OWNER,
+        peerPubky: PEER,
+        createdAt: NOW,
+        updatedAt: NOW,
+        status: 'pending',
+      });
+
+      await LinkService.sendDm(PEER, 'hello');
+
+      expect(mockedStorage.upsertMessageRequest).toHaveBeenCalledWith(
+        expect.objectContaining({ status: 'accepted' }),
+      );
+      const restoreOrder = mockedNative.restoreLink.mock.invocationCallOrder[0]!;
+      const acceptOrder = mockedStorage.upsertMessageRequest.mock.invocationCallOrder[0]!;
+      expect(restoreOrder).toBeLessThan(acceptOrder);
     });
   });
 

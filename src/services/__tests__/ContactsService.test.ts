@@ -35,6 +35,10 @@ function http404(): NexusResult<never> {
   return { ok: false, kind: 'http', status: 404, message: 'not found' };
 }
 
+function http500(message: string): NexusResult<never> {
+  return { ok: false, kind: 'http', status: 500, message };
+}
+
 function makeNexus(overrides: Partial<NexusClientApi> = {}): NexusClientApi {
   return {
     followers: jest.fn(async () => ok([])),
@@ -51,10 +55,29 @@ function makeStorage(seed: Contact[] = []) {
   return {
     rows,
     upsertContact: jest.fn(async (c: Contact) => {
-      rows.set(c.pubky, c);
+      const prev = rows.get(c.pubky);
+      rows.set(c.pubky, {
+        ...c,
+        isFollowing: (prev?.isFollowing ?? false) || c.isFollowing,
+        isFollower: (prev?.isFollower ?? false) || c.isFollower,
+        isMutual: (prev?.isMutual ?? false) || c.isMutual,
+        addedManually: (prev?.addedManually ?? false) || c.addedManually,
+      });
     }),
     getContact: jest.fn(async (pubky: PubkyKey) => rows.get(pubky) ?? null),
     getAllContacts: jest.fn(async () => [...rows.values()]),
+    setContactRelationshipFlags: jest.fn(
+      async (
+        _owner: PubkyKey,
+        pubky: PubkyKey,
+        flags: { isFollowing: boolean; isFollower: boolean; isMutual: boolean },
+      ) => {
+        const row = rows.get(pubky);
+        if (row) {
+          rows.set(pubky, { ...row, ...flags });
+        }
+      },
+    ),
   };
 }
 
@@ -80,12 +103,15 @@ describe('ContactsService.importFollows', () => {
       pubky === ALICE ? { displayName: 'Alice', avatarHash: 'img://alice' } : null,
     );
     const service = createContactsService({
-      list: async () => [
-        `pubky://${OWNER}/pub/pubky.app/follows/${ALICE}`,
-        `pubky://${OWNER}/pub/pubky.app/follows/${BOB}`,
-        `pubky://${OWNER}/pub/pubky.app/follows/${BOB}`,
-        `pubky://${OWNER}/pub/pubky.app/mutes/${CARA}`,
-      ],
+      list: async () => ({
+        ok: true,
+        urls: [
+          `pubky://${OWNER}/pub/pubky.app/follows/${ALICE}`,
+          `pubky://${OWNER}/pub/pubky.app/follows/${BOB}`,
+          `pubky://${OWNER}/pub/pubky.app/follows/${BOB}`,
+          `pubky://${OWNER}/pub/pubky.app/mutes/${CARA}`,
+        ],
+      }),
       getProfile,
       getHomeserver: async () => 'https://hs',
       nexus: makeNexus(),
@@ -94,8 +120,11 @@ describe('ContactsService.importFollows', () => {
 
     const result = await service.importFollows(OWNER);
 
-    expect(result.imported).toBe(2);
-    expect(result.followees.sort()).toEqual([ALICE, BOB].sort());
+    expect(result).toEqual(expect.objectContaining({ ok: true, imported: 2 }));
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.followees.sort()).toEqual([ALICE, BOB].sort());
+    }
     expect(storage.rows.get(ALICE)).toEqual(
       expect.objectContaining({
         ownerPubky: OWNER,
@@ -117,7 +146,10 @@ describe('ContactsService.importFollows', () => {
   it('tolerates missing profiles (404 → null) without failing the import', async () => {
     const storage = makeStorage();
     const service = createContactsService({
-      list: async () => [`pubky://${OWNER}/pub/pubky.app/follows/${ALICE}`],
+      list: async () => ({
+        ok: true,
+        urls: [`pubky://${OWNER}/pub/pubky.app/follows/${ALICE}`],
+      }),
       getProfile: async () => null,
       getHomeserver: async () => null,
       nexus: makeNexus(),
@@ -125,6 +157,7 @@ describe('ContactsService.importFollows', () => {
     });
 
     await expect(service.importFollows(OWNER)).resolves.toEqual({
+      ok: true,
       imported: 1,
       followees: [ALICE],
     });
@@ -152,7 +185,7 @@ describe('ContactsService.syncRelationships', () => {
       friends: jest.fn(async () => ok([ALICE])),
     });
     const service = createContactsService({
-      list: async () => [],
+      list: async () => ({ ok: true, urls: [] }),
       getProfile: async () => null,
       getHomeserver: async () => null,
       nexus,
@@ -190,7 +223,7 @@ describe('ContactsService.syncRelationships', () => {
       },
     ]);
     const service = createContactsService({
-      list: async () => [],
+      list: async () => ({ ok: true, urls: [] }),
       getProfile: async () => null,
       getHomeserver: async () => null,
       nexus: makeNexus({
@@ -205,5 +238,97 @@ describe('ContactsService.syncRelationships', () => {
     expect(result.nexusReachable).toBe(true);
     expect(storage.rows.get(ALICE)?.isFollowing).toBe(true);
     expect(storage.rows.get(ALICE)?.isFollower).toBe(false);
+  });
+
+  it('skips the write phase when a Nexus page errors mid-pagination', async () => {
+    const storage = makeStorage([
+      {
+        pubky: ALICE,
+        ownerPubky: OWNER,
+        trustScore: 0,
+        isFollowing: true,
+        isFollower: true,
+        isMutual: true,
+        addedManually: false,
+        firstSeenAt: 1,
+      },
+    ]);
+    let followingCalls = 0;
+    const nexus = makeNexus({
+      following: jest.fn(async () => {
+        followingCalls += 1;
+        if (followingCalls === 1) {
+          return ok(Array.from({ length: 200 }, (_, i) => `f${i}`.padEnd(52, 'a')));
+        }
+        return http500('Nexus exploded');
+      }),
+      followers: jest.fn(async () => ok([ALICE])),
+      friends: jest.fn(async () => ok([ALICE])),
+    });
+    const service = createContactsService({
+      list: async () => ({ ok: true, urls: [] }),
+      getProfile: async () => null,
+      getHomeserver: async () => null,
+      nexus,
+      storage,
+    });
+
+    const result = await service.syncRelationships(OWNER);
+    expect(result.nexusReachable).toBe(false);
+    expect(result.nexusError).toContain('exploded');
+    expect(storage.rows.get(ALICE)).toEqual(
+      expect.objectContaining({ isFollowing: true, isFollower: true, isMutual: true }),
+    );
+    expect(storage.setContactRelationshipFlags).not.toHaveBeenCalled();
+  });
+
+  it('revokes isFollowing when the Nexus following endpoint is authoritative', async () => {
+    const storage = makeStorage([
+      {
+        pubky: ALICE,
+        ownerPubky: OWNER,
+        trustScore: 0,
+        isFollowing: true,
+        isFollower: false,
+        isMutual: false,
+        addedManually: false,
+        firstSeenAt: 1,
+      },
+    ]);
+    const service = createContactsService({
+      list: async () => ({ ok: true, urls: [] }),
+      getProfile: async () => null,
+      getHomeserver: async () => null,
+      nexus: makeNexus({
+        following: jest.fn(async () => ok([])),
+        followers: jest.fn(async () => ok([])),
+        friends: jest.fn(async () => ok([])),
+      }),
+      storage,
+    });
+
+    await service.syncRelationships(OWNER);
+    expect(storage.rows.get(ALICE)?.isFollowing).toBe(false);
+  });
+});
+
+describe('ContactsService.importFollows failures', () => {
+  it('surfaces a homeserver list failure instead of treating it as zero follows', async () => {
+    const storage = makeStorage();
+    const service = createContactsService({
+      list: async () => ({ ok: false, message: 'homeserver timeout' }),
+      getProfile: async () => null,
+      getHomeserver: async () => null,
+      nexus: makeNexus(),
+      storage,
+    });
+
+    await expect(service.importFollows(OWNER)).resolves.toEqual({
+      ok: false,
+      imported: 0,
+      followees: [],
+      message: 'homeserver timeout',
+    });
+    expect(storage.upsertContact).not.toHaveBeenCalled();
   });
 });

@@ -1,8 +1,8 @@
-import { DEFAULT_NEXUS_BASE_URL, PROFILE_HYDRATE_CONCURRENCY } from '../flags/config';
+import { PROFILE_HYDRATE_CONCURRENCY } from '../flags/config';
 import type { Contact, PubkyKey } from '../types';
 import { isValidPubky, parsePubky } from '../utils/pubkyId';
 import { createNexusClient, type NexusClientApi, type NexusResult } from './NexusClient';
-import { PubkyService } from './PubkyService';
+import { PubkyService, type HomeserverListResult } from './PubkyService';
 import { StorageService } from './StorageService';
 
 /**
@@ -32,7 +32,7 @@ export function parseFolloweeFromUrl(url: string): PubkyKey | null {
 }
 
 export type ContactsServiceDeps = {
-  list: (urlPrefix: string) => Promise<string[]>;
+  list: (urlPrefix: string) => Promise<HomeserverListResult>;
   getProfile: (pubky: PubkyKey) => Promise<{
     displayName: string;
     avatarHash?: string;
@@ -43,13 +43,13 @@ export type ContactsServiceDeps = {
     upsertContact: typeof StorageService.upsertContact;
     getContact: typeof StorageService.getContact;
     getAllContacts: typeof StorageService.getAllContacts;
+    setContactRelationshipFlags: typeof StorageService.setContactRelationshipFlags;
   };
 };
 
-export type ImportFollowsResult = {
-  imported: number;
-  followees: PubkyKey[];
-};
+export type ImportFollowsResult =
+  | { ok: true; imported: number; followees: PubkyKey[] }
+  | { ok: false; imported: 0; followees: []; message: string };
 
 export type SyncRelationshipsResult = {
   following: number;
@@ -68,7 +68,11 @@ const DEFAULT_PAGE = 200;
 export function createContactsService(deps: ContactsServiceDeps) {
   return {
     async importFollows(ownerPubky: PubkyKey): Promise<ImportFollowsResult> {
-      const urls = await deps.list(followsDirUrl(ownerPubky));
+      const listed = await deps.list(followsDirUrl(ownerPubky));
+      if (!listed.ok) {
+        return { ok: false, imported: 0, followees: [], message: listed.message };
+      }
+      const urls = listed.urls;
       const followees: PubkyKey[] = [];
       const seen = new Set<string>();
       for (const url of urls) {
@@ -88,7 +92,7 @@ export function createContactsService(deps: ContactsServiceDeps) {
         await deps.storage.upsertContact(contact);
       });
 
-      return { imported: followees.length, followees };
+      return { ok: true, imported: followees.length, followees };
     },
 
     async syncRelationships(ownerPubky: PubkyKey): Promise<SyncRelationshipsResult> {
@@ -100,19 +104,33 @@ export function createContactsService(deps: ContactsServiceDeps) {
 
       const nexusError =
         followingResult.error ?? followersResult.error ?? friendsResult.error ?? null;
+      if (nexusError !== null) {
+        return {
+          following: followingResult.ids.length,
+          followers: followersResult.ids.length,
+          friends: friendsResult.ids.length,
+          nexusReachable: false,
+          nexusError,
+        };
+      }
+
       const following = new Set(followingResult.ids);
       const followers = new Set(followersResult.ids);
       const friends = new Set(friendsResult.ids);
+      const existingRows = await deps.storage.getAllContacts(ownerPubky);
       const everyone = new Set<PubkyKey>([
         ...followingResult.ids,
         ...followersResult.ids,
         ...friendsResult.ids,
+        ...existingRows.map(row => row.pubky),
       ]);
+      const followingAuthoritative = followingResult.authoritative;
 
       await mapPool([...everyone], PROFILE_HYDRATE_CONCURRENCY, async peer => {
         const existing = await deps.storage.getContact(peer, ownerPubky);
-        const isFollowing =
-          following.has(peer) || friends.has(peer) || (existing?.isFollowing ?? false);
+        const isFollowing = followingAuthoritative
+          ? following.has(peer) || friends.has(peer)
+          : following.has(peer) || friends.has(peer) || (existing?.isFollowing ?? false);
         const isFollower = followers.has(peer) || friends.has(peer);
         const isMutual = friends.has(peer) || (isFollowing && isFollower);
         const contact = mergeContact(ownerPubky, peer, existing, {
@@ -121,6 +139,11 @@ export function createContactsService(deps: ContactsServiceDeps) {
           isMutual,
         });
         await deps.storage.upsertContact(contact);
+        await deps.storage.setContactRelationshipFlags(ownerPubky, peer, {
+          isFollowing,
+          isFollower,
+          isMutual,
+        });
       });
 
       return {
@@ -210,19 +233,19 @@ function mergeContact(
 
 async function collectAllPages(
   fetchPage: (query: { skip: number; limit: number }) => Promise<NexusResult<PubkyKey[]>>,
-): Promise<{ ids: PubkyKey[]; error: string | null }> {
+): Promise<{ ids: PubkyKey[]; error: string | null; authoritative: boolean }> {
   const ids: PubkyKey[] = [];
   let skip = 0;
   for (;;) {
     const page = await fetchPage({ skip, limit: DEFAULT_PAGE });
     if (!page.ok) {
       if (page.kind === 'http' && page.status === 404) {
-        return { ids, error: null };
+        return { ids, error: null, authoritative: false };
       }
-      return { ids, error: page.message };
+      return { ids, error: page.message, authoritative: false };
     }
     ids.push(...page.value);
-    if (page.value.length < DEFAULT_PAGE) return { ids, error: null };
+    if (page.value.length < DEFAULT_PAGE) return { ids, error: null, authoritative: true };
     skip += DEFAULT_PAGE;
   }
 }
@@ -257,10 +280,12 @@ export const ContactsService = createContactsService({
     };
   },
   getHomeserver: pubky => PubkyService.getHomeserver(pubky),
-  nexus: createNexusClient({ baseUrl: DEFAULT_NEXUS_BASE_URL }),
+  nexus: createNexusClient(),
   storage: {
     upsertContact: c => StorageService.upsertContact(c),
     getContact: (pubky, owner) => StorageService.getContact(pubky, owner),
     getAllContacts: owner => StorageService.getAllContacts(owner),
+    setContactRelationshipFlags: (owner, pubky, flags) =>
+      StorageService.setContactRelationshipFlags(owner, pubky, flags),
   },
 });

@@ -69,7 +69,7 @@ export type ContactSource = 'follow' | 'manual' | 'mesh';
 
 export interface Contact {
   pubky: PubkyKey;
-  /** Account that owns this row. Empty string is a pre-v5 / mesh leftover. */
+  /** Account that owns this row. v6 forbids empty-owner leftovers. */
   ownerPubky: PubkyKey;
   displayName?: string;
   avatarHash?: string;

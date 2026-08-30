@@ -77,6 +77,8 @@ jest.mock('../../StorageService', () => ({
     countPendingMessageRequests: jest.fn(),
     deleteLinkStreamItemsForPeer: jest.fn(),
     deleteLinkMessagesForPeer: jest.fn(),
+    countLinkMessagesForPeer: jest.fn(),
+    setContactRelationshipFlags: jest.fn(),
   },
 }));
 
@@ -174,6 +176,7 @@ describe('LinkService message requests', () => {
     mockedStorage.getContact.mockResolvedValue(null);
     mockedStorage.getAllContacts.mockResolvedValue([]);
     mockedStorage.getMessageRequest.mockResolvedValue(null);
+    mockedStorage.countLinkMessagesForPeer.mockResolvedValue(0);
     mockedRetryQueue.getDue.mockResolvedValue([]);
 
     await LinkService.clearSession();
@@ -314,5 +317,48 @@ describe('LinkService message requests', () => {
 
     const candidates = await LinkService.collectInboxCandidates();
     expect(candidates.sort()).toEqual([PEER, other].sort());
+  });
+
+  it('declined stays declined across re-sync with re-initiated inbound', async () => {
+    mockedStorage.getMessageRequest.mockResolvedValue(pendingRequest('declined'));
+    mockedStorage.getLink.mockResolvedValue(null);
+    mockedNative.probeInboundLink.mockResolvedValue({
+      result: 'established',
+      linkId: 'inbound-reprobe',
+      snapshot: 'est-again',
+    });
+
+    const received = await LinkService.syncInbox([PEER]);
+
+    expect(received).toEqual([]);
+    expect(mockedStorage.upsertMessageRequest).not.toHaveBeenCalled();
+    expect(mockedStorage.saveLinkStreamItems).not.toHaveBeenCalled();
+    expect(mockedStorage.saveLinkMessage).not.toHaveBeenCalled();
+    expect(mockedNative.receivePrivateMessages).not.toHaveBeenCalled();
+    expect(mockedNative.probeInboundLink).not.toHaveBeenCalled();
+    expect(mockedNative.clearLinkOutbox).toHaveBeenCalled();
+  });
+
+  it('classifies a wiped established conversation as auto-accept, not a new request', async () => {
+    mockedStorage.getLink.mockResolvedValue(null);
+    mockedStorage.getMessageRequest.mockResolvedValue(null);
+    mockedStorage.getContact.mockResolvedValue({
+      pubky: PEER,
+      ownerPubky: OWNER,
+      trustScore: 0,
+      isFollowing: false,
+      isFollower: false,
+      isMutual: false,
+      addedManually: false,
+      firstSeenAt: NOW,
+    });
+    mockedStorage.countLinkMessagesForPeer.mockResolvedValue(3);
+    mockedNative.restoreLink.mockResolvedValue({ linkId: 'recovered-1' });
+
+    const received = await LinkService.syncInbox([PEER]);
+
+    expect(mockedStorage.upsertMessageRequest).not.toHaveBeenCalled();
+    expect(mockedNative.receivePrivateMessages).toHaveBeenCalled();
+    expect(received).toEqual([]);
   });
 });

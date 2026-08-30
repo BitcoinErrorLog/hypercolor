@@ -53,9 +53,16 @@ export default function ContactsScreen() {
     setRefreshing(true);
     setSyncing(true);
     try {
-      await ContactsService.importFollows(ownerPubky);
+      const notes: string[] = [];
+      const imported = await ContactsService.importFollows(ownerPubky);
+      if (!imported.ok) {
+        notes.push(`Import failed: ${imported.message}`);
+      }
       const rel = await ContactsService.syncRelationships(ownerPubky);
-      setNexusNote(rel.nexusReachable ? null : rel.nexusError);
+      if (!rel.nexusReachable && rel.nexusError) {
+        notes.push(rel.nexusError);
+      }
+      setNexusNote(notes.length > 0 ? notes.join('\n') : null);
       await loadLocal();
     } finally {
       setSyncing(false);

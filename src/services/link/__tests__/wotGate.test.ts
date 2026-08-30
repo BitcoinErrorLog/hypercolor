@@ -3,10 +3,15 @@ import { classifyInboundPeer, wotInputFromContact } from '../wotGate';
 const THRESHOLD = 0.5;
 
 describe('classifyInboundPeer (WoT gate)', () => {
-  it('auto-accepts mutual follows regardless of trust', () => {
+  it('auto-accepts mutual follows regardless of conversation history', () => {
     expect(
       classifyInboundPeer(
-        { isMutual: true, isFollowing: true, addedManually: false, trustScore: 0 },
+        {
+          isMutual: true,
+          isFollowing: true,
+          addedManually: false,
+          hasEstablishedConversation: false,
+        },
         THRESHOLD,
       ),
     ).toBe('auto-accept');
@@ -15,7 +20,12 @@ describe('classifyInboundPeer (WoT gate)', () => {
   it('auto-accepts people I already follow', () => {
     expect(
       classifyInboundPeer(
-        { isMutual: false, isFollowing: true, addedManually: false, trustScore: 0 },
+        {
+          isMutual: false,
+          isFollowing: true,
+          addedManually: false,
+          hasEstablishedConversation: false,
+        },
         THRESHOLD,
       ),
     ).toBe('auto-accept');
@@ -24,34 +34,53 @@ describe('classifyInboundPeer (WoT gate)', () => {
   it('auto-accepts a manually added contact', () => {
     expect(
       classifyInboundPeer(
-        { isMutual: false, isFollowing: false, addedManually: true, trustScore: 0 },
+        {
+          isMutual: false,
+          isFollowing: false,
+          addedManually: true,
+          hasEstablishedConversation: false,
+        },
         THRESHOLD,
       ),
     ).toBe('auto-accept');
   });
 
-  it('auto-accepts when trust meets the configured threshold', () => {
+  it('auto-accepts when a prior routed conversation exists', () => {
     expect(
       classifyInboundPeer(
-        { isMutual: false, isFollowing: false, addedManually: false, trustScore: 0.5 },
-        THRESHOLD,
-      ),
-    ).toBe('auto-accept');
-    expect(
-      classifyInboundPeer(
-        { isMutual: false, isFollowing: false, addedManually: false, trustScore: 0.9 },
+        {
+          isMutual: false,
+          isFollowing: false,
+          addedManually: false,
+          hasEstablishedConversation: true,
+        },
         THRESHOLD,
       ),
     ).toBe('auto-accept');
   });
 
-  it('holds a stranger / follower-only below threshold as a request', () => {
+  it('never auto-accepts a follower-only stranger on composite trust', () => {
     expect(
       classifyInboundPeer(
-        { isMutual: false, isFollowing: false, addedManually: false, trustScore: 0.49 },
+        {
+          isMutual: false,
+          isFollowing: false,
+          addedManually: false,
+          hasEstablishedConversation: false,
+        },
         THRESHOLD,
       ),
     ).toBe('request');
     expect(classifyInboundPeer(wotInputFromContact(null), THRESHOLD)).toBe('request');
+    expect(
+      classifyInboundPeer(
+        wotInputFromContact({
+          isMutual: false,
+          isFollowing: false,
+          addedManually: false,
+        }),
+        0,
+      ),
+    ).toBe('request');
   });
 });

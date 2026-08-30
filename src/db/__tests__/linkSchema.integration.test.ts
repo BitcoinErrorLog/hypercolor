@@ -12,7 +12,13 @@ jest.mock('@op-engineering/op-sqlite', () => ({
 
 import { setDbForTests } from '../index';
 import { runMigrations } from '../migrations';
-import { SCHEMA_V1_STATEMENTS, SCHEMA_V2_STATEMENTS, SCHEMA_V3_STATEMENTS } from '../schema';
+import {
+  SCHEMA_V1_STATEMENTS,
+  SCHEMA_V2_STATEMENTS,
+  SCHEMA_V3_STATEMENTS,
+  SCHEMA_V4_STATEMENTS,
+  SCHEMA_V5_STATEMENTS,
+} from '../schema';
 import { StorageService } from '../../services/StorageService';
 import { CHAT_MESSAGE_KIND } from '../../types/link';
 import { openMemoryDb } from './betterSqliteAdapter';
@@ -78,7 +84,7 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
 
     await runMigrations(db);
 
-    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(5);
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(6);
     expect(db.executeSync('SELECT * FROM link_receivers').rows).toEqual([]);
     expect(
       db.executeSync(
@@ -313,7 +319,7 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
     setDbForTests(db);
     await runMigrations(db);
 
-    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(5);
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(6);
     const cols = db.executeSync('PRAGMA table_info(contacts)').rows ?? [];
     const names = cols.map(row => row.name);
     expect(names).toEqual(
@@ -354,5 +360,221 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
       }),
     );
     expect((await StorageService.getAllContacts(OWNER)).map(c => c.pubky)).toEqual([PEER]);
+
+    const pkCols = cols.filter(row => Number(row.pk) > 0).map(row => row.name);
+    expect(pkCols).toEqual(['owner_pubky', 'pubky']);
+  });
+
+  it('keeps independent contact rows per account and does not delete A on B sign-out', async () => {
+    const db = openMemoryDb();
+    setDbForTests(db);
+    await runMigrations(db);
+
+    await StorageService.upsertContact({
+      pubky: PEER,
+      ownerPubky: OWNER,
+      trustScore: 0.2,
+      isFollowing: true,
+      isFollower: false,
+      isMutual: false,
+      addedManually: true,
+      firstSeenAt: 10,
+    });
+    await StorageService.upsertContact({
+      pubky: PEER,
+      ownerPubky: OTHER,
+      trustScore: 0.9,
+      isFollowing: false,
+      isFollower: true,
+      isMutual: false,
+      addedManually: false,
+      firstSeenAt: 11,
+    });
+
+    const forA = await StorageService.getContact(PEER, OWNER);
+    const forB = await StorageService.getContact(PEER, OTHER);
+    expect(forA).toEqual(
+      expect.objectContaining({
+        ownerPubky: OWNER,
+        isFollowing: true,
+        addedManually: true,
+        trustScore: 0.2,
+      }),
+    );
+    expect(forB).toEqual(
+      expect.objectContaining({
+        ownerPubky: OTHER,
+        isFollowing: false,
+        isFollower: true,
+        trustScore: 0.9,
+      }),
+    );
+
+    await StorageService.updateTrustScore(PEER, 0.1, OTHER);
+    expect((await StorageService.getContact(PEER, OWNER))?.trustScore).toBe(0.2);
+    expect((await StorageService.getContact(PEER, OTHER))?.trustScore).toBeCloseTo(1.0);
+
+    await StorageService.clearAccountData(OTHER);
+    expect(await StorageService.getContact(PEER, OWNER)).toEqual(
+      expect.objectContaining({ ownerPubky: OWNER, isFollowing: true }),
+    );
+    expect(await StorageService.getContact(PEER, OTHER)).toBeNull();
+  });
+
+  it('does not demote relationship flags on a plain discovery upsert', async () => {
+    const db = openMemoryDb();
+    setDbForTests(db);
+    await runMigrations(db);
+
+    await StorageService.upsertContact({
+      pubky: PEER,
+      ownerPubky: OWNER,
+      trustScore: 0.4,
+      isFollowing: true,
+      isFollower: true,
+      isMutual: true,
+      addedManually: true,
+      firstSeenAt: 10,
+    });
+    await StorageService.upsertContact({
+      pubky: PEER,
+      ownerPubky: OWNER,
+      trustScore: 0.1,
+      isFollowing: false,
+      isFollower: false,
+      isMutual: false,
+      addedManually: false,
+      firstSeenAt: 99,
+    });
+
+    expect(await StorageService.getContact(PEER, OWNER)).toEqual(
+      expect.objectContaining({
+        isFollowing: true,
+        isFollower: true,
+        isMutual: true,
+        addedManually: true,
+        trustScore: 0.1,
+      }),
+    );
+  });
+
+  it('routes held stream items in insertion order when received_at ties', async () => {
+    const db = openMemoryDb();
+    setDbForTests(db);
+    await runMigrations(db);
+
+    const arrivedAt = 50;
+    await StorageService.saveLinkStreamItems([
+      {
+        id: 'later-id',
+        ownerPubky: OWNER,
+        peerPubky: PEER,
+        kind: CHAT_MESSAGE_KIND,
+        rawJson: '{"n":2}',
+        receivedAt: arrivedAt,
+      },
+      {
+        id: 'earlier-id',
+        ownerPubky: OWNER,
+        peerPubky: PEER,
+        kind: CHAT_MESSAGE_KIND,
+        rawJson: '{"n":1}',
+        receivedAt: arrivedAt,
+      },
+    ]);
+    // Insert one first, then the other, so rowid order is the arrival order.
+    const items = await StorageService.getUnprocessedLinkStreamItems(OWNER, PEER);
+    expect(items.map(item => item.id)).toEqual(['later-id', 'earlier-id']);
+  });
+
+  it('backfills empty-owner contacts to the sole receiver and drops ambiguous orphans', async () => {
+    const sole = openMemoryDb();
+    applyThroughV5(sole);
+    sole.executeSync(
+      `INSERT INTO link_receivers
+        (owner_pubky, receiver_alias, receiver_path, marker_published, created_at, updated_at)
+       VALUES (?, 'alias', 'hypercolor/wallet', 1, 1, 1)`,
+      [OWNER],
+    );
+    sole.executeSync(
+      `INSERT INTO contacts
+        (pubky, owner_pubky, display_name, trust_score, is_following, is_follower,
+         is_mutual, added_manually, first_seen_at, created_at, updated_at)
+       VALUES (?, '', 'Orphan', 1.0, 0, 1, 0, 0, 1, 1, 1)`,
+      [PEER],
+    );
+    await runMigrations(sole);
+    expect(sole.executeSync('SELECT owner_pubky, trust_score FROM contacts').rows?.[0]).toEqual(
+      expect.objectContaining({ owner_pubky: OWNER, trust_score: 1.0 }),
+    );
+
+    const ambiguous = openMemoryDb();
+    applyThroughV5(ambiguous);
+    ambiguous.executeSync(
+      `INSERT INTO link_receivers
+        (owner_pubky, receiver_alias, receiver_path, marker_published, created_at, updated_at)
+       VALUES (?, 'a', 'hypercolor/wallet', 1, 1, 1)`,
+      [OWNER],
+    );
+    ambiguous.executeSync(
+      `INSERT INTO link_receivers
+        (owner_pubky, receiver_alias, receiver_path, marker_published, created_at, updated_at)
+       VALUES (?, 'b', 'hypercolor/wallet', 1, 1, 1)`,
+      [OTHER],
+    );
+    ambiguous.executeSync(
+      `INSERT INTO contacts
+        (pubky, owner_pubky, display_name, trust_score, is_following, is_follower,
+         is_mutual, added_manually, first_seen_at, created_at, updated_at)
+       VALUES (?, '', 'Shared', 1.0, 0, 1, 0, 0, 1, 1, 1)`,
+      [PEER],
+    );
+    await runMigrations(ambiguous);
+    expect(ambiguous.executeSync('SELECT * FROM contacts').rows).toEqual([]);
+  });
+
+  it('does not let the WoT gate read another account or an empty-owner leftover', async () => {
+    const db = openMemoryDb();
+    setDbForTests(db);
+    await runMigrations(db);
+    await StorageService.upsertContact({
+      pubky: PEER,
+      ownerPubky: OWNER,
+      trustScore: 1,
+      isFollowing: true,
+      isFollower: false,
+      isMutual: false,
+      addedManually: false,
+      firstSeenAt: 1,
+    });
+    expect(await StorageService.getContact(PEER, OTHER)).toBeNull();
+    expect(await StorageService.getContact(PEER, '')).toBeNull();
+    expect((await StorageService.getAllContacts(OTHER)).map(c => c.pubky)).toEqual([]);
+  });
+
+  it('drops the threads→contacts(pubky) FK so a composite contacts PK is valid', async () => {
+    const db = openMemoryDb();
+    setDbForTests(db);
+    await runMigrations(db);
+    db.executeSync(
+      `INSERT INTO threads
+        (id, participant_pubky, unread_count, created_at, updated_at)
+       VALUES ('t1', ?, 0, 1, 1)`,
+      [PEER],
+    );
+    expect(db.executeSync('SELECT id FROM threads').rows?.[0]?.id).toBe('t1');
   });
 });
+
+function applyThroughV5(db: ReturnType<typeof openMemoryDb>): void {
+  for (const statement of [
+    ...SCHEMA_V1_STATEMENTS,
+    ...SCHEMA_V2_STATEMENTS,
+    ...SCHEMA_V3_STATEMENTS,
+    ...SCHEMA_V4_STATEMENTS,
+    ...SCHEMA_V5_STATEMENTS,
+  ]) {
+    db.executeSync(statement);
+  }
+  db.executeSync('PRAGMA user_version = 5');
+}

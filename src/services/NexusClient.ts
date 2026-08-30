@@ -56,15 +56,29 @@ export type NexusClientOptions = {
 
 const DEFAULT_PAGE = 200;
 
+function readConfiguredNexusBaseUrl(): string {
+  try {
+    // Lazy so unit tests that pass an explicit baseUrl never load MMKV.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const flags = require('../flags') as { AppConfig: { getNexusBaseUrl: () => string } };
+    return flags.AppConfig.getNexusBaseUrl();
+  } catch {
+    return DEFAULT_NEXUS_BASE_URL;
+  }
+}
+
 export function createNexusClient(options: NexusClientOptions = {}): NexusClientApi {
   const fetchFn = options.fetchFn ?? fetch;
-  const baseUrl = (options.baseUrl ?? DEFAULT_NEXUS_BASE_URL).replace(/\/+$/, '');
+
+  function currentBaseUrl(): string {
+    return (options.baseUrl ?? readConfiguredNexusBaseUrl()).replace(/\/+$/, '');
+  }
 
   async function getJson<T>(
     path: string,
     parse: (body: unknown) => T | null,
   ): Promise<NexusResult<T>> {
-    const url = `${baseUrl}${path}`;
+    const url = `${currentBaseUrl()}${path}`;
     let response: Response;
     try {
       response = await fetchFn(url);

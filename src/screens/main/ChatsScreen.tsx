@@ -1,10 +1,11 @@
 import React, { useEffect, useCallback, useState } from 'react';
 import { View, Text, FlatList, TouchableOpacity, StyleSheet, SafeAreaView } from 'react-native';
-import { useNavigation } from '@react-navigation/native';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { RootStackParamList, Thread } from '../../types';
 import { useMessageStore } from '../../stores/messageStore';
 import { StorageService } from '../../services/StorageService';
+import { LinkService } from '../../services/link/LinkService';
 import { useAuthStore } from '../../stores/authStore';
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
@@ -22,10 +23,25 @@ export default function ChatsScreen() {
     });
   }, []);
 
-  useEffect(() => {
-    if (!ownerPubky) return;
-    StorageService.countPendingMessageRequests(ownerPubky).then(setPendingRequests);
+  const refreshPendingRequests = useCallback(() => {
+    if (!ownerPubky) {
+      setPendingRequests(0);
+      return;
+    }
+    void StorageService.countPendingMessageRequests(ownerPubky).then(setPendingRequests);
   }, [ownerPubky]);
+
+  useFocusEffect(
+    useCallback(() => {
+      refreshPendingRequests();
+    }, [refreshPendingRequests]),
+  );
+
+  useEffect(() => {
+    return LinkService.subscribeInboxSynced(owner => {
+      if (owner === ownerPubky) refreshPendingRequests();
+    });
+  }, [ownerPubky, refreshPendingRequests]);
 
   const sorted = [...threads].sort((a, b) => (b.lastMessageAt ?? 0) - (a.lastMessageAt ?? 0));
 
