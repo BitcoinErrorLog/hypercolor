@@ -1,5 +1,5 @@
 import { v4 as uuidv4 } from 'uuid';
-import { PaykitLinkNative, isLinkNativeError, type PaykitLinkNativeApi } from './PaykitLinkNative';
+import { type PaykitLinkNativeApi } from './PaykitLinkNative';
 import {
   CHAT_MESSAGE_KIND,
   LINK_RECEIVER_PATH,
@@ -22,184 +22,55 @@ import {
 } from '../../types/payment';
 import { StorageService } from '../StorageService';
 import { applyPaymentInbound } from '../payments/applyPaymentInbound';
+import {
+  cleanupNativeParties,
+  createLiveProofRecorder,
+  emptyParty,
+  generatePartySecrets,
+  requirePartyField,
+  requireText,
+  resolveClock,
+  signupParty,
+  type LiveProofConfig,
+  type LiveProofDeps,
+  type LiveProofReport,
+  type ProofParty,
+} from './liveProofShared';
 
-export type LiveProofConfig = {
-  homeserverPubky: string;
-  signupTokenA: string;
-  signupTokenB: string;
-};
-
-export type LiveProofStep = {
-  step: string;
-  ok: boolean;
-  detail: string;
-  elapsedMs: number;
-};
-
-export type LiveProofReport = {
-  ok: boolean;
-  steps: LiveProofStep[];
-};
-
-export type LiveProofDeps = {
-  native?: PaykitLinkNativeApi;
-  now?: () => number;
-  sleep?: (ms: number) => Promise<void>;
-  randomBytes?: (size: number) => Uint8Array;
-  handshakeTimeoutMs?: number;
-  receiveTimeoutMs?: number;
-  pollIntervalMs?: number;
-};
-
-const DEFAULT_HANDSHAKE_TIMEOUT_MS = 60_000;
-const DEFAULT_RECEIVE_TIMEOUT_MS = 30_000;
-const DEFAULT_POLL_INTERVAL_MS = 500;
-const MIN_REDACT_SECRET_LENGTH = 4;
-
-/**
- * Defense-in-depth redaction for live-proof logs and step details. Strips
- * known signup tokens, generated identity secrets, and the inlined
- * `EXPO_PUBLIC_LIVEPROOF` env blob so neither console output nor the
- * report echoes credentials. Public values (pubkys, Noise keys) are kept.
- */
-export function redactLiveProofForLog(text: string, secrets: readonly string[] = []): string {
-  let out = text;
-  const env = process.env.EXPO_PUBLIC_LIVEPROOF;
-  const extra = typeof env === 'string' && env.length > 0 ? [env] : [];
-  for (const secret of [...secrets, ...extra]) {
-    const trimmed = secret.trim();
-    if (trimmed.length < MIN_REDACT_SECRET_LENGTH) continue;
-    out = out.split(trimmed).join('[redacted]');
-  }
-  return out;
-}
-
-type Party = {
-  label: 'A' | 'B';
-  secretHex: string;
-  sessionAlias: string | null;
-  pubky: string | null;
-  receiverAlias: string | null;
-  noisePublicKey: string | null;
-  handshakeLinkId: string | null;
-  establishedLinkId: string | null;
-};
-
-export function parseLiveProofTokens(
-  tokenA: string,
-  tokenB: string,
-): { signupTokenA: string; signupTokenB: string } | null {
-  const a = tokenA.trim();
-  const b = tokenB.trim();
-  if (a.length > 0 && b.length > 0) return { signupTokenA: a, signupTokenB: b };
-  if (a.includes(',')) {
-    const parts = a
-      .split(',')
-      .map(part => part.trim())
-      .filter(part => part.length > 0);
-    const first = parts[0];
-    const second = parts[1];
-    if (first !== undefined && second !== undefined) {
-      return { signupTokenA: first, signupTokenB: second };
-    }
-  }
-  return null;
-}
-
-/**
- * These bytes become real identity secrets (`signupWithSecret`), so they are
- * key material. Fail closed when no CSPRNG is available — `index.js`
- * polyfills react-native-get-random-values, so this should never trigger in
- * the app runtime. Never fall back to Math.random().
- */
-function defaultRandomBytes(size: number): Uint8Array {
-  if (typeof globalThis.crypto?.getRandomValues !== 'function') {
-    throw new Error(
-      'liveProof: crypto.getRandomValues is unavailable; identity secrets require a CSPRNG',
-    );
-  }
-  const bytes = new Uint8Array(size);
-  globalThis.crypto.getRandomValues(bytes);
-  return bytes;
-}
-
-function toHex(bytes: Uint8Array): string {
-  return Array.from(bytes)
-    .map(b => b.toString(16).padStart(2, '0'))
-    .join('');
-}
-
-function identitySecretHex(randomBytes: (size: number) => Uint8Array): string {
-  return toHex(randomBytes(32));
-}
-
-function errorMessage(err: unknown): string {
-  if (isLinkNativeError(err)) return `[${err.code}] ${err.message}`;
-  if (err instanceof Error) return err.message;
-  return String(err);
-}
-
-function defaultSleep(ms: number): Promise<void> {
-  return new Promise(resolve => {
-    setTimeout(resolve, ms);
-  });
-}
-
-function requireText(value: string, name: string): string {
-  const trimmed = value.trim();
-  if (trimmed.length === 0) throw new Error(`${name} is required`);
-  return trimmed;
-}
-
-function requirePartyField(value: string | null, name: string): string {
-  if (value === null || value.length === 0) throw new Error(`${name} is missing`);
-  return value;
-}
+export type {
+  LiveProofConfig,
+  LiveProofDeps,
+  LiveProofReport,
+  LiveProofStep,
+  NamedLiveProofConfig,
+  NamedLiveProofRow,
+  ThreePartyLiveProofConfig,
+} from './liveProofShared';
+export {
+  parseLiveProofTokenList,
+  parseLiveProofTokens,
+  parseNamedLiveProofRows,
+  redactLiveProofForLog,
+} from './liveProofShared';
 
 /**
  * Two-party Encrypted-Link proof against the real native module.
- * Never touches {@link LinkService}, KeyStore, or SQLite.
+ * Never touches {@link LinkService}, KeyStore, or SQLite for chat send/receive.
+ * Optional diagnostic only — it is not the product proof (see P0).
  * Never throws — failures are recorded on the report.
  */
 export async function runLinkLiveProof(
   config: LiveProofConfig,
   deps: LiveProofDeps = {},
 ): Promise<LiveProofReport> {
-  const native = deps.native ?? PaykitLinkNative;
-  const now = deps.now ?? Date.now;
-  const sleep = deps.sleep ?? defaultSleep;
-  const randomBytes = deps.randomBytes ?? defaultRandomBytes;
-  const handshakeTimeoutMs = deps.handshakeTimeoutMs ?? DEFAULT_HANDSHAKE_TIMEOUT_MS;
-  const receiveTimeoutMs = deps.receiveTimeoutMs ?? DEFAULT_RECEIVE_TIMEOUT_MS;
-  const pollIntervalMs = deps.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
+  const { native, now, sleep, randomBytes, handshakeTimeoutMs, receiveTimeoutMs, pollIntervalMs } =
+    resolveClock(deps);
 
-  const steps: LiveProofStep[] = [];
-  const partyA: Party = emptyParty('A');
-  const partyB: Party = emptyParty('B');
+  const partyA = emptyParty('A');
+  const partyB = emptyParty('B');
   const redactSecrets = [config.signupTokenA, config.signupTokenB];
-
-  const record = async (step: string, body: () => Promise<string>): Promise<boolean> => {
-    const started = now();
-    try {
-      const detail = redactLiveProofForLog(await body(), redactSecrets);
-      const entry: LiveProofStep = { step, ok: true, detail, elapsedMs: now() - started };
-      steps.push(entry);
-      console.log('[liveproof]', JSON.stringify(entry));
-      return true;
-    } catch (err) {
-      const entry: LiveProofStep = {
-        step,
-        ok: false,
-        detail: redactLiveProofForLog(errorMessage(err), redactSecrets),
-        elapsedMs: now() - started,
-      };
-      steps.push(entry);
-      console.log('[liveproof]', JSON.stringify(entry));
-      return false;
-    }
-  };
-
-  const failed = (): LiveProofReport => ({ ok: false, steps });
+  const { record, failed, report, steps } = createLiveProofRecorder(now, redactSecrets);
+  void steps;
 
   try {
     if (
@@ -225,26 +96,21 @@ export async function runLinkLiveProof(
     }
 
     if (
-      !(await record('generate-identities', async () => {
-        partyA.secretHex = identitySecretHex(randomBytes);
-        partyB.secretHex = identitySecretHex(randomBytes);
-        if (partyA.secretHex.length !== 64 || partyB.secretHex.length !== 64) {
-          throw new Error('identity secrets must be 32-byte hex (64 chars)');
-        }
-        if (partyA.secretHex === partyB.secretHex) {
-          throw new Error('generated identical identity secrets');
-        }
-        redactSecrets.push(partyA.secretHex, partyB.secretHex);
-        return 'two 32-byte secrets';
-      }))
+      !(await record('generate-identities', async () =>
+        generatePartySecrets([partyA, partyB], randomBytes, redactSecrets),
+      ))
     ) {
       return failed();
     }
 
-    if (!(await signupParty(record, native, config, partyA, config.signupTokenA))) return failed();
-    if (!(await signupParty(record, native, config, partyB, config.signupTokenB))) return failed();
-    if (!(await provisionParty(record, native, partyA))) return failed();
-    if (!(await provisionParty(record, native, partyB))) return failed();
+    if (!(await signupParty(record, native, config.homeserverPubky, partyA, config.signupTokenA))) {
+      return failed();
+    }
+    if (!(await signupParty(record, native, config.homeserverPubky, partyB, config.signupTokenB))) {
+      return failed();
+    }
+    if (!(await provisionNativeParty(record, native, partyA))) return failed();
+    if (!(await provisionNativeParty(record, native, partyB))) return failed();
 
     if (
       !(await record('read-marker-b', async () => {
@@ -423,12 +289,7 @@ export async function runLinkLiveProof(
           rawJson: raw,
           receivedAt: now(),
         });
-        await assertRequestStatus(
-          pubkyB,
-          pubkyA,
-          requestOne.envelope.payment_request_id,
-          'pending',
-        );
+        await assertRequestStatus(pubkyB, pubkyA, requestOne.envelope.payment_request_id, 'pending');
         if (applied.action !== 'applied') throw new Error(`B apply request: ${applied.action}`);
         return `pending ${requestOne.envelope.payment_request_id}`;
       }))
@@ -545,7 +406,7 @@ export async function runLinkLiveProof(
           'proof_received',
         );
         if (applied.action !== 'applied') throw new Error(`A apply proof: ${applied.action}`);
-        return 'proof_received';
+        return 'proof_received (dummy hex — does not close P4)';
       }))
     ) {
       return failed();
@@ -591,12 +452,7 @@ export async function runLinkLiveProof(
           rawJson: raw,
           receivedAt: now(),
         });
-        await assertRequestStatus(
-          pubkyB,
-          pubkyA,
-          requestTwo.envelope.payment_request_id,
-          'pending',
-        );
+        await assertRequestStatus(pubkyB, pubkyA, requestTwo.envelope.payment_request_id, 'pending');
         if (applied.action !== 'applied') throw new Error(`B apply request 2: ${applied.action}`);
         return 'pending';
       }))
@@ -667,10 +523,10 @@ export async function runLinkLiveProof(
       return failed();
     }
   } finally {
-    await cleanupParties(record, native, partyA, partyB);
+    await cleanupNativeParties(record, native, [partyA, partyB]);
   }
 
-  return { ok: steps.every(step => step.ok), steps };
+  return report();
 }
 
 async function persistOutboundRequest(
@@ -735,7 +591,7 @@ async function assertRequestStatus(
 
 async function receivePaymentJson(
   native: PaykitLinkNativeApi,
-  party: Party,
+  party: ProofParty,
   kind: string,
   eventId: string,
   now: () => number,
@@ -766,42 +622,10 @@ async function receivePaymentJson(
   );
 }
 
-function emptyParty(label: 'A' | 'B'): Party {
-  return {
-    label,
-    secretHex: '',
-    sessionAlias: null,
-    pubky: null,
-    receiverAlias: null,
-    noisePublicKey: null,
-    handshakeLinkId: null,
-    establishedLinkId: null,
-  };
-}
-
-async function signupParty(
+async function provisionNativeParty(
   record: (step: string, body: () => Promise<string>) => Promise<boolean>,
   native: PaykitLinkNativeApi,
-  config: LiveProofConfig,
-  party: Party,
-  signupToken: string,
-): Promise<boolean> {
-  return record(`signup-${party.label.toLowerCase()}`, async () => {
-    const session = await native.signupWithSecret(
-      party.secretHex,
-      config.homeserverPubky,
-      signupToken,
-    );
-    party.sessionAlias = session.sessionAlias;
-    party.pubky = session.pubky;
-    return session.pubky;
-  });
-}
-
-async function provisionParty(
-  record: (step: string, body: () => Promise<string>) => Promise<boolean>,
-  native: PaykitLinkNativeApi,
-  party: Party,
+  party: ProofParty,
 ): Promise<boolean> {
   return record(`provision-${party.label.toLowerCase()}`, async () => {
     const generated = await native.generateReceiverKey();
@@ -818,8 +642,8 @@ async function provisionParty(
 
 async function establishBoth(
   native: PaykitLinkNativeApi,
-  partyA: Party,
-  partyB: Party,
+  partyA: ProofParty,
+  partyB: ProofParty,
   now: () => number,
   sleep: (ms: number) => Promise<void>,
   timeoutMs: number,
@@ -869,7 +693,7 @@ async function establishBoth(
 
 async function receiveExpected(
   native: PaykitLinkNativeApi,
-  party: Party,
+  party: ProofParty,
   eventId: string,
   body: string,
   now: () => number,
@@ -904,60 +728,3 @@ async function receiveExpected(
   );
 }
 
-async function cleanupParties(
-  record: (step: string, body: () => Promise<string>) => Promise<boolean>,
-  native: PaykitLinkNativeApi,
-  partyA: Party,
-  partyB: Party,
-): Promise<void> {
-  await record('cleanup-close', async () => {
-    const ids = [
-      partyA.establishedLinkId,
-      partyB.establishedLinkId,
-      partyA.handshakeLinkId,
-      partyB.handshakeLinkId,
-    ].filter((id, index, all): id is string => id !== null && all.indexOf(id) === index);
-    const closed: string[] = [];
-    const errors: string[] = [];
-    for (const linkId of ids) {
-      try {
-        await native.closeLink(linkId);
-        closed.push(linkId);
-      } catch (err) {
-        errors.push(`${linkId}: ${errorMessage(err)}`);
-      }
-    }
-    if (errors.length > 0) {
-      throw new Error(`closed ${closed.length}; failed: ${errors.join('; ')}`);
-    }
-    return `closed ${closed.length}`;
-  });
-
-  await record('cleanup-markers', async () => {
-    const errors: string[] = [];
-    for (const party of [partyA, partyB]) {
-      if (party.sessionAlias === null) continue;
-      try {
-        await native.removeReceiverMarker(party.sessionAlias, LINK_RECEIVER_PATH);
-      } catch (err) {
-        errors.push(`${party.label}: ${errorMessage(err)}`);
-      }
-    }
-    if (errors.length > 0) throw new Error(errors.join('; '));
-    return 'removed';
-  });
-
-  await record('cleanup-signout', async () => {
-    const errors: string[] = [];
-    for (const party of [partyA, partyB]) {
-      if (party.sessionAlias === null) continue;
-      try {
-        await native.signOutSession(party.sessionAlias);
-      } catch (err) {
-        errors.push(`${party.label}: ${errorMessage(err)}`);
-      }
-    }
-    if (errors.length > 0) throw new Error(errors.join('; '));
-    return 'signed out';
-  });
-}

@@ -237,6 +237,37 @@ export const LinkService = {
     KeyStore.deleteLinkSession();
   },
 
+  /**
+   * Live-proof / test harness: adopt an already-created native session
+   * (`signupWithSecret`) without signing in again and without wiping
+   * other parties' live handles. Used to switch A/B/C on one process.
+   */
+  async adoptHarnessSession(sessionAlias: string, pubky: string): Promise<void> {
+    const alias = sessionAlias.trim();
+    const id = pubky.trim();
+    if (alias.length === 0 || id.length === 0) {
+      throw new Error('LinkService.adoptHarnessSession: sessionAlias and pubky are required');
+    }
+    KeyStore.setPubky(id);
+    KeyStore.setLinkSession(alias);
+    session = { alias, pubky: id };
+  },
+
+  /**
+   * Live-proof / test harness: publish the receiver marker for the
+   * adopted session (same path as {@link enable} after Ring auth).
+   */
+  async provisionHarnessReceiver(): Promise<{
+    pubky: string;
+    receiverPath: string;
+    noisePublicKey: string;
+  }> {
+    if (!session) {
+      throw new Error('LinkService.provisionHarnessReceiver: no adopted session');
+    }
+    return provisionReceiver(session.alias, session.pubky);
+  },
+
   // ── Enable flow ───────────────────────────────────────────────────────────
 
   /**
@@ -694,6 +725,16 @@ export function stopLinkRetryDrain(): void {
 /** Test seam: live per-peer queue map size (must be 0 after a settled op). */
 export function linkQueueEntryCountForTests(): number {
   return queues.size;
+}
+
+/**
+ * Test / harness: drop in-memory session, handles, and queues without
+ * native sign-out or SQL wipe. Does not touch other owners' SQLite rows.
+ */
+export function resetLinkServiceHarnessState(): void {
+  session = null;
+  liveHandles.clear();
+  queues.clear();
 }
 
 // ─── Session internals ────────────────────────────────────────────────────────

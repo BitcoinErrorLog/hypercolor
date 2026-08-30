@@ -9,20 +9,35 @@ export default function App() {
 
   useEffect(() => {
     // Dev-only, env-gated live-proof auto-runner. EXPO_PUBLIC_LIVEPROOF is
-    // "<homeserverPubky>,<tokenA>,<tokenB>"; Expo inlines EXPO_PUBLIC_* at
-    // bundle time. Runs the isolated two-party staging proof on launch and
-    // logs each step so it is capturable from simulator logs without any UI.
+    // "<homeserverPubky>,<tokenA>,<tokenB>[,<tokenC>]". Expo inlines
+    // EXPO_PUBLIC_* at bundle time. EXPO_PUBLIC_LIVEPROOF_ROWS selects P0–P5;
+    // EXPO_PUBLIC_LIVEPROOF_NATIVE=1 also runs the native diagnostic. Logs
+    // are redacted so tokens and identity secrets never hit the console.
     if (__DEV__ && process.env.EXPO_PUBLIC_LIVEPROOF) {
-      const [homeserverPubky = '', signupTokenA = '', signupTokenB = ''] =
+      const [homeserverPubky = '', signupTokenA = '', signupTokenB = '', signupTokenC = ''] =
         process.env.EXPO_PUBLIC_LIVEPROOF.split(',');
-      void import('./src/services/link/liveProof').then(
-        ({ runLinkLiveProof, redactLiveProofForLog }) =>
-          runLinkLiveProof({ homeserverPubky, signupTokenA, signupTokenB }).then(report =>
+      const rowsRaw = process.env.EXPO_PUBLIC_LIVEPROOF_ROWS;
+      const includeNative = process.env.EXPO_PUBLIC_LIVEPROOF_NATIVE === '1';
+      void import('./src/services/link/liveProofRun').then(
+        ({ parseNamedLiveProofRows, redactLiveProofForLog, runNamedLiveProofs }) => {
+          const rows = parseNamedLiveProofRows(rowsRaw);
+          if (includeNative && !rows.includes('native')) rows.unshift('native');
+          const secrets = [signupTokenA, signupTokenB, signupTokenC].filter(
+            token => token.length > 0,
+          );
+          return runNamedLiveProofs({
+            homeserverPubky,
+            signupTokenA,
+            signupTokenB,
+            ...(signupTokenC.length > 0 ? { signupTokenC } : {}),
+            rows,
+          }).then(result =>
             console.log(
               '[liveproof] REPORT',
-              redactLiveProofForLog(JSON.stringify(report), [signupTokenA, signupTokenB]),
+              redactLiveProofForLog(JSON.stringify(result), secrets),
             ),
-          ),
+          );
+        },
       );
     }
   }, []);

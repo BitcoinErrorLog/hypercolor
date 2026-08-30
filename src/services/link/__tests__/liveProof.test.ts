@@ -1,7 +1,9 @@
 import { v4 as uuidv4 } from 'uuid';
 import {
   runLinkLiveProof,
+  parseLiveProofTokenList,
   parseLiveProofTokens,
+  parseNamedLiveProofRows,
   redactLiveProofForLog,
   type LiveProofConfig,
 } from '../liveProof';
@@ -232,6 +234,28 @@ describe('parseLiveProofTokens', () => {
       signupTokenB: 'b',
     });
     expect(parseLiveProofTokens('', '')).toBeNull();
+  });
+});
+
+describe('parseLiveProofTokenList', () => {
+  it('reads a third token from a comma list or a dedicated field', () => {
+    expect(parseLiveProofTokenList('a,b,c')).toEqual({
+      signupTokenA: 'a',
+      signupTokenB: 'b',
+      signupTokenC: 'c',
+    });
+    expect(parseLiveProofTokenList('a', 'b', 'c')).toEqual({
+      signupTokenA: 'a',
+      signupTokenB: 'b',
+      signupTokenC: 'c',
+    });
+  });
+});
+
+describe('parseNamedLiveProofRows', () => {
+  it('defaults to p0 and de-duplicates named rows', () => {
+    expect(parseNamedLiveProofRows(undefined)).toEqual(['p0']);
+    expect(parseNamedLiveProofRows('p0,p4,p0,native')).toEqual(['p0', 'p4', 'native']);
   });
 });
 

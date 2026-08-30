@@ -115,3 +115,25 @@ Keep and extend Jest for anything a live run cannot cheaply adversarial-test:
 - `onchainAddress` SHA-256 used only for Base58Check.
 
 New live-proof code needs Jest coverage of its step machine (same pattern as `liveProof.test.ts`) with a mocked native module — that does **not** replace the staging run.
+
+## Harness entrypoints
+
+All runners live under `src/services/link/liveProof*.ts`. `App.tsx` dynamic-imports `runNamedLiveProofs` from `liveProofRun.ts` (`__DEV__` + env). Parent runs on a simulator/device with staging signup tokens. Never commit tokens. The native-only `runLinkLiveProof` stays in `liveProof.ts` so Jest can cover it without loading product services.
+
+`EXPO_PUBLIC_LIVEPROOF` is `<homeserverPubky>,<tokenA>,<tokenB>[,<tokenC>]`.
+
+`EXPO_PUBLIC_LIVEPROOF_ROWS` is a comma list of `p0` / `p1` / `p2` / `p3` / `p4` / `p5` (default `p0`). `EXPO_PUBLIC_LIVEPROOF_NATIVE=1` also runs the native-only diagnostic (`runLinkLiveProof`); that path is **not** the product proof.
+
+| Row | Function | Tokens | What parent should see |
+|---|---|---|---|
+| P0 | `runLinkServiceLiveProof` | A, B | `add-contact-ab-paste` (local WoT so the first inbox poll is not held as a request), then `send-dm-a` / `sync-inbox-b` / `persist-inbound-b` / `send-dm-b` / `sync-inbox-a` / `replay-inbox-dedup` through `LinkService.sendDm` + `syncInbox` |
+| P1 | `runContactsLiveProof` | A, B, C | `add-contact-b-paste`, `nexus-import` (or `skipped nexus:`), `inbound-b-auto-accept`, `inbound-c-request`, `unilateral-follower-closed` |
+| P2 | `runGroupLiveProof` | A, B, C | `create-channel-a`, `membership-fanout`, `group-message-a`, `remove-c`, `removed-c-message-rejected`, `forged-channel-and-event-rejected` |
+| P3 | `runAttachmentLiveProof` | A, B | `send-attachment-a`, `resolve-attachment-b`, `attachment-invariants`, `aad-path-bind`, `over-limit-rejected` |
+| P4 | `runPaymentHandoffLiveProof` | A, B | `build-payment-request`, `handoff-bind-amount`, `handoff-injection-closed`, `wallet-handoff-open`. Attach `openWalletUri` (Bitkit / `Linking.openURL` of the validated URI) to close the row. Dummy `proofData` hex does **not** mark P4 green. |
+| P5 | `runBackupLiveProof` | A, B | `export-backup` (recovery code redacted), `wipe-local`, `restore-backup`, `assert-restored`, `assert-not-restored` |
+| native | `runLinkLiveProof` | A, B | Optional diagnostic only. Payment proof payload is dummy hex. |
+
+Programmatic dispatch: `runNamedLiveProofs({ homeserverPubky, signupTokenA, signupTokenB, signupTokenC, rows })`.
+
+Cleanup: each product row closes links, removes markers, signs out, `clearAccountData` per owner, then `clearAllNativeSecrets`. Logs go through `redactLiveProofForLog`.
