@@ -9,6 +9,7 @@ jest.mock('../../StorageService', () => ({
     getGroupMember: jest.fn(),
     saveGroupMessage: jest.fn(),
     touchGroupChannel: jest.fn(),
+    markGroupEventSeen: jest.fn(),
   },
 }));
 
@@ -23,6 +24,7 @@ import { KeyStore } from '../../KeyStore';
 import { applyAttachmentInbound, attachmentPreviewBody } from '../applyAttachmentInbound';
 import {
   ATTACHMENT_ALGORITHM,
+  ATTACHMENT_KEY_PLACEHOLDER,
   CHAT_ATTACHMENT_KIND,
   attachmentKeyRef,
   buildAttachmentEnvelope,
@@ -85,18 +87,78 @@ describe('applyAttachmentInbound', () => {
     );
     expect(mockedKeyStore.setAttachmentSecret).toHaveBeenCalledWith(
       OWNER,
+      PEER,
       EVENT_ID,
       expect.objectContaining({ key: 'A'.repeat(43), nonce: 'B'.repeat(32) }),
     );
     expect(mockedStorage.saveAttachment).toHaveBeenCalledWith(
       expect.objectContaining({
         eventId: EVENT_ID,
-        keyRef: attachmentKeyRef(OWNER, EVENT_ID),
+        senderPubky: PEER,
+        keyRef: attachmentKeyRef(OWNER, PEER, EVENT_ID),
         localCachePath: null,
         location: buildAttachmentLocation(PEER, ATTACHMENT_ID),
       }),
     );
     expect(mockedStorage.saveLinkMessage).toHaveBeenCalled();
+    const persisted = mockedStorage.saveLinkMessage.mock.calls[0]![0] as { rawJson: string };
+    expect(persisted.rawJson).toContain(ATTACHMENT_KEY_PLACEHOLDER);
+    expect(persisted.rawJson).not.toContain('A'.repeat(43));
+    expect(persisted.rawJson).not.toContain('B'.repeat(32));
+  });
+
+  it('rejects a spoofed location owner and a victim-owned path', async () => {
+    const victim = 'v'.repeat(52);
+    const spoofed = buildAttachmentEnvelope({
+      eventId: EVENT_ID,
+      sentAt: NOW - 50,
+      location: buildAttachmentLocation(victim, ATTACHMENT_ID),
+      key: 'A'.repeat(43),
+      nonce: 'B'.repeat(32),
+      algorithm: ATTACHMENT_ALGORITHM,
+      contentType: 'image/jpeg',
+      size: 12,
+    }).json;
+    const row = await applyAttachmentInbound({
+      ownerPubky: OWNER,
+      senderPubky: PEER,
+      peerPubky: PEER,
+      rawJson: spoofed,
+      receivedAt: NOW,
+    });
+    expect(row).toBeNull();
+    expect(mockedStorage.saveAttachment).not.toHaveBeenCalled();
+    expect(mockedKeyStore.setAttachmentSecret).not.toHaveBeenCalled();
+  });
+
+  it('rejects a mismatched thumbnail location', async () => {
+    const location = buildAttachmentLocation(PEER, ATTACHMENT_ID);
+    const rawJson = JSON.stringify({
+      version: 1,
+      kind: CHAT_ATTACHMENT_KIND,
+      event_id: EVENT_ID,
+      sent_at: NOW - 50,
+      location,
+      key: 'A'.repeat(43),
+      nonce: 'B'.repeat(32),
+      algorithm: ATTACHMENT_ALGORITHM,
+      contentType: 'image/jpeg',
+      size: 12,
+      thumbnail: {
+        location: buildAttachmentLocation(PEER, 'bbbbbbbb-bbbb-4ccc-8ddd-eeeeeeeeeeee'),
+        key: 'C'.repeat(43),
+        nonce: 'D'.repeat(32),
+      },
+    });
+    const row = await applyAttachmentInbound({
+      ownerPubky: OWNER,
+      senderPubky: PEER,
+      peerPubky: PEER,
+      rawJson,
+      receivedAt: NOW,
+    });
+    expect(row).toBeNull();
+    expect(mockedStorage.saveAttachment).not.toHaveBeenCalled();
   });
 
   it('dedups an already-stored DM attachment', async () => {

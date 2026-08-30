@@ -4,13 +4,18 @@ import {
   ATTACHMENT_ALGORITHM,
   CHAT_ATTACHMENT_KIND,
   AttachmentError,
+  ATTACHMENT_KEY_PLACEHOLDER,
   attachmentKeyRef,
   buildAttachmentEnvelope,
   buildAttachmentLocation,
   buildAttachmentThumbLocation,
   decodeAttachmentEnvelope,
+  decodePersistedAttachmentEnvelope,
   isAttachmentKind,
+  isAttachmentLocationBoundToSender,
   isImageContentType,
+  parseAttachmentLocation,
+  redactAttachmentRawJson,
   serializedEnvelopeBytes,
 } from '../attachment';
 
@@ -52,7 +57,11 @@ describe('attachment wire contracts', () => {
     const location = buildAttachmentLocation(OWNER, ATTACHMENT_ID);
     expect(location).toBe(`pubky://${OWNER}/pub/hypercolor.app/v1/attachments/${ATTACHMENT_ID}`);
     expect(buildAttachmentThumbLocation(OWNER, ATTACHMENT_ID)).toBe(`${location}.thumb`);
-    expect(attachmentKeyRef(OWNER, EVENT_ID)).toBe(`att:${OWNER}:${EVENT_ID}`);
+    expect(attachmentKeyRef(OWNER, OWNER, EVENT_ID)).toBe(`att:${OWNER}:${OWNER}:${EVENT_ID}`);
+    const parsed = parseAttachmentLocation(location);
+    expect(parsed).toEqual({ ownerPubky: OWNER, attachmentId: ATTACHMENT_ID });
+    expect(isAttachmentLocationBoundToSender(location, OWNER)).toBe(true);
+    expect(isAttachmentLocationBoundToSender(location, 'z'.repeat(52))).toBe(false);
   });
 
   it('builds a representative chat.attachment.v0 envelope within the 1000-byte link budget', () => {
@@ -116,6 +125,50 @@ describe('attachment wire contracts', () => {
       decodeAttachmentEnvelope(JSON.stringify({ ...valid, event_id: 'not-a-uuid' })),
     ).toBeNull();
     expect(decodeAttachmentEnvelope(JSON.stringify({ ...valid, size: 0 }))).toBeNull();
+    expect(
+      decodeAttachmentEnvelope(JSON.stringify({ ...valid, size: ATTACHMENT_MAX_BYTES + 1 })),
+    ).toBeNull();
+    expect(
+      decodeAttachmentEnvelope(JSON.stringify({ ...valid, algorithm: 'AES-256-GCM' })),
+    ).toBeNull();
+    expect(decodeAttachmentEnvelope(JSON.stringify({ ...valid, key: 'short' }))).toBeNull();
+    expect(decodeAttachmentEnvelope(JSON.stringify({ ...valid, nonce: 'short' }))).toBeNull();
+    expect(
+      decodeAttachmentEnvelope(
+        JSON.stringify({
+          ...valid,
+          location: `pubky://${'z'.repeat(52)}/pub/other.app/v1/file`,
+        }),
+      ),
+    ).toBeNull();
+    expect(
+      decodeAttachmentEnvelope(
+        JSON.stringify({
+          ...valid,
+          thumbnail: {
+            location: valid.location,
+            key: 'C'.repeat(43),
+            nonce: 'D'.repeat(32),
+          },
+        }),
+      ),
+    ).toBeNull();
+  });
+
+  it('redacts key material and still decodes the persisted copy', () => {
+    const { json, envelope } = buildAttachmentEnvelope(representativeInput());
+    const redacted = redactAttachmentRawJson(json);
+    expect(redacted).not.toContain(KEY_B64URL);
+    expect(redacted).not.toContain(NONCE_B64URL);
+    expect(redacted).toContain(ATTACHMENT_KEY_PLACEHOLDER);
+    expect(decodeAttachmentEnvelope(redacted)).toBeNull();
+    expect(decodePersistedAttachmentEnvelope(redacted)).toEqual(
+      expect.objectContaining({
+        event_id: envelope.event_id,
+        key: ATTACHMENT_KEY_PLACEHOLDER,
+        nonce: ATTACHMENT_KEY_PLACEHOLDER,
+      }),
+    );
   });
 
   it('exposes typed AttachmentError codes', () => {

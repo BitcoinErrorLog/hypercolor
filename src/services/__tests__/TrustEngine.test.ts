@@ -6,12 +6,15 @@ jest.mock('@op-engineering/op-sqlite', () => ({
 
 jest.mock('../KeyStore', () => ({
   KeyStore: {
-    deleteAttachmentSecrets: jest.fn().mockResolvedValue(undefined),
+    deleteAttachmentSecrets: jest.fn().mockResolvedValue([]),
+    clearAttachmentSecretsForOwner: jest.fn().mockResolvedValue([]),
+    deleteAttachmentSecretByService: jest.fn().mockResolvedValue(true),
   },
 }));
 
 jest.mock('../attachments/fileIo', () => ({
   deleteCacheFiles: jest.fn().mockResolvedValue(undefined),
+  cachePathsForAttachment: () => [],
 }));
 
 import { setDbForTests } from '../../db';

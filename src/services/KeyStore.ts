@@ -249,7 +249,7 @@ export function deleteLinkSession(): void {
   store().remove(LINK_SESSION_KEY);
 }
 
-// ─── Attachment AEAD material (OS Keychain, keyed by owner + event_id) ───────
+// ─── Attachment AEAD material (OS Keychain, keyed by owner + sender + event) ─
 
 export interface AttachmentSecretMaterial {
   key: string;
@@ -258,34 +258,82 @@ export interface AttachmentSecretMaterial {
   thumbnail?: { key: string; nonce: string };
 }
 
-function attachmentKeyService(ownerPubky: string, eventId: string): string {
-  return `${ATTACHMENT_KEY_SERVICE_PREFIX}:${ownerPubky}:${eventId}`;
+export interface AttachmentSecretRef {
+  senderPubky: string;
+  eventId: string;
+}
+
+const ATTACHMENT_INDEX_PREFIX = 'attachment_key_services:';
+
+export function attachmentKeyService(
+  ownerPubky: string,
+  senderPubky: string,
+  eventId: string,
+): string {
+  return `${ATTACHMENT_KEY_SERVICE_PREFIX}:${ownerPubky}:${senderPubky}:${eventId}`;
+}
+
+function attachmentIndexKey(ownerPubky: string): string {
+  return `${ATTACHMENT_INDEX_PREFIX}${ownerPubky}`;
+}
+
+function readAttachmentServiceIndex(ownerPubky: string): string[] {
+  try {
+    const raw = store().getString(attachmentIndexKey(ownerPubky));
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((item): item is string => typeof item === 'string');
+  } catch {
+    return [];
+  }
+}
+
+function writeAttachmentServiceIndex(ownerPubky: string, services: readonly string[]): void {
+  store().set(attachmentIndexKey(ownerPubky), JSON.stringify([...new Set(services)]));
+}
+
+function rememberAttachmentService(ownerPubky: string, service: string): void {
+  const current = readAttachmentServiceIndex(ownerPubky);
+  if (current.includes(service)) return;
+  writeAttachmentServiceIndex(ownerPubky, [...current, service]);
+}
+
+function forgetAttachmentService(ownerPubky: string, service: string): void {
+  writeAttachmentServiceIndex(
+    ownerPubky,
+    readAttachmentServiceIndex(ownerPubky).filter(item => item !== service),
+  );
 }
 
 /**
  * Stores the attachment key/nonce that arrived over the Encrypted Link.
  * Ciphertext is world-readable; this material is the only secret.
- * One Keychain service per (owner, event) — a shared service would
- * overwrite earlier keys.
+ * One Keychain service per (owner, sender, event) — a shared (owner, event)
+ * service would let a group peer overwrite another sender's key.
  */
 export async function setAttachmentSecret(
   ownerPubky: string,
+  senderPubky: string,
   eventId: string,
   material: AttachmentSecretMaterial,
 ): Promise<void> {
+  const service = attachmentKeyService(ownerPubky, senderPubky, eventId);
   await Keychain.setGenericPassword(KEYCHAIN_USERNAME, JSON.stringify(material), {
-    service: attachmentKeyService(ownerPubky, eventId),
+    service,
     accessible: Keychain.ACCESSIBLE.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
   });
+  rememberAttachmentService(ownerPubky, service);
 }
 
 export async function getAttachmentSecret(
   ownerPubky: string,
+  senderPubky: string,
   eventId: string,
 ): Promise<AttachmentSecretMaterial | null> {
   try {
     const result = await Keychain.getGenericPassword({
-      service: attachmentKeyService(ownerPubky, eventId),
+      service: attachmentKeyService(ownerPubky, senderPubky, eventId),
     });
     if (result === false) return null;
     return JSON.parse(result.password) as AttachmentSecretMaterial;
@@ -294,23 +342,62 @@ export async function getAttachmentSecret(
   }
 }
 
-export async function deleteAttachmentSecret(ownerPubky: string, eventId: string): Promise<void> {
+export async function deleteAttachmentSecretByService(
+  ownerPubky: string,
+  service: string,
+): Promise<boolean> {
   try {
-    await Keychain.resetGenericPassword({
-      service: attachmentKeyService(ownerPubky, eventId),
-    });
+    await Keychain.resetGenericPassword({ service });
+    forgetAttachmentService(ownerPubky, service);
+    return true;
   } catch {
-    // Best-effort: row wipe still proceeds.
+    return false;
   }
 }
 
+export async function deleteAttachmentSecret(
+  ownerPubky: string,
+  senderPubky: string,
+  eventId: string,
+): Promise<boolean> {
+  return deleteAttachmentSecretByService(
+    ownerPubky,
+    attachmentKeyService(ownerPubky, senderPubky, eventId),
+  );
+}
+
+/**
+ * Deletes the listed attachment key services. Returns service names whose
+ * deletion failed so the caller can journal them in `pending_cleanup`.
+ */
 export async function deleteAttachmentSecrets(
   ownerPubky: string,
-  eventIds: readonly string[],
-): Promise<void> {
-  for (const eventId of eventIds) {
-    await deleteAttachmentSecret(ownerPubky, eventId);
+  refs: readonly AttachmentSecretRef[],
+): Promise<string[]> {
+  const failed: string[] = [];
+  for (const ref of refs) {
+    const service = attachmentKeyService(ownerPubky, ref.senderPubky, ref.eventId);
+    const ok = await deleteAttachmentSecretByService(ownerPubky, service);
+    if (!ok) failed.push(service);
   }
+  return failed;
+}
+
+/**
+ * Wipes every attachment service recorded for this owner (MMKV index).
+ * Returns service names that could not be deleted.
+ */
+export async function clearAttachmentSecretsForOwner(ownerPubky: string): Promise<string[]> {
+  const services = readAttachmentServiceIndex(ownerPubky);
+  const failed: string[] = [];
+  for (const service of services) {
+    const ok = await deleteAttachmentSecretByService(ownerPubky, service);
+    if (!ok) failed.push(service);
+  }
+  if (failed.length === 0) {
+    store().remove(attachmentIndexKey(ownerPubky));
+  }
+  return failed;
 }
 
 // ─── Session / cert validity ──────────────────────────────────────────────────
@@ -334,6 +421,10 @@ export async function isAppCertValid(): Promise<boolean> {
 // ─── Clear all ────────────────────────────────────────────────────────────────
 
 export async function clear(): Promise<void> {
+  const owner = getPubky();
+  if (owner) {
+    await clearAttachmentSecretsForOwner(owner);
+  }
   await Promise.all([
     deleteAppKeypair(),
     Keychain.resetGenericPassword({ service: INBOX_KEY_SERVICE }),
@@ -341,6 +432,9 @@ export async function clear(): Promise<void> {
     Keychain.resetGenericPassword({ service: APP_CERT_SERVICE }),
     Keychain.resetGenericPassword({ service: LEGACY_LINK_RECEIVER_SECRET_SERVICE }),
   ]);
+  if (owner) {
+    store().remove(attachmentIndexKey(owner));
+  }
   store().remove(PUBKY_KEY);
   store().remove(HOMESERVER_KEY);
   store().remove(SESSION_SECRET_KEY);
@@ -367,7 +461,10 @@ export const KeyStore = {
   setAttachmentSecret,
   getAttachmentSecret,
   deleteAttachmentSecret,
+  deleteAttachmentSecretByService,
   deleteAttachmentSecrets,
+  clearAttachmentSecretsForOwner,
+  attachmentKeyService,
   // AppCert
   setAppCert,
   getAppCert,

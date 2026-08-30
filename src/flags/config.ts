@@ -46,3 +46,36 @@ export const GROUP_DEFERRED_TTL_MS = 48 * 60 * 60 * 1000;
  * chunked native transfer.
  */
 export const ATTACHMENT_MAX_BYTES = 8 * 1024 * 1024;
+
+/** Separate receive-side cap for encrypted JPEG thumbnails. */
+export const ATTACHMENT_THUMBNAIL_MAX_BYTES = 256 * 1024;
+
+/**
+ * XChaCha20-Poly1305 authentication tag. The 24-byte nonce travels in the
+ * access PAM, not in the homeserver blob.
+ */
+export const ATTACHMENT_AEAD_TAG_BYTES = 16;
+
+/**
+ * Slack on top of the 4/3 base64url expansion of (plaintext + tag).
+ * Covers padding/rounding when the blob is transported as a JS string.
+ */
+export const ATTACHMENT_CIPHERTEXT_BUDGET_MARGIN = 64;
+
+/**
+ * Max characters of the fetched ciphertext string for a given plaintext cap.
+ * ciphertext_chars ≈ ceil((plaintext + 16-byte tag) × 4/3) + margin.
+ */
+export function attachmentCiphertextBudgetChars(plaintextCap: number): number {
+  return (
+    Math.ceil(((plaintextCap + ATTACHMENT_AEAD_TAG_BYTES) * 4) / 3) +
+    ATTACHMENT_CIPHERTEXT_BUDGET_MARGIN
+  );
+}
+
+export const ATTACHMENT_CIPHERTEXT_MAX_CHARS =
+  attachmentCiphertextBudgetChars(ATTACHMENT_MAX_BYTES);
+
+export const ATTACHMENT_THUMBNAIL_CIPHERTEXT_MAX_CHARS = attachmentCiphertextBudgetChars(
+  ATTACHMENT_THUMBNAIL_MAX_BYTES,
+);

@@ -1,17 +1,25 @@
 import type { PubkyKey } from '../../types';
 import {
   attachmentKeyRef,
+  CHAT_ATTACHMENT_KIND,
   decodeAttachmentEnvelope,
+  decodePersistedAttachmentEnvelope,
+  isAttachmentKeyPlaceholder,
+  isAttachmentLocationBoundToSender,
+  redactAttachmentEnvelope,
   type ChatAttachmentEnvelope,
 } from '../../types/attachment';
 import { buildDmConversationId, type LinkMessage } from '../../types/link';
-import { CHAT_ATTACHMENT_KIND } from '../../types/attachment';
 import { KeyStore } from '../KeyStore';
 import { StorageService } from '../StorageService';
 
 /**
  * Persists one inbound `chat.attachment.v0` access message. Does not download
- * or decrypt ciphertext. Keys go to KeyStore; SQLite gets metadata + key_ref.
+ * or decrypt ciphertext. Keys go to KeyStore first; SQLite gets metadata +
+ * a redacted `raw_json` (key/nonce replaced with `__keystore__`).
+ *
+ * Location must be `pubky://{authenticatedSender}/pub/hypercolor.app/v1/attachments/{uuid}`.
+ * Rejected envelopes are marked seen and never persisted.
  *
  * With `channel_id`: persist a group_messages row only if the sender is an
  * active member of a known private channel (same policy as group content).
@@ -26,8 +34,23 @@ export async function applyAttachmentInbound(input: {
   rawJson: string;
   receivedAt: number;
 }): Promise<LinkMessage | null> {
-  const envelope = decodeAttachmentEnvelope(input.rawJson);
-  if (!envelope) return null;
+  const envelope =
+    decodeAttachmentEnvelope(input.rawJson) ?? decodePersistedAttachmentEnvelope(input.rawJson);
+  if (!envelope) {
+    return null;
+  }
+  if (!isAttachmentLocationBoundToSender(envelope.location, input.senderPubky)) {
+    if (envelope.channel_id) {
+      await StorageService.markGroupEventSeen(
+        input.ownerPubky,
+        envelope.channel_id,
+        input.senderPubky,
+        envelope.event_id,
+        input.receivedAt,
+      );
+    }
+    return null;
+  }
 
   if (envelope.channel_id) {
     await persistGroupAttachment(input, envelope);
@@ -58,15 +81,34 @@ async function persistGroupAttachment(
     return;
   }
   const channel = await StorageService.getGroupChannel(input.ownerPubky, channelId);
-  if (!channel || channel.isPublic) return;
+  if (!channel || channel.isPublic) {
+    await StorageService.markGroupEventSeen(
+      input.ownerPubky,
+      channelId,
+      input.senderPubky,
+      envelope.event_id,
+      input.receivedAt,
+    );
+    return;
+  }
   const member = await StorageService.getGroupMember(
     input.ownerPubky,
     channelId,
     input.senderPubky,
   );
-  if (!member || member.status !== 'active') return;
+  if (!member || member.status !== 'active') {
+    await StorageService.markGroupEventSeen(
+      input.ownerPubky,
+      channelId,
+      input.senderPubky,
+      envelope.event_id,
+      input.receivedAt,
+    );
+    return;
+  }
 
-  await storeSecrets(input.ownerPubky, envelope);
+  await storeSecrets(input.ownerPubky, input.senderPubky, envelope);
+  const persistJson = JSON.stringify(redactAttachmentEnvelope(envelope));
   await StorageService.saveAttachment({
     ownerPubky: input.ownerPubky,
     eventId: envelope.event_id,
@@ -75,7 +117,7 @@ async function persistGroupAttachment(
     senderPubky: input.senderPubky,
     direction: 'received',
     location: envelope.location,
-    keyRef: attachmentKeyRef(input.ownerPubky, envelope.event_id),
+    keyRef: attachmentKeyRef(input.ownerPubky, input.senderPubky, envelope.event_id),
     contentType: envelope.contentType,
     size: envelope.size,
     thumbnailLocation: envelope.thumbnail?.location ?? null,
@@ -92,7 +134,7 @@ async function persistGroupAttachment(
     senderPubky: input.senderPubky,
     kind: CHAT_ATTACHMENT_KIND,
     body: attachmentPreviewBody(envelope),
-    rawJson: input.rawJson,
+    rawJson: persistJson,
     sentAt: envelope.sent_at,
     receivedAt: input.receivedAt,
     deliveryState: 'delivered',
@@ -125,11 +167,12 @@ async function persistDmAttachment(
   ) {
     return null;
   }
-  if (await StorageService.hasAttachment(input.ownerPubky, envelope.event_id)) {
+  if (await StorageService.hasAttachment(input.ownerPubky, input.senderPubky, envelope.event_id)) {
     return null;
   }
 
-  await storeSecrets(input.ownerPubky, envelope);
+  await storeSecrets(input.ownerPubky, input.senderPubky, envelope);
+  const persistJson = JSON.stringify(redactAttachmentEnvelope(envelope));
   await StorageService.saveAttachment({
     ownerPubky: input.ownerPubky,
     eventId: envelope.event_id,
@@ -138,7 +181,7 @@ async function persistDmAttachment(
     senderPubky: input.senderPubky,
     direction: 'received',
     location: envelope.location,
-    keyRef: attachmentKeyRef(input.ownerPubky, envelope.event_id),
+    keyRef: attachmentKeyRef(input.ownerPubky, input.senderPubky, envelope.event_id),
     contentType: envelope.contentType,
     size: envelope.size,
     thumbnailLocation: envelope.thumbnail?.location ?? null,
@@ -157,7 +200,7 @@ async function persistDmAttachment(
     senderPubky: input.senderPubky,
     direction: 'received',
     kind: CHAT_ATTACHMENT_KIND,
-    rawJson: input.rawJson,
+    rawJson: persistJson,
     body: attachmentPreviewBody(envelope),
     sentAt: envelope.sent_at,
     receivedAt: input.receivedAt,
@@ -167,12 +210,17 @@ async function persistDmAttachment(
   return row;
 }
 
-async function storeSecrets(ownerPubky: PubkyKey, envelope: ChatAttachmentEnvelope): Promise<void> {
-  await KeyStore.setAttachmentSecret(ownerPubky, envelope.event_id, {
+async function storeSecrets(
+  ownerPubky: PubkyKey,
+  senderPubky: PubkyKey,
+  envelope: ChatAttachmentEnvelope,
+): Promise<void> {
+  if (isAttachmentKeyPlaceholder(envelope.key)) return;
+  await KeyStore.setAttachmentSecret(ownerPubky, senderPubky, envelope.event_id, {
     key: envelope.key,
     nonce: envelope.nonce,
     algorithm: envelope.algorithm,
-    ...(envelope.thumbnail
+    ...(envelope.thumbnail && !isAttachmentKeyPlaceholder(envelope.thumbnail.key)
       ? { thumbnail: { key: envelope.thumbnail.key, nonce: envelope.thumbnail.nonce } }
       : {}),
   });

@@ -67,6 +67,8 @@ jest.mock('../../StorageService', () => ({
     getLinkReadCursor: jest.fn(),
     setLinkReadCursor: jest.fn(),
     clearAccountData: jest.fn(),
+    retryPendingCleanup: jest.fn(),
+    markGroupEventSeen: jest.fn(),
     listDeliveryQueue: jest.fn(),
     removeFromQueue: jest.fn(),
     getContact: jest.fn(),

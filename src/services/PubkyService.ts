@@ -11,6 +11,7 @@ import {
 } from '@synonymdev/react-native-pubky';
 import { computeInboxKid } from '../utils/PubkyNoiseModule';
 import { KeyStore } from './KeyStore';
+import { LinkService } from './link/LinkService';
 import type { UserProfile, PubkyKey } from '../types';
 
 /**
@@ -98,6 +99,9 @@ export const PubkyService = {
         // Best-effort
       }
     }
+    // Full messaging teardown (KeyStore attachment keys, cache, SQL) while
+    // the current-owner identity is still readable. Identity clear is last.
+    await LinkService.clearSession();
     await KeyStore.clear();
   },
 

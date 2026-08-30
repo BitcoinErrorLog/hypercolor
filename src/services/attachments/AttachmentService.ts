@@ -1,6 +1,19 @@
+/**
+ * Design ruling (M4 security review): per-attachment content keys MAY transit
+ * JS memory transiently. The JS runtime already renders decrypted plaintext,
+ * so keeping those short-lived keys out of JS adds no effective protection
+ * against that adversary. They MUST NEVER be persisted anywhere except the
+ * platform keychain (KeyStore). Long-term keys (Noise receiver secret,
+ * homeserver bearer, device snapshot key) remain native-only.
+ */
 import { v4 as uuidv4 } from 'uuid';
 import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
-import { ATTACHMENT_MAX_BYTES } from '../../flags/config';
+import {
+  ATTACHMENT_CIPHERTEXT_MAX_CHARS,
+  ATTACHMENT_MAX_BYTES,
+  ATTACHMENT_THUMBNAIL_CIPHERTEXT_MAX_CHARS,
+  ATTACHMENT_THUMBNAIL_MAX_BYTES,
+} from '../../flags/config';
 import type { PubkyKey } from '../../types';
 import {
   ATTACHMENT_ALGORITHM,
@@ -11,11 +24,17 @@ import {
   buildAttachmentThumbLocation,
   CHAT_ATTACHMENT_KIND,
   decodeAttachmentEnvelope,
+  isAttachmentLocationBoundToSender,
   isImageContentType,
+  parseAttachmentLocation,
   type AttachmentRecord,
   type ChatAttachmentEnvelope,
 } from '../../types/attachment';
-import { buildDmConversationId, parseDmConversationId } from '../../types/link';
+import {
+  buildDmConversationId,
+  parseDmConversationId,
+  type LinkDeliveryState,
+} from '../../types/link';
 import { KeyStore } from '../KeyStore';
 import { StorageService } from '../StorageService';
 import { PubkyService } from '../PubkyService';
@@ -25,7 +44,9 @@ import { GroupService } from '../group/GroupService';
 import { attachmentPreviewBody } from './applyAttachmentInbound';
 import {
   attachmentCachePath,
+  attachmentThumbCachePath,
   cacheFileExists,
+  decodedBase64Bytes,
   fromBase64Url,
   readFileAsStandardBase64,
   toBase64Url,
@@ -35,6 +56,11 @@ import {
 export type AttachmentSendTarget =
   | { type: 'conversation'; peerPubky: PubkyKey }
   | { type: 'channel'; channelId: string };
+
+function attachmentDeliveryFromLink(state: LinkDeliveryState): AttachmentRecord['deliveryState'] {
+  if (state === 'sending' || state === 'failed' || state === 'sent') return state;
+  return 'delivered';
+}
 
 export const AttachmentService = {
   /**
@@ -89,6 +115,14 @@ export const AttachmentService = {
       ? await encryptAndUploadThumbnail(owner, attachmentId, fileUri)
       : null;
 
+    // Custody: KeyStore first, then any JSON that might be persisted.
+    await KeyStore.setAttachmentSecret(owner, owner, eventId, {
+      key,
+      nonce: sealed.nonceB64,
+      algorithm: sealed.algorithm || ATTACHMENT_ALGORITHM,
+      ...(thumbnail ? { thumbnail: { key: thumbnail.key, nonce: thumbnail.nonce } } : {}),
+    });
+
     const built = buildAttachmentEnvelope({
       eventId,
       sentAt,
@@ -105,19 +139,8 @@ export const AttachmentService = {
     const conversationId =
       target.type === 'conversation' ? buildDmConversationId(target.peerPubky) : null;
     const channelId = target.type === 'channel' ? target.channelId : null;
-    const cachePath = attachmentCachePath(owner, eventId);
+    const cachePath = attachmentCachePath(owner, owner, eventId);
     await writeFileFromStandardBase64(cachePath, base64);
-
-    await KeyStore.setAttachmentSecret(owner, eventId, {
-      key,
-      nonce: sealed.nonceB64,
-      algorithm: built.envelope.algorithm,
-      ...(built.envelope.thumbnail
-        ? {
-            thumbnail: { key: built.envelope.thumbnail.key, nonce: built.envelope.thumbnail.nonce },
-          }
-        : {}),
-    });
 
     const record: AttachmentRecord = {
       ownerPubky: owner,
@@ -127,7 +150,7 @@ export const AttachmentService = {
       senderPubky: owner,
       direction: 'sent',
       location,
-      keyRef: attachmentKeyRef(owner, eventId),
+      keyRef: attachmentKeyRef(owner, owner, eventId),
       contentType: mime,
       size,
       thumbnailLocation: built.envelope.thumbnail?.location ?? null,
@@ -141,7 +164,7 @@ export const AttachmentService = {
 
     try {
       if (target.type === 'conversation') {
-        await LinkService.sendPreparedMessage({
+        const sent = await LinkService.sendPreparedMessage({
           peerPubky: target.peerPubky,
           kind: CHAT_ATTACHMENT_KIND,
           eventId,
@@ -149,20 +172,23 @@ export const AttachmentService = {
           body: attachmentPreviewBody(built.envelope),
           sentAt,
         });
-      } else {
-        await GroupService.sendPreparedFanout({
-          channelId: target.channelId,
-          kind: CHAT_ATTACHMENT_KIND,
-          eventId,
-          sentAt,
-          body: attachmentPreviewBody(built.envelope),
-          rawJson: built.json,
-        });
+        const deliveryState = attachmentDeliveryFromLink(sent.deliveryState);
+        await StorageService.updateAttachmentDelivery(owner, owner, eventId, deliveryState);
+        return { ...record, deliveryState, updatedAt: Date.now() };
       }
-      await StorageService.updateAttachmentDelivery(owner, eventId, 'sent');
-      return { ...record, deliveryState: 'sent', updatedAt: Date.now() };
+      const sent = await GroupService.sendPreparedFanout({
+        channelId: target.channelId,
+        kind: CHAT_ATTACHMENT_KIND,
+        eventId,
+        sentAt,
+        body: attachmentPreviewBody(built.envelope),
+        rawJson: built.json,
+      });
+      const deliveryState = attachmentDeliveryFromLink(sent.deliveryState);
+      await StorageService.updateAttachmentDelivery(owner, owner, eventId, deliveryState);
+      return { ...record, deliveryState, updatedAt: Date.now() };
     } catch (err) {
-      await StorageService.updateAttachmentDelivery(owner, eventId, 'failed');
+      await StorageService.updateAttachmentDelivery(owner, owner, eventId, 'failed');
       if (err instanceof AttachmentError) throw err;
       if (isLinkNativeError(err)) {
         throw new AttachmentError(
@@ -181,15 +207,23 @@ export const AttachmentService = {
       throw new AttachmentError('validation', 'Not a valid chat.attachment.v0 access message');
     }
     const owner = requireOwner();
-    return AttachmentService.resolveAttachment(owner, envelope.event_id);
+    const parsed = parseAttachmentLocation(envelope.location);
+    if (!parsed || !isAttachmentLocationBoundToSender(envelope.location, parsed.ownerPubky)) {
+      throw new AttachmentError('validation', 'Attachment location is not sender-bound');
+    }
+    return AttachmentService.resolveAttachment(owner, parsed.ownerPubky, envelope.event_id);
   },
 
   /**
-   * Download + decrypt + cache. Cached by event_id; does not re-download
-   * when a local cache file already exists.
+   * Download + decrypt + cache. Cached by (sender, event_id); does not
+   * re-download when a local cache file already exists.
    */
-  async resolveAttachment(ownerPubky: PubkyKey, eventId: string): Promise<string> {
-    const row = await StorageService.getAttachment(ownerPubky, eventId);
+  async resolveAttachment(
+    ownerPubky: PubkyKey,
+    senderPubky: PubkyKey,
+    eventId: string,
+  ): Promise<string> {
+    const row = await StorageService.getAttachment(ownerPubky, senderPubky, eventId);
     if (!row) {
       throw new AttachmentError('not-found', 'No attachment metadata for this event');
     }
@@ -197,12 +231,12 @@ export const AttachmentService = {
       return row.localCachePath;
     }
 
-    const secret = await KeyStore.getAttachmentSecret(ownerPubky, eventId);
+    const secret = await KeyStore.getAttachmentSecret(ownerPubky, senderPubky, eventId);
     if (!secret) {
       throw new AttachmentError('not-found', 'Attachment key material is not in KeyStore');
     }
 
-    await StorageService.updateAttachmentResolve(ownerPubky, eventId, {
+    await StorageService.updateAttachmentResolve(ownerPubky, senderPubky, eventId, {
       resolveState: 'resolving',
     });
     try {
@@ -213,21 +247,36 @@ export const AttachmentService = {
           'Attachment ciphertext was not found on the homeserver',
         );
       }
+      if (ciphertext.length > ATTACHMENT_CIPHERTEXT_MAX_CHARS) {
+        throw new AttachmentError(
+          'too-large',
+          `Attachment ciphertext exceeds the receive-side budget (${ciphertext.length} chars)`,
+        );
+      }
       const plaintextB64 = await PaykitLinkNative.attachmentDecrypt(
         ciphertext,
         secret.key,
         secret.nonce,
         row.location,
       );
-      const cachePath = attachmentCachePath(ownerPubky, eventId);
+      const decryptedBytes = decodedBase64Bytes(fromBase64Url(plaintextB64));
+      if (decryptedBytes !== row.size) {
+        throw new AttachmentError(
+          'protocol',
+          `Decrypted attachment is ${decryptedBytes} bytes; envelope claimed ${row.size}`,
+        );
+      }
+      const cachePath = attachmentCachePath(ownerPubky, senderPubky, eventId);
       await writeFileFromStandardBase64(cachePath, fromBase64Url(plaintextB64));
-      await StorageService.updateAttachmentResolve(ownerPubky, eventId, {
+      await StorageService.updateAttachmentResolve(ownerPubky, senderPubky, eventId, {
         resolveState: 'ready',
         localCachePath: cachePath,
       });
       return cachePath;
     } catch (err) {
-      await StorageService.updateAttachmentResolve(ownerPubky, eventId, { resolveState: 'failed' });
+      await StorageService.updateAttachmentResolve(ownerPubky, senderPubky, eventId, {
+        resolveState: 'failed',
+      });
       if (err instanceof AttachmentError) throw err;
       if (isLinkNativeError(err) && err.code === 'protocol') {
         throw new AttachmentError('decrypt-failed', err.message);
@@ -236,13 +285,20 @@ export const AttachmentService = {
     }
   },
 
-  async resolveThumbnail(ownerPubky: PubkyKey, eventId: string): Promise<string | null> {
-    const row = await StorageService.getAttachment(ownerPubky, eventId);
+  async resolveThumbnail(
+    ownerPubky: PubkyKey,
+    senderPubky: PubkyKey,
+    eventId: string,
+  ): Promise<string | null> {
+    const row = await StorageService.getAttachment(ownerPubky, senderPubky, eventId);
     if (!row?.thumbnailLocation) return null;
-    const secret = await KeyStore.getAttachmentSecret(ownerPubky, eventId);
+    const secret = await KeyStore.getAttachmentSecret(ownerPubky, senderPubky, eventId);
     if (!secret?.thumbnail) return null;
     const ciphertext = await PubkyService.get(row.thumbnailLocation);
     if (!ciphertext) return null;
+    if (ciphertext.length > ATTACHMENT_THUMBNAIL_CIPHERTEXT_MAX_CHARS) {
+      return null;
+    }
     try {
       const plaintextB64 = await PaykitLinkNative.attachmentDecrypt(
         ciphertext,
@@ -250,7 +306,11 @@ export const AttachmentService = {
         secret.thumbnail.nonce,
         row.thumbnailLocation,
       );
-      const path = `${attachmentCachePath(ownerPubky, eventId)}.thumb`;
+      const decryptedBytes = decodedBase64Bytes(fromBase64Url(plaintextB64));
+      if (decryptedBytes > ATTACHMENT_THUMBNAIL_MAX_BYTES) {
+        return null;
+      }
+      const path = attachmentThumbCachePath(ownerPubky, senderPubky, eventId);
       await writeFileFromStandardBase64(path, fromBase64Url(plaintextB64));
       return path;
     } catch {
@@ -263,7 +323,7 @@ async function encryptAndUploadThumbnail(
   owner: PubkyKey,
   attachmentId: string,
   fileUri: string,
-): Promise<{ location: string; key: string; nonce: string } | null> {
+): Promise<{ location: string; key: string; nonce: string; size: number } | null> {
   try {
     const resized = await manipulateAsync(fileUri, [{ resize: { width: 96 } }], {
       compress: 0.55,
@@ -271,6 +331,8 @@ async function encryptAndUploadThumbnail(
       base64: true,
     });
     if (!resized.base64) return null;
+    const size = decodedBase64Bytes(resized.base64);
+    if (size <= 0 || size > ATTACHMENT_THUMBNAIL_MAX_BYTES) return null;
     const location = buildAttachmentThumbLocation(owner, attachmentId);
     const key = await PaykitLinkNative.generateAttachmentKey();
     const sealed = await PaykitLinkNative.attachmentEncrypt(
@@ -279,7 +341,7 @@ async function encryptAndUploadThumbnail(
       location,
     );
     await PubkyService.put(location, sealed.ciphertextB64);
-    return { location, key, nonce: sealed.nonceB64 };
+    return { location, key, nonce: sealed.nonceB64, size };
   } catch {
     return null;
   }

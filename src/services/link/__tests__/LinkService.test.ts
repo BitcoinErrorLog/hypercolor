@@ -11,6 +11,7 @@ import { KeyStore } from '../../KeyStore';
 import { RetryQueue } from '../../RetryQueue';
 import {
   CHAT_MESSAGE_KIND,
+  LINK_MESSAGE_MAX_BYTES,
   LINK_RECEIVER_PATH,
   PAYKIT_MESSAGING_CAPABILITY,
   PUBKY_APP_DM_KIND,
@@ -22,7 +23,11 @@ import type { DeliveryQueueItem } from '../../../types';
 import { applyGroupInbound } from '../../group/applyGroupInbound';
 import { applyAttachmentInbound } from '../../attachments/applyAttachmentInbound';
 import { GROUP_MESSAGE_KIND } from '../../../types/group';
-import { CHAT_ATTACHMENT_KIND } from '../../../types/attachment';
+import {
+  ATTACHMENT_ALGORITHM,
+  ATTACHMENT_KEY_PLACEHOLDER,
+  CHAT_ATTACHMENT_KIND,
+} from '../../../types/attachment';
 
 jest.mock('../PaykitLinkNative', () => ({
   PaykitLinkNative: {
@@ -88,6 +93,8 @@ jest.mock('../../StorageService', () => ({
     getLinkReadCursor: jest.fn(),
     setLinkReadCursor: jest.fn(),
     clearAccountData: jest.fn(),
+    retryPendingCleanup: jest.fn(),
+    markGroupEventSeen: jest.fn(),
     listDeliveryQueue: jest.fn(),
     removeFromQueue: jest.fn(),
     getContact: jest.fn(),
@@ -249,6 +256,8 @@ describe('LinkService', () => {
     mockedStorage.getLink.mockResolvedValue(null);
     mockedStorage.getAllLinks.mockResolvedValue([]);
     mockedStorage.listDeliveryQueue.mockResolvedValue([]);
+    mockedStorage.retryPendingCleanup.mockResolvedValue(undefined);
+    mockedStorage.markGroupEventSeen.mockResolvedValue(undefined);
     mockedStorage.hasLinkMessage.mockResolvedValue(false);
     mockedStorage.getUnprocessedLinkStreamItems.mockResolvedValue([]);
     mockedStorage.incrementLinkConsecutiveFailures.mockResolvedValue(1);
@@ -1077,15 +1086,17 @@ describe('LinkService', () => {
 
     it('routes chat.attachment.v0 through applyAttachmentInbound and marks processed', async () => {
       givenEstablishedLink();
+      const liveKey = 'A'.repeat(43);
+      const liveNonce = 'B'.repeat(32);
       const attJson = JSON.stringify({
         version: 1,
         kind: CHAT_ATTACHMENT_KIND,
         event_id: EVENT_ID,
         sent_at: NOW,
         location: `pubky://${PEER}/pub/hypercolor.app/v1/attachments/${EVENT_ID}`,
-        key: 'k',
-        nonce: 'n',
-        algorithm: 'XChaCha20Poly1305',
+        key: liveKey,
+        nonce: liveNonce,
+        algorithm: ATTACHMENT_ALGORITHM,
         contentType: 'image/jpeg',
         size: 12,
       });
@@ -1122,15 +1133,90 @@ describe('LinkService', () => {
 
       const received = await LinkService.syncInbox([PEER]);
 
+      expect(mockedKeyStore.setAttachmentSecret).toHaveBeenCalledWith(
+        OWNER,
+        PEER,
+        EVENT_ID,
+        expect.objectContaining({ key: liveKey, nonce: liveNonce }),
+      );
+      expect(mockedStorage.saveLinkStreamItems).toHaveBeenCalled();
+      const stored = mockedStorage.saveLinkStreamItems.mock.calls[0]![0] as {
+        rawJson: string;
+      }[];
+      expect(stored[0]!.rawJson).toContain(ATTACHMENT_KEY_PLACEHOLDER);
+      expect(stored[0]!.rawJson).not.toContain(liveKey);
+      expect(stored[0]!.rawJson).not.toContain(liveNonce);
       expect(applyAttachmentInbound).toHaveBeenCalledWith(
         expect.objectContaining({
           ownerPubky: OWNER,
           senderPubky: PEER,
-          rawJson: attJson,
         }),
       );
       expect(mockedStorage.markLinkStreamItemProcessed).toHaveBeenCalledWith('sa');
       expect(received).toEqual([attRow]);
+    });
+
+    it('does not persist an oversized known-kind inbound envelope', async () => {
+      givenEstablishedLink();
+      const oversized = JSON.stringify({
+        version: 1,
+        kind: CHAT_MESSAGE_KIND,
+        event_id: EVENT_ID,
+        sent_at: NOW,
+        body: 'z'.repeat(LINK_MESSAGE_MAX_BYTES),
+      });
+      expect(new TextEncoder().encode(oversized).byteLength).toBeGreaterThan(
+        LINK_MESSAGE_MAX_BYTES,
+      );
+      mockedNative.receivePrivateMessages.mockResolvedValue({
+        messages: [{ rawJson: oversized, kind: CHAT_MESSAGE_KIND, version: 1 }],
+        snapshot: 'est-2',
+      });
+      mockedStorage.getUnprocessedLinkStreamItems
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([]);
+
+      await LinkService.syncInbox([PEER]);
+
+      expect(mockedStorage.saveLinkStreamItems).not.toHaveBeenCalled();
+      expect(mockedStorage.updateLinkSnapshot).toHaveBeenCalledWith(
+        OWNER,
+        PEER,
+        'est-2',
+        'established',
+      );
+      expect(mockedStorage.saveLinkMessage).not.toHaveBeenCalled();
+    });
+
+    it('does not persist a spoofed attachment location', async () => {
+      givenEstablishedLink();
+      const victim = 'v'.repeat(52);
+      const spoofed = JSON.stringify({
+        version: 1,
+        kind: CHAT_ATTACHMENT_KIND,
+        event_id: EVENT_ID,
+        sent_at: NOW,
+        location: `pubky://${victim}/pub/hypercolor.app/v1/attachments/${EVENT_ID}`,
+        key: 'A'.repeat(43),
+        nonce: 'B'.repeat(32),
+        algorithm: ATTACHMENT_ALGORITHM,
+        contentType: 'image/jpeg',
+        size: 12,
+      });
+      mockedNative.receivePrivateMessages.mockResolvedValue({
+        messages: [{ rawJson: spoofed, kind: CHAT_ATTACHMENT_KIND, version: 1 }],
+        snapshot: 'est-2',
+      });
+      mockedStorage.getUnprocessedLinkStreamItems
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([]);
+
+      await LinkService.syncInbox([PEER]);
+
+      expect(mockedStorage.saveLinkStreamItems).not.toHaveBeenCalled();
+      expect(mockedKeyStore.setAttachmentSecret).not.toHaveBeenCalled();
+      expect(applyAttachmentInbound).not.toHaveBeenCalled();
+      expect(mockedStorage.updateLinkSnapshot).toHaveBeenCalled();
     });
 
     it('does not persist a snapshot when the drain returned nothing', async () => {

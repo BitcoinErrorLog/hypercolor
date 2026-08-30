@@ -31,6 +31,8 @@ import {
 jest.mock('../../KeyStore', () => ({
   KeyStore: {
     getPubky: jest.fn(),
+    deleteAttachmentSecrets: jest.fn().mockResolvedValue([]),
+    clearAttachmentSecretsForOwner: jest.fn().mockResolvedValue([]),
   },
 }));
 

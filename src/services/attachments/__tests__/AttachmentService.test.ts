@@ -69,11 +69,14 @@ jest.mock('../../group/GroupService', () => ({
 
 import { v4 as uuidv4 } from 'uuid';
 import { manipulateAsync } from 'expo-image-manipulator';
-import { ATTACHMENT_MAX_BYTES } from '../../../flags/config';
+import {
+  ATTACHMENT_CIPHERTEXT_MAX_CHARS,
+  ATTACHMENT_MAX_BYTES,
+  ATTACHMENT_THUMBNAIL_CIPHERTEXT_MAX_CHARS,
+} from '../../../flags/config';
 import { LINK_MESSAGE_MAX_BYTES } from '../../../types/link';
 import {
   ATTACHMENT_ALGORITHM,
-  AttachmentError,
   CHAT_ATTACHMENT_KIND,
   attachmentKeyRef,
   buildAttachmentLocation,
@@ -218,14 +221,15 @@ describe('AttachmentService', () => {
     );
     expect(mockedKeyStore.setAttachmentSecret).toHaveBeenCalledWith(
       OWNER,
+      OWNER,
       EVENT_ID,
       expect.objectContaining({ key: MAIN_KEY, nonce: MAIN_NONCE }),
     );
     expect(mockedStorage.saveAttachment).toHaveBeenCalledWith(
       expect.objectContaining({
         eventId: EVENT_ID,
-        keyRef: attachmentKeyRef(OWNER, EVENT_ID),
-        localCachePath: `file:///cache/hypercolor-attachments/${OWNER}/${EVENT_ID}`,
+        keyRef: attachmentKeyRef(OWNER, OWNER, EVENT_ID),
+        localCachePath: `file:///cache/hypercolor-attachments/${OWNER}/${OWNER}/${EVENT_ID}`,
         location: location(),
       }),
     );
@@ -279,7 +283,7 @@ describe('AttachmentService', () => {
     );
   });
 
-  it('rejects files over the 8 MiB v1 cap before encrypt or upload', async () => {
+  it('uses decoded bytes for size, not filesystem metadata', async () => {
     mockedFs.getInfoAsync.mockResolvedValue({
       exists: true,
       isDirectory: false,
@@ -288,16 +292,43 @@ describe('AttachmentService', () => {
       modificationTime: 0,
     } as never);
 
-    await expect(
-      AttachmentService.sendAttachment(
-        { type: 'conversation', peerPubky: PEER },
-        FILE_URI,
-        'image/jpeg',
-      ),
-    ).rejects.toMatchObject({ code: 'too-large' } satisfies Partial<AttachmentError>);
-    expect(mockedNative.generateAttachmentKey).not.toHaveBeenCalled();
-    expect(mockedPubky.put).not.toHaveBeenCalled();
-    expect(mockedLink.sendPreparedMessage).not.toHaveBeenCalled();
+    const record = await AttachmentService.sendAttachment(
+      { type: 'conversation', peerPubky: PEER },
+      FILE_URI,
+      'application/pdf',
+    );
+    expect(record.size).toBe(9);
+    expect(mockedLink.sendPreparedMessage).toHaveBeenCalled();
+  });
+
+  it('propagates queued delivery instead of lying that the PAM was sent', async () => {
+    mockedLink.sendPreparedMessage.mockResolvedValueOnce({
+      ownerPubky: OWNER,
+      eventId: EVENT_ID,
+      conversationId: `dm:${PEER}`,
+      peerPubky: PEER,
+      senderPubky: OWNER,
+      direction: 'sent',
+      kind: CHAT_ATTACHMENT_KIND,
+      rawJson: '{}',
+      body: '[attachment]',
+      sentAt: 1_700_000_000_000,
+      receivedAt: null,
+      deliveryState: 'sending',
+    });
+
+    const record = await AttachmentService.sendAttachment(
+      { type: 'conversation', peerPubky: PEER },
+      FILE_URI,
+      'application/pdf',
+    );
+    expect(record.deliveryState).toBe('sending');
+    expect(mockedStorage.updateAttachmentDelivery).toHaveBeenCalledWith(
+      OWNER,
+      OWNER,
+      EVENT_ID,
+      'sending',
+    );
   });
 
   it('rejects public-channel and unknown-channel targets', async () => {
@@ -369,7 +400,7 @@ describe('AttachmentService', () => {
       senderPubky: PEER,
       direction: 'received',
       location: location(),
-      keyRef: attachmentKeyRef(OWNER, EVENT_ID),
+      keyRef: attachmentKeyRef(OWNER, PEER, EVENT_ID),
       contentType: 'application/pdf',
       size: 9,
       thumbnailLocation: null,
@@ -382,7 +413,7 @@ describe('AttachmentService', () => {
     mockedFs.getInfoAsync.mockResolvedValue({
       exists: false,
       isDirectory: false,
-      uri: `file:///cache/hypercolor-attachments/${OWNER}/${EVENT_ID}`,
+      uri: `file:///cache/hypercolor-attachments/${OWNER}/${PEER}/${EVENT_ID}`,
     } as never);
     mockedKeyStore.getAttachmentSecret.mockResolvedValue({
       key: MAIN_KEY,
@@ -392,7 +423,7 @@ describe('AttachmentService', () => {
     mockedPubky.get.mockResolvedValue(MAIN_CT);
     mockedNative.attachmentDecrypt.mockResolvedValue(PLAIN_STD);
 
-    const path = await AttachmentService.resolveAttachment(OWNER, EVENT_ID);
+    const path = await AttachmentService.resolveAttachment(OWNER, PEER, EVENT_ID);
 
     expect(mockedPubky.get).toHaveBeenCalledWith(location());
     expect(mockedNative.attachmentDecrypt).toHaveBeenCalledWith(
@@ -402,16 +433,17 @@ describe('AttachmentService', () => {
       location(),
     );
     expect(mockedFs.writeAsStringAsync).toHaveBeenCalled();
-    expect(path).toBe(`file:///cache/hypercolor-attachments/${OWNER}/${EVENT_ID}`);
+    expect(path).toBe(`file:///cache/hypercolor-attachments/${OWNER}/${PEER}/${EVENT_ID}`);
     expect(mockedStorage.updateAttachmentResolve).toHaveBeenCalledWith(
       OWNER,
+      PEER,
       EVENT_ID,
       expect.objectContaining({ resolveState: 'ready', localCachePath: path }),
     );
   });
 
   it('does not re-download when a cache file already exists', async () => {
-    const cachePath = `file:///cache/hypercolor-attachments/${OWNER}/${EVENT_ID}`;
+    const cachePath = `file:///cache/hypercolor-attachments/${OWNER}/${PEER}/${EVENT_ID}`;
     mockedStorage.getAttachment.mockResolvedValue({
       ownerPubky: OWNER,
       eventId: EVENT_ID,
@@ -420,7 +452,7 @@ describe('AttachmentService', () => {
       senderPubky: PEER,
       direction: 'received',
       location: location(),
-      keyRef: attachmentKeyRef(OWNER, EVENT_ID),
+      keyRef: attachmentKeyRef(OWNER, PEER, EVENT_ID),
       contentType: 'application/pdf',
       size: 9,
       thumbnailLocation: null,
@@ -438,7 +470,9 @@ describe('AttachmentService', () => {
       modificationTime: 0,
     } as never);
 
-    await expect(AttachmentService.resolveAttachment(OWNER, EVENT_ID)).resolves.toBe(cachePath);
+    await expect(AttachmentService.resolveAttachment(OWNER, PEER, EVENT_ID)).resolves.toBe(
+      cachePath,
+    );
     expect(mockedPubky.get).not.toHaveBeenCalled();
     expect(mockedNative.attachmentDecrypt).not.toHaveBeenCalled();
   });
@@ -452,7 +486,7 @@ describe('AttachmentService', () => {
       senderPubky: PEER,
       direction: 'received',
       location: location(),
-      keyRef: attachmentKeyRef(OWNER, EVENT_ID),
+      keyRef: attachmentKeyRef(OWNER, PEER, EVENT_ID),
       contentType: 'application/pdf',
       size: 9,
       thumbnailLocation: null,
@@ -478,10 +512,10 @@ describe('AttachmentService', () => {
       message: 'decrypt_failed',
     });
 
-    await expect(AttachmentService.resolveAttachment(OWNER, EVENT_ID)).rejects.toMatchObject({
+    await expect(AttachmentService.resolveAttachment(OWNER, PEER, EVENT_ID)).rejects.toMatchObject({
       code: 'decrypt-failed',
     });
-    expect(mockedStorage.updateAttachmentResolve).toHaveBeenCalledWith(OWNER, EVENT_ID, {
+    expect(mockedStorage.updateAttachmentResolve).toHaveBeenCalledWith(OWNER, PEER, EVENT_ID, {
       resolveState: 'failed',
     });
   });
@@ -490,5 +524,176 @@ describe('AttachmentService', () => {
     await expect(AttachmentService.receiveAttachment('{"kind":"other.v0"}')).rejects.toMatchObject({
       code: 'validation',
     });
+  });
+
+  it('aborts an oversized actual download before decrypt', async () => {
+    mockedStorage.getAttachment.mockResolvedValue({
+      ownerPubky: OWNER,
+      eventId: EVENT_ID,
+      conversationId: `dm:${PEER}`,
+      channelId: null,
+      senderPubky: PEER,
+      direction: 'received',
+      location: location(),
+      keyRef: attachmentKeyRef(OWNER, PEER, EVENT_ID),
+      contentType: 'application/pdf',
+      size: 9,
+      thumbnailLocation: null,
+      localCachePath: null,
+      createdAt: 1,
+      updatedAt: 1,
+      deliveryState: 'delivered',
+      resolveState: 'pending',
+    });
+    mockedFs.getInfoAsync.mockResolvedValue({
+      exists: false,
+      isDirectory: false,
+      uri: 'x',
+    } as never);
+    mockedKeyStore.getAttachmentSecret.mockResolvedValue({
+      key: MAIN_KEY,
+      nonce: MAIN_NONCE,
+      algorithm: ATTACHMENT_ALGORITHM,
+    });
+    mockedPubky.get.mockResolvedValue('C'.repeat(ATTACHMENT_CIPHERTEXT_MAX_CHARS + 1));
+
+    await expect(AttachmentService.resolveAttachment(OWNER, PEER, EVENT_ID)).rejects.toMatchObject({
+      code: 'too-large',
+    });
+    expect(mockedNative.attachmentDecrypt).not.toHaveBeenCalled();
+    expect(mockedFs.writeAsStringAsync).not.toHaveBeenCalled();
+  });
+
+  it('rejects a decrypted-length mismatch and does not cache', async () => {
+    mockedStorage.getAttachment.mockResolvedValue({
+      ownerPubky: OWNER,
+      eventId: EVENT_ID,
+      conversationId: `dm:${PEER}`,
+      channelId: null,
+      senderPubky: PEER,
+      direction: 'received',
+      location: location(),
+      keyRef: attachmentKeyRef(OWNER, PEER, EVENT_ID),
+      contentType: 'application/pdf',
+      size: 9,
+      thumbnailLocation: null,
+      localCachePath: null,
+      createdAt: 1,
+      updatedAt: 1,
+      deliveryState: 'delivered',
+      resolveState: 'pending',
+    });
+    mockedFs.getInfoAsync.mockResolvedValue({
+      exists: false,
+      isDirectory: false,
+      uri: 'x',
+    } as never);
+    mockedKeyStore.getAttachmentSecret.mockResolvedValue({
+      key: MAIN_KEY,
+      nonce: MAIN_NONCE,
+      algorithm: ATTACHMENT_ALGORITHM,
+    });
+    mockedPubky.get.mockResolvedValue(MAIN_CT);
+    mockedNative.attachmentDecrypt.mockResolvedValue('QQ'); // 1 decoded byte, not 9
+
+    await expect(AttachmentService.resolveAttachment(OWNER, PEER, EVENT_ID)).rejects.toMatchObject({
+      code: 'protocol',
+    });
+    expect(mockedFs.writeAsStringAsync).not.toHaveBeenCalled();
+  });
+
+  it('enforces the thumbnail ciphertext cap and does not write a cache file', async () => {
+    mockedStorage.getAttachment.mockResolvedValue({
+      ownerPubky: OWNER,
+      eventId: EVENT_ID,
+      conversationId: `dm:${PEER}`,
+      channelId: null,
+      senderPubky: PEER,
+      direction: 'received',
+      location: location(),
+      keyRef: attachmentKeyRef(OWNER, PEER, EVENT_ID),
+      contentType: 'image/jpeg',
+      size: 9,
+      thumbnailLocation: `${location()}.thumb`,
+      localCachePath: null,
+      createdAt: 1,
+      updatedAt: 1,
+      deliveryState: 'delivered',
+      resolveState: 'pending',
+    });
+    mockedKeyStore.getAttachmentSecret.mockResolvedValue({
+      key: MAIN_KEY,
+      nonce: MAIN_NONCE,
+      algorithm: ATTACHMENT_ALGORITHM,
+      thumbnail: { key: THUMB_KEY, nonce: THUMB_NONCE },
+    });
+    mockedPubky.get.mockResolvedValue('V'.repeat(ATTACHMENT_THUMBNAIL_CIPHERTEXT_MAX_CHARS + 1));
+
+    await expect(AttachmentService.resolveThumbnail(OWNER, PEER, EVENT_ID)).resolves.toBeNull();
+    expect(mockedNative.attachmentDecrypt).not.toHaveBeenCalled();
+    expect(mockedFs.writeAsStringAsync).not.toHaveBeenCalled();
+  });
+
+  it('makes the decrypt mock enforce AAD equality rather than echo', async () => {
+    let sealedAad = '';
+    mockedNative.attachmentEncrypt.mockImplementation(async (_pt, _key, aad) => {
+      sealedAad = String(aad ?? '');
+      return { nonceB64: MAIN_NONCE, ciphertextB64: MAIN_CT, algorithm: ATTACHMENT_ALGORITHM };
+    });
+    mockedNative.attachmentDecrypt.mockImplementation(async (_ct, _key, _nonce, aad) => {
+      if (aad !== sealedAad) {
+        throw { code: 'protocol', message: 'aad mismatch' };
+      }
+      return PLAIN_STD;
+    });
+
+    await AttachmentService.sendAttachment(
+      { type: 'conversation', peerPubky: PEER },
+      FILE_URI,
+      'application/pdf',
+    );
+    mockedStorage.getAttachment.mockResolvedValue({
+      ownerPubky: OWNER,
+      eventId: EVENT_ID,
+      conversationId: `dm:${PEER}`,
+      channelId: null,
+      senderPubky: OWNER,
+      direction: 'sent',
+      location: location(),
+      keyRef: attachmentKeyRef(OWNER, OWNER, EVENT_ID),
+      contentType: 'application/pdf',
+      size: 9,
+      thumbnailLocation: null,
+      localCachePath: null,
+      createdAt: 1,
+      updatedAt: 1,
+      deliveryState: 'sent',
+      resolveState: 'pending',
+    });
+    mockedFs.getInfoAsync.mockResolvedValue({
+      exists: false,
+      isDirectory: false,
+      uri: 'x',
+    } as never);
+    mockedKeyStore.getAttachmentSecret.mockResolvedValue({
+      key: MAIN_KEY,
+      nonce: MAIN_NONCE,
+      algorithm: ATTACHMENT_ALGORITHM,
+    });
+    mockedPubky.get.mockResolvedValue(MAIN_CT);
+
+    await expect(AttachmentService.resolveAttachment(OWNER, OWNER, EVENT_ID)).resolves.toBe(
+      `file:///cache/hypercolor-attachments/${OWNER}/${OWNER}/${EVENT_ID}`,
+    );
+
+    mockedNative.attachmentDecrypt.mockImplementation(async (_ct, _key, _nonce, aad) => {
+      if (aad !== sealedAad) {
+        throw { code: 'protocol', message: 'aad mismatch' };
+      }
+      return PLAIN_STD;
+    });
+    await expect(
+      mockedNative.attachmentDecrypt(MAIN_CT, MAIN_KEY, MAIN_NONCE, 'pubky://wrong/path'),
+    ).rejects.toMatchObject({ message: 'aad mismatch' });
   });
 });

@@ -35,8 +35,16 @@ import {
 } from '../../types/group';
 import { applyGroupInbound } from '../group/applyGroupInbound';
 import { classifyInboundPeer, wotInputFromContact } from './wotGate';
-import { CHAT_ATTACHMENT_KIND } from '../../types/attachment';
+import {
+  attachmentKeyRef,
+  CHAT_ATTACHMENT_KIND,
+  decodeAttachmentEnvelope,
+  isAttachmentLocationBoundToSender,
+  redactAttachmentRawJson,
+} from '../../types/attachment';
 import { applyAttachmentInbound } from '../attachments/applyAttachmentInbound';
+import { reconstructAttachmentWireJson } from '../attachments/redaction';
+import { shouldDropOversizedKnownInbound } from './inboundEnvelope';
 
 /**
  * LinkService — end-to-end-encrypted DMs over official Paykit Encrypted
@@ -144,6 +152,11 @@ export const LinkService = {
    * the alias and is reported as `session-offline` from {@link ensureLinkWith}.
    */
   async restorePersistedSession(): Promise<boolean> {
+    try {
+      await StorageService.retryPendingCleanup();
+    } catch {
+      // Cleanup journal is best-effort; session restore still proceeds.
+    }
     const lookup = await sessionOrRestore();
     return isActiveSession(lookup);
   },
@@ -394,7 +407,14 @@ export const LinkService = {
       try {
         const ownerPubky = requireOwner();
         const handle = requireEstablishedHandle(ownerPubky, input.peerPubky);
-        const { snapshot } = await PaykitLinkNative.sendPrivateMessageJson(handle, input.rawJson);
+        const wireJson = await wireJsonForNativeSend(
+          input.kind,
+          input.rawJson,
+          ownerPubky,
+          ownerPubky,
+          input.eventId,
+        );
+        const { snapshot } = await PaykitLinkNative.sendPrivateMessageJson(handle, wireJson);
         await StorageService.finalizeGroupFanoutSend({
           ownerPubky,
           peerPubky: input.peerPubky,
@@ -1219,15 +1239,10 @@ async function persistInboundWithoutRouting(
   const { messages, snapshot } = await PaykitLinkNative.receivePrivateMessages(handle);
   if (messages.length === 0) return;
   const arrivedAt = Date.now();
-  const streamItems: LinkStreamItemInput[] = messages.map(item => ({
-    id: uuidv4(),
-    ownerPubky,
-    peerPubky,
-    kind: item.kind,
-    rawJson: item.rawJson,
-    receivedAt: arrivedAt,
-  }));
-  await StorageService.saveLinkStreamItems(streamItems);
+  const streamItems = await prepareInboundStreamItems(ownerPubky, peerPubky, messages, arrivedAt);
+  if (streamItems.length > 0) {
+    await StorageService.saveLinkStreamItems(streamItems);
+  }
   await StorageService.updateLinkSnapshot(ownerPubky, peerPubky, snapshot, 'established');
 }
 
@@ -1337,15 +1352,10 @@ async function syncPeerLocked(peerPubky: PubkyKey): Promise<LinkMessage[]> {
     if (messages.length === 0) return swept;
 
     const arrivedAt = Date.now();
-    const streamItems: LinkStreamItemInput[] = messages.map(item => ({
-      id: uuidv4(),
-      ownerPubky,
-      peerPubky,
-      kind: item.kind,
-      rawJson: item.rawJson,
-      receivedAt: arrivedAt,
-    }));
-    await StorageService.saveLinkStreamItems(streamItems);
+    const streamItems = await prepareInboundStreamItems(ownerPubky, peerPubky, messages, arrivedAt);
+    if (streamItems.length > 0) {
+      await StorageService.saveLinkStreamItems(streamItems);
+    }
     const routed = await routeUnprocessedStreamItems(ownerPubky, peerPubky);
     await StorageService.updateLinkSnapshot(ownerPubky, peerPubky, snapshot, 'established');
     return [...swept, ...routed];
@@ -1366,6 +1376,23 @@ async function routeUnprocessedStreamItems(
   const received: LinkMessage[] = [];
   const seenInBatch = new Set<string>();
   for (const item of items) {
+    if (shouldDropOversizedKnownInbound(item.rawJson, item.kind)) {
+      const peekedOver = peekEnvelopeKind(item.rawJson);
+      if (peekedOver !== null && isGroupWireKind(peekedOver)) {
+        const groupEnvelope = decodeGroupEnvelope(item.rawJson);
+        if (groupEnvelope) {
+          await StorageService.markGroupEventSeen(
+            ownerPubky,
+            groupEnvelope.channel_id,
+            peerPubky,
+            groupEnvelope.event_id,
+            item.receivedAt,
+          );
+        }
+      }
+      await StorageService.markLinkStreamItemProcessed(item.id);
+      continue;
+    }
     const peeked = peekEnvelopeKind(item.rawJson);
     if (peeked === CHAT_ATTACHMENT_KIND) {
       const row = await applyAttachmentInbound({
@@ -1479,7 +1506,14 @@ async function deliverQueuedPayload(
 
     try {
       const handle = requireEstablishedHandle(payload.ownerPubky, payload.peerPubky);
-      const { snapshot } = await PaykitLinkNative.sendPrivateMessageJson(handle, payload.rawJson);
+      const wireJson = await wireJsonForNativeSend(
+        payload.kind,
+        payload.rawJson,
+        payload.ownerPubky,
+        payload.senderPubky,
+        payload.eventId,
+      );
+      const { snapshot } = await PaykitLinkNative.sendPrivateMessageJson(handle, wireJson);
       if (payload.type === LINK_GROUP_FANOUT_PAYLOAD_TYPE) {
         await StorageService.finalizeGroupFanoutSend({
           ownerPubky: payload.ownerPubky,
@@ -1496,6 +1530,14 @@ async function deliverQueuedPayload(
             payload.eventId,
             'sent',
           );
+          if (payload.kind === CHAT_ATTACHMENT_KIND) {
+            await StorageService.updateAttachmentDelivery(
+              payload.ownerPubky,
+              payload.senderPubky,
+              payload.eventId,
+              'sent',
+            );
+          }
         }
       } else {
         await StorageService.finalizeLinkSend({
@@ -1545,6 +1587,85 @@ async function markFailed(payload: AnyLinkRetryPayload): Promise<void> {
     payload.eventId,
     'failed',
   );
+  if (payload.kind === CHAT_ATTACHMENT_KIND) {
+    await StorageService.updateAttachmentDelivery(
+      payload.ownerPubky,
+      payload.senderPubky,
+      payload.eventId,
+      'failed',
+    );
+  }
+}
+
+async function prepareInboundStreamItems(
+  ownerPubky: PubkyKey,
+  peerPubky: PubkyKey,
+  messages: readonly { kind: string | null; rawJson: string }[],
+  arrivedAt: number,
+): Promise<LinkStreamItemInput[]> {
+  const out: LinkStreamItemInput[] = [];
+  for (const item of messages) {
+    if (shouldDropOversizedKnownInbound(item.rawJson, item.kind)) {
+      continue;
+    }
+    const peeked = peekEnvelopeKind(item.rawJson) ?? item.kind;
+    if (peeked === CHAT_ATTACHMENT_KIND) {
+      const envelope = decodeAttachmentEnvelope(item.rawJson);
+      if (!envelope) continue;
+      if (!isAttachmentLocationBoundToSender(envelope.location, peerPubky)) {
+        if (envelope.channel_id) {
+          await StorageService.markGroupEventSeen(
+            ownerPubky,
+            envelope.channel_id,
+            peerPubky,
+            envelope.event_id,
+            arrivedAt,
+          );
+        }
+        continue;
+      }
+      await KeyStore.setAttachmentSecret(ownerPubky, peerPubky, envelope.event_id, {
+        key: envelope.key,
+        nonce: envelope.nonce,
+        algorithm: envelope.algorithm,
+        ...(envelope.thumbnail
+          ? { thumbnail: { key: envelope.thumbnail.key, nonce: envelope.thumbnail.nonce } }
+          : {}),
+      });
+      out.push({
+        id: uuidv4(),
+        ownerPubky,
+        peerPubky,
+        kind: item.kind,
+        rawJson: redactAttachmentRawJson(item.rawJson),
+        receivedAt: arrivedAt,
+      });
+      continue;
+    }
+    out.push({
+      id: uuidv4(),
+      ownerPubky,
+      peerPubky,
+      kind: item.kind,
+      rawJson: item.rawJson,
+      receivedAt: arrivedAt,
+    });
+  }
+  return out;
+}
+
+async function wireJsonForNativeSend(
+  kind: string,
+  persistedRawJson: string,
+  ownerPubky: PubkyKey,
+  senderPubky: PubkyKey,
+  eventId: string,
+): Promise<string> {
+  if (kind !== CHAT_ATTACHMENT_KIND) return persistedRawJson;
+  return reconstructAttachmentWireJson(
+    persistedRawJson,
+    attachmentKeyRef(ownerPubky, senderPubky, eventId),
+  );
 }
 
 function retryPayload(
@@ -1576,6 +1697,8 @@ async function dispatchPreparedDm(input: {
   sentAt: number;
 }): Promise<LinkMessage> {
   const queueId = uuidv4();
+  const persistJson =
+    input.kind === CHAT_ATTACHMENT_KIND ? redactAttachmentRawJson(input.rawJson) : input.rawJson;
   const message: LinkMessage = {
     ownerPubky: input.ownerPubky,
     eventId: input.eventId,
@@ -1584,7 +1707,7 @@ async function dispatchPreparedDm(input: {
     senderPubky: input.ownerPubky,
     direction: 'sent',
     kind: input.kind,
-    rawJson: input.rawJson,
+    rawJson: persistJson,
     body: input.body,
     sentAt: input.sentAt,
     receivedAt: null,
@@ -1598,7 +1721,7 @@ async function dispatchPreparedDm(input: {
       messageId: input.eventId,
       recipientPubky: input.peerPubky,
       payload: JSON.stringify(
-        retryPayload(input.ownerPubky, input.peerPubky, input.eventId, input.rawJson, input.kind),
+        retryPayload(input.ownerPubky, input.peerPubky, input.eventId, persistJson, input.kind),
       ),
       attempts: 0,
       nextRetryAt: ts,
@@ -1610,7 +1733,14 @@ async function dispatchPreparedDm(input: {
 
   try {
     const handle = requireEstablishedHandle(input.ownerPubky, input.peerPubky);
-    const { snapshot } = await PaykitLinkNative.sendPrivateMessageJson(handle, input.rawJson);
+    const wireJson = await wireJsonForNativeSend(
+      input.kind,
+      persistJson,
+      input.ownerPubky,
+      input.ownerPubky,
+      input.eventId,
+    );
+    const { snapshot } = await PaykitLinkNative.sendPrivateMessageJson(handle, wireJson);
     await StorageService.finalizeLinkSend({
       ownerPubky: input.ownerPubky,
       peerPubky: input.peerPubky,

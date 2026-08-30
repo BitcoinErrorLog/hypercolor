@@ -160,6 +160,7 @@ export type {
 } from './attachment';
 export {
   ATTACHMENT_ALGORITHM,
+  ATTACHMENT_KEY_PLACEHOLDER,
   CHAT_ATTACHMENT_KIND,
   attachmentKeyRef,
   isAttachmentKind,

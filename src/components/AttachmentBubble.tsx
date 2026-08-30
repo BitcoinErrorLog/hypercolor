@@ -24,7 +24,11 @@ export function AttachmentBubble({
     setLoading(true);
     setError(null);
     try {
-      const path = await AttachmentService.resolveAttachment(record.ownerPubky, record.eventId);
+      const path = await AttachmentService.resolveAttachment(
+        record.ownerPubky,
+        record.senderPubky,
+        record.eventId,
+      );
       setUri(path);
     } catch (err) {
       const message =
@@ -37,7 +41,7 @@ export function AttachmentBubble({
     } finally {
       setLoading(false);
     }
-  }, [loading, record.eventId, record.ownerPubky]);
+  }, [loading, record.eventId, record.ownerPubky, record.senderPubky]);
 
   useEffect(() => {
     if (record.localCachePath) {
@@ -46,7 +50,11 @@ export function AttachmentBubble({
     }
     if (!isImageContentType(record.contentType) || !record.thumbnailLocation) return;
     let cancelled = false;
-    void AttachmentService.resolveThumbnail(record.ownerPubky, record.eventId).then(path => {
+    void AttachmentService.resolveThumbnail(
+      record.ownerPubky,
+      record.senderPubky,
+      record.eventId,
+    ).then(path => {
       if (!cancelled && path) setThumbUri(path);
     });
     return () => {
@@ -57,6 +65,7 @@ export function AttachmentBubble({
     record.eventId,
     record.localCachePath,
     record.ownerPubky,
+    record.senderPubky,
     record.thumbnailLocation,
   ]);
 

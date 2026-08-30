@@ -33,10 +33,16 @@ import type {
   GroupMemberStatus,
   GroupMessage,
 } from '../types/group';
+import { peekEnvelopeKind } from '../types/group';
 import { GROUP_DEFERRED_QUOTA_PER_SENDER, GROUP_DEFERRED_TTL_MS } from '../flags/config';
 import type { AttachmentRecord, AttachmentResolveState } from '../types/attachment';
+import {
+  CHAT_ATTACHMENT_KIND,
+  decodePersistedAttachmentEnvelope,
+  redactAttachmentRawJson,
+} from '../types/attachment';
 import { KeyStore } from './KeyStore';
-import { deleteCacheFiles } from './attachments/fileIo';
+import { cachePathsForAttachment, deleteCacheFiles } from './attachments/fileIo';
 
 /**
  * StorageService — the single point of access for all SQLite persistence.
@@ -294,6 +300,28 @@ export const StorageService = {
 
   async deleteLinkStreamItemsForPeer(ownerPubky: PubkyKey, peerPubky: PubkyKey): Promise<void> {
     const db = await getDb();
+    const held =
+      db.executeSync(
+        `SELECT kind, raw_json FROM link_stream_items
+         WHERE owner_pubky = ? AND peer_pubky = ?`,
+        [ownerPubky, peerPubky],
+      ).rows ?? [];
+    const refs: { senderPubky: string; eventId: string }[] = [];
+    for (const row of held) {
+      const raw = typeof row.raw_json === 'string' ? row.raw_json : '';
+      const kind =
+        typeof row.kind === 'string' && row.kind.length > 0 ? row.kind : peekEnvelopeKind(raw);
+      if (kind !== CHAT_ATTACHMENT_KIND) continue;
+      const envelope = decodePersistedAttachmentEnvelope(raw);
+      if (envelope) refs.push({ senderPubky: peerPubky, eventId: envelope.event_id });
+    }
+    if (refs.length > 0 && typeof KeyStore.deleteAttachmentSecrets === 'function') {
+      try {
+        await KeyStore.deleteAttachmentSecrets(ownerPubky, refs);
+      } catch {
+        // Decline still drops the stream rows.
+      }
+    }
     db.executeSync('DELETE FROM link_stream_items WHERE owner_pubky = ? AND peer_pubky = ?', [
       ownerPubky,
       peerPubky,
@@ -552,7 +580,7 @@ export const StorageService = {
         item.id,
         item.messageId,
         item.recipientPubky,
-        item.payload,
+        persistQueuePayload(item.payload),
         item.attempts,
         item.nextRetryAt,
         item.createdAt,
@@ -824,6 +852,14 @@ export const StorageService = {
          WHERE owner_pubky = ? AND sender_pubky = ? AND kind = ? AND event_id = ?`,
         [ts, input.ownerPubky, input.senderPubky, input.kind, input.eventId],
       );
+      if (input.kind === CHAT_ATTACHMENT_KIND) {
+        db.executeSync(
+          `UPDATE attachments
+           SET delivery_state = 'sent', updated_at = ?
+           WHERE owner_pubky = ? AND sender_pubky = ? AND event_id = ?`,
+          [ts, input.ownerPubky, input.senderPubky, input.eventId],
+        );
+      }
       db.executeSync(
         `UPDATE links
          SET snapshot = ?, status = 'established', consecutive_failures = 0, updated_at = ?
@@ -923,7 +959,7 @@ export const StorageService = {
             item.ownerPubky,
             item.peerPubky,
             item.kind,
-            item.rawJson,
+            persistRawJson(item.kind, item.rawJson),
             item.receivedAt,
             item.receivedAt,
           ],
@@ -980,21 +1016,69 @@ export const StorageService = {
   },
 
   /**
-   * Sign-out teardown: drop every Encrypted-Link row for this account.
-   * Callers must also close native handles (`closeLink` / `signOutSession`).
-   * Also wipes attachment rows, KeyStore attachment keys, and cache files.
+   * Sign-out teardown: collect KeyStore/cache targets first, attempt those
+   * deletes, journal any failed key deletions, then drop SQL rows.
    */
   async clearAccountData(ownerPubky: PubkyKey): Promise<void> {
     const db = await getDb();
     const attachmentRows =
-      db.executeSync('SELECT event_id, local_cache_path FROM attachments WHERE owner_pubky = ?', [
+      db.executeSync(
+        `SELECT event_id, sender_pubky, key_ref, local_cache_path
+         FROM attachments WHERE owner_pubky = ?`,
+        [ownerPubky],
+      ).rows ?? [];
+    const refs = attachmentRows.map(row => ({
+      senderPubky: String(row.sender_pubky),
+      eventId: String(row.event_id),
+    }));
+    const cachePaths = attachmentRows.flatMap(row =>
+      cachePathsForAttachment({
         ownerPubky,
-      ]).rows ?? [];
-    const eventIds = attachmentRows.map(row => String(row.event_id));
-    const cachePaths = attachmentRows.map(row =>
-      typeof row.local_cache_path === 'string' ? row.local_cache_path : null,
+        senderPubky: String(row.sender_pubky),
+        eventId: String(row.event_id),
+        localCachePath: typeof row.local_cache_path === 'string' ? row.local_cache_path : null,
+      }),
     );
+
+    const ownerQueueIds: string[] = [];
+    for (const item of await StorageService.listDeliveryQueue()) {
+      if (queuePayloadBelongsToOwner(item.payload, ownerPubky)) {
+        ownerQueueIds.push(item.id);
+      }
+    }
+
+    const failedServices: string[] = [];
+    try {
+      if (typeof KeyStore.deleteAttachmentSecrets === 'function') {
+        const deleted = await KeyStore.deleteAttachmentSecrets(ownerPubky, refs);
+        if (Array.isArray(deleted)) failedServices.push(...deleted);
+      }
+      if (typeof KeyStore.clearAttachmentSecretsForOwner === 'function') {
+        const leftover = await KeyStore.clearAttachmentSecretsForOwner(ownerPubky);
+        if (Array.isArray(leftover)) failedServices.push(...leftover);
+      }
+    } catch {
+      // Keychain is unavailable in some unit tests.
+    }
+    try {
+      await deleteCacheFiles(cachePaths);
+    } catch {
+      // Cache wipe is best-effort.
+    }
+
+    const ts = now();
     transact(db, () => {
+      for (const service of [...new Set(failedServices)]) {
+        db.executeSync(
+          `INSERT OR IGNORE INTO pending_cleanup
+            (owner_pubky, target_kind, target, created_at)
+           VALUES (?, 'keystore', ?, ?)`,
+          [ownerPubky, service, ts],
+        );
+      }
+      for (const id of ownerQueueIds) {
+        db.executeSync('DELETE FROM delivery_queue WHERE id = ?', [id]);
+      }
       db.executeSync('DELETE FROM attachments WHERE owner_pubky = ?', [ownerPubky]);
       db.executeSync('DELETE FROM group_deferred_events WHERE owner_pubky = ?', [ownerPubky]);
       db.executeSync('DELETE FROM group_seen_events WHERE owner_pubky = ?', [ownerPubky]);
@@ -1009,15 +1093,41 @@ export const StorageService = {
       db.executeSync('DELETE FROM message_requests WHERE owner_pubky = ?', [ownerPubky]);
       db.executeSync('DELETE FROM contacts WHERE owner_pubky = ?', [ownerPubky]);
     });
-    try {
-      await KeyStore.deleteAttachmentSecrets(ownerPubky, eventIds);
-    } catch {
-      // Keychain is unavailable in some unit tests; SQL wipe still happened.
-    }
-    try {
-      await deleteCacheFiles(cachePaths);
-    } catch {
-      // Cache wipe is best-effort.
+  },
+
+  async retryPendingCleanup(): Promise<void> {
+    const db = await getDb();
+    const rows =
+      db.executeSync('SELECT owner_pubky, target_kind, target FROM pending_cleanup').rows ?? [];
+    for (const row of rows) {
+      const ownerPubky = String(row.owner_pubky);
+      const targetKind = String(row.target_kind);
+      const target = String(row.target);
+      let ok = false;
+      if (
+        targetKind === 'keystore' &&
+        typeof KeyStore.deleteAttachmentSecretByService === 'function'
+      ) {
+        try {
+          ok = (await KeyStore.deleteAttachmentSecretByService(ownerPubky, target)) === true;
+        } catch {
+          ok = false;
+        }
+      } else if (targetKind === 'cache') {
+        try {
+          await deleteCacheFiles([target]);
+          ok = true;
+        } catch {
+          ok = false;
+        }
+      }
+      if (ok) {
+        db.executeSync(
+          `DELETE FROM pending_cleanup
+           WHERE owner_pubky = ? AND target_kind = ? AND target = ?`,
+          [ownerPubky, targetKind, target],
+        );
+      }
     }
   },
 
@@ -1028,22 +1138,30 @@ export const StorageService = {
     insertAttachment(db, record);
   },
 
-  async getAttachment(ownerPubky: PubkyKey, eventId: string): Promise<AttachmentRecord | null> {
+  async getAttachment(
+    ownerPubky: PubkyKey,
+    senderPubky: PubkyKey,
+    eventId: string,
+  ): Promise<AttachmentRecord | null> {
     const db = await getDb();
     const result = db.executeSync(
-      'SELECT * FROM attachments WHERE owner_pubky = ? AND event_id = ?',
-      [ownerPubky, eventId],
+      'SELECT * FROM attachments WHERE owner_pubky = ? AND sender_pubky = ? AND event_id = ?',
+      [ownerPubky, senderPubky, eventId],
     );
     const row = result.rows?.[0];
     if (!row) return null;
     return rowToAttachment(row);
   },
 
-  async hasAttachment(ownerPubky: PubkyKey, eventId: string): Promise<boolean> {
+  async hasAttachment(
+    ownerPubky: PubkyKey,
+    senderPubky: PubkyKey,
+    eventId: string,
+  ): Promise<boolean> {
     const db = await getDb();
     const result = db.executeSync(
-      'SELECT 1 FROM attachments WHERE owner_pubky = ? AND event_id = ? LIMIT 1',
-      [ownerPubky, eventId],
+      'SELECT 1 FROM attachments WHERE owner_pubky = ? AND sender_pubky = ? AND event_id = ? LIMIT 1',
+      [ownerPubky, senderPubky, eventId],
     );
     return (result.rows?.length ?? 0) > 0;
   },
@@ -1078,6 +1196,7 @@ export const StorageService = {
 
   async updateAttachmentResolve(
     ownerPubky: PubkyKey,
+    senderPubky: PubkyKey,
     eventId: string,
     patch: { resolveState: AttachmentResolveState; localCachePath?: string | null },
   ): Promise<void> {
@@ -1086,21 +1205,22 @@ export const StorageService = {
       db.executeSync(
         `UPDATE attachments
          SET resolve_state = ?, local_cache_path = ?, updated_at = ?
-         WHERE owner_pubky = ? AND event_id = ?`,
-        [patch.resolveState, patch.localCachePath, now(), ownerPubky, eventId],
+         WHERE owner_pubky = ? AND sender_pubky = ? AND event_id = ?`,
+        [patch.resolveState, patch.localCachePath, now(), ownerPubky, senderPubky, eventId],
       );
       return;
     }
     db.executeSync(
       `UPDATE attachments
        SET resolve_state = ?, updated_at = ?
-       WHERE owner_pubky = ? AND event_id = ?`,
-      [patch.resolveState, now(), ownerPubky, eventId],
+       WHERE owner_pubky = ? AND sender_pubky = ? AND event_id = ?`,
+      [patch.resolveState, now(), ownerPubky, senderPubky, eventId],
     );
   },
 
   async updateAttachmentDelivery(
     ownerPubky: PubkyKey,
+    senderPubky: PubkyKey,
     eventId: string,
     deliveryState: AttachmentRecord['deliveryState'],
   ): Promise<void> {
@@ -1108,8 +1228,8 @@ export const StorageService = {
     db.executeSync(
       `UPDATE attachments
        SET delivery_state = ?, updated_at = ?
-       WHERE owner_pubky = ? AND event_id = ?`,
-      [deliveryState, now(), ownerPubky, eventId],
+       WHERE owner_pubky = ? AND sender_pubky = ? AND event_id = ?`,
+      [deliveryState, now(), ownerPubky, senderPubky, eventId],
     );
   },
 
@@ -1814,7 +1934,7 @@ function insertQueueItem(db: SqlExecutor, item: DeliveryQueueItem): void {
       item.id,
       item.messageId,
       item.recipientPubky,
-      item.payload,
+      persistQueuePayload(item.payload),
       item.attempts,
       item.nextRetryAt,
       item.createdAt,
@@ -1838,7 +1958,7 @@ function insertLinkMessage(db: SqlExecutor, message: LinkMessage): void {
       message.conversationId,
       message.peerPubky,
       message.direction,
-      message.rawJson,
+      persistRawJson(message.kind, message.rawJson),
       message.body,
       message.sentAt,
       message.receivedAt,
@@ -1978,7 +2098,7 @@ function insertGroupMessage(db: SqlExecutor, message: GroupMessage): void {
       message.eventId,
       message.kind,
       message.body,
-      message.rawJson,
+      persistRawJson(message.kind, message.rawJson),
       message.sentAt,
       message.receivedAt,
       message.deliveryState,
@@ -2029,6 +2149,34 @@ function rowToGroupDeferred(row: any): GroupDeferredEvent {
     targetEventId: row.target_event_id,
     targetAuthorPubky: row.target_author_pubky,
   };
+}
+
+function persistRawJson(kind: string | null | undefined, rawJson: string): string {
+  if (kind === CHAT_ATTACHMENT_KIND || peekEnvelopeKind(rawJson) === CHAT_ATTACHMENT_KIND) {
+    return redactAttachmentRawJson(rawJson);
+  }
+  return rawJson;
+}
+
+function persistQueuePayload(payload: string): string {
+  try {
+    const parsed = JSON.parse(payload) as { kind?: unknown; rawJson?: unknown };
+    if (parsed.kind === CHAT_ATTACHMENT_KIND && typeof parsed.rawJson === 'string') {
+      return JSON.stringify({ ...parsed, rawJson: redactAttachmentRawJson(parsed.rawJson) });
+    }
+  } catch {
+    return payload;
+  }
+  return payload;
+}
+
+function queuePayloadBelongsToOwner(payload: string, ownerPubky: string): boolean {
+  try {
+    const parsed = JSON.parse(payload) as { ownerPubky?: unknown };
+    return parsed.ownerPubky === ownerPubky;
+  } catch {
+    return false;
+  }
 }
 
 function insertAttachment(db: SqlExecutor, record: AttachmentRecord): void {

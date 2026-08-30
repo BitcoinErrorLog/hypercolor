@@ -57,7 +57,9 @@ export async function readFileAsStandardBase64(
   const base64 = await FileSystem.readAsStringAsync(uri, {
     encoding: FileSystem.EncodingType.Base64,
   });
-  const size = typeof info.size === 'number' ? info.size : decodedBase64Bytes(base64);
+  // Size from the actual decoded bytes, never filesystem metadata (sparse
+  // files / host reports can disagree with the bytes we encrypt).
+  const size = decodedBase64Bytes(base64);
   return { base64, size };
 }
 
@@ -79,8 +81,37 @@ export function attachmentCacheDirectory(ownerPubky: string): string {
   return `${root}hypercolor-attachments/${ownerPubky}/`;
 }
 
-export function attachmentCachePath(ownerPubky: string, eventId: string): string {
-  return `${attachmentCacheDirectory(ownerPubky)}${eventId}`;
+export function attachmentCachePath(
+  ownerPubky: string,
+  senderPubky: string,
+  eventId: string,
+): string {
+  return `${attachmentCacheDirectory(ownerPubky)}${senderPubky}/${eventId}`;
+}
+
+export function attachmentThumbCachePath(
+  ownerPubky: string,
+  senderPubky: string,
+  eventId: string,
+): string {
+  return `${attachmentCachePath(ownerPubky, senderPubky, eventId)}.thumb`;
+}
+
+export function cachePathsForAttachment(row: {
+  ownerPubky: string;
+  senderPubky: string;
+  eventId: string;
+  localCachePath: string | null;
+}): string[] {
+  const primary = attachmentCachePath(row.ownerPubky, row.senderPubky, row.eventId);
+  const paths = new Set<string>([primary, `${primary}.thumb`]);
+  if (row.localCachePath) {
+    paths.add(row.localCachePath);
+    if (!row.localCachePath.endsWith('.thumb')) {
+      paths.add(`${row.localCachePath}.thumb`);
+    }
+  }
+  return [...paths];
 }
 
 export async function cacheFileExists(path: string): Promise<boolean> {
