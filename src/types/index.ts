@@ -165,3 +165,15 @@ export {
   attachmentKeyRef,
   isAttachmentKind,
 } from './attachment';
+
+export type {
+  PaymentRequestRecord,
+  PaymentStatus,
+  PaymentDirection,
+  TipEndpointRecord,
+} from './payment';
+export {
+  PAYKIT_PAYMENT_REQUEST_KIND,
+  PAYKIT_PRIVATE_PAYMENT_LIST_KIND,
+  isPaykitPaymentKind,
+} from './payment';

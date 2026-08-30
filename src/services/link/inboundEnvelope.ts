@@ -1,6 +1,7 @@
 import { CHAT_MESSAGE_KIND, LINK_MESSAGE_MAX_BYTES, PUBKY_APP_DM_KIND } from '../../types/link';
 import { CHAT_ATTACHMENT_KIND } from '../../types/attachment';
 import { isGroupWireKind, peekEnvelopeKind } from '../../types/group';
+import { isPaykitPaymentKind } from '../../types/payment';
 
 export function inboundRawJsonUtf8Bytes(rawJson: string): number {
   return new TextEncoder().encode(rawJson).byteLength;
@@ -12,6 +13,7 @@ export function isKnownInboundChatKind(kind: string | null): boolean {
     kind === CHAT_MESSAGE_KIND ||
     kind === PUBKY_APP_DM_KIND ||
     kind === CHAT_ATTACHMENT_KIND ||
+    isPaykitPaymentKind(kind) ||
     isGroupWireKind(kind)
   );
 }

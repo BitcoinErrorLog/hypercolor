@@ -3,6 +3,40 @@ import { runLinkLiveProof, parseLiveProofTokens, type LiveProofConfig } from '..
 import { PaykitLinkNative, type PaykitLinkNativeApi } from '../PaykitLinkNative';
 import { CHAT_MESSAGE_KIND, LINK_RECEIVER_PATH } from '../../../types/link';
 import { LinkService } from '../LinkService';
+import { setDbForTests } from '../../../db';
+import { runMigrations } from '../../../db/migrations';
+import { openMemoryDb } from '../../../db/__tests__/betterSqliteAdapter';
+import {
+  ENDPOINT_LIGHTNING_BOLT11,
+  PAYKIT_PAYMENT_ACCEPTANCE_KIND,
+  PAYKIT_PAYMENT_PROOF_KIND,
+  PAYKIT_PAYMENT_REJECTION_KIND,
+  PAYKIT_PAYMENT_REQUEST_KIND,
+  buildPaymentAcceptanceEnvelope,
+  buildPaymentProofEnvelope,
+  buildPaymentRejectionEnvelope,
+  buildPaymentRequestEnvelope,
+} from '../../../types/payment';
+
+jest.mock('@op-engineering/op-sqlite', () => ({
+  open: () => {
+    throw new Error('op-sqlite must not be used in the live-proof unit test');
+  },
+}));
+
+jest.mock('../../KeyStore', () => ({
+  KeyStore: {
+    getPubky: jest.fn(),
+    deleteAttachmentSecrets: jest.fn().mockResolvedValue([]),
+    clearAttachmentSecretsForOwner: jest.fn().mockResolvedValue([]),
+    deleteAttachmentSecretByService: jest.fn().mockResolvedValue(true),
+  },
+}));
+
+jest.mock('../../attachments/fileIo', () => ({
+  deleteCacheFiles: jest.fn().mockResolvedValue(undefined),
+  cachePathsForAttachment: () => [],
+}));
 
 jest.mock('uuid', () => ({ v4: jest.fn() }));
 
@@ -58,6 +92,14 @@ const PUBKY_A = 'a'.repeat(52);
 const PUBKY_B = 'b'.repeat(52);
 const EVENT_A = '00000000-0000-4000-8000-0000000000aa';
 const EVENT_B = '00000000-0000-4000-8000-0000000000bb';
+const REQ_EVENT_1 = '00000000-0000-4000-8000-0000000000c1';
+const REQ_ID_1 = '00000000-0000-4000-8000-0000000000d1';
+const ACC_EVENT = '00000000-0000-4000-8000-0000000000e1';
+const PROOF_EVENT = '00000000-0000-4000-8000-0000000000f1';
+const REQ_EVENT_2 = '00000000-0000-4000-8000-0000000000c2';
+const REQ_ID_2 = '00000000-0000-4000-8000-0000000000d2';
+const REJ_EVENT = '00000000-0000-4000-8000-0000000000e2';
+const LIVE_PREIMAGE = '00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff';
 
 function secrets(): Uint8Array[] {
   return [new Uint8Array(32).fill(1), new Uint8Array(32).fill(2)];
@@ -95,6 +137,36 @@ function mockNativeHappyPath(): void {
     snapshot: 'est-b',
   });
   mockedNative.sendPrivateMessageJson.mockResolvedValue({ snapshot: 'sent' });
+  const requestOne = buildPaymentRequestEnvelope({
+    eventId: REQ_EVENT_1,
+    paymentRequestId: REQ_ID_1,
+    amountValue: '0.001',
+    paymentReference: 'liveproof-pay-1',
+    endpointIds: [ENDPOINT_LIGHTNING_BOLT11],
+  });
+  const acceptance = buildPaymentAcceptanceEnvelope({
+    eventId: ACC_EVENT,
+    paymentRequestId: REQ_ID_1,
+  });
+  const proof = buildPaymentProofEnvelope({
+    eventId: PROOF_EVENT,
+    paymentRequestId: REQ_ID_1,
+    paymentReference: 'liveproof-pay-1',
+    paymentEndpointIdentifier: ENDPOINT_LIGHTNING_BOLT11,
+    proofData: LIVE_PREIMAGE,
+  });
+  const requestTwo = buildPaymentRequestEnvelope({
+    eventId: REQ_EVENT_2,
+    paymentRequestId: REQ_ID_2,
+    amountValue: '0.002',
+    paymentReference: 'liveproof-pay-2',
+    endpointIds: [ENDPOINT_LIGHTNING_BOLT11],
+  });
+  const rejection = buildPaymentRejectionEnvelope({
+    eventId: REJ_EVENT,
+    paymentRequestId: REQ_ID_2,
+    reason: 'liveproof-reject',
+  });
   mockedNative.receivePrivateMessages
     .mockResolvedValueOnce({
       messages: [
@@ -107,6 +179,26 @@ function mockNativeHappyPath(): void {
         { version: 1, kind: CHAT_MESSAGE_KIND, rawJson: envelope(EVENT_B, 'liveproof-b-reply', 2) },
       ],
       snapshot: 'recv-a',
+    })
+    .mockResolvedValueOnce({
+      messages: [{ version: 1, kind: PAYKIT_PAYMENT_REQUEST_KIND, rawJson: requestOne.json }],
+      snapshot: 'recv-pay-1',
+    })
+    .mockResolvedValueOnce({
+      messages: [{ version: 1, kind: PAYKIT_PAYMENT_ACCEPTANCE_KIND, rawJson: acceptance.json }],
+      snapshot: 'recv-acc',
+    })
+    .mockResolvedValueOnce({
+      messages: [{ version: 1, kind: PAYKIT_PAYMENT_PROOF_KIND, rawJson: proof.json }],
+      snapshot: 'recv-proof',
+    })
+    .mockResolvedValueOnce({
+      messages: [{ version: 1, kind: PAYKIT_PAYMENT_REQUEST_KIND, rawJson: requestTwo.json }],
+      snapshot: 'recv-pay-2',
+    })
+    .mockResolvedValueOnce({
+      messages: [{ version: 1, kind: PAYKIT_PAYMENT_REJECTION_KIND, rawJson: rejection.json }],
+      snapshot: 'recv-rej',
     });
   mockedNative.closeLink.mockResolvedValue(undefined);
   mockedNative.removeReceiverMarker.mockResolvedValue(undefined);
@@ -128,12 +220,16 @@ describe('parseLiveProofTokens', () => {
 });
 
 describe('runLinkLiveProof', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     jest.resetAllMocks();
     jest.spyOn(console, 'log').mockImplementation(() => undefined);
+    const db = openMemoryDb();
+    setDbForTests(db);
+    await runMigrations(db);
   });
 
   afterEach(() => {
+    setDbForTests(null);
     jest.restoreAllMocks();
   });
 
@@ -172,7 +268,16 @@ describe('runLinkLiveProof', () => {
     const secretsQueue = secrets();
     let now = 1_700_000_000_000;
     const mockedUuid = uuidv4 as jest.Mock;
-    mockedUuid.mockReturnValueOnce(EVENT_A).mockReturnValue(EVENT_B);
+    mockedUuid
+      .mockReturnValueOnce(EVENT_A)
+      .mockReturnValueOnce(EVENT_B)
+      .mockReturnValueOnce(REQ_EVENT_1)
+      .mockReturnValueOnce(REQ_ID_1)
+      .mockReturnValueOnce(ACC_EVENT)
+      .mockReturnValueOnce(PROOF_EVENT)
+      .mockReturnValueOnce(REQ_EVENT_2)
+      .mockReturnValueOnce(REQ_ID_2)
+      .mockReturnValueOnce(REJ_EVENT);
 
     const report = await runLinkLiveProof(CONFIG, {
       native: mockedNative as unknown as PaykitLinkNativeApi,
@@ -205,6 +310,16 @@ describe('runLinkLiveProof', () => {
       'receive-b',
       'send-b',
       'receive-a',
+      'send-payment-request-a',
+      'receive-payment-request-b',
+      'send-payment-acceptance-b',
+      'receive-payment-acceptance-a',
+      'send-payment-proof-b',
+      'receive-payment-proof-a',
+      'send-payment-request-2-a',
+      'receive-payment-request-2-b',
+      'send-payment-rejection-b',
+      'receive-payment-rejection-a',
       'cleanup-close',
       'cleanup-markers',
       'cleanup-signout',

@@ -44,6 +44,8 @@ import {
 } from '../../types/attachment';
 import { applyAttachmentInbound } from '../attachments/applyAttachmentInbound';
 import { reconstructAttachmentWireJson } from '../attachments/redaction';
+import { applyPaymentInbound } from '../payments/applyPaymentInbound';
+import { isPaykitPaymentKind } from '../../types/payment';
 import { shouldDropOversizedKnownInbound } from './inboundEnvelope';
 
 /**
@@ -1404,6 +1406,17 @@ async function routeUnprocessedStreamItems(
       });
       await StorageService.markLinkStreamItemProcessed(item.id);
       if (row) received.push(row);
+      continue;
+    }
+    if (peeked !== null && isPaykitPaymentKind(peeked)) {
+      await applyPaymentInbound({
+        ownerPubky,
+        senderPubky: peerPubky,
+        peerPubky,
+        rawJson: item.rawJson,
+        receivedAt: item.receivedAt,
+      });
+      await StorageService.markLinkStreamItemProcessed(item.id);
       continue;
     }
     if (peeked !== null && isGroupWireKind(peeked)) {

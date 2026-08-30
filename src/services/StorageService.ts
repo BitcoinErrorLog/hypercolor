@@ -41,6 +41,12 @@ import {
   decodePersistedAttachmentEnvelope,
   redactAttachmentRawJson,
 } from '../types/attachment';
+import type {
+  PaymentEventRecord,
+  PaymentRequestRecord,
+  PaymentStatus,
+  TipEndpointRecord,
+} from '../types/payment';
 import { KeyStore } from './KeyStore';
 import { cachePathsForAttachment, deleteCacheFiles } from './attachments/fileIo';
 
@@ -1080,6 +1086,9 @@ export const StorageService = {
         db.executeSync('DELETE FROM delivery_queue WHERE id = ?', [id]);
       }
       db.executeSync('DELETE FROM attachments WHERE owner_pubky = ?', [ownerPubky]);
+      db.executeSync('DELETE FROM payment_events WHERE owner_pubky = ?', [ownerPubky]);
+      db.executeSync('DELETE FROM payment_requests WHERE owner_pubky = ?', [ownerPubky]);
+      db.executeSync('DELETE FROM tip_endpoints WHERE owner_pubky = ?', [ownerPubky]);
       db.executeSync('DELETE FROM group_deferred_events WHERE owner_pubky = ?', [ownerPubky]);
       db.executeSync('DELETE FROM group_seen_events WHERE owner_pubky = ?', [ownerPubky]);
       db.executeSync('DELETE FROM group_messages WHERE owner_pubky = ?', [ownerPubky]);
@@ -1828,6 +1837,169 @@ export const StorageService = {
     ]);
     return (result.rows?.[0]?.n as number) ?? 0;
   },
+
+  // ── Payments (M5) ─────────────────────────────────────────────────────────
+
+  async savePaymentRequest(record: PaymentRequestRecord): Promise<void> {
+    const db = await getDb();
+    db.executeSync(
+      `INSERT OR IGNORE INTO payment_requests
+        (owner_pubky, peer_pubky, direction, payment_request_id, event_id,
+         amount_value, amount_asset, payment_reference, endpoint_ids, expires_at,
+         status, created_at, updated_at, proof_json, reason)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        record.ownerPubky,
+        record.peerPubky,
+        record.direction,
+        record.paymentRequestId,
+        record.eventId,
+        record.amountValue,
+        record.amountAsset,
+        record.paymentReference,
+        JSON.stringify(record.endpointIds),
+        record.expiresAt,
+        record.status,
+        record.createdAt,
+        record.updatedAt,
+        record.proofJson,
+        record.reason,
+      ],
+    );
+  },
+
+  async getPaymentRequest(
+    ownerPubky: PubkyKey,
+    peerPubky: PubkyKey,
+    paymentRequestId: string,
+  ): Promise<PaymentRequestRecord | null> {
+    const db = await getDb();
+    const result = db.executeSync(
+      `SELECT * FROM payment_requests
+       WHERE owner_pubky = ? AND peer_pubky = ? AND payment_request_id = ?`,
+      [ownerPubky, peerPubky, paymentRequestId],
+    );
+    const row = result.rows?.[0];
+    return row ? rowToPaymentRequest(row) : null;
+  },
+
+  async listPaymentRequestsForPeer(
+    ownerPubky: PubkyKey,
+    peerPubky: PubkyKey,
+  ): Promise<PaymentRequestRecord[]> {
+    const db = await getDb();
+    const result = db.executeSync(
+      `SELECT * FROM payment_requests
+       WHERE owner_pubky = ? AND peer_pubky = ?
+       ORDER BY created_at ASC`,
+      [ownerPubky, peerPubky],
+    );
+    return (result.rows ?? []).map(rowToPaymentRequest);
+  },
+
+  async updatePaymentRequest(
+    ownerPubky: PubkyKey,
+    peerPubky: PubkyKey,
+    paymentRequestId: string,
+    patch: {
+      status: PaymentStatus;
+      proofJson?: string | null;
+      reason?: string | null;
+    },
+  ): Promise<void> {
+    const db = await getDb();
+    db.executeSync(
+      `UPDATE payment_requests
+       SET status = ?, proof_json = COALESCE(?, proof_json),
+           reason = COALESCE(?, reason), updated_at = ?
+       WHERE owner_pubky = ? AND peer_pubky = ? AND payment_request_id = ?`,
+      [
+        patch.status,
+        patch.proofJson === undefined ? null : patch.proofJson,
+        patch.reason === undefined ? null : patch.reason,
+        now(),
+        ownerPubky,
+        peerPubky,
+        paymentRequestId,
+      ],
+    );
+  },
+
+  async savePaymentEvent(record: PaymentEventRecord): Promise<boolean> {
+    const db = await getDb();
+    const before = db.executeSync(
+      `SELECT 1 FROM payment_events
+       WHERE owner_pubky = ? AND conversation_id = ? AND sender_pubky = ? AND event_id = ?`,
+      [record.ownerPubky, record.conversationId, record.senderPubky, record.eventId],
+    );
+    if ((before.rows?.length ?? 0) > 0) return false;
+    db.executeSync(
+      `INSERT OR IGNORE INTO payment_events
+        (owner_pubky, conversation_id, sender_pubky, event_id, kind,
+         payment_request_id, applied, received_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        record.ownerPubky,
+        record.conversationId,
+        record.senderPubky,
+        record.eventId,
+        record.kind,
+        record.paymentRequestId,
+        record.applied ? 1 : 0,
+        record.receivedAt,
+      ],
+    );
+    return true;
+  },
+
+  async hasPaymentEvent(
+    ownerPubky: PubkyKey,
+    conversationId: string,
+    senderPubky: PubkyKey,
+    eventId: string,
+  ): Promise<boolean> {
+    const db = await getDb();
+    const result = db.executeSync(
+      `SELECT 1 FROM payment_events
+       WHERE owner_pubky = ? AND conversation_id = ? AND sender_pubky = ? AND event_id = ?
+       LIMIT 1`,
+      [ownerPubky, conversationId, senderPubky, eventId],
+    );
+    return (result.rows?.length ?? 0) > 0;
+  },
+
+  async replaceTipEndpoints(
+    ownerPubky: PubkyKey,
+    peerPubky: PubkyKey,
+    endpoints: readonly { identifier: string; payload: string }[],
+    updatedAt: number,
+  ): Promise<void> {
+    const db = await getDb();
+    transact(db, () => {
+      db.executeSync('DELETE FROM tip_endpoints WHERE owner_pubky = ? AND peer_pubky = ?', [
+        ownerPubky,
+        peerPubky,
+      ]);
+      for (const endpoint of endpoints) {
+        db.executeSync(
+          `INSERT INTO tip_endpoints (owner_pubky, peer_pubky, identifier, payload, updated_at)
+           VALUES (?, ?, ?, ?, ?)`,
+          [ownerPubky, peerPubky, endpoint.identifier, endpoint.payload, updatedAt],
+        );
+      }
+    });
+  },
+
+  async listTipEndpoints(ownerPubky: PubkyKey, peerPubky: PubkyKey): Promise<TipEndpointRecord[]> {
+    const db = await getDb();
+    const result = db.executeSync(
+      `SELECT * FROM tip_endpoints
+       WHERE owner_pubky = ? AND peer_pubky = ?
+       ORDER BY identifier ASC`,
+      [ownerPubky, peerPubky],
+    );
+    return (result.rows ?? []).map(rowToTipEndpoint);
+  },
 };
 
 // ─── Row mappers ──────────────────────────────────────────────────────────
@@ -2227,5 +2399,46 @@ function rowToAttachment(row: any): AttachmentRecord {
     updatedAt: row.updated_at,
     deliveryState: row.delivery_state,
     resolveState: row.resolve_state,
+  };
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function rowToPaymentRequest(row: any): PaymentRequestRecord {
+  let endpointIds: string[] = [];
+  try {
+    const parsed: unknown = JSON.parse(String(row.endpoint_ids));
+    if (Array.isArray(parsed)) {
+      endpointIds = parsed.filter((id): id is string => typeof id === 'string');
+    }
+  } catch {
+    endpointIds = [];
+  }
+  return {
+    ownerPubky: row.owner_pubky,
+    peerPubky: row.peer_pubky,
+    direction: row.direction,
+    paymentRequestId: row.payment_request_id,
+    eventId: row.event_id,
+    amountValue: row.amount_value,
+    amountAsset: row.amount_asset,
+    paymentReference: row.payment_reference,
+    endpointIds,
+    expiresAt: row.expires_at ?? null,
+    status: row.status,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    proofJson: row.proof_json ?? null,
+    reason: row.reason ?? null,
+  };
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function rowToTipEndpoint(row: any): TipEndpointRecord {
+  return {
+    ownerPubky: row.owner_pubky,
+    peerPubky: row.peer_pubky,
+    identifier: row.identifier,
+    payload: row.payload,
+    updatedAt: row.updated_at,
   };
 }

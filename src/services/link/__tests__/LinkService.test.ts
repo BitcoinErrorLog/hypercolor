@@ -22,6 +22,8 @@ import {
 import type { DeliveryQueueItem } from '../../../types';
 import { applyGroupInbound } from '../../group/applyGroupInbound';
 import { applyAttachmentInbound } from '../../attachments/applyAttachmentInbound';
+import { applyPaymentInbound } from '../../payments/applyPaymentInbound';
+import { PAYKIT_PAYMENT_REQUEST_KIND } from '../../../types/payment';
 import { GROUP_MESSAGE_KIND } from '../../../types/group';
 import {
   ATTACHMENT_ALGORITHM,
@@ -125,6 +127,10 @@ jest.mock('../../group/applyGroupInbound', () => ({
 
 jest.mock('../../attachments/applyAttachmentInbound', () => ({
   applyAttachmentInbound: jest.fn().mockResolvedValue(null),
+}));
+
+jest.mock('../../payments/applyPaymentInbound', () => ({
+  applyPaymentInbound: jest.fn().mockResolvedValue({ action: 'applied', request: null }),
 }));
 
 jest.mock('../../KeyStore', () => ({
@@ -1154,6 +1160,52 @@ describe('LinkService', () => {
       );
       expect(mockedStorage.markLinkStreamItemProcessed).toHaveBeenCalledWith('sa');
       expect(received).toEqual([attRow]);
+    });
+
+    it('routes paykit.payment_request through applyPaymentInbound and marks processed', async () => {
+      givenEstablishedLink();
+      const payJson = JSON.stringify({
+        version: 1,
+        kind: PAYKIT_PAYMENT_REQUEST_KIND,
+        event_id: EVENT_ID,
+        payment_request_id: 'b7f9c2a1-6d43-4b0e-a8d4-0fe2c712ab33',
+        request: {
+          amount: { value: '0.001', asset: 'btc' },
+          payment_reference: 'invoice-2026-0001',
+          proposal_expires_at: null,
+          recurrence: null,
+          accepted_payment_endpoint_identifiers: ['btc-lightning-bolt11'],
+          metadata: {},
+        },
+      });
+      mockedNative.receivePrivateMessages.mockResolvedValue({
+        messages: [{ rawJson: payJson, kind: PAYKIT_PAYMENT_REQUEST_KIND, version: 1 }],
+        snapshot: 'est-2',
+      });
+      mockedStorage.getUnprocessedLinkStreamItems.mockResolvedValueOnce([]).mockResolvedValueOnce([
+        {
+          id: 'sp',
+          ownerPubky: OWNER,
+          peerPubky: PEER,
+          kind: PAYKIT_PAYMENT_REQUEST_KIND,
+          rawJson: payJson,
+          receivedAt: NOW,
+          processed: false,
+        },
+      ]);
+
+      const received = await LinkService.syncInbox([PEER]);
+
+      expect(applyPaymentInbound).toHaveBeenCalledWith(
+        expect.objectContaining({
+          ownerPubky: OWNER,
+          senderPubky: PEER,
+          peerPubky: PEER,
+          rawJson: payJson,
+        }),
+      );
+      expect(mockedStorage.markLinkStreamItemProcessed).toHaveBeenCalledWith('sp');
+      expect(received).toEqual([]);
     });
 
     it('does not persist an oversized known-kind inbound envelope', async () => {

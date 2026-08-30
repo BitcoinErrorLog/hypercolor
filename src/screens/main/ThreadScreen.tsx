@@ -10,6 +10,7 @@ import {
   StyleSheet,
   SafeAreaView,
   ActivityIndicator,
+  Alert,
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
@@ -24,6 +25,12 @@ import { MessageRouter } from '../../services/MessageRouter';
 import { LinkService } from '../../services/link/LinkService';
 import { AttachmentBubble } from '../../components/AttachmentBubble';
 import { ComposerAttachButton } from '../../components/ComposerAttachButton';
+import { PaymentRequestBubble } from '../../components/PaymentRequestBubble';
+import { PaymentComposeSheet } from '../../components/PaymentComposeSheet';
+import { ThreadTipBar } from '../../components/ThreadTipBar';
+import { PaymentService } from '../../services/payments/PaymentService';
+import { isPaykitPaymentKind, PaymentError, type PaymentRequestRecord } from '../../types/payment';
+import type { TipEndpointRecord } from '../../types/payment';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Thread'>;
 
@@ -36,7 +43,8 @@ type ThreadItem =
       kind: 'attachment';
       record: AttachmentRecord;
       message?: LinkMessage;
-    };
+    }
+  | { id: string; sentAt: number; kind: 'payment'; record: PaymentRequestRecord };
 
 export default function ThreadScreen({ route }: Props) {
   const { threadId, participantPubky } = route.params;
@@ -48,18 +56,26 @@ export default function ThreadScreen({ route }: Props) {
   const [loading, setLoading] = useState(true);
   const [linkMessages, setLinkMessages] = useState<LinkMessage[]>([]);
   const [attachments, setAttachments] = useState<AttachmentRecord[]>([]);
+  const [payments, setPayments] = useState<PaymentRequestRecord[]>([]);
+  const [tipEndpoints, setTipEndpoints] = useState<TipEndpointRecord[]>([]);
+  const [composePayment, setComposePayment] = useState(false);
+  const [paymentBusy, setPaymentBusy] = useState(false);
 
   const conversationId = buildDmConversationId(participantPubky);
 
   const reloadEncrypted = useCallback(async () => {
     if (!localPubky) return;
-    const [msgs, atts] = await Promise.all([
+    const [msgs, atts, pays, tips] = await Promise.all([
       StorageService.getLinkMessagesForConversation(localPubky, conversationId, 200),
       StorageService.listAttachmentsForConversation(localPubky, conversationId),
+      StorageService.listPaymentRequestsForPeer(localPubky, participantPubky),
+      StorageService.listTipEndpoints(localPubky, participantPubky),
     ]);
     setLinkMessages(msgs);
     setAttachments(atts);
-  }, [conversationId, localPubky]);
+    setPayments(pays);
+    setTipEndpoints(tips);
+  }, [conversationId, localPubky, participantPubky]);
 
   useEffect(() => {
     StorageService.getMessagesForThread(threadId, 50).then(msgs => {
@@ -102,12 +118,40 @@ export default function ThreadScreen({ route }: Props) {
       storeMessages={storeMessages}
       linkMessages={linkMessages}
       attachments={attachments}
+      payments={payments}
+      tipEndpoints={tipEndpoints}
+      composePayment={composePayment}
+      paymentBusy={paymentBusy}
       onBack={() => nav.goBack()}
       onChangeDraft={setDraft}
       onSend={() => {
         void handleSend();
       }}
       onAttachSent={() => {
+        void reloadEncrypted();
+      }}
+      onOpenPaymentCompose={() => setComposePayment(true)}
+      onClosePaymentCompose={() => setComposePayment(false)}
+      onSubmitPayment={(amountBtc, reference) => {
+        setPaymentBusy(true);
+        void PaymentService.requestPayment(participantPubky, { value: amountBtc }, reference)
+          .then(() => {
+            setComposePayment(false);
+            void reloadEncrypted();
+          })
+          .catch(err => {
+            Alert.alert(
+              'Payment request',
+              err instanceof PaymentError
+                ? err.message
+                : err instanceof Error
+                  ? err.message
+                  : 'Could not send payment request',
+            );
+          })
+          .finally(() => setPaymentBusy(false));
+      }}
+      onPaymentsChanged={() => {
         void reloadEncrypted();
       }}
     />
@@ -123,10 +167,18 @@ export function ThreadScreenContent({
   storeMessages,
   linkMessages,
   attachments,
+  payments,
+  tipEndpoints,
+  composePayment,
+  paymentBusy,
   onBack,
   onChangeDraft,
   onSend,
   onAttachSent,
+  onOpenPaymentCompose,
+  onClosePaymentCompose,
+  onSubmitPayment,
+  onPaymentsChanged,
 }: {
   participantPubky: string;
   localPubky: string | null;
@@ -136,15 +188,23 @@ export function ThreadScreenContent({
   storeMessages: Message[];
   linkMessages: LinkMessage[];
   attachments: AttachmentRecord[];
+  payments: PaymentRequestRecord[];
+  tipEndpoints: TipEndpointRecord[];
+  composePayment: boolean;
+  paymentBusy: boolean;
   onBack: () => void;
   onChangeDraft: (value: string) => void;
   onSend: () => void;
   onAttachSent: () => void;
+  onOpenPaymentCompose: () => void;
+  onClosePaymentCompose: () => void;
+  onSubmitPayment: (amountBtc: string, reference: string) => void;
+  onPaymentsChanged: () => void;
 }) {
   const flatListRef = useRef<FlatList<ThreadItem>>(null);
   const items = useMemo(
-    () => mergeThreadItems(storeMessages, linkMessages, attachments),
-    [storeMessages, linkMessages, attachments],
+    () => mergeThreadItems(storeMessages, linkMessages, attachments, payments),
+    [storeMessages, linkMessages, attachments, payments],
   );
 
   useEffect(() => {
@@ -155,6 +215,23 @@ export function ThreadScreenContent({
 
   const renderItem = useCallback(
     ({ item }: { item: ThreadItem }) => {
+      if (item.kind === 'payment') {
+        const isMine = item.record.direction === 'sent';
+        return (
+          <View style={[styles.bubble, isMine ? styles.mine : styles.theirs]}>
+            {localPubky ? (
+              <PaymentRequestBubble
+                record={item.record}
+                localPubky={localPubky}
+                onChanged={onPaymentsChanged}
+              />
+            ) : null}
+            <View style={styles.meta}>
+              <Text style={styles.time}>{formatTime(item.sentAt)}</Text>
+            </View>
+          </View>
+        );
+      }
       if (item.kind === 'attachment') {
         const isMine = item.record.senderPubky === localPubky;
         return (
@@ -195,7 +272,7 @@ export function ThreadScreenContent({
         </View>
       );
     },
-    [localPubky],
+    [localPubky, onPaymentsChanged],
   );
 
   return (
@@ -207,8 +284,15 @@ export function ThreadScreenContent({
         <Text style={styles.title} numberOfLines={1} ellipsizeMode="middle">
           {participantPubky}
         </Text>
-        <View style={{ width: 32 }} />
+        <TouchableOpacity onPress={onOpenPaymentCompose} style={styles.backBtn}>
+          <Text style={styles.requestPay}>₿</Text>
+        </TouchableOpacity>
       </View>
+      <ThreadTipBar
+        peerPubky={participantPubky}
+        endpoints={tipEndpoints}
+        onChanged={onPaymentsChanged}
+      />
 
       {loading ? (
         <View style={styles.loadingContainer}>
@@ -230,6 +314,12 @@ export function ThreadScreenContent({
         keyboardVerticalOffset={0}
       >
         <View style={styles.composer}>
+          <PaymentComposeSheet
+            visible={composePayment}
+            busy={paymentBusy}
+            onClose={onClosePaymentCompose}
+            onSubmit={onSubmitPayment}
+          />
           <ComposerAttachButton
             target={{ type: 'conversation', peerPubky: participantPubky }}
             disabled={sending}
@@ -266,6 +356,7 @@ function mergeThreadItems(
   legacy: Message[],
   linkMessages: LinkMessage[],
   attachments: AttachmentRecord[],
+  payments: PaymentRequestRecord[],
 ): ThreadItem[] {
   const items: ThreadItem[] = [];
   const attachmentByEvent = new Map(attachments.map(a => [a.eventId, a]));
@@ -274,7 +365,18 @@ function mergeThreadItems(
   for (const message of legacy) {
     items.push({ id: `legacy:${message.id}`, sentAt: message.createdAt, kind: 'legacy', message });
   }
+  for (const record of payments) {
+    items.push({
+      id: `pay:${record.peerPubky}:${record.paymentRequestId}`,
+      sentAt: record.createdAt,
+      kind: 'payment',
+      record,
+    });
+  }
   for (const message of linkMessages) {
+    if (isPaykitPaymentKind(message.kind)) {
+      continue;
+    }
     if (message.kind === CHAT_ATTACHMENT_KIND) {
       const record = attachmentByEvent.get(message.eventId);
       if (record) {
@@ -398,4 +500,5 @@ const styles = StyleSheet.create({
   },
   sendBtnDisabled: { opacity: 0.4 },
   sendIcon: { color: '#fff', fontSize: 18, fontWeight: '700' },
+  requestPay: { fontSize: 18, color: '#c4b5fd', textAlign: 'right' },
 });

@@ -20,6 +20,7 @@ import {
   runLinkLiveProof,
   type LiveProofReport,
 } from '../../services/link/liveProof';
+import { TipEndpointsSettings } from '../../components/TipEndpointsSettings';
 
 type Nav = NativeStackNavigationProp<RootStackParamList, 'Settings'>;
 
@@ -118,6 +119,8 @@ export default function SettingsScreen() {
             <Text style={styles.chevron}>›</Text>
           </TouchableOpacity>
         </View>
+
+        <TipEndpointsSettings />
 
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Account</Text>

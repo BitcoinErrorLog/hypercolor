@@ -118,7 +118,7 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
 
     await runMigrations(db);
 
-    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(10);
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(11);
     expect(db.executeSync('SELECT * FROM link_receivers').rows).toEqual([]);
     expect(
       db.executeSync(
@@ -353,7 +353,7 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
     setDbForTests(db);
     await runMigrations(db);
 
-    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(10);
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(11);
     const cols = db.executeSync('PRAGMA table_info(contacts)').rows ?? [];
     const names = cols.map(row => row.name);
     expect(names).toEqual(
@@ -604,7 +604,7 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
     setDbForTests(db);
     await runMigrations(db);
 
-    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(10);
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(11);
     for (const name of [
       'group_channels',
       'group_members',
@@ -755,7 +755,7 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
 
     await runMigrations(db);
 
-    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(10);
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(11);
     const row = db.executeSync('SELECT * FROM group_messages').rows?.[0];
     expect(row).toEqual(
       expect.objectContaining({
@@ -781,7 +781,7 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
     setDbForTests(db);
     await runMigrations(db);
 
-    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(10);
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(11);
     expect(
       db.executeSync("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'attachments'")
         .rows,
@@ -915,6 +915,105 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
     );
     expect(await StorageService.getAttachment(OWNER, OTHER, sharedEvent)).toEqual(
       expect.objectContaining({ senderPubky: OTHER, size: 8 }),
+    );
+  });
+
+  it('creates v11 payment tables, wipes them on clearAccountData, and isolates accounts', async () => {
+    const db = openMemoryDb();
+    setDbForTests(db);
+    await runMigrations(db);
+
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(11);
+    expect(
+      db.executeSync(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'payment_requests'",
+      ).rows,
+    ).toHaveLength(1);
+    expect(
+      db.executeSync(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'payment_events'",
+      ).rows,
+    ).toHaveLength(1);
+    expect(
+      db.executeSync(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'tip_endpoints'",
+      ).rows,
+    ).toHaveLength(1);
+
+    const pk = db.executeSync('PRAGMA table_info(payment_requests)').rows ?? [];
+    expect(pk.filter(col => Number(col.pk) > 0).map(col => col.name)).toEqual([
+      'owner_pubky',
+      'peer_pubky',
+      'payment_request_id',
+    ]);
+
+    const requestId = 'b7f9c2a1-6d43-4b0e-a8d4-0fe2c712ab33';
+    const eventId = '8a0d8b4c-913f-4e31-9f2c-2a6f5bb4d101';
+    await StorageService.savePaymentRequest({
+      ownerPubky: OWNER,
+      peerPubky: PEER,
+      direction: 'sent',
+      paymentRequestId: requestId,
+      eventId,
+      amountValue: '0.001',
+      amountAsset: 'btc',
+      paymentReference: 'invoice-2026-0001',
+      endpointIds: ['btc-lightning-bolt11'],
+      expiresAt: null,
+      status: 'pending',
+      createdAt: 10,
+      updatedAt: 10,
+      proofJson: null,
+      reason: null,
+    });
+    await StorageService.savePaymentEvent({
+      ownerPubky: OWNER,
+      conversationId: `dm:${PEER}`,
+      senderPubky: OWNER,
+      eventId,
+      kind: 'paykit.payment_request',
+      paymentRequestId: requestId,
+      applied: true,
+      receivedAt: 10,
+    });
+    await StorageService.replaceTipEndpoints(
+      OWNER,
+      PEER,
+      [{ identifier: 'btc-lightning-bolt11', payload: 'lnbc1validinvoiceabc' }],
+      10,
+    );
+    await StorageService.savePaymentRequest({
+      ownerPubky: OTHER,
+      peerPubky: PEER,
+      direction: 'received',
+      paymentRequestId: requestId,
+      eventId,
+      amountValue: '0.002',
+      amountAsset: 'btc',
+      paymentReference: 'other-invoice',
+      endpointIds: ['btc-lightning-bolt11'],
+      expiresAt: null,
+      status: 'pending',
+      createdAt: 11,
+      updatedAt: 11,
+      proofJson: null,
+      reason: null,
+    });
+
+    expect(await StorageService.getPaymentRequest(OWNER, PEER, requestId)).toEqual(
+      expect.objectContaining({ amountValue: '0.001', paymentReference: 'invoice-2026-0001' }),
+    );
+    expect(await StorageService.getPaymentRequest(OTHER, PEER, requestId)).toEqual(
+      expect.objectContaining({ amountValue: '0.002' }),
+    );
+
+    await StorageService.clearAccountData(OWNER);
+
+    expect(await StorageService.getPaymentRequest(OWNER, PEER, requestId)).toBeNull();
+    expect(await StorageService.hasPaymentEvent(OWNER, `dm:${PEER}`, OWNER, eventId)).toBe(false);
+    expect(await StorageService.listTipEndpoints(OWNER, PEER)).toEqual([]);
+    expect(await StorageService.getPaymentRequest(OTHER, PEER, requestId)).toEqual(
+      expect.objectContaining({ amountValue: '0.002', paymentReference: 'other-invoice' }),
     );
   });
 });

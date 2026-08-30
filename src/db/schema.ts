@@ -1,4 +1,67 @@
 /**
+ * Schema v11 — Paykit payment requests, sender-scoped event dedup, tip lists.
+ *
+ * Payments are official Paykit PAMs over Encrypted Links. This app never
+ * executes them. Rows are owner-scoped and wiped by `clearAccountData`.
+ *
+ * `payment_requests` PK is `(owner_pubky, peer_pubky, payment_request_id)`
+ * so a request id from peer A cannot be transitioned by peer B.
+ *
+ * `payment_events` dedup is `(owner_pubky, conversation_id, sender_pubky,
+ * event_id)` — the same sender-scoped identity as M3/M4.
+ *
+ * `tip_endpoints` stores the latest-state private payment list per peer.
+ * Locally configured endpoints use `peer_pubky = owner_pubky`.
+ */
+export const SCHEMA_V11_STATEMENTS: readonly string[] = [
+  `CREATE TABLE IF NOT EXISTS payment_requests (
+    owner_pubky           TEXT    NOT NULL,
+    peer_pubky            TEXT    NOT NULL,
+    direction             TEXT    NOT NULL,
+    payment_request_id    TEXT    NOT NULL,
+    event_id              TEXT    NOT NULL,
+    amount_value          TEXT    NOT NULL,
+    amount_asset          TEXT    NOT NULL,
+    payment_reference     TEXT    NOT NULL,
+    endpoint_ids          TEXT    NOT NULL,
+    expires_at            INTEGER,
+    status                TEXT    NOT NULL,
+    created_at            INTEGER NOT NULL,
+    updated_at            INTEGER NOT NULL,
+    proof_json            TEXT,
+    reason                TEXT,
+    PRIMARY KEY (owner_pubky, peer_pubky, payment_request_id)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_payment_requests_peer
+    ON payment_requests(owner_pubky, peer_pubky, updated_at DESC)`,
+
+  `CREATE TABLE IF NOT EXISTS payment_events (
+    owner_pubky          TEXT    NOT NULL,
+    conversation_id      TEXT    NOT NULL,
+    sender_pubky         TEXT    NOT NULL,
+    event_id             TEXT    NOT NULL,
+    kind                 TEXT    NOT NULL,
+    payment_request_id   TEXT,
+    applied              INTEGER NOT NULL DEFAULT 0,
+    received_at          INTEGER NOT NULL,
+    PRIMARY KEY (owner_pubky, conversation_id, sender_pubky, event_id)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_payment_events_request
+    ON payment_events(owner_pubky, payment_request_id)`,
+
+  `CREATE TABLE IF NOT EXISTS tip_endpoints (
+    owner_pubky    TEXT    NOT NULL,
+    peer_pubky     TEXT    NOT NULL,
+    identifier     TEXT    NOT NULL,
+    payload        TEXT    NOT NULL,
+    updated_at     INTEGER NOT NULL,
+    PRIMARY KEY (owner_pubky, peer_pubky, identifier)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_tip_endpoints_peer
+    ON tip_endpoints(owner_pubky, peer_pubky)`,
+];
+
+/**
  * Schema v10 — sender-scoped attachment identity + durable cleanup journal.
  *
  * v9 PK `(owner_pubky, event_id)` let a group member reuse another sender's
