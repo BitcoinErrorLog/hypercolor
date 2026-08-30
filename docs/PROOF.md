@@ -20,7 +20,7 @@ These requirements exist because M1–M6 left a proof gap: Jest covers service i
 
 | Gate | What ran | Bar |
 |---|---|---|
-| CI | `npm run typecheck && npm run lint && npm test` on every push | Typecheck + lint + Jest green. Last counted: 30 suites / 281 tests. |
+| CI | `npm run typecheck && npm run lint && npm test` on every push | Typecheck + lint + Jest green. Last counted: 34 suites / 309 tests. |
 | Staging DM (native path) | `runLinkLiveProof` on iOS simulator, two fresh staging signups | Handshake + bidirectional chat PAMs over real homeserver. |
 | Staging payment PAMs | Same harness | Request → accept → proof, plus a second request → reject. Proof payload is dummy hex — **does not** satisfy the payment-execution row below. |
 
@@ -137,13 +137,13 @@ All runners live under `src/services/link/liveProof*.ts`. `App.tsx` dynamic-impo
 
 Programmatic dispatch: `runNamedLiveProofs({ homeserverPubky, signupTokenA, signupTokenB, signupTokenC, rows })`.
 
-Cleanup: each product row closes links, removes markers, signs out, `clearAccountData` per owner, then `clearAllNativeSecrets`. Logs go through `redactLiveProofForLog`.
+Cleanup: each product row closes links, removes markers, signs out, `clearAccountData` per owner, then `clearAllNativeSecrets`. That last call wipes **every** native Paykit secret on the device — run only on a throwaway simulator or a dedicated test account, never a device that holds a real identity. Logs go through `redactLiveProofForLog`.
 
 ## P7 harness (Maestro)
 
 One suite, Maestro only. Requires a **debug / expo-dev-client** native build (`org.name.hypercolor` on iOS, `com.hypercolor` on Android). Release builds reject secret import, and the debug signup panel is `__DEV__` only. Do not drive Ring (P6).
 
-Debug signup uses `signupWithSecret` / `signinWithSecret` and `provisionHarnessReceiver`, then the flow opens the product Enable Messaging screen and asserts **Already enabled**. Account switch is the Profile debug panel — not `Disconnect pubky-ring` — so the previous party's homeserver receiver marker stays published for send/receive on one device.
+Debug signup uses `signupWithSecret` / `signinWithSecret` and `provisionHarnessReceiver`, then the flow opens the product Enable Messaging screen and asserts **Already enabled** (it does not tap the enable action; the receiver is already provisioned). Account switch is the Profile debug panel — not `Disconnect pubky-ring` — so the previous party's homeserver receiver marker stays published for send/receive on one device.
 
 Tokens are single-use staging signup tokens. Never commit them. Identity secrets are optional 64-char hex; if omitted the app generates them and the flow copies the values from `debugSignupPubky` / `debugSignupSecretValue`.
 

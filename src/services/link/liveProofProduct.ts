@@ -183,7 +183,8 @@ export async function runLinkServiceLiveProof(
           CHAT_MESSAGE_KIND,
           sentAEventId,
         );
-        if (outbound && outbound.deliveryState !== 'sent') {
+        if (!outbound) throw new Error('A outbound link_messages row missing after B receive');
+        if (outbound.deliveryState !== 'sent') {
           throw new Error(`A outbound still ${outbound.deliveryState} after B receive`);
         }
         return `delivered ${sentAEventId}`;
