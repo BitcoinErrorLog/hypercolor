@@ -1,3 +1,7 @@
+// Polyfill crypto.getRandomValues so `uuid` works in the RN runtime. MUST be
+// imported before anything that generates UUIDs (LinkService message ids).
+import 'react-native-get-random-values';
+
 // Polyfill Buffer for libraries that depend on it (EnvelopeService, PubkyService)
 import { Buffer } from 'buffer';
 global.Buffer = Buffer;

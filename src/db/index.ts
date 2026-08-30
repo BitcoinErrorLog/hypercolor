@@ -35,8 +35,6 @@ export async function getDb(): Promise<SqlExecutor> {
   // Enable WAL mode and foreign key enforcement before running migrations.
   db.executeSync('PRAGMA journal_mode = WAL');
   db.executeSync('PRAGMA foreign_keys = ON');
-  // Clear transient mesh peer data on every startup — BLE state is ephemeral.
-  db.executeSync('DELETE FROM mesh_peers');
 
   const executor: SqlExecutor = {
     executeSync(query, params) {
@@ -44,6 +42,9 @@ export async function getDb(): Promise<SqlExecutor> {
     },
   };
   await runMigrations(executor);
+  // Clear transient mesh peer data on every startup — BLE state is ephemeral.
+  // Must run after migrations so the table exists on a fresh install.
+  executor.executeSync('DELETE FROM mesh_peers');
   _db = executor;
   return executor;
 }
