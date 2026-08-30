@@ -1429,6 +1429,7 @@ async function deliverQueuedPayload(
       const exists = await StorageService.hasGroupMessage(
         payload.ownerPubky,
         payload.channelId,
+        payload.senderPubky,
         payload.eventId,
       );
       if (!exists) {
@@ -1470,6 +1471,7 @@ async function deliverQueuedPayload(
           await StorageService.updateGroupMessageDeliveryState(
             payload.ownerPubky,
             payload.channelId,
+            payload.senderPubky,
             payload.eventId,
             'sent',
           );
@@ -1508,6 +1510,7 @@ async function markFailed(payload: AnyLinkRetryPayload): Promise<void> {
       await StorageService.updateGroupMessageDeliveryState(
         payload.ownerPubky,
         payload.channelId,
+        payload.senderPubky,
         payload.eventId,
         'sent',
       );

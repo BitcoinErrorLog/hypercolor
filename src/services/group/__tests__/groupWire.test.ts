@@ -50,6 +50,7 @@ describe('group wire contracts', () => {
       channelId: CHANNEL,
       eventId: EVENT,
       targetEventId: TARGET,
+      targetAuthorPubky: HOST,
       emoji: '👍',
       sentAt: SENT,
     });
@@ -59,6 +60,7 @@ describe('group wire contracts', () => {
       channelId: CHANNEL,
       eventId: EVENT,
       targetEventId: TARGET,
+      targetAuthorPubky: HOST,
       body: 'fixed',
       sentAt: SENT,
     });
@@ -68,6 +70,7 @@ describe('group wire contracts', () => {
       channelId: CHANNEL,
       eventId: EVENT,
       targetEventId: TARGET,
+      targetAuthorPubky: HOST,
       sentAt: SENT,
     });
     expect(decodeGroupEnvelope(del.json)).toEqual(del.envelope);
@@ -87,6 +90,19 @@ describe('group wire contracts', () => {
     expect(decodeGroupEnvelope('{"kind":"chat.group.message.v0"}')).toBeNull();
     expect(
       decodeGroupEnvelope('{"version":1,"kind":"chat.group.message.v0","event_id":"x"}'),
+    ).toBeNull();
+    expect(
+      decodeGroupEnvelope(
+        JSON.stringify({
+          version: 1,
+          kind: GROUP_REACTION_KIND,
+          channel_id: CHANNEL,
+          event_id: EVENT,
+          target_event_id: TARGET,
+          emoji: '👍',
+          sent_at: SENT,
+        }),
+      ),
     ).toBeNull();
     expect(peekEnvelopeKind('{"kind":"other.v0"}')).toBe('other.v0');
     expect(peekEnvelopeKind('not-json')).toBeNull();

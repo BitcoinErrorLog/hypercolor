@@ -18,6 +18,8 @@ import {
   SCHEMA_V3_STATEMENTS,
   SCHEMA_V4_STATEMENTS,
   SCHEMA_V5_STATEMENTS,
+  SCHEMA_V6_STATEMENTS,
+  SCHEMA_V7_STATEMENTS,
 } from '../schema';
 import { StorageService } from '../../services/StorageService';
 import { CHAT_MESSAGE_KIND } from '../../types/link';
@@ -84,7 +86,7 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
 
     await runMigrations(db);
 
-    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(7);
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(8);
     expect(db.executeSync('SELECT * FROM link_receivers').rows).toEqual([]);
     expect(
       db.executeSync(
@@ -319,7 +321,7 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
     setDbForTests(db);
     await runMigrations(db);
 
-    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(7);
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(8);
     const cols = db.executeSync('PRAGMA table_info(contacts)').rows ?? [];
     const names = cols.map(row => row.name);
     expect(names).toEqual(
@@ -565,18 +567,28 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
     expect(db.executeSync('SELECT id FROM threads').rows?.[0]?.id).toBe('t1');
   });
 
-  it('creates v7 group tables, wipes them on clearAccountData, and isolates accounts', async () => {
+  it('creates v8 group tables, wipes them on clearAccountData, and isolates accounts', async () => {
     const db = openMemoryDb();
     setDbForTests(db);
     await runMigrations(db);
 
-    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(7);
-    for (const name of ['group_channels', 'group_members', 'group_messages']) {
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(8);
+    for (const name of [
+      'group_channels',
+      'group_members',
+      'group_messages',
+      'group_seen_events',
+      'group_deferred_events',
+    ]) {
       expect(
         db.executeSync("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", [name])
           .rows,
       ).toHaveLength(1);
     }
+    const pk = db.executeSync('PRAGMA table_info(group_messages)').rows ?? [];
+    const pkCols = pk.filter(row => Number(row.pk) > 0).map(row => row.name);
+    expect(pkCols).toEqual(['owner_pubky', 'channel_id', 'sender_pubky', 'event_id']);
+    expect(pk.map(row => row.name)).toEqual(expect.arrayContaining(['target_author_pubky']));
 
     const channelId = '00000000-0000-4000-8000-0000000000aa';
     const eventId = '00000000-0000-4000-8000-0000000000bb';
@@ -624,6 +636,7 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
       deliveryState: 'sent',
       replyToEventId: null,
       targetEventId: null,
+      targetAuthorPubky: null,
       editedAt: null,
       deleted: false,
     });
@@ -640,8 +653,37 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
       deliveryState: 'sent',
       replyToEventId: null,
       targetEventId: null,
+      targetAuthorPubky: null,
       editedAt: null,
       deleted: false,
+    });
+    await StorageService.markGroupEventSeen(OWNER, channelId, PEER, eventId, 10);
+    await StorageService.saveGroupDeferred({
+      ownerPubky: OWNER,
+      channelId,
+      senderPubky: PEER,
+      eventId: '00000000-0000-4000-8000-0000000000cc',
+      kind: 'chat.group.edit.v0',
+      body: 'later',
+      rawJson: '{}',
+      sentAt: 12,
+      receivedAt: 12,
+      targetEventId: eventId,
+      targetAuthorPubky: OWNER,
+    });
+    await StorageService.markGroupEventSeen(OTHER, channelId, PEER, eventId, 11);
+    await StorageService.saveGroupDeferred({
+      ownerPubky: OTHER,
+      channelId,
+      senderPubky: PEER,
+      eventId: '00000000-0000-4000-8000-0000000000cc',
+      kind: 'chat.group.edit.v0',
+      body: 'other-later',
+      rawJson: '{}',
+      sentAt: 13,
+      receivedAt: 13,
+      targetEventId: eventId,
+      targetAuthorPubky: OTHER,
     });
 
     expect(await StorageService.getGroupChannel(OWNER, channelId)).toEqual(
@@ -654,13 +696,52 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
     await StorageService.clearAccountData(OWNER);
     expect(await StorageService.getGroupChannel(OWNER, channelId)).toBeNull();
     expect(await StorageService.listGroupMembers(OWNER, channelId)).toEqual([]);
-    expect(await StorageService.getGroupMessage(OWNER, channelId, eventId)).toBeNull();
+    expect(await StorageService.getGroupMessage(OWNER, channelId, OWNER, eventId)).toBeNull();
+    expect(await StorageService.hasGroupEventSeen(OWNER, channelId, PEER, eventId)).toBe(false);
+    expect(await StorageService.listGroupDeferredForSender(OWNER, channelId, PEER)).toEqual([]);
     expect(await StorageService.getGroupChannel(OTHER, channelId)).toEqual(
       expect.objectContaining({ name: 'Other crew' }),
     );
-    expect(await StorageService.getGroupMessage(OTHER, channelId, eventId)).toEqual(
+    expect(await StorageService.getGroupMessage(OTHER, channelId, OTHER, eventId)).toEqual(
       expect.objectContaining({ body: 'other' }),
     );
+    expect(await StorageService.hasGroupEventSeen(OTHER, channelId, PEER, eventId)).toBe(true);
+    expect(await StorageService.listGroupDeferredForSender(OTHER, channelId, PEER)).toHaveLength(1);
+  });
+
+  it('migrates v7 group_messages into the sender-scoped v8 primary key', async () => {
+    const db = openMemoryDb();
+    applyThroughV7(db);
+    db.executeSync(
+      `INSERT INTO group_messages
+        (owner_pubky, channel_id, event_id, sender_pubky, kind, body, raw_json,
+         sent_at, received_at, delivery_state, reply_to_event_id, target_event_id,
+         edited_at, deleted, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, 'hi', '{}', 10, NULL, 'sent', NULL, NULL, NULL, 0, 1, 1)`,
+      [OWNER, 'chan-1', EVENT, PEER, CHAT_MESSAGE_KIND],
+    );
+
+    await runMigrations(db);
+
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(8);
+    const row = db.executeSync('SELECT * FROM group_messages').rows?.[0];
+    expect(row).toEqual(
+      expect.objectContaining({
+        owner_pubky: OWNER,
+        channel_id: 'chan-1',
+        sender_pubky: PEER,
+        event_id: EVENT,
+        target_author_pubky: null,
+        body: 'hi',
+      }),
+    );
+    const pk = db.executeSync('PRAGMA table_info(group_messages)').rows ?? [];
+    expect(pk.filter(col => Number(col.pk) > 0).map(col => col.name)).toEqual([
+      'owner_pubky',
+      'channel_id',
+      'sender_pubky',
+      'event_id',
+    ]);
   });
 });
 
@@ -675,4 +756,12 @@ function applyThroughV5(db: ReturnType<typeof openMemoryDb>): void {
     db.executeSync(statement);
   }
   db.executeSync('PRAGMA user_version = 5');
+}
+
+function applyThroughV7(db: ReturnType<typeof openMemoryDb>): void {
+  applyThroughV5(db);
+  for (const statement of [...SCHEMA_V6_STATEMENTS, ...SCHEMA_V7_STATEMENTS]) {
+    db.executeSync(statement);
+  }
+  db.executeSync('PRAGMA user_version = 7');
 }

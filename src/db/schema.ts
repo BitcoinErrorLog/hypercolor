@@ -1,4 +1,88 @@
 /**
+ * Schema v8 — sender-scoped group event identity + bounded deferred store.
+ *
+ * v7 is committed history and is not rewritten. This migration rebuilds
+ * `group_messages` so the primary key is
+ * `(owner_pubky, channel_id, sender_pubky, event_id)` and adds
+ * `target_author_pubky` so reaction/edit/delete resolve a target by
+ * `(channel, target_author, target_event_id)`.
+ *
+ * Existing rows (none expected in production) are copied with
+ * `target_author_pubky = NULL`. `INSERT OR IGNORE` keeps the copy
+ * idempotent if a sender-scoped duplicate would otherwise collide.
+ *
+ * `group_seen_events` holds rejected-event dedup markers (never history).
+ * `group_deferred_events` holds authorized reaction/edit/delete rows
+ * whose target has not arrived yet (quota + TTL enforced in application
+ * code). Both are wiped by `clearAccountData(owner_pubky)`.
+ */
+export const SCHEMA_V8_STATEMENTS: readonly string[] = [
+  `CREATE TABLE IF NOT EXISTS group_messages_v8 (
+    owner_pubky          TEXT    NOT NULL,
+    channel_id           TEXT    NOT NULL,
+    sender_pubky         TEXT    NOT NULL,
+    event_id             TEXT    NOT NULL,
+    kind                 TEXT    NOT NULL,
+    body                 TEXT    NOT NULL,
+    raw_json             TEXT    NOT NULL,
+    sent_at              INTEGER NOT NULL,
+    received_at          INTEGER,
+    delivery_state       TEXT    NOT NULL,
+    reply_to_event_id    TEXT,
+    target_event_id      TEXT,
+    target_author_pubky  TEXT,
+    edited_at            INTEGER,
+    deleted              INTEGER NOT NULL DEFAULT 0,
+    created_at           INTEGER NOT NULL,
+    updated_at           INTEGER NOT NULL,
+    PRIMARY KEY (owner_pubky, channel_id, sender_pubky, event_id)
+  )`,
+  `INSERT OR IGNORE INTO group_messages_v8
+     (owner_pubky, channel_id, sender_pubky, event_id, kind, body, raw_json,
+      sent_at, received_at, delivery_state, reply_to_event_id, target_event_id,
+      target_author_pubky, edited_at, deleted, created_at, updated_at)
+   SELECT
+      owner_pubky, channel_id, sender_pubky, event_id, kind, body, raw_json,
+      sent_at, received_at, delivery_state, reply_to_event_id, target_event_id,
+      NULL, edited_at, deleted, created_at, updated_at
+     FROM group_messages`,
+  `DROP TABLE IF EXISTS group_messages`,
+  `ALTER TABLE group_messages_v8 RENAME TO group_messages`,
+  `CREATE INDEX IF NOT EXISTS idx_group_messages_channel
+    ON group_messages(owner_pubky, channel_id, sent_at DESC)`,
+  `CREATE INDEX IF NOT EXISTS idx_group_messages_target
+    ON group_messages(owner_pubky, channel_id, target_author_pubky, target_event_id)`,
+
+  `CREATE TABLE IF NOT EXISTS group_seen_events (
+    owner_pubky    TEXT    NOT NULL,
+    channel_id     TEXT    NOT NULL,
+    sender_pubky   TEXT    NOT NULL,
+    event_id       TEXT    NOT NULL,
+    received_at    INTEGER NOT NULL,
+    PRIMARY KEY (owner_pubky, channel_id, sender_pubky, event_id)
+  )`,
+
+  `CREATE TABLE IF NOT EXISTS group_deferred_events (
+    owner_pubky          TEXT    NOT NULL,
+    channel_id           TEXT    NOT NULL,
+    sender_pubky         TEXT    NOT NULL,
+    event_id             TEXT    NOT NULL,
+    kind                 TEXT    NOT NULL,
+    body                 TEXT    NOT NULL,
+    raw_json             TEXT    NOT NULL,
+    sent_at              INTEGER NOT NULL,
+    received_at          INTEGER NOT NULL,
+    target_event_id      TEXT    NOT NULL,
+    target_author_pubky  TEXT    NOT NULL,
+    PRIMARY KEY (owner_pubky, channel_id, sender_pubky, event_id)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_group_deferred_target
+    ON group_deferred_events(owner_pubky, channel_id, target_author_pubky, target_event_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_group_deferred_sender
+    ON group_deferred_events(owner_pubky, channel_id, sender_pubky, received_at, sent_at)`,
+];
+
+/**
  * Schema v7 — owner-scoped private groups + public channels.
  *
  * v1 `channels` / `channel_members` / `messages` stay in place (research-era,
@@ -12,6 +96,7 @@
  * `group_messages.target_event_id` holds the referenced event for
  * reaction / edit / delete kinds. `reply_to_event_id` is only for
  * `chat.group.message.v0` threads. Unknown targets stay stored (deferred).
+ * Superseded by v8 for sender-scoped identity and the deferred/seen tables.
  */
 export const SCHEMA_V7_STATEMENTS: readonly string[] = [
   `CREATE TABLE IF NOT EXISTS group_channels (

@@ -12,29 +12,49 @@ import { LINK_MESSAGE_MAX_BYTES, parseLinkSentAt } from './link';
  * member's existing 1:1 Paykit Encrypted Link via
  * `sendPrivateMessageJson`. The receiver routes by `channel_id`.
  *
- * Membership removal cutoff is immediate: stop including the removed
- * member in future fan-out. There is no group secret to rotate.
+ * Pairwise fan-out has NO cryptographic removal cutoff. A removed
+ * member can still transmit to any peer who keeps the 1:1 Encrypted
+ * Link. Removal is receive-side POLICY: compliant receivers reject
+ * content from removed/non-members and do not add it to group history.
+ * There is no group secret to rotate. Senders also stop including a
+ * removed member in future fan-out, and the remove op is fanned out
+ * to the removed subject so their local roster converges.
  *
  * ## Trust model
  *
  * Encrypted Links authenticate the *sender* as the 1:1 counterparty
- * (Noise XX). Group kinds do not carry a sender field — authorship is
- * the link peer.
+ * (Noise XX). Group kinds do not carry a trusted sender field —
+ * authorship is the link peer (`senderPubky` from LinkService).
+ *
+ * Authorization is evaluated against the *receiver's* local channel
+ * and membership state, keyed by that authenticated `senderPubky`.
+ * Authorize first; persist to `group_messages` only if authorized.
+ * Rejected events may be recorded only as a seen/dedup marker. They
+ * MUST NOT appear in group history or the UI.
+ *
+ * Private `channel_id` is founder-bound: `{founderPubky}:{uuid}`.
+ * Event identity is sender-scoped: dedup key is
+ * `(owner_pubky, channel_id, sender_pubky, event_id)`.
+ * Reaction / edit / delete targets are `(channel_id, target_author_pubky,
+ * target_event_id)`.
  *
  * - `chat.group.membership.v0` `create` on an unknown `channel_id`:
- *   accepted. The sender becomes the channel's founding admin. This is
- *   how a channel first appears on a receiver. A later `create` for an
- *   already-known channel is admin-only (name refresh) or ignored.
+ *   accepted only when the authenticated sender equals the founder
+ *   encoded in `channel_id`. The channel row is insert-if-absent;
+ *   founder/admin metadata is never overwritten. A later `create` for
+ *   an already-known channel is admin-only (name refresh) or ignored.
  * - `add` / `remove` / a subsequent `create`: applied only when the
- *   sender is an *active admin* in the local membership table. Otherwise
- *   the event is stored for dedup and ignored (not applied).
- * - `leave`: the sender may only remove themselves. A leave naming a
- *   different `subject_pubky` is ignored.
- * - `chat.group.edit.v0` / `chat.group.delete.v0`: applied only when
- *   `sender === original author` of the target. Non-author ops are
- *   stored for dedup and ignored.
+ *   sender is an *active admin* in the local membership table.
+ * - `leave`: the sender may only mark themselves removed. A leave
+ *   naming a different `subject_pubky` is rejected.
+ * - Content (`message` / `reaction` / `edit` / `delete`): the channel
+ *   must be a known *private* channel locally and the sender must be
+ *   an *active member*. Edit/delete also require
+ *   `target_author_pubky === sender` and the same `channel_id` as the
+ *   target. Cross-channel target references are rejected.
  * - Reactions / edits / deletes whose target is not yet present are
- *   stored (deferred), never dropped. They apply when the target arrives.
+ *   deferred in a bounded store (per-sender quota + TTL) only after
+ *   membership admission. They apply when the matching target arrives.
  *
  * Unknown kinds stay on `link_stream_items` unprocessed (M1 rule).
  * Malformed *known* group kinds are rejected (not applied) and marked
@@ -108,20 +128,46 @@ export const PUBLIC_CHANNEL_DEEP_LINK = 'hypercolor://join-public';
 /** Per-member private-group fan-out item in the shared `delivery_queue`. */
 export const LINK_GROUP_FANOUT_PAYLOAD_TYPE = 'link.group.fanout';
 
+/**
+ * Founder-bound channel id: `{founderPubky}:{uuid}`.
+ * Used by private groups (founder) and public channels (host).
+ */
+export function buildFounderBoundChannelId(founderPubky: PubkyKey, localId: string): string {
+  return `${founderPubky}:${localId}`;
+}
+
+export function parseFounderBoundChannelId(
+  channelId: string,
+): { founderPubky: PubkyKey; localId: string } | null {
+  const colon = channelId.indexOf(':');
+  if (colon !== PUBKY_LENGTH) return null;
+  const founderPubky = channelId.slice(0, colon);
+  const localId = channelId.slice(colon + 1);
+  if (founderPubky.length !== PUBKY_LENGTH) return null;
+  if (!UUID_PATTERN.test(localId)) return null;
+  return { founderPubky, localId };
+}
+
+export function buildPrivateChannelId(founderPubky: PubkyKey, localId: string): string {
+  return buildFounderBoundChannelId(founderPubky, localId);
+}
+
+export function parsePrivateChannelId(
+  channelId: string,
+): { founderPubky: PubkyKey; localId: string } | null {
+  return parseFounderBoundChannelId(channelId);
+}
+
 export function buildPublicChannelId(hostPubky: PubkyKey, localId: string): string {
-  return `${hostPubky}:${localId}`;
+  return buildFounderBoundChannelId(hostPubky, localId);
 }
 
 export function parsePublicChannelId(
   channelId: string,
 ): { hostPubky: PubkyKey; localId: string } | null {
-  const colon = channelId.indexOf(':');
-  if (colon !== PUBKY_LENGTH) return null;
-  const hostPubky = channelId.slice(0, colon);
-  const localId = channelId.slice(colon + 1);
-  if (hostPubky.length !== PUBKY_LENGTH) return null;
-  if (!UUID_PATTERN.test(localId)) return null;
-  return { hostPubky, localId };
+  const parsed = parseFounderBoundChannelId(channelId);
+  if (!parsed) return null;
+  return { hostPubky: parsed.founderPubky, localId: parsed.localId };
 }
 
 export function publicChannelMetaUrl(hostPubky: PubkyKey, localId: string): string {
@@ -195,6 +241,7 @@ export interface GroupReactionEnvelope {
   channel_id: string;
   event_id: string;
   target_event_id: string;
+  target_author_pubky: string;
   emoji: string;
   sent_at: number;
 }
@@ -205,6 +252,7 @@ export interface GroupEditEnvelope {
   channel_id: string;
   event_id: string;
   target_event_id: string;
+  target_author_pubky: string;
   body: string;
   sent_at: number;
 }
@@ -215,6 +263,7 @@ export interface GroupDeleteEnvelope {
   channel_id: string;
   event_id: string;
   target_event_id: string;
+  target_author_pubky: string;
   sent_at: number;
 }
 
@@ -293,8 +342,24 @@ export interface GroupMessage {
   deliveryState: LinkDeliveryState;
   replyToEventId: string | null;
   targetEventId: string | null;
+  targetAuthorPubky: PubkyKey | null;
   editedAt: number | null;
   deleted: boolean;
+}
+
+/** Bounded deferred reaction / edit / delete waiting for its target. */
+export interface GroupDeferredEvent {
+  ownerPubky: PubkyKey;
+  channelId: string;
+  senderPubky: PubkyKey;
+  eventId: string;
+  kind: string;
+  body: string;
+  rawJson: string;
+  sentAt: number;
+  receivedAt: number;
+  targetEventId: string;
+  targetAuthorPubky: PubkyKey;
 }
 
 export class GroupServiceError extends Error {
@@ -355,6 +420,18 @@ function readEventId(candidate: Record<string, unknown>): string | null {
   return candidate.event_id;
 }
 
+function readTargetEventId(candidate: Record<string, unknown>): string | null {
+  if (typeof candidate.target_event_id !== 'string') return null;
+  if (!UUID_PATTERN.test(candidate.target_event_id)) return null;
+  return candidate.target_event_id;
+}
+
+function readTargetAuthorPubky(candidate: Record<string, unknown>): string | null {
+  if (typeof candidate.target_author_pubky !== 'string') return null;
+  if (candidate.target_author_pubky.length !== PUBKY_LENGTH) return null;
+  return candidate.target_author_pubky;
+}
+
 function assertSerializedSize(json: string, kind: string): number {
   const byteSize = new TextEncoder().encode(json).byteLength;
   if (byteSize > LINK_MESSAGE_MAX_BYTES) {
@@ -409,12 +486,19 @@ export function buildGroupReactionEnvelope(input: {
   channelId: string;
   eventId: string;
   targetEventId: string;
+  targetAuthorPubky: string;
   emoji: string;
   sentAt: number;
 }): { envelope: GroupReactionEnvelope; json: string; byteSize: number } {
   const emoji = input.emoji.trim();
   if (!UUID_PATTERN.test(input.eventId) || !UUID_PATTERN.test(input.targetEventId)) {
     throw new GroupServiceError('invalid-input', `${GROUP_REACTION_KIND} ids must be UUIDs`);
+  }
+  if (input.targetAuthorPubky.length !== PUBKY_LENGTH) {
+    throw new GroupServiceError(
+      'invalid-input',
+      `${GROUP_REACTION_KIND} target_author_pubky is invalid`,
+    );
   }
   if (!Number.isInteger(input.sentAt) || input.sentAt <= 0) {
     throw new GroupServiceError('invalid-input', `${GROUP_REACTION_KIND} sent_at is invalid`);
@@ -428,6 +512,7 @@ export function buildGroupReactionEnvelope(input: {
     channel_id: input.channelId,
     event_id: input.eventId,
     target_event_id: input.targetEventId,
+    target_author_pubky: input.targetAuthorPubky,
     emoji,
     sent_at: input.sentAt,
   };
@@ -439,12 +524,19 @@ export function buildGroupEditEnvelope(input: {
   channelId: string;
   eventId: string;
   targetEventId: string;
+  targetAuthorPubky: string;
   body: string;
   sentAt: number;
 }): { envelope: GroupEditEnvelope; json: string; byteSize: number } {
   const body = input.body.trim();
   if (!UUID_PATTERN.test(input.eventId) || !UUID_PATTERN.test(input.targetEventId)) {
     throw new GroupServiceError('invalid-input', `${GROUP_EDIT_KIND} ids must be UUIDs`);
+  }
+  if (input.targetAuthorPubky.length !== PUBKY_LENGTH) {
+    throw new GroupServiceError(
+      'invalid-input',
+      `${GROUP_EDIT_KIND} target_author_pubky is invalid`,
+    );
   }
   if (!Number.isInteger(input.sentAt) || input.sentAt <= 0) {
     throw new GroupServiceError('invalid-input', `${GROUP_EDIT_KIND} sent_at is invalid`);
@@ -458,6 +550,7 @@ export function buildGroupEditEnvelope(input: {
     channel_id: input.channelId,
     event_id: input.eventId,
     target_event_id: input.targetEventId,
+    target_author_pubky: input.targetAuthorPubky,
     body,
     sent_at: input.sentAt,
   };
@@ -469,10 +562,17 @@ export function buildGroupDeleteEnvelope(input: {
   channelId: string;
   eventId: string;
   targetEventId: string;
+  targetAuthorPubky: string;
   sentAt: number;
 }): { envelope: GroupDeleteEnvelope; json: string; byteSize: number } {
   if (!UUID_PATTERN.test(input.eventId) || !UUID_PATTERN.test(input.targetEventId)) {
     throw new GroupServiceError('invalid-input', `${GROUP_DELETE_KIND} ids must be UUIDs`);
+  }
+  if (input.targetAuthorPubky.length !== PUBKY_LENGTH) {
+    throw new GroupServiceError(
+      'invalid-input',
+      `${GROUP_DELETE_KIND} target_author_pubky is invalid`,
+    );
   }
   if (!Number.isInteger(input.sentAt) || input.sentAt <= 0) {
     throw new GroupServiceError('invalid-input', `${GROUP_DELETE_KIND} sent_at is invalid`);
@@ -483,6 +583,7 @@ export function buildGroupDeleteEnvelope(input: {
     channel_id: input.channelId,
     event_id: input.eventId,
     target_event_id: input.targetEventId,
+    target_author_pubky: input.targetAuthorPubky,
     sent_at: input.sentAt,
   };
   const json = JSON.stringify(envelope);
@@ -594,42 +695,48 @@ export function decodeGroupEnvelope(rawJson: string): GroupEnvelope | null {
       return envelope;
     }
     case GROUP_REACTION_KIND: {
-      if (typeof candidate.target_event_id !== 'string') return null;
-      if (!UUID_PATTERN.test(candidate.target_event_id)) return null;
+      const targetEventId = readTargetEventId(candidate);
+      const targetAuthor = readTargetAuthorPubky(candidate);
+      if (targetEventId === null || targetAuthor === null) return null;
       if (typeof candidate.emoji !== 'string' || candidate.emoji.trim().length === 0) return null;
       return {
         version: 1,
         kind: GROUP_REACTION_KIND,
         channel_id: channelId,
         event_id: eventId,
-        target_event_id: candidate.target_event_id,
+        target_event_id: targetEventId,
+        target_author_pubky: targetAuthor,
         emoji: candidate.emoji,
         sent_at: sentAt,
       };
     }
     case GROUP_EDIT_KIND: {
-      if (typeof candidate.target_event_id !== 'string') return null;
-      if (!UUID_PATTERN.test(candidate.target_event_id)) return null;
+      const targetEventId = readTargetEventId(candidate);
+      const targetAuthor = readTargetAuthorPubky(candidate);
+      if (targetEventId === null || targetAuthor === null) return null;
       if (typeof candidate.body !== 'string' || candidate.body.trim().length === 0) return null;
       return {
         version: 1,
         kind: GROUP_EDIT_KIND,
         channel_id: channelId,
         event_id: eventId,
-        target_event_id: candidate.target_event_id,
+        target_event_id: targetEventId,
+        target_author_pubky: targetAuthor,
         body: candidate.body,
         sent_at: sentAt,
       };
     }
     case GROUP_DELETE_KIND: {
-      if (typeof candidate.target_event_id !== 'string') return null;
-      if (!UUID_PATTERN.test(candidate.target_event_id)) return null;
+      const targetEventId = readTargetEventId(candidate);
+      const targetAuthor = readTargetAuthorPubky(candidate);
+      if (targetEventId === null || targetAuthor === null) return null;
       return {
         version: 1,
         kind: GROUP_DELETE_KIND,
         channel_id: channelId,
         event_id: eventId,
-        target_event_id: candidate.target_event_id,
+        target_event_id: targetEventId,
+        target_author_pubky: targetAuthor,
         sent_at: sentAt,
       };
     }
@@ -748,8 +855,28 @@ export function groupTargetEventId(envelope: GroupEnvelope): string | null {
   }
 }
 
+export function groupTargetAuthorPubky(envelope: GroupEnvelope): string | null {
+  switch (envelope.kind) {
+    case GROUP_REACTION_KIND:
+    case GROUP_EDIT_KIND:
+    case GROUP_DELETE_KIND:
+      return envelope.target_author_pubky;
+    default:
+      return null;
+  }
+}
+
 export function groupReplyToEventId(envelope: GroupEnvelope): string | null {
   return envelope.kind === GROUP_MESSAGE_KIND && envelope.reply_to !== undefined
     ? envelope.reply_to
     : null;
+}
+
+/** Timeline bubbles: admitted messages and applied membership ops. Never edits/deletes/seen. */
+export function isGroupTimelineVisible(message: { kind: string }): boolean {
+  return (
+    message.kind === GROUP_MESSAGE_KIND ||
+    message.kind === PUBLIC_CHANNEL_MESSAGE_KIND ||
+    message.kind === GROUP_MEMBERSHIP_KIND
+  );
 }

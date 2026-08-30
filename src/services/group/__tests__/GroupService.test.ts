@@ -93,6 +93,7 @@ describe('GroupService', () => {
 
   async function createPrivateGroup(): Promise<string> {
     const channel = await GroupService.createChannel('Crew', [PEER_A, PEER_B]);
+    expect(channel.channelId.startsWith(`${OWNER}:`)).toBe(true);
     return channel.channelId;
   }
 
@@ -101,6 +102,8 @@ describe('GroupService', () => {
     mockedLink.sendPersistedLinkJson.mockClear();
 
     await GroupService.removeMember(channelId, PEER_B);
+    const removePeers = mockedLink.sendPersistedLinkJson.mock.calls.map(call => call[0]!.peerPubky);
+    expect(removePeers).toContain(PEER_B);
     mockedLink.sendPersistedLinkJson.mockClear();
 
     await GroupService.sendGroupMessage(channelId, 'hello all');
@@ -172,6 +175,7 @@ describe('GroupService', () => {
         channelId,
         eventId: EVENT2,
         targetEventId: EVENT,
+        targetAuthorPubky: PEER_A,
         body: 'hijack',
         sentAt: NOW + 1,
       }).envelope,
@@ -185,21 +189,25 @@ describe('GroupService', () => {
         channelId,
         eventId: EVENT3,
         targetEventId: EVENT,
+        targetAuthorPubky: PEER_A,
         sentAt: NOW + 2,
       }).envelope,
       rawJson: '{}',
       receivedAt: NOW + 2,
     });
 
-    const original = await StorageService.getGroupMessage(OWNER, channelId, EVENT);
+    const original = await StorageService.getGroupMessage(OWNER, channelId, PEER_A, EVENT);
     expect(original?.body).toBe('original');
     expect(original?.deleted).toBe(false);
-    expect(await StorageService.hasGroupMessage(OWNER, channelId, EVENT2)).toBe(true);
-    expect(await StorageService.hasGroupMessage(OWNER, channelId, EVENT3)).toBe(true);
+    expect(await StorageService.hasGroupMessage(OWNER, channelId, PEER_B, EVENT2)).toBe(false);
+    expect(await StorageService.hasGroupMessage(OWNER, channelId, PEER_B, EVENT3)).toBe(false);
+    expect(await StorageService.hasGroupEventSeen(OWNER, channelId, PEER_B, EVENT2)).toBe(true);
+    expect(await StorageService.hasGroupEventSeen(OWNER, channelId, PEER_B, EVENT3)).toBe(true);
   });
 
   it('defers reaction, edit, and delete that reference an unknown target instead of dropping them', async () => {
     const channelId = await createPrivateGroup();
+    const EVENT4 = '00000000-0000-4000-8000-000000000004';
     await applyGroupInbound({
       ownerPubky: OWNER,
       senderPubky: PEER_A,
@@ -207,6 +215,7 @@ describe('GroupService', () => {
         channelId,
         eventId: EVENT,
         targetEventId: EVENT2,
+        targetAuthorPubky: PEER_A,
         emoji: '👍',
         sentAt: NOW,
       }).envelope,
@@ -220,16 +229,35 @@ describe('GroupService', () => {
         channelId,
         eventId: EVENT3,
         targetEventId: EVENT2,
+        targetAuthorPubky: PEER_A,
         body: 'later',
         sentAt: NOW + 1,
       }).envelope,
       rawJson: '{}',
       receivedAt: NOW + 1,
     });
+    await applyGroupInbound({
+      ownerPubky: OWNER,
+      senderPubky: PEER_A,
+      envelope: buildGroupDeleteEnvelope({
+        channelId,
+        eventId: EVENT4,
+        targetEventId: EVENT2,
+        targetAuthorPubky: PEER_A,
+        sentAt: NOW + 2,
+      }).envelope,
+      rawJson: '{}',
+      receivedAt: NOW + 2,
+    });
 
-    expect(await StorageService.hasGroupMessage(OWNER, channelId, EVENT)).toBe(true);
-    expect(await StorageService.hasGroupMessage(OWNER, channelId, EVENT3)).toBe(true);
-    expect(await StorageService.getGroupMessage(OWNER, channelId, EVENT2)).toBeNull();
+    expect(await StorageService.hasGroupMessage(OWNER, channelId, PEER_A, EVENT)).toBe(false);
+    expect(await StorageService.hasGroupMessage(OWNER, channelId, PEER_A, EVENT3)).toBe(false);
+    expect(await StorageService.hasGroupMessage(OWNER, channelId, PEER_A, EVENT4)).toBe(false);
+    expect(await StorageService.getGroupMessage(OWNER, channelId, PEER_A, EVENT2)).toBeNull();
+    const deferred = await StorageService.listGroupDeferredForSender(OWNER, channelId, PEER_A);
+    expect(deferred.map(d => d.kind).sort()).toEqual(
+      ['chat.group.delete.v0', 'chat.group.edit.v0', 'chat.group.reaction.v0'].sort(),
+    );
 
     await applyGroupInbound({
       ownerPubky: OWNER,
@@ -237,18 +265,21 @@ describe('GroupService', () => {
       envelope: buildGroupMessageEnvelope({
         channelId,
         eventId: EVENT2,
-        sentAt: NOW + 2,
+        sentAt: NOW + 3,
         body: 'original',
       }).envelope,
       rawJson: '{}',
-      receivedAt: NOW + 2,
+      receivedAt: NOW + 3,
     });
-    const arrived = await StorageService.getGroupMessage(OWNER, channelId, EVENT2);
+    const arrived = await StorageService.getGroupMessage(OWNER, channelId, PEER_A, EVENT2);
     expect(arrived?.body).toBe('later');
     expect(arrived?.editedAt).toBe(NOW + 1);
+    expect(arrived?.deleted).toBe(true);
+    expect(await StorageService.hasGroupMessage(OWNER, channelId, PEER_A, EVENT)).toBe(true);
+    expect(await StorageService.listGroupDeferredForSender(OWNER, channelId, PEER_A)).toEqual([]);
   });
 
-  it('dedups group messages by (owner, channel_id, event_id)', async () => {
+  it('dedups group messages by (owner, channel_id, sender_pubky, event_id)', async () => {
     const channelId = await createPrivateGroup();
     const envelope = buildGroupMessageEnvelope({
       channelId,
@@ -287,7 +318,7 @@ describe('GroupService', () => {
 
     const message = await GroupService.sendGroupMessage(channelId, 'partial');
     expect(message.body).toBe('partial');
-    expect(await StorageService.getGroupMessage(OWNER, channelId, message.eventId)).toEqual(
+    expect(await StorageService.getGroupMessage(OWNER, channelId, OWNER, message.eventId)).toEqual(
       expect.objectContaining({ body: 'partial' }),
     );
     const queued = await StorageService.listDeliveryQueue();

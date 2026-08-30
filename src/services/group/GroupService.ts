@@ -14,6 +14,7 @@ import {
   buildGroupMembershipEnvelope,
   buildGroupMessageEnvelope,
   buildGroupReactionEnvelope,
+  buildPrivateChannelId,
   buildPublicChannelId,
   buildPublicChannelInvite,
   decodePublicChannelMessage,
@@ -93,7 +94,7 @@ export const GroupService = {
         `Private groups are limited to ${PRIVATE_GROUP_MEMBER_CAP} members`,
       );
     }
-    const channelId = uuidv4();
+    const channelId = buildPrivateChannelId(owner, uuidv4());
     const ts = Date.now();
     const channel: GroupChannel = {
       ownerPubky: owner,
@@ -180,16 +181,30 @@ export const GroupService = {
     channelId: string,
     targetEventId: string,
     emoji: string,
+    targetAuthorPubky: PubkyKey,
   ): Promise<GroupMessage> {
     const owner = requireOwner();
     await requireActiveMember(owner, channelId, owner);
     await requirePrivateChannel(owner, channelId);
     const eventId = uuidv4();
     const sentAt = Date.now();
+    const target = await StorageService.getGroupMessage(
+      owner,
+      channelId,
+      targetAuthorPubky,
+      targetEventId,
+    );
+    if (!target) {
+      throw new GroupServiceError(
+        'not-found',
+        'Cannot react to a message that is not on this device',
+      );
+    }
     const built = buildGroupReactionEnvelope({
       channelId,
       eventId,
       targetEventId,
+      targetAuthorPubky,
       emoji,
       sentAt,
     });
@@ -204,6 +219,7 @@ export const GroupService = {
       rawJson: built.json,
       replyToEventId: null,
       targetEventId,
+      targetAuthorPubky,
     });
     notifyGroupEvent(owner, channelId);
     return message;
@@ -213,7 +229,7 @@ export const GroupService = {
     const owner = requireOwner();
     await requireActiveMember(owner, channelId, owner);
     await requirePrivateChannel(owner, channelId);
-    const target = await StorageService.getGroupMessage(owner, channelId, targetEventId);
+    const target = await StorageService.getGroupMessage(owner, channelId, owner, targetEventId);
     if (!target) {
       throw new GroupServiceError('not-found', 'Cannot edit a message that is not on this device');
     }
@@ -226,6 +242,7 @@ export const GroupService = {
       channelId,
       eventId,
       targetEventId,
+      targetAuthorPubky: owner,
       body,
       sentAt,
     });
@@ -240,10 +257,12 @@ export const GroupService = {
       rawJson: built.json,
       replyToEventId: null,
       targetEventId,
+      targetAuthorPubky: owner,
     });
     await StorageService.applyGroupMessageEdit(
       owner,
       channelId,
+      owner,
       targetEventId,
       built.envelope.body,
       sentAt,
@@ -256,7 +275,7 @@ export const GroupService = {
     const owner = requireOwner();
     await requireActiveMember(owner, channelId, owner);
     await requirePrivateChannel(owner, channelId);
-    const target = await StorageService.getGroupMessage(owner, channelId, targetEventId);
+    const target = await StorageService.getGroupMessage(owner, channelId, owner, targetEventId);
     if (!target) {
       throw new GroupServiceError(
         'not-found',
@@ -268,7 +287,13 @@ export const GroupService = {
     }
     const eventId = uuidv4();
     const sentAt = Date.now();
-    const built = buildGroupDeleteEnvelope({ channelId, eventId, targetEventId, sentAt });
+    const built = buildGroupDeleteEnvelope({
+      channelId,
+      eventId,
+      targetEventId,
+      targetAuthorPubky: owner,
+      sentAt,
+    });
     const message = await fanOutEnvelope({
       ownerPubky: owner,
       channelId,
@@ -280,8 +305,9 @@ export const GroupService = {
       rawJson: built.json,
       replyToEventId: null,
       targetEventId,
+      targetAuthorPubky: owner,
     });
-    await StorageService.tombstoneGroupMessage(owner, channelId, targetEventId);
+    await StorageService.tombstoneGroupMessage(owner, channelId, owner, targetEventId);
     notifyGroupEvent(owner, channelId);
     return message;
   },
@@ -333,7 +359,7 @@ export const GroupService = {
       removedAt: ts,
     });
     await StorageService.bumpGroupMembershipEpoch(owner, channelId);
-    await fanOutMembershipOp(owner, channelId, 'remove', memberPubky);
+    await fanOutMembershipOp(owner, channelId, 'remove', memberPubky, [memberPubky]);
     notifyGroupEvent(owner, channelId);
   },
 
@@ -520,6 +546,7 @@ export const GroupService = {
       deliveryState: 'sent',
       replyToEventId: replyTo ?? null,
       targetEventId: null,
+      targetAuthorPubky: null,
       editedAt: null,
       deleted: false,
     };
@@ -587,6 +614,7 @@ async function refreshPublicChannel(ownerPubky: PubkyKey, channel: GroupChannel)
         deliveryState: 'delivered',
         replyToEventId: doc.reply_to ?? null,
         targetEventId: null,
+        targetAuthorPubky: null,
         editedAt: null,
         deleted: false,
       });
@@ -614,6 +642,7 @@ async function fanOutMembershipOp(
   channelId: string,
   op: 'add' | 'remove' | 'leave',
   subjectPubky: PubkyKey,
+  extraRecipients: PubkyKey[] = [],
 ): Promise<void> {
   const eventId = uuidv4();
   const sentAt = Date.now();
@@ -635,6 +664,8 @@ async function fanOutMembershipOp(
     rawJson: built.json,
     replyToEventId: null,
     targetEventId: null,
+    targetAuthorPubky: null,
+    extraRecipients,
   });
 }
 
@@ -649,8 +680,13 @@ async function fanOutEnvelope(input: {
   rawJson: string;
   replyToEventId: string | null;
   targetEventId: string | null;
+  targetAuthorPubky?: string | null;
+  extraRecipients?: PubkyKey[];
 }): Promise<GroupMessage> {
-  const recipients = await activeFanoutRecipients(input.ownerPubky, input.channelId);
+  const recipients = uniquePubkys([
+    ...(await activeFanoutRecipients(input.ownerPubky, input.channelId)),
+    ...(input.extraRecipients ?? []),
+  ]).filter(pubky => pubky !== input.ownerPubky);
   const ts = Date.now();
   const message: GroupMessage = {
     ownerPubky: input.ownerPubky,
@@ -665,6 +701,7 @@ async function fanOutEnvelope(input: {
     deliveryState: recipients.length === 0 ? 'sent' : 'sending',
     replyToEventId: input.replyToEventId,
     targetEventId: input.targetEventId,
+    targetAuthorPubky: input.targetAuthorPubky ?? null,
     editedAt: null,
     deleted: false,
   };
@@ -714,6 +751,7 @@ async function fanOutEnvelope(input: {
     await StorageService.updateGroupMessageDeliveryState(
       input.ownerPubky,
       input.channelId,
+      input.senderPubky,
       input.eventId,
       nextState,
     );

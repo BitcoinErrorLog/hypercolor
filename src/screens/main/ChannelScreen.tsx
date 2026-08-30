@@ -18,11 +18,10 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { Contact, RootStackParamList } from '../../types';
 import type { GroupChannel, GroupMember, GroupMessage } from '../../types/group';
 import {
-  GROUP_MESSAGE_KIND,
   GROUP_REACTION_KIND,
   GROUP_MEMBERSHIP_KIND,
-  PUBLIC_CHANNEL_MESSAGE_KIND,
   GroupServiceError,
+  isGroupTimelineVisible,
 } from '../../types/group';
 import { PRIVATE_GROUP_MEMBER_CAP } from '../../flags/config';
 import { useAuthStore } from '../../stores/authStore';
@@ -137,9 +136,9 @@ export default function ChannelScreen({ route }: Props) {
       onClearReply={() => setReplyTo(null)}
       onToggleMembers={() => setShowMembers(v => !v)}
       onChangeAddPubky={setAddPubky}
-      onReact={async (eventId, emoji) => {
+      onReact={async (eventId, authorPubky, emoji) => {
         try {
-          await GroupService.reactToMessage(channelId, eventId, emoji);
+          await GroupService.reactToMessage(channelId, eventId, emoji, authorPubky);
           await reload();
         } catch (err) {
           Alert.alert('Reaction failed', err instanceof Error ? err.message : String(err));
@@ -256,7 +255,7 @@ export function ChannelScreenContent({
   onClearReply: () => void;
   onToggleMembers: () => void;
   onChangeAddPubky: (value: string) => void;
-  onReact: (eventId: string, emoji: string) => void;
+  onReact: (eventId: string, authorPubky: string, emoji: string) => void;
   onEdit: (eventId: string) => void;
   onDelete: (eventId: string) => void;
   onAddMember: () => void;
@@ -273,20 +272,18 @@ export function ChannelScreenContent({
   const reactionsByTarget = useMemo(() => {
     const map = new Map<string, Map<string, number>>();
     for (const msg of messages) {
-      if (msg.kind !== GROUP_REACTION_KIND || !msg.targetEventId) continue;
-      const bucket = map.get(msg.targetEventId) ?? new Map<string, number>();
+      if (msg.kind !== GROUP_REACTION_KIND || !msg.targetEventId || !msg.targetAuthorPubky) {
+        continue;
+      }
+      const key = `${msg.targetAuthorPubky}:${msg.targetEventId}`;
+      const bucket = map.get(key) ?? new Map<string, number>();
       bucket.set(msg.body, (bucket.get(msg.body) ?? 0) + 1);
-      map.set(msg.targetEventId, bucket);
+      map.set(key, bucket);
     }
     return map;
   }, [messages]);
 
-  const visible = messages.filter(
-    m =>
-      m.kind === GROUP_MESSAGE_KIND ||
-      m.kind === PUBLIC_CHANNEL_MESSAGE_KIND ||
-      m.kind === GROUP_MEMBERSHIP_KIND,
-  );
+  const visible = messages.filter(isGroupTimelineVisible);
   const activeMembers = members.filter(m => m.status === 'active');
   const isPublic = channel?.isPublic === true;
 
@@ -303,7 +300,7 @@ export function ChannelScreenContent({
       }
       const isMine = item.senderPubky === localPubky;
       const parent = item.replyToEventId ? byId.get(item.replyToEventId) : undefined;
-      const reactions = reactionsByTarget.get(item.eventId);
+      const reactions = reactionsByTarget.get(`${item.senderPubky}:${item.eventId}`);
       return (
         <View style={[styles.bubble, isMine ? styles.mine : styles.theirs]}>
           {!isMine && (
@@ -340,7 +337,10 @@ export function ChannelScreenContent({
               </TouchableOpacity>
               {!isPublic
                 ? REACTION_EMOJIS.map(emoji => (
-                    <TouchableOpacity key={emoji} onPress={() => onReact(item.eventId, emoji)}>
+                    <TouchableOpacity
+                      key={emoji}
+                      onPress={() => onReact(item.eventId, item.senderPubky, emoji)}
+                    >
                       <Text style={styles.action}>{emoji}</Text>
                     </TouchableOpacity>
                   ))
@@ -440,7 +440,7 @@ export function ChannelScreenContent({
         <FlatList
           ref={flatListRef}
           data={visible}
-          keyExtractor={item => item.eventId}
+          keyExtractor={item => `${item.senderPubky}:${item.eventId}`}
           renderItem={renderMessage}
           contentContainerStyle={styles.messageList}
           onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: false })}

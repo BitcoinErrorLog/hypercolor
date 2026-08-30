@@ -25,3 +25,16 @@ export const PROFILE_HYDRATE_CONCURRENCY = 4;
  * Public channels are uncapped (homeserver read, no Encrypted Link fan-out).
  */
 export const PRIVATE_GROUP_MEMBER_CAP = 50;
+
+/**
+ * Max deferred reaction/edit/delete rows kept per (owner, channel, sender).
+ * Admission (membership) is checked before a row can consume this quota.
+ * Oldest rows (by received_at, then sent_at) are evicted when the cap is hit.
+ */
+export const GROUP_DEFERRED_QUOTA_PER_SENDER = 32;
+
+/**
+ * Deferred reaction/edit/delete rows older than this are dropped and
+ * recorded as seen so they cannot refill the quota by replay.
+ */
+export const GROUP_DEFERRED_TTL_MS = 48 * 60 * 60 * 1000;
