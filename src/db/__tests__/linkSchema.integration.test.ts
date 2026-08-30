@@ -55,6 +55,7 @@ import {
 import { StorageService } from '../../services/StorageService';
 import { KeyStore } from '../../services/KeyStore';
 import { CHAT_MESSAGE_KIND } from '../../types/link';
+import { EMPTY_PAYMENT_RECORD_EXTRAS } from '../../types/payment';
 import { openMemoryDb } from './betterSqliteAdapter';
 
 const OWNER = 'a'.repeat(52);
@@ -118,7 +119,7 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
 
     await runMigrations(db);
 
-    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(11);
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(12);
     expect(db.executeSync('SELECT * FROM link_receivers').rows).toEqual([]);
     expect(
       db.executeSync(
@@ -353,7 +354,7 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
     setDbForTests(db);
     await runMigrations(db);
 
-    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(11);
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(12);
     const cols = db.executeSync('PRAGMA table_info(contacts)').rows ?? [];
     const names = cols.map(row => row.name);
     expect(names).toEqual(
@@ -604,7 +605,7 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
     setDbForTests(db);
     await runMigrations(db);
 
-    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(11);
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(12);
     for (const name of [
       'group_channels',
       'group_members',
@@ -755,7 +756,7 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
 
     await runMigrations(db);
 
-    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(11);
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(12);
     const row = db.executeSync('SELECT * FROM group_messages').rows?.[0];
     expect(row).toEqual(
       expect.objectContaining({
@@ -781,7 +782,7 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
     setDbForTests(db);
     await runMigrations(db);
 
-    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(11);
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(12);
     expect(
       db.executeSync("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'attachments'")
         .rows,
@@ -923,7 +924,13 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
     setDbForTests(db);
     await runMigrations(db);
 
-    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(11);
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(12);
+    const paymentCols = (db.executeSync('PRAGMA table_info(payment_requests)').rows ?? []).map(
+      col => col.name,
+    );
+    expect(paymentCols).toEqual(
+      expect.arrayContaining(['pending_event_id', 'displayed_payment_hash', 'proof_verified']),
+    );
     expect(
       db.executeSync(
         "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'payment_requests'",
@@ -965,6 +972,7 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
       updatedAt: 10,
       proofJson: null,
       reason: null,
+      ...EMPTY_PAYMENT_RECORD_EXTRAS,
     });
     await StorageService.savePaymentEvent({
       ownerPubky: OWNER,
@@ -998,6 +1006,7 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
       updatedAt: 11,
       proofJson: null,
       reason: null,
+      ...EMPTY_PAYMENT_RECORD_EXTRAS,
     });
 
     expect(await StorageService.getPaymentRequest(OWNER, PEER, requestId)).toEqual(

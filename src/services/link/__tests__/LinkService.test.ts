@@ -98,6 +98,11 @@ jest.mock('../../StorageService', () => ({
     retryPendingCleanup: jest.fn(),
     markGroupEventSeen: jest.fn(),
     listDeliveryQueue: jest.fn(),
+    listPaymentRequestsWithPendingEvent: jest.fn().mockResolvedValue([]),
+    getLinkMessageByEventId: jest.fn(),
+    hasQueueItemForMessage: jest.fn(),
+    clearPaymentPendingEvent: jest.fn(),
+    enqueue: jest.fn(),
     removeFromQueue: jest.fn(),
     getContact: jest.fn(),
     getAllContacts: jest.fn(),
@@ -262,6 +267,7 @@ describe('LinkService', () => {
     mockedStorage.getLink.mockResolvedValue(null);
     mockedStorage.getAllLinks.mockResolvedValue([]);
     mockedStorage.listDeliveryQueue.mockResolvedValue([]);
+    mockedStorage.listPaymentRequestsWithPendingEvent.mockResolvedValue([]);
     mockedStorage.retryPendingCleanup.mockResolvedValue(undefined);
     mockedStorage.markGroupEventSeen.mockResolvedValue(undefined);
     mockedStorage.hasLinkMessage.mockResolvedValue(false);

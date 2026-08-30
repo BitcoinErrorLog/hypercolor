@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, TextInput } from 'react-native';
 import {
   displayPaymentStatus,
+  formatPaymentDisplayText,
   type PaymentDisplayStatus,
   type PaymentRequestRecord,
 } from '../types/payment';
@@ -31,7 +32,10 @@ export function PaymentRequestCard({
   onPayInWallet: () => void;
   onSubmitProof: () => void;
 }) {
-  const status = displayPaymentStatus(record.status, record.expiresAt, nowMs);
+  const status = displayPaymentStatus(record.status, record.expiresAt, nowMs, {
+    pendingEventId: record.pendingEventId,
+    proofVerified: record.proofVerified,
+  });
   const isPayer = !isPayee;
 
   return (
@@ -40,7 +44,7 @@ export function PaymentRequestCard({
       <Text style={styles.amount}>
         {record.amountValue} {record.amountAsset.toUpperCase()}
       </Text>
-      <Text style={styles.reference}>{record.paymentReference}</Text>
+      <Text style={styles.reference}>{formatPaymentDisplayText(record.paymentReference)}</Text>
       <View style={styles.chipRow}>
         <StatusChip status={status} />
         {record.expiresAt !== null ? (
@@ -77,10 +81,28 @@ export function PaymentRequestCard({
   );
 }
 
+function statusLabel(status: PaymentDisplayStatus): string {
+  switch (status) {
+    case 'claimed':
+      return 'Payment claimed';
+    case 'verified':
+      return 'Paid';
+    case 'sending':
+      return 'sending';
+    case 'proof_received':
+      return 'Payment claimed';
+    default:
+      return status.replace('_', ' ');
+  }
+}
+
 function StatusChip({ status }: { status: PaymentDisplayStatus }) {
   return (
     <View style={[styles.chip, chipTone(status)]}>
-      <Text style={styles.chipText}>{status.replace('_', ' ')}</Text>
+      <Text style={styles.chipText}>
+        {status === 'verified' ? '✓ ' : ''}
+        {statusLabel(status)}
+      </Text>
     </View>
   );
 }
@@ -125,12 +147,16 @@ function ActionButton({
 function chipTone(status: PaymentDisplayStatus) {
   switch (status) {
     case 'accepted':
-    case 'proof_received':
+    case 'verified':
       return styles.chipOk;
     case 'rejected':
     case 'cancelled':
     case 'expired':
       return styles.chipBad;
+    case 'claimed':
+    case 'proof_received':
+    case 'sending':
+      return styles.chipPending;
     default:
       return styles.chipPending;
   }

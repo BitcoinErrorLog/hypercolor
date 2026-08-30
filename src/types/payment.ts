@@ -1,4 +1,8 @@
 import { LINK_MESSAGE_MAX_BYTES } from './link';
+import { isMainnetBolt11 } from '../utils/bolt11';
+import { formatPaymentDisplayText } from '../utils/displaySanitize';
+import { hasWatchedDuplicateKeys } from '../utils/jsonDuplicateKeys';
+import { isValidMainnetOnchainAddress } from '../utils/onchainAddress';
 
 /**
  * Official Paykit Private Application Message kinds for payments.
@@ -38,9 +42,7 @@ const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f
 const AMOUNT_CANONICAL = /^[0-9]+(\.[0-9]{1,11})?$/;
 const ENDPOINT_CHAR = /^[A-Za-z0-9._-]+$/;
 const RESERVED_ENDPOINTS = new Set(['private', 'encrypted-link-recovery']);
-const BOLT11 = /^(lnbc|lntb|lnbcrt)[0-9a-z]+$/i;
-const BECH32 = /^(bc1|tb1|bcrt1)[0-9a-z]{20,90}$/;
-const BASE58 = /^[13mn2][1-9A-HJ-NP-Za-km-z]{25,39}$/;
+const AMOUNT_LENIENT = /^(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)$/;
 const RFC3339_Z = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/;
 
 const REQUEST_TOP_KEYS = ['version', 'kind', 'event_id', 'payment_request_id', 'request'] as const;
@@ -78,25 +80,43 @@ export type PaymentAction = 'accept' | 'reject' | 'cancel' | 'proof';
 /**
  * State machine (receive-side authorization is separate — see PaymentService):
  *
- * | state          | accept | reject | cancel | proof                         |
- * |----------------|--------|--------|--------|-------------------------------|
- * | pending        | payer* | payer  | payee  | payer (accepted-or-pending)   |
- * | accepted       | —      | —      | payee  | payer                         |
- * | rejected       | —      | —      | —      | —                             |
- * | cancelled      | —      | —      | —      | —                             |
- * | proof_received | —      | —      | —      | —                             |
+ * | state          | accept | reject | cancel | proof                                      |
+ * |----------------|--------|--------|--------|--------------------------------------------|
+ * | pending        | payer* | payer  | payee  | — (inbound: mark seen, do not apply)       |
+ * | accepted       | —      | —      | payee  | payer                                      |
+ * | rejected       | —      | —      | —      | —                                          |
+ * | cancelled      | —      | —      | —      | —                                          |
+ * | proof_received | —      | —      | —      | —                                          |
+ *
+ * Terminal states (rejected / cancelled / proof_received) are never overwritten.
+ * Crossing accept/cancel resolves to whichever compare-and-set applied first
+ * locally; the later transition is a no-op (inbound: seen-marker; local:
+ * `already transitioned`).
  *
  * *accept is refused when `proposal_expires_at` is in the past.
- * Proof on pending is also refused after proposal expiry.
+ * Proof requires `status === accepted` (stricter than the earlier
+ * accepted-or-pending rule).
  * `proposal_expires_at` is a proposal window (before acceptance), not a
  * pay-by deadline: an already-accepted request can still receive proof
  * after that timestamp.
+ *
+ * Wire policy (emit-strict / accept-lenient):
+ * - Outbound amounts are canonical positive `btc` decimals only.
+ * - Inbound amounts accept official Paykit decimals (`.5`, `10.`, any
+ *   non-empty asset without controls) and store a normalized value.
+ * - Inbound `proof` is an opaque JSON object (official Paykit JsonMap).
+ *   Empty `{}` decodes. Render is neutral "Payment claimed" unless a
+ *   bolt11 preimage is verified against a displayed invoice hash.
+ * - Duplicate-key scan: tokenizer rejects duplicate keys in the root
+ *   object and nested `request` / `proof` / `payment_endpoints` /
+ *   `amount` / `billing_period`. Other objects (e.g. `metadata`) are
+ *   not scanned; JSON.parse still collapses those.
  */
-export type PaymentDisplayStatus = PaymentStatus | 'expired';
+export type PaymentDisplayStatus = PaymentStatus | 'expired' | 'sending' | 'claimed' | 'verified';
 
 export interface PaymentAmount {
   value: string;
-  asset: typeof PAYMENT_ASSET_BTC;
+  asset: string;
 }
 
 export interface PaymentRecurrence {
@@ -152,10 +172,8 @@ export interface PaymentBillingPeriod {
   ends_at: string;
 }
 
-export interface PaymentProofBody {
-  type: typeof PAYMENT_PROOF_TYPE_BOLT11_PREIMAGE;
-  data: string;
-}
+/** Opaque official Paykit proof object (any JSON object, including `{}`). */
+export type PaymentProofBody = Record<string, unknown>;
 
 export interface PaymentProofEnvelope {
   version: 1;
@@ -198,7 +216,25 @@ export interface PaymentRequestRecord {
   updatedAt: number;
   proofJson: string | null;
   reason: string | null;
+  pendingEventId: string | null;
+  displayedPaymentHash: string | null;
+  proofVerified: boolean | null;
 }
+
+export const EMPTY_PAYMENT_RECORD_EXTRAS = {
+  pendingEventId: null,
+  displayedPaymentHash: null,
+  proofVerified: null,
+} as const;
+
+export type PaymentRequestPatch = {
+  status: PaymentStatus;
+  proofJson?: string | null;
+  reason?: string | null;
+  pendingEventId?: string | null;
+  displayedPaymentHash?: string | null;
+  proofVerified?: boolean | null;
+};
 
 export interface PaymentEventRecord {
   ownerPubky: string;
@@ -211,16 +247,29 @@ export interface PaymentEventRecord {
   receivedAt: number;
 }
 
+export type TipValidationStatus = 'valid' | 'rejected';
+
 export interface TipEndpointRecord {
   ownerPubky: string;
   peerPubky: string;
   identifier: string;
   payload: string;
   updatedAt: number;
+  validationStatus: TipValidationStatus;
+  invoiceAmount: string | null;
+  invoiceExpiresAt: number | null;
+  paymentHash: string | null;
 }
 
 export class PaymentError extends Error {
-  readonly code: 'validation' | 'unauthorized' | 'not-found' | 'state' | 'expired' | 'budget';
+  readonly code:
+    | 'validation'
+    | 'unauthorized'
+    | 'not-found'
+    | 'state'
+    | 'expired'
+    | 'budget'
+    | 'conflict';
 
   constructor(code: PaymentError['code'], message: string) {
     super(message);
@@ -261,6 +310,35 @@ export function isCanonicalAmountValue(value: string): boolean {
   return AMOUNT_CANONICAL.test(value);
 }
 
+/**
+ * Official Paykit inbound amount: ASCII digits and at most one decimal point,
+ * with at least one digit. `.5` and `10.` are accepted. Signs and exponents
+ * are rejected.
+ */
+export function isLenientAmountValue(value: string): boolean {
+  if (!AMOUNT_LENIENT.test(value)) return false;
+  return /[0-9]/.test(value);
+}
+
+/** Normalize `.5` → `0.5`, `10.` → `10`, `10.00` → `10`. */
+export function normalizeAmountValue(value: string): string | null {
+  if (!isLenientAmountValue(value)) return null;
+  const [wholeRaw, fracRaw] = value.split('.');
+  const whole =
+    (wholeRaw === '' || wholeRaw === undefined ? '0' : wholeRaw).replace(/^0+(?=\d)/, '') || '0';
+  if (!value.includes('.')) return whole;
+  const frac = (fracRaw ?? '').replace(/0+$/, '');
+  return frac.length === 0 ? whole : `${whole}.${frac}`;
+}
+
+export function isLenientAsset(value: string): boolean {
+  if (value.length === 0) return false;
+  for (const ch of value) {
+    if (ch < ' ' || ch === '\u007f') return false;
+  }
+  return true;
+}
+
 export function isPositiveBtcAmount(value: string): boolean {
   if (!isCanonicalAmountValue(value)) return false;
   if (!isBtcAtMostCap(value)) return false;
@@ -296,21 +374,11 @@ export function isValidPaymentReference(value: string): boolean {
 }
 
 export function isValidBolt11(payload: string): boolean {
-  if (payload.length === 0) return false;
-  for (const ch of payload) {
-    const code = ch.charCodeAt(0);
-    if (code <= 32 || code === 127) return false;
-  }
-  return BOLT11.test(payload);
+  return isMainnetBolt11(payload);
 }
 
 export function isValidOnchainAddress(payload: string): boolean {
-  if (payload.length === 0) return false;
-  for (const ch of payload) {
-    const code = ch.charCodeAt(0);
-    if (code <= 32 || code === 127) return false;
-  }
-  return BECH32.test(payload) || BASE58.test(payload);
+  return isValidMainnetOnchainAddress(payload);
 }
 
 export function isValidRfc3339Z(value: string): boolean {
@@ -363,9 +431,28 @@ export function displayPaymentStatus(
   status: PaymentStatus,
   expiresAt: number | null,
   nowMs: number,
+  extras?: { pendingEventId?: string | null; proofVerified?: boolean | null },
 ): PaymentDisplayStatus {
+  if (extras?.pendingEventId) return 'sending';
+  if (status === 'proof_received') {
+    return extras?.proofVerified === true ? 'verified' : 'claimed';
+  }
   if (status === 'pending' && isProposalExpired(expiresAt, nowMs)) return 'expired';
   return status;
+}
+
+export function expectedStatusesForAction(action: PaymentAction): readonly PaymentStatus[] {
+  switch (action) {
+    case 'accept':
+    case 'reject':
+      return ['pending'];
+    case 'cancel':
+      return ['pending', 'accepted'];
+    case 'proof':
+      return ['accepted'];
+    default:
+      return [];
+  }
 }
 
 export function canTransition(
@@ -381,8 +468,7 @@ export function canTransition(
     case 'cancel':
       return status === 'pending' || status === 'accepted';
     case 'proof':
-      if (status === 'accepted') return true;
-      return status === 'pending' && !proposalExpired;
+      return status === 'accepted';
     default:
       return false;
   }
@@ -418,9 +504,10 @@ function decodeAmount(value: unknown): PaymentAmount | null {
   const amount = asRecord(value);
   if (!amount || !hasExactKeys(amount, AMOUNT_KEYS)) return null;
   if (typeof amount.value !== 'string' || typeof amount.asset !== 'string') return null;
-  if (amount.asset !== PAYMENT_ASSET_BTC) return null;
-  if (!isPositiveBtcAmount(amount.value)) return null;
-  return { value: amount.value, asset: PAYMENT_ASSET_BTC };
+  if (!isLenientAsset(amount.asset)) return null;
+  const normalized = normalizeAmountValue(amount.value);
+  if (!normalized) return null;
+  return { value: normalized, asset: amount.asset };
 }
 
 function decodeRecurrence(value: unknown): PaymentRecurrence | null | 'invalid' {
@@ -457,14 +544,7 @@ function decodeBillingPeriod(value: unknown): PaymentBillingPeriod | null | 'inv
 }
 
 function decodeProofBody(value: unknown): PaymentProofBody | null {
-  const proof = asRecord(value);
-  if (!proof) return null;
-  if (typeof proof.type !== 'string' || typeof proof.data !== 'string') return null;
-  if (proof.type !== PAYMENT_PROOF_TYPE_BOLT11_PREIMAGE) return null;
-  for (const ch of proof.data) {
-    if (ch < ' ' || ch === '\u007f') return null;
-  }
-  return { type: PAYMENT_PROOF_TYPE_BOLT11_PREIMAGE, data: proof.data };
+  return asRecord(value);
 }
 
 export function buildPaymentRequestEnvelope(input: {
@@ -922,6 +1002,7 @@ export function paymentPreviewBody(kind: string): string {
 }
 
 function parseObject(rawJson: string): Record<string, unknown> | null {
+  if (hasWatchedDuplicateKeys(rawJson)) return null;
   let value: unknown;
   try {
     value = JSON.parse(rawJson);
@@ -930,3 +1011,5 @@ function parseObject(rawJson: string): Record<string, unknown> | null {
   }
   return asRecord(value);
 }
+
+export { formatPaymentDisplayText };

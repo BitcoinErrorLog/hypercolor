@@ -10,6 +10,7 @@ import {
   SCHEMA_V9_STATEMENTS,
   SCHEMA_V10_STATEMENTS,
   SCHEMA_V11_STATEMENTS,
+  SCHEMA_V12_STATEMENTS,
 } from './schema';
 import type { SqlExecutor } from './sql';
 
@@ -25,7 +26,7 @@ import type { SqlExecutor } from './sql';
  * - After adding a migration, bump CURRENT_VERSION.
  */
 
-const CURRENT_VERSION = 11;
+const CURRENT_VERSION = 12;
 
 type Migration = {
   version: number;
@@ -44,6 +45,7 @@ const MIGRATIONS: readonly Migration[] = [
   { version: 9, statements: SCHEMA_V9_STATEMENTS },
   { version: 10, statements: SCHEMA_V10_STATEMENTS },
   { version: 11, statements: SCHEMA_V11_STATEMENTS },
+  { version: 12, statements: SCHEMA_V12_STATEMENTS },
 ];
 
 export async function runMigrations(db: SqlExecutor): Promise<void> {

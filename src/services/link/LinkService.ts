@@ -383,6 +383,79 @@ export const LinkService = {
   },
 
   /**
+   * Serializes work against the same per-peer queue used for inbound apply
+   * and native send. Payment local transitions MUST run inside this.
+   */
+  async withPeerQueue<T>(peerPubky: PubkyKey, operation: () => Promise<T>): Promise<T> {
+    return withQueue(peerPubky, operation);
+  },
+
+  /**
+   * Attempt delivery of an already-persisted send intent. Does not take the
+   * peer queue — caller must already hold {@link withPeerQueue}. A not-ready
+   * link or send failure leaves the queued item for {@link drainRetries}.
+   */
+  async attemptPersistedSend(input: {
+    peerPubky: PubkyKey;
+    kind: string;
+    eventId: string;
+    queueId: string;
+    rawJson: string;
+  }): Promise<'sent' | 'queued'> {
+    let outcome: EnsureOutcome;
+    try {
+      outcome = await ensureLinkLocked(input.peerPubky, true, false);
+    } catch {
+      return 'queued';
+    }
+    if (
+      outcome !== 'ready' &&
+      outcome !== 'handshaking-initiator' &&
+      outcome !== 'handshaking-responder'
+    ) {
+      return 'queued';
+    }
+    const ownerForRequest = requireOwner();
+    const pending = await StorageService.getMessageRequest(ownerForRequest, input.peerPubky);
+    if (pending?.status === 'pending') {
+      await StorageService.upsertMessageRequest({
+        ...pending,
+        status: 'accepted',
+        updatedAt: Date.now(),
+      });
+    }
+    if (outcome !== 'ready') return 'queued';
+    try {
+      const ownerPubky = requireOwner();
+      const handle = requireEstablishedHandle(ownerPubky, input.peerPubky);
+      const wireJson = await wireJsonForNativeSend(
+        input.kind,
+        input.rawJson,
+        ownerPubky,
+        ownerPubky,
+        input.eventId,
+      );
+      const { snapshot } = await PaykitLinkNative.sendPrivateMessageJson(handle, wireJson);
+      await StorageService.finalizeLinkSend({
+        ownerPubky,
+        peerPubky: input.peerPubky,
+        senderPubky: ownerPubky,
+        kind: input.kind,
+        eventId: input.eventId,
+        snapshot,
+        queueId: input.queueId,
+      });
+      return 'sent';
+    } catch (err) {
+      console.warn(
+        `[LinkService] Persisted send failed for ${input.peerPubky}:`,
+        errorMessage(err),
+      );
+      return 'queued';
+    }
+  },
+
+  /**
    * Sends an already-persisted PAM JSON over a 1:1 Encrypted Link.
    * Used by GroupService pairwise fan-out. The caller MUST persist the
    * exact `rawJson` in `delivery_queue` first (nonce-safe). Returns
@@ -439,6 +512,7 @@ export const LinkService = {
    * Intended call site: app startup / foreground (see file header).
    */
   async recoverPendingSends(): Promise<void> {
+    await reconcilePaymentPendingSends();
     const items = await StorageService.listDeliveryQueue();
     for (const item of items) {
       const payload = parseRetryPayload(item.payload);
@@ -1679,6 +1753,78 @@ async function wireJsonForNativeSend(
     persistedRawJson,
     attachmentKeyRef(ownerPubky, senderPubky, eventId),
   );
+}
+
+export function buildPreparedSendIntent(input: {
+  ownerPubky: PubkyKey;
+  peerPubky: PubkyKey;
+  kind: string;
+  eventId: string;
+  rawJson: string;
+  body: string;
+  sentAt: number;
+  queueId: string;
+}): { message: LinkMessage; queueItem: DeliveryQueueItem } {
+  const persistJson =
+    input.kind === CHAT_ATTACHMENT_KIND ? redactAttachmentRawJson(input.rawJson) : input.rawJson;
+  const ts = Date.now();
+  return {
+    message: {
+      ownerPubky: input.ownerPubky,
+      eventId: input.eventId,
+      conversationId: buildDmConversationId(input.peerPubky),
+      peerPubky: input.peerPubky,
+      senderPubky: input.ownerPubky,
+      direction: 'sent',
+      kind: input.kind,
+      rawJson: persistJson,
+      body: input.body,
+      sentAt: input.sentAt,
+      receivedAt: null,
+      deliveryState: 'sending',
+    },
+    queueItem: {
+      id: input.queueId,
+      messageId: input.eventId,
+      recipientPubky: input.peerPubky,
+      payload: JSON.stringify(
+        retryPayload(input.ownerPubky, input.peerPubky, input.eventId, persistJson, input.kind),
+      ),
+      attempts: 0,
+      nextRetryAt: ts,
+      createdAt: ts,
+    },
+  };
+}
+
+async function reconcilePaymentPendingSends(): Promise<void> {
+  const ownerPubky = session?.pubky ?? KeyStore.getPubky();
+  if (!ownerPubky) return;
+  const pending = (await StorageService.listPaymentRequestsWithPendingEvent(ownerPubky)) ?? [];
+  for (const row of pending) {
+    const eventId = row.pendingEventId;
+    if (!eventId) continue;
+    const message = await StorageService.getLinkMessageByEventId(ownerPubky, ownerPubky, eventId);
+    if (!message) continue;
+    if (message.deliveryState === 'sent') {
+      await StorageService.clearPaymentPendingEvent(ownerPubky, eventId);
+      continue;
+    }
+    if (message.deliveryState !== 'sending') continue;
+    if (await StorageService.hasQueueItemForMessage(eventId)) continue;
+    const ts = Date.now();
+    await StorageService.enqueue({
+      id: uuidv4(),
+      messageId: eventId,
+      recipientPubky: row.peerPubky,
+      payload: JSON.stringify(
+        retryPayload(ownerPubky, row.peerPubky, eventId, message.rawJson, message.kind),
+      ),
+      attempts: 0,
+      nextRetryAt: ts,
+      createdAt: ts,
+    });
+  }
 }
 
 function retryPayload(

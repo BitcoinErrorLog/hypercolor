@@ -24,15 +24,27 @@ import {
   decodePaymentRequestEnvelope,
   decodePrivatePaymentListEnvelope,
   canTransition,
+  displayPaymentStatus,
   decodePaymentEnvelope,
   isCanonicalAmountValue,
   isCanonicalThreePartEndpointId,
+  isLenientAmountValue,
   isPositiveBtcAmount,
   isValidBolt11,
   isValidOnchainAddress,
   isValidPaymentEndpointIdentifier,
+  normalizeAmountValue,
   satsToBtcDecimal,
 } from '../payment';
+import {
+  MAINNET_BOLT11_20U,
+  MAINNET_BOLT11_AMOUNTLESS,
+  MAINNET_P2PKH,
+  MAINNET_P2TR,
+  MAINNET_P2WPKH,
+  TESTNET_BOLT11,
+  corruptBolt11Checksum,
+} from '../../services/payments/__tests__/bolt11Vectors';
 
 const EVENT_ID = '8a0d8b4c-913f-4e31-9f2c-2a6f5bb4d101';
 const REQUEST_ID = 'b7f9c2a1-6d43-4b0e-a8d4-0fe2c712ab33';
@@ -94,8 +106,8 @@ const OFFICIAL_LIST = {
   version: 1,
   kind: PAYKIT_PRIVATE_PAYMENT_LIST_KIND,
   payment_endpoints: {
-    [ENDPOINT_LIGHTNING_BOLT11]: 'lnbc1abcdefghijklmnopqrstuvwxyz',
-    [ENDPOINT_BITCOIN_P2TR]: 'bc1pw508d6qejxtdg4y5r3zarvary0c5xw7kw508d6qejxtdg4y5r3zarvary0c5xw7k',
+    [ENDPOINT_LIGHTNING_BOLT11]: MAINNET_BOLT11_20U,
+    [ENDPOINT_BITCOIN_P2TR]: MAINNET_P2TR,
   },
 };
 
@@ -271,12 +283,20 @@ describe('payment wire contracts', () => {
     expect(decodePaymentEnvelope(JSON.stringify(OFFICIAL_ACCEPTANCE))).toEqual(OFFICIAL_ACCEPTANCE);
   });
 
-  it('encodes the state machine: pending accept/reject/cancel/proof, accepted cancel/proof only', () => {
+  it('renders proof_received as claimed unless verified, and pendingEventId as sending', () => {
+    expect(displayPaymentStatus('proof_received', null, 1)).toBe('claimed');
+    expect(displayPaymentStatus('proof_received', null, 1, { proofVerified: true })).toBe(
+      'verified',
+    );
+    expect(displayPaymentStatus('accepted', null, 1, { pendingEventId: EVENT_ID })).toBe('sending');
+  });
+
+  it('encodes the state machine: pending accept/reject/cancel; proof only from accepted', () => {
     expect(canTransition('pending', 'accept', false)).toBe(true);
     expect(canTransition('pending', 'accept', true)).toBe(false);
     expect(canTransition('pending', 'reject', true)).toBe(true);
     expect(canTransition('pending', 'cancel', false)).toBe(true);
-    expect(canTransition('pending', 'proof', false)).toBe(true);
+    expect(canTransition('pending', 'proof', false)).toBe(false);
     expect(canTransition('pending', 'proof', true)).toBe(false);
     expect(canTransition('accepted', 'accept', false)).toBe(false);
     expect(canTransition('accepted', 'proof', true)).toBe(true);
@@ -287,19 +307,19 @@ describe('payment wire contracts', () => {
 });
 
 describe('S3 payload validators', () => {
-  it('accepts bolt11 and bech32/base58 and rejects injected schemes', () => {
-    expect(isValidBolt11('lnbc1abcdefghijklmnopqrstuvwxyz')).toBe(true);
-    expect(isValidBolt11('LNBC1ABCDEFGHIJKLMNOPQRSTUVWXYZ')).toBe(true);
+  it('accepts mainnet bolt11/bech32/base58 and rejects injected schemes', () => {
+    expect(isValidBolt11(MAINNET_BOLT11_20U)).toBe(true);
+    expect(isValidBolt11(MAINNET_BOLT11_20U.toUpperCase())).toBe(true);
+    expect(isValidBolt11(MAINNET_BOLT11_AMOUNTLESS)).toBe(true);
+    expect(isValidBolt11(TESTNET_BOLT11)).toBe(false);
+    expect(isValidBolt11(corruptBolt11Checksum(MAINNET_BOLT11_20U))).toBe(false);
     expect(isValidBolt11(' javascript:alert(1)')).toBe(false);
     expect(isValidBolt11('lnbc1 abc')).toBe(false);
-    expect(
-      isValidOnchainAddress('bc1pw508d6qejxtdg4y5r3zarvary0c5xw7kw508d6qejxtdg4y5r3zarvary0c5xw7k'),
-    ).toBe(true);
-    expect(isValidOnchainAddress('1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa')).toBe(true);
+    expect(isValidOnchainAddress(MAINNET_P2TR)).toBe(true);
+    expect(isValidOnchainAddress(MAINNET_P2WPKH)).toBe(true);
+    expect(isValidOnchainAddress(MAINNET_P2PKH)).toBe(true);
     expect(isValidOnchainAddress('file:///etc/passwd')).toBe(false);
-    expect(
-      isValidOnchainAddress('BC1PW508D6QEJXTDG4Y5R3ZARVARY0C5XW7KW508D6QEJXTDG4Y5R3ZARVARY0C5XW7K'),
-    ).toBe(false);
+    expect(isValidOnchainAddress(MAINNET_P2WPKH.toUpperCase())).toBe(false);
   });
 });
 
@@ -316,15 +336,47 @@ describe('amount validation', () => {
     expect(isCanonicalAmountValue('')).toBe(false);
     expect(isCanonicalAmountValue('.5')).toBe(false);
     expect(isCanonicalAmountValue('10.')).toBe(false);
+    expect(isLenientAmountValue('.5')).toBe(true);
+    expect(isLenientAmountValue('10.')).toBe(true);
+    expect(normalizeAmountValue('.5')).toBe('0.5');
+    expect(normalizeAmountValue('10.')).toBe('10');
     expect(satsToBtcDecimal(1000)).toBe('0.00001');
     expect(satsToBtcDecimal(100_000_000)).toBe('1');
   });
 
-  it('rejects non-btc assets on decode', () => {
-    const usd = {
+  it('accepts lenient inbound amounts and any asset on decode, emits remain strict', () => {
+    const leading = {
       ...OFFICIAL_REQUEST,
-      request: { ...OFFICIAL_REQUEST.request, amount: { value: '1.00', asset: 'usd' } },
+      request: { ...OFFICIAL_REQUEST.request, amount: { value: '.5', asset: 'usd' } },
     };
-    expect(decodePaymentRequestEnvelope(JSON.stringify(usd))).toBeNull();
+    expect(decodePaymentRequestEnvelope(JSON.stringify(leading))?.request.amount).toEqual({
+      value: '0.5',
+      asset: 'usd',
+    });
+    const trailing = {
+      ...OFFICIAL_REQUEST,
+      request: { ...OFFICIAL_REQUEST.request, amount: { value: '10.', asset: 'btc' } },
+    };
+    expect(decodePaymentRequestEnvelope(JSON.stringify(trailing))?.request.amount).toEqual({
+      value: '10',
+      asset: 'btc',
+    });
+  });
+
+  it('accepts opaque proof objects including empty and {txid}', () => {
+    const txidProof = { ...OFFICIAL_PROOF, proof: { txid: 'abc' } };
+    expect(decodePaymentProofEnvelope(JSON.stringify(txidProof))?.proof).toEqual({ txid: 'abc' });
+    const emptyProof = { ...OFFICIAL_PROOF, proof: {} };
+    expect(decodePaymentProofEnvelope(JSON.stringify(emptyProof))?.proof).toEqual({});
+  });
+
+  it('rejects duplicate security-relevant keys before JSON.parse collapse', () => {
+    const dupKind = `{"version":1,"kind":"${PAYKIT_PAYMENT_REQUEST_KIND}","kind":"paykit.payment_proof","event_id":"${EVENT_ID}","payment_request_id":"${REQUEST_ID}","request":${JSON.stringify(OFFICIAL_REQUEST.request)}}`;
+    expect(decodePaymentRequestEnvelope(dupKind)).toBeNull();
+    const dupNested = JSON.stringify(OFFICIAL_REQUEST).replace(
+      '"payment_request_id":',
+      '"payment_request_id":"aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa","payment_request_id":',
+    );
+    expect(decodePaymentRequestEnvelope(dupNested)).toBeNull();
   });
 });

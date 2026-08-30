@@ -14,10 +14,9 @@ import {
   buildPaymentRequestEnvelope,
   buildPrivatePaymentListEnvelope,
   canTransition,
+  expectedStatusesForAction,
   isPositiveBtcAmount,
   isProposalExpired,
-  isValidBolt11,
-  isValidOnchainAddress,
   isValidPaymentEndpointIdentifier,
   paymentPreviewBody,
   satsToBtcDecimal,
@@ -28,7 +27,9 @@ import {
 } from '../../types/payment';
 import { KeyStore } from '../KeyStore';
 import { StorageService } from '../StorageService';
-import { LinkService } from '../link/LinkService';
+import { buildPreparedSendIntent, LinkService } from '../link/LinkService';
+import { validateTipEndpoint } from './endpointValidation';
+import { extractBolt11Preimage, verifyBolt11Preimage } from './proofVerify';
 
 export type RequestPaymentAmount = number | { value: string; asset?: string };
 
@@ -73,27 +74,47 @@ export const PaymentService = {
       updatedAt: sentAt,
       proofJson: null,
       reason: null,
+      pendingEventId: eventId,
+      displayedPaymentHash: null,
+      proofVerified: null,
     };
-    await StorageService.savePaymentRequest(record);
-    await StorageService.savePaymentEvent({
+    const queueId = uuidv4();
+    const sendIntent = buildPreparedSendIntent({
       ownerPubky: owner,
-      conversationId: `dm:${peer}`,
-      senderPubky: owner,
-      eventId,
-      kind: PAYKIT_PAYMENT_REQUEST_KIND,
-      paymentRequestId,
-      applied: true,
-      receivedAt: sentAt,
-    });
-    await LinkService.sendPreparedMessage({
       peerPubky: peer,
       kind: PAYKIT_PAYMENT_REQUEST_KIND,
       eventId,
       rawJson: built.json,
       body: paymentPreviewBody(PAYKIT_PAYMENT_REQUEST_KIND),
       sentAt,
+      queueId,
     });
-    return record;
+    await LinkService.withPeerQueue(peer, async () => {
+      await StorageService.persistPaymentCreateWithSendIntent({
+        record,
+        event: {
+          ownerPubky: owner,
+          conversationId: `dm:${peer}`,
+          senderPubky: owner,
+          eventId,
+          kind: PAYKIT_PAYMENT_REQUEST_KIND,
+          paymentRequestId,
+          applied: true,
+          receivedAt: sentAt,
+        },
+        sendIntent,
+      });
+      await LinkService.attemptPersistedSend({
+        peerPubky: peer,
+        kind: PAYKIT_PAYMENT_REQUEST_KIND,
+        eventId,
+        queueId,
+        rawJson: built.json,
+      });
+    });
+    const stored = await StorageService.getPaymentRequest(owner, peer, paymentRequestId);
+    if (!stored) throw new PaymentError('not-found', 'payment request missing after create');
+    return stored;
   },
 
   async acceptRequest(peer: PubkyKey, paymentRequestId: string): Promise<PaymentRequestRecord> {
@@ -127,47 +148,89 @@ export const PaymentService = {
     endpointIdentifier: string = ENDPOINT_LIGHTNING_BOLT11,
   ): Promise<PaymentRequestRecord> {
     const owner = requireOwner();
-    const row = await requireLocalRequest(owner, peer, paymentRequestId, 'received');
-    const nowMs = Date.now();
-    if (!canTransition(row.status, 'proof', isProposalExpired(row.expiresAt, nowMs))) {
-      throw new PaymentError('state', 'payment request cannot receive proof in its current state');
-    }
-    if (!row.endpointIds.includes(endpointIdentifier)) {
-      throw new PaymentError('validation', 'endpoint is not accepted by this request');
-    }
-    const eventId = uuidv4();
-    const built = buildPaymentProofEnvelope({
-      eventId,
-      paymentRequestId,
-      paymentReference: row.paymentReference,
-      paymentEndpointIdentifier: endpointIdentifier,
-      proofData: (preimage ?? '').trim(),
+    return LinkService.withPeerQueue(peer, async () => {
+      const row = await requireLocalRequest(owner, peer, paymentRequestId, 'received');
+      const nowMs = Date.now();
+      if (!canTransition(row.status, 'proof', isProposalExpired(row.expiresAt, nowMs))) {
+        throw new PaymentError(
+          'state',
+          'payment request cannot receive proof in its current state',
+        );
+      }
+      if (!row.endpointIds.includes(endpointIdentifier)) {
+        throw new PaymentError('validation', 'endpoint is not accepted by this request');
+      }
+      const eventId = uuidv4();
+      const proofData = (preimage ?? '').trim();
+      const built = buildPaymentProofEnvelope({
+        eventId,
+        paymentRequestId,
+        paymentReference: row.paymentReference,
+        paymentEndpointIdentifier: endpointIdentifier,
+        proofData,
+      });
+      const preimageHex = extractBolt11Preimage(built.envelope.proof);
+      let proofVerified: boolean | null = null;
+      if (preimageHex && row.displayedPaymentHash) {
+        proofVerified = await verifyBolt11Preimage(preimageHex, row.displayedPaymentHash);
+      }
+      const queueId = uuidv4();
+      const sendIntent = buildPreparedSendIntent({
+        ownerPubky: owner,
+        peerPubky: peer,
+        kind: PAYKIT_PAYMENT_PROOF_KIND,
+        eventId,
+        rawJson: built.json,
+        body: paymentPreviewBody(PAYKIT_PAYMENT_PROOF_KIND),
+        sentAt: nowMs,
+        queueId,
+      });
+      const applied = await StorageService.persistPaymentOutboundTransition({
+        ownerPubky: owner,
+        peerPubky: peer,
+        paymentRequestId,
+        expectedStatuses: expectedStatusesForAction('proof'),
+        patch: {
+          status: 'proof_received',
+          proofJson: JSON.stringify(built.envelope.proof),
+          pendingEventId: eventId,
+          proofVerified,
+        },
+        event: {
+          ownerPubky: owner,
+          conversationId: `dm:${peer}`,
+          senderPubky: owner,
+          eventId,
+          kind: PAYKIT_PAYMENT_PROOF_KIND,
+          paymentRequestId,
+          applied: true,
+          receivedAt: nowMs,
+        },
+        sendIntent,
+      });
+      if (!applied) {
+        throw new PaymentError('conflict', 'already transitioned');
+      }
+      await LinkService.attemptPersistedSend({
+        peerPubky: peer,
+        kind: PAYKIT_PAYMENT_PROOF_KIND,
+        eventId,
+        queueId,
+        rawJson: built.json,
+      });
+      const updated = await StorageService.getPaymentRequest(owner, peer, paymentRequestId);
+      if (!updated) throw new PaymentError('not-found', 'payment request missing after proof');
+      return updated;
     });
-    await StorageService.updatePaymentRequest(owner, peer, paymentRequestId, {
-      status: 'proof_received',
-      proofJson: JSON.stringify(built.envelope.proof),
-    });
-    await StorageService.savePaymentEvent({
-      ownerPubky: owner,
-      conversationId: `dm:${peer}`,
-      senderPubky: owner,
-      eventId,
-      kind: PAYKIT_PAYMENT_PROOF_KIND,
-      paymentRequestId,
-      applied: true,
-      receivedAt: nowMs,
-    });
-    await LinkService.sendPreparedMessage({
-      peerPubky: peer,
-      kind: PAYKIT_PAYMENT_PROOF_KIND,
-      eventId,
-      rawJson: built.json,
-      body: paymentPreviewBody(PAYKIT_PAYMENT_PROOF_KIND),
-      sentAt: nowMs,
-    });
-    const updated = await StorageService.getPaymentRequest(owner, peer, paymentRequestId);
-    if (!updated) throw new PaymentError('not-found', 'payment request missing after proof');
-    return updated;
+  },
+
+  async recordDisplayedInvoice(
+    peer: PubkyKey,
+    paymentRequestId: string,
+    paymentHash: string,
+  ): Promise<void> {
+    const owner = requireOwner();
+    await StorageService.setDisplayedPaymentHash(owner, peer, paymentRequestId, paymentHash);
   },
 
   async setMyTipEndpoints(
@@ -189,6 +252,14 @@ export const PaymentService = {
     return StorageService.listTipEndpoints(owner, peer);
   },
 
+  async listMatchingTipEndpoints(
+    peer: PubkyKey,
+    acceptedIds: readonly string[],
+  ): Promise<TipEndpointRecord[]> {
+    const tips = await PaymentService.getPeerTipEndpoints(peer);
+    return tips.filter(tip => acceptedIds.includes(tip.identifier));
+  },
+
   async sendTipList(peer: PubkyKey): Promise<void> {
     const owner = requireOwner();
     const mine = await StorageService.listTipEndpoints(owner, owner);
@@ -199,23 +270,38 @@ export const PaymentService = {
     const built = buildPrivatePaymentListEnvelope({ paymentEndpoints: map });
     const eventId = uuidv4();
     const sentAt = Date.now();
-    await StorageService.savePaymentEvent({
+    const queueId = uuidv4();
+    const sendIntent = buildPreparedSendIntent({
       ownerPubky: owner,
-      conversationId: `dm:${peer}`,
-      senderPubky: owner,
-      eventId,
-      kind: PAYKIT_PRIVATE_PAYMENT_LIST_KIND,
-      paymentRequestId: null,
-      applied: true,
-      receivedAt: sentAt,
-    });
-    await LinkService.sendPreparedMessage({
       peerPubky: peer,
       kind: PAYKIT_PRIVATE_PAYMENT_LIST_KIND,
       eventId,
       rawJson: built.json,
       body: paymentPreviewBody(PAYKIT_PRIVATE_PAYMENT_LIST_KIND),
       sentAt,
+      queueId,
+    });
+    await LinkService.withPeerQueue(peer, async () => {
+      await StorageService.persistPaymentEventWithSendIntent({
+        event: {
+          ownerPubky: owner,
+          conversationId: `dm:${peer}`,
+          senderPubky: owner,
+          eventId,
+          kind: PAYKIT_PRIVATE_PAYMENT_LIST_KIND,
+          paymentRequestId: null,
+          applied: true,
+          receivedAt: sentAt,
+        },
+        sendIntent,
+      });
+      await LinkService.attemptPersistedSend({
+        peerPubky: peer,
+        kind: PAYKIT_PRIVATE_PAYMENT_LIST_KIND,
+        eventId,
+        queueId,
+        rawJson: built.json,
+      });
     });
   },
 
@@ -232,61 +318,84 @@ async function localTransition(
   reason?: string,
 ): Promise<PaymentRequestRecord> {
   const owner = requireOwner();
-  const requiredDirection = action === 'cancel' ? 'sent' : 'received';
-  const row = await requireLocalRequest(owner, peer, paymentRequestId, requiredDirection);
-  const nowMs = Date.now();
-  if (!canTransition(row.status, action, isProposalExpired(row.expiresAt, nowMs))) {
-    if (action === 'accept' && isProposalExpired(row.expiresAt, nowMs)) {
-      throw new PaymentError('expired', 'payment request has expired');
+  return LinkService.withPeerQueue(peer, async () => {
+    const requiredDirection = action === 'cancel' ? 'sent' : 'received';
+    const row = await requireLocalRequest(owner, peer, paymentRequestId, requiredDirection);
+    const nowMs = Date.now();
+    if (!canTransition(row.status, action, isProposalExpired(row.expiresAt, nowMs))) {
+      if (action === 'accept' && isProposalExpired(row.expiresAt, nowMs)) {
+        throw new PaymentError('expired', 'payment request has expired');
+      }
+      throw new PaymentError('state', 'payment request cannot be transitioned');
     }
-    throw new PaymentError('state', 'payment request cannot be transitioned');
-  }
 
-  const eventId = uuidv4();
-  const nextStatus: PaymentStatus =
-    action === 'accept' ? 'accepted' : action === 'reject' ? 'rejected' : 'cancelled';
-  const trimmedReason = reason === undefined ? undefined : reason.trim();
+    const eventId = uuidv4();
+    const nextStatus: PaymentStatus =
+      action === 'accept' ? 'accepted' : action === 'reject' ? 'rejected' : 'cancelled';
+    const trimmedReason = reason === undefined ? undefined : reason.trim();
 
-  const built =
-    action === 'accept'
-      ? buildPaymentAcceptanceEnvelope({ eventId, paymentRequestId })
-      : action === 'reject'
-        ? buildPaymentRejectionEnvelope({
-            eventId,
-            paymentRequestId,
-            ...(trimmedReason ? { reason: trimmedReason } : {}),
-          })
-        : buildPaymentCancellationEnvelope({
-            eventId,
-            paymentRequestId,
-            ...(trimmedReason ? { reason: trimmedReason } : {}),
-          });
+    const built =
+      action === 'accept'
+        ? buildPaymentAcceptanceEnvelope({ eventId, paymentRequestId })
+        : action === 'reject'
+          ? buildPaymentRejectionEnvelope({
+              eventId,
+              paymentRequestId,
+              ...(trimmedReason ? { reason: trimmedReason } : {}),
+            })
+          : buildPaymentCancellationEnvelope({
+              eventId,
+              paymentRequestId,
+              ...(trimmedReason ? { reason: trimmedReason } : {}),
+            });
 
-  await StorageService.updatePaymentRequest(owner, peer, paymentRequestId, {
-    status: nextStatus,
-    reason: trimmedReason ?? null,
+    const queueId = uuidv4();
+    const sendIntent = buildPreparedSendIntent({
+      ownerPubky: owner,
+      peerPubky: peer,
+      kind: built.envelope.kind,
+      eventId,
+      rawJson: built.json,
+      body: paymentPreviewBody(built.envelope.kind),
+      sentAt: nowMs,
+      queueId,
+    });
+    const applied = await StorageService.persistPaymentOutboundTransition({
+      ownerPubky: owner,
+      peerPubky: peer,
+      paymentRequestId,
+      expectedStatuses: expectedStatusesForAction(action),
+      patch: {
+        status: nextStatus,
+        reason: trimmedReason ?? null,
+        pendingEventId: eventId,
+      },
+      event: {
+        ownerPubky: owner,
+        conversationId: `dm:${peer}`,
+        senderPubky: owner,
+        eventId,
+        kind: built.envelope.kind,
+        paymentRequestId,
+        applied: true,
+        receivedAt: nowMs,
+      },
+      sendIntent,
+    });
+    if (!applied) {
+      throw new PaymentError('conflict', 'already transitioned');
+    }
+    await LinkService.attemptPersistedSend({
+      peerPubky: peer,
+      kind: built.envelope.kind,
+      eventId,
+      queueId,
+      rawJson: built.json,
+    });
+    const updated = await StorageService.getPaymentRequest(owner, peer, paymentRequestId);
+    if (!updated) throw new PaymentError('not-found', 'payment request missing after transition');
+    return updated;
   });
-  await StorageService.savePaymentEvent({
-    ownerPubky: owner,
-    conversationId: `dm:${peer}`,
-    senderPubky: owner,
-    eventId,
-    kind: built.envelope.kind,
-    paymentRequestId,
-    applied: true,
-    receivedAt: nowMs,
-  });
-  await LinkService.sendPreparedMessage({
-    peerPubky: peer,
-    kind: built.envelope.kind,
-    eventId,
-    rawJson: built.json,
-    body: paymentPreviewBody(built.envelope.kind),
-    sentAt: nowMs,
-  });
-  const updated = await StorageService.getPaymentRequest(owner, peer, paymentRequestId);
-  if (!updated) throw new PaymentError('not-found', 'payment request missing after transition');
-  return updated;
 }
 
 async function requireLocalRequest(
@@ -319,8 +428,8 @@ function resolveAmountValue(amount: RequestPaymentAmount): string {
 
 function validateLocalTipEndpoints(
   endpoints: readonly { identifier: string; payload: string }[],
-): { identifier: string; payload: string }[] {
-  const cleaned: { identifier: string; payload: string }[] = [];
+): ReturnType<typeof validateTipEndpoint>[] {
+  const cleaned: ReturnType<typeof validateTipEndpoint>[] = [];
   const seen = new Set<string>();
   for (const endpoint of endpoints) {
     const identifier = endpoint.identifier.trim();
@@ -333,18 +442,18 @@ function validateLocalTipEndpoints(
     }
     seen.add(identifier);
     const scheme = schemeForEndpointIdentifier(identifier);
-    if (scheme === 'lightning') {
-      if (!isValidBolt11(payload)) {
-        throw new PaymentError('validation', 'lightning endpoint payload is not a valid bolt11');
-      }
-    } else if (scheme === 'bitcoin') {
-      if (!isValidOnchainAddress(payload)) {
-        throw new PaymentError('validation', 'bitcoin endpoint payload is not a valid address');
-      }
-    } else {
-      throw new PaymentError('validation', 'unsupported payment endpoint identifier');
+    const validated = validateTipEndpoint(identifier, payload);
+    if (validated.validationStatus !== 'valid' || scheme === null) {
+      throw new PaymentError(
+        'validation',
+        scheme === 'lightning'
+          ? 'lightning endpoint payload is not a valid mainnet bolt11'
+          : scheme === 'bitcoin'
+            ? 'bitcoin endpoint payload is not a valid mainnet address'
+            : 'unsupported payment endpoint identifier',
+      );
     }
-    cleaned.push({ identifier, payload });
+    cleaned.push(validated);
   }
   return cleaned;
 }

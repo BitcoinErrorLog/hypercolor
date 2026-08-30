@@ -43,6 +43,7 @@ import {
 } from '../types/attachment';
 import type {
   PaymentEventRecord,
+  PaymentRequestPatch,
   PaymentRequestRecord,
   PaymentStatus,
   TipEndpointRecord,
@@ -857,6 +858,12 @@ export const StorageService = {
          SET delivery_state = 'sent', updated_at = ?
          WHERE owner_pubky = ? AND sender_pubky = ? AND kind = ? AND event_id = ?`,
         [ts, input.ownerPubky, input.senderPubky, input.kind, input.eventId],
+      );
+      db.executeSync(
+        `UPDATE payment_requests
+         SET pending_event_id = NULL, updated_at = ?
+         WHERE owner_pubky = ? AND pending_event_id = ?`,
+        [ts, input.ownerPubky, input.eventId],
       );
       if (input.kind === CHAT_ATTACHMENT_KIND) {
         db.executeSync(
@@ -1842,30 +1849,7 @@ export const StorageService = {
 
   async savePaymentRequest(record: PaymentRequestRecord): Promise<void> {
     const db = await getDb();
-    db.executeSync(
-      `INSERT OR IGNORE INTO payment_requests
-        (owner_pubky, peer_pubky, direction, payment_request_id, event_id,
-         amount_value, amount_asset, payment_reference, endpoint_ids, expires_at,
-         status, created_at, updated_at, proof_json, reason)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        record.ownerPubky,
-        record.peerPubky,
-        record.direction,
-        record.paymentRequestId,
-        record.eventId,
-        record.amountValue,
-        record.amountAsset,
-        record.paymentReference,
-        JSON.stringify(record.endpointIds),
-        record.expiresAt,
-        record.status,
-        record.createdAt,
-        record.updatedAt,
-        record.proofJson,
-        record.reason,
-      ],
-    );
+    insertPaymentRequest(db, record);
   },
 
   async getPaymentRequest(
@@ -1897,32 +1881,159 @@ export const StorageService = {
     return (result.rows ?? []).map(rowToPaymentRequest);
   },
 
-  async updatePaymentRequest(
+  async compareAndSetPaymentRequest(
     ownerPubky: PubkyKey,
     peerPubky: PubkyKey,
     paymentRequestId: string,
-    patch: {
-      status: PaymentStatus;
-      proofJson?: string | null;
-      reason?: string | null;
-    },
+    expectedStatuses: readonly PaymentStatus[],
+    patch: PaymentRequestPatch,
+  ): Promise<boolean> {
+    const db = await getDb();
+    return compareAndSetPaymentRequestRow(
+      db,
+      ownerPubky,
+      peerPubky,
+      paymentRequestId,
+      expectedStatuses,
+      patch,
+    );
+  },
+
+  /**
+   * Atomically persist a local status change + payment event + outbound
+   * send intent (link_messages.sending + delivery_queue). Compare-and-set
+   * on expected statuses; 0-row update rolls the transaction back.
+   */
+  async persistPaymentOutboundTransition(input: {
+    ownerPubky: PubkyKey;
+    peerPubky: PubkyKey;
+    paymentRequestId: string;
+    expectedStatuses: readonly PaymentStatus[];
+    patch: PaymentRequestPatch;
+    event: PaymentEventRecord;
+    sendIntent: { message: LinkMessage; queueItem: DeliveryQueueItem };
+  }): Promise<boolean> {
+    const db = await getDb();
+    try {
+      transact(db, () => {
+        const applied = compareAndSetPaymentRequestRow(
+          db,
+          input.ownerPubky,
+          input.peerPubky,
+          input.paymentRequestId,
+          input.expectedStatuses,
+          input.patch,
+        );
+        if (!applied) throw new CasConflictError();
+        insertPaymentEvent(db, input.event);
+        insertLinkMessage(db, input.sendIntent.message);
+        insertQueueItem(db, input.sendIntent.queueItem);
+      });
+      return true;
+    } catch (err) {
+      if (err instanceof CasConflictError) return false;
+      throw err;
+    }
+  },
+
+  async persistPaymentCreateWithSendIntent(input: {
+    record: PaymentRequestRecord;
+    event: PaymentEventRecord;
+    sendIntent: { message: LinkMessage; queueItem: DeliveryQueueItem };
+  }): Promise<void> {
+    const db = await getDb();
+    transact(db, () => {
+      insertPaymentRequest(db, input.record);
+      insertPaymentEvent(db, input.event);
+      insertLinkMessage(db, input.sendIntent.message);
+      insertQueueItem(db, input.sendIntent.queueItem);
+    });
+  },
+
+  async persistPaymentEventWithSendIntent(input: {
+    event: PaymentEventRecord;
+    sendIntent: { message: LinkMessage; queueItem: DeliveryQueueItem };
+  }): Promise<void> {
+    const db = await getDb();
+    transact(db, () => {
+      insertPaymentEvent(db, input.event);
+      insertLinkMessage(db, input.sendIntent.message);
+      insertQueueItem(db, input.sendIntent.queueItem);
+    });
+  },
+
+  async listPaymentRequestsWithPendingEvent(ownerPubky: PubkyKey): Promise<PaymentRequestRecord[]> {
+    const db = await getDb();
+    const result = db.executeSync(
+      `SELECT * FROM payment_requests
+       WHERE owner_pubky = ? AND pending_event_id IS NOT NULL
+       ORDER BY updated_at ASC`,
+      [ownerPubky],
+    );
+    return (result.rows ?? []).map(rowToPaymentRequest);
+  },
+
+  async clearPaymentPendingEvent(ownerPubky: PubkyKey, pendingEventId: string): Promise<void> {
+    const db = await getDb();
+    db.executeSync(
+      `UPDATE payment_requests SET pending_event_id = NULL, updated_at = ?
+       WHERE owner_pubky = ? AND pending_event_id = ?`,
+      [now(), ownerPubky, pendingEventId],
+    );
+  },
+
+  async getLinkMessageByEventId(
+    ownerPubky: PubkyKey,
+    senderPubky: PubkyKey,
+    eventId: string,
+  ): Promise<LinkMessage | null> {
+    const db = await getDb();
+    const result = db.executeSync(
+      `SELECT * FROM link_messages
+       WHERE owner_pubky = ? AND sender_pubky = ? AND event_id = ?
+       LIMIT 1`,
+      [ownerPubky, senderPubky, eventId],
+    );
+    const row = result.rows?.[0];
+    return row ? rowToLinkMessage(row) : null;
+  },
+
+  async hasQueueItemForMessage(messageId: string): Promise<boolean> {
+    const db = await getDb();
+    const result = db.executeSync('SELECT 1 FROM delivery_queue WHERE message_id = ? LIMIT 1', [
+      messageId,
+    ]);
+    return (result.rows?.length ?? 0) > 0;
+  },
+
+  async setDisplayedPaymentHash(
+    ownerPubky: PubkyKey,
+    peerPubky: PubkyKey,
+    paymentRequestId: string,
+    paymentHash: string,
   ): Promise<void> {
     const db = await getDb();
     db.executeSync(
       `UPDATE payment_requests
-       SET status = ?, proof_json = COALESCE(?, proof_json),
-           reason = COALESCE(?, reason), updated_at = ?
+       SET displayed_payment_hash = ?, updated_at = ?
        WHERE owner_pubky = ? AND peer_pubky = ? AND payment_request_id = ?`,
-      [
-        patch.status,
-        patch.proofJson === undefined ? null : patch.proofJson,
-        patch.reason === undefined ? null : patch.reason,
-        now(),
-        ownerPubky,
-        peerPubky,
-        paymentRequestId,
-      ],
+      [paymentHash, now(), ownerPubky, peerPubky, paymentRequestId],
     );
+  },
+
+  async getTipEndpoint(
+    ownerPubky: PubkyKey,
+    peerPubky: PubkyKey,
+    identifier: string,
+  ): Promise<TipEndpointRecord | null> {
+    const db = await getDb();
+    const result = db.executeSync(
+      `SELECT * FROM tip_endpoints
+       WHERE owner_pubky = ? AND peer_pubky = ? AND identifier = ?`,
+      [ownerPubky, peerPubky, identifier],
+    );
+    const row = result.rows?.[0];
+    return row ? rowToTipEndpoint(row) : null;
   },
 
   async savePaymentEvent(record: PaymentEventRecord): Promise<boolean> {
@@ -1971,7 +2082,14 @@ export const StorageService = {
   async replaceTipEndpoints(
     ownerPubky: PubkyKey,
     peerPubky: PubkyKey,
-    endpoints: readonly { identifier: string; payload: string }[],
+    endpoints: readonly {
+      identifier: string;
+      payload: string;
+      validationStatus?: 'valid' | 'rejected';
+      invoiceAmount?: string | null;
+      invoiceExpiresAt?: number | null;
+      paymentHash?: string | null;
+    }[],
     updatedAt: number,
   ): Promise<void> {
     const db = await getDb();
@@ -1982,20 +2100,42 @@ export const StorageService = {
       ]);
       for (const endpoint of endpoints) {
         db.executeSync(
-          `INSERT INTO tip_endpoints (owner_pubky, peer_pubky, identifier, payload, updated_at)
-           VALUES (?, ?, ?, ?, ?)`,
-          [ownerPubky, peerPubky, endpoint.identifier, endpoint.payload, updatedAt],
+          `INSERT INTO tip_endpoints
+            (owner_pubky, peer_pubky, identifier, payload, updated_at,
+             validation_status, invoice_amount, invoice_expires_at, payment_hash)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            ownerPubky,
+            peerPubky,
+            endpoint.identifier,
+            endpoint.payload,
+            updatedAt,
+            endpoint.validationStatus ?? 'valid',
+            endpoint.invoiceAmount ?? null,
+            endpoint.invoiceExpiresAt ?? null,
+            endpoint.paymentHash ?? null,
+          ],
         );
       }
     });
   },
 
-  async listTipEndpoints(ownerPubky: PubkyKey, peerPubky: PubkyKey): Promise<TipEndpointRecord[]> {
+  async listTipEndpoints(
+    ownerPubky: PubkyKey,
+    peerPubky: PubkyKey,
+    options?: { includeRejected?: boolean },
+  ): Promise<TipEndpointRecord[]> {
     const db = await getDb();
+    const includeRejected = options?.includeRejected === true;
     const result = db.executeSync(
-      `SELECT * FROM tip_endpoints
-       WHERE owner_pubky = ? AND peer_pubky = ?
-       ORDER BY identifier ASC`,
+      includeRejected
+        ? `SELECT * FROM tip_endpoints
+           WHERE owner_pubky = ? AND peer_pubky = ?
+           ORDER BY identifier ASC`
+        : `SELECT * FROM tip_endpoints
+           WHERE owner_pubky = ? AND peer_pubky = ?
+             AND (validation_status = 'valid' OR validation_status IS NULL)
+           ORDER BY identifier ASC`,
       [ownerPubky, peerPubky],
     );
     return (result.rows ?? []).map(rowToTipEndpoint);
@@ -2429,6 +2569,10 @@ function rowToPaymentRequest(row: any): PaymentRequestRecord {
     updatedAt: row.updated_at,
     proofJson: row.proof_json ?? null,
     reason: row.reason ?? null,
+    pendingEventId: typeof row.pending_event_id === 'string' ? row.pending_event_id : null,
+    displayedPaymentHash:
+      typeof row.displayed_payment_hash === 'string' ? row.displayed_payment_hash : null,
+    proofVerified: row.proof_verified === 1 ? true : row.proof_verified === 0 ? false : null,
   };
 }
 
@@ -2440,5 +2584,109 @@ function rowToTipEndpoint(row: any): TipEndpointRecord {
     identifier: row.identifier,
     payload: row.payload,
     updatedAt: row.updated_at,
+    validationStatus: row.validation_status === 'rejected' ? 'rejected' : 'valid',
+    invoiceAmount: typeof row.invoice_amount === 'string' ? row.invoice_amount : null,
+    invoiceExpiresAt: typeof row.invoice_expires_at === 'number' ? row.invoice_expires_at : null,
+    paymentHash: typeof row.payment_hash === 'string' ? row.payment_hash : null,
   };
+}
+
+class CasConflictError extends Error {
+  constructor() {
+    super('already transitioned');
+    this.name = 'CasConflictError';
+  }
+}
+
+function sqliteChanges(db: SqlExecutor): number {
+  const result = db.executeSync('SELECT changes() AS n');
+  return Number(result.rows?.[0]?.n ?? 0);
+}
+
+function insertPaymentRequest(db: SqlExecutor, record: PaymentRequestRecord): void {
+  db.executeSync(
+    `INSERT OR IGNORE INTO payment_requests
+      (owner_pubky, peer_pubky, direction, payment_request_id, event_id,
+       amount_value, amount_asset, payment_reference, endpoint_ids, expires_at,
+       status, created_at, updated_at, proof_json, reason,
+       pending_event_id, displayed_payment_hash, proof_verified)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      record.ownerPubky,
+      record.peerPubky,
+      record.direction,
+      record.paymentRequestId,
+      record.eventId,
+      record.amountValue,
+      record.amountAsset,
+      record.paymentReference,
+      JSON.stringify(record.endpointIds),
+      record.expiresAt,
+      record.status,
+      record.createdAt,
+      record.updatedAt,
+      record.proofJson,
+      record.reason,
+      record.pendingEventId,
+      record.displayedPaymentHash,
+      record.proofVerified === null ? null : record.proofVerified ? 1 : 0,
+    ],
+  );
+}
+
+function insertPaymentEvent(db: SqlExecutor, record: PaymentEventRecord): void {
+  db.executeSync(
+    `INSERT OR IGNORE INTO payment_events
+      (owner_pubky, conversation_id, sender_pubky, event_id, kind,
+       payment_request_id, applied, received_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      record.ownerPubky,
+      record.conversationId,
+      record.senderPubky,
+      record.eventId,
+      record.kind,
+      record.paymentRequestId,
+      record.applied ? 1 : 0,
+      record.receivedAt,
+    ],
+  );
+}
+
+function compareAndSetPaymentRequestRow(
+  db: SqlExecutor,
+  ownerPubky: string,
+  peerPubky: string,
+  paymentRequestId: string,
+  expectedStatuses: readonly PaymentStatus[],
+  patch: PaymentRequestPatch,
+): boolean {
+  if (expectedStatuses.length === 0) return false;
+  const placeholders = expectedStatuses.map(() => '?').join(', ');
+  db.executeSync(
+    `UPDATE payment_requests
+     SET status = ?,
+         proof_json = COALESCE(?, proof_json),
+         reason = COALESCE(?, reason),
+         pending_event_id = COALESCE(?, pending_event_id),
+         displayed_payment_hash = COALESCE(?, displayed_payment_hash),
+         proof_verified = COALESCE(?, proof_verified),
+         updated_at = ?
+     WHERE owner_pubky = ? AND peer_pubky = ? AND payment_request_id = ?
+       AND status IN (${placeholders})`,
+    [
+      patch.status,
+      patch.proofJson === undefined ? null : patch.proofJson,
+      patch.reason === undefined ? null : patch.reason,
+      patch.pendingEventId === undefined ? null : patch.pendingEventId,
+      patch.displayedPaymentHash === undefined ? null : patch.displayedPaymentHash,
+      patch.proofVerified === undefined ? null : patch.proofVerified ? 1 : 0,
+      now(),
+      ownerPubky,
+      peerPubky,
+      paymentRequestId,
+      ...expectedStatuses,
+    ],
+  );
+  return sqliteChanges(db) > 0;
 }

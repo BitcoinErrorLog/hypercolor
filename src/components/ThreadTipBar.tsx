@@ -4,6 +4,8 @@ import type { TipEndpointRecord } from '../types/payment';
 import { PaymentError } from '../types/payment';
 import { PaymentService } from '../services/payments/PaymentService';
 import { openPayUri } from '../services/payments/walletHandoff';
+import { useTickingNow } from './PaymentRequestCard';
+import { formatTipIdentifierDisplay } from '../utils/displaySanitize';
 
 export function ThreadTipBar({
   peerPubky,
@@ -51,35 +53,51 @@ export function ThreadTipBarContent({
   onSendMyList: () => void;
 }) {
   const [open, setOpen] = useState(false);
-
+  const nowMs = useTickingNow();
   const toggle = useCallback(() => setOpen(value => !value), []);
+  const payable = endpoints.filter(endpoint => endpoint.validationStatus !== 'rejected');
 
   return (
     <View style={styles.wrap}>
       <View style={styles.row}>
         <TouchableOpacity onPress={toggle} style={styles.chip}>
-          <Text style={styles.chipText}>
-            Tip{endpoints.length > 0 ? ` (${endpoints.length})` : ''}
-          </Text>
+          <Text style={styles.chipText}>Tip{payable.length > 0 ? ` (${payable.length})` : ''}</Text>
         </TouchableOpacity>
         <TouchableOpacity onPress={onSendMyList} style={styles.chip}>
           <Text style={styles.chipText}>Send my tip list</Text>
         </TouchableOpacity>
       </View>
       {open ? (
-        endpoints.length === 0 ? (
+        payable.length === 0 ? (
           <Text style={styles.empty}>No tip destinations from this peer yet.</Text>
         ) : (
-          endpoints.map(endpoint => (
-            <TouchableOpacity
-              key={endpoint.identifier}
-              style={styles.endpoint}
-              onPress={() => onTip(endpoint.identifier)}
-            >
-              <Text style={styles.endpointId}>{endpoint.identifier}</Text>
-              <Text style={styles.endpointHint}>Pay in wallet</Text>
-            </TouchableOpacity>
-          ))
+          payable.map(endpoint => {
+            const expired =
+              endpoint.invoiceExpiresAt !== null && endpoint.invoiceExpiresAt <= nowMs;
+            return (
+              <TouchableOpacity
+                key={endpoint.identifier}
+                style={styles.endpoint}
+                onPress={() => onTip(endpoint.identifier)}
+              >
+                <View style={styles.endpointCopy}>
+                  <Text style={styles.endpointId}>
+                    {formatTipIdentifierDisplay(endpoint.identifier)}
+                  </Text>
+                  {endpoint.invoiceAmount ? (
+                    <Text style={styles.meta}>{endpoint.invoiceAmount} BTC</Text>
+                  ) : null}
+                  {expired ? <Text style={styles.expired}>Expired</Text> : null}
+                  {endpoint.invoiceExpiresAt !== null && !expired ? (
+                    <Text style={styles.meta}>
+                      Expires {new Date(endpoint.invoiceExpiresAt).toISOString()}
+                    </Text>
+                  ) : null}
+                </View>
+                <Text style={styles.endpointHint}>Pay in wallet</Text>
+              </TouchableOpacity>
+            );
+          })
         )
       ) : null}
     </View>
@@ -104,7 +122,11 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     flexDirection: 'row',
     justifyContent: 'space-between',
+    alignItems: 'center',
   },
+  endpointCopy: { flex: 1, gap: 2, paddingRight: 8 },
   endpointId: { color: '#f9fafb', fontSize: 12, fontFamily: 'monospace' },
   endpointHint: { color: '#a78bfa', fontSize: 12, fontWeight: '600' },
+  meta: { color: '#9ca3af', fontSize: 11 },
+  expired: { color: '#fca5a5', fontSize: 11, fontWeight: '600' },
 });

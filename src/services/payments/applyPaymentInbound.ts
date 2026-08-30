@@ -1,6 +1,7 @@
 import type { PubkyKey } from '../../types';
 import { buildDmConversationId } from '../../types/link';
 import {
+  EMPTY_PAYMENT_RECORD_EXTRAS,
   PAYKIT_PAYMENT_ACCEPTANCE_KIND,
   PAYKIT_PAYMENT_CANCELLATION_KIND,
   PAYKIT_PAYMENT_PROOF_KIND,
@@ -14,6 +15,7 @@ import {
   decodePaymentRejectionEnvelope,
   decodePaymentRequestEnvelope,
   decodePrivatePaymentListEnvelope,
+  expectedStatusesForAction,
   isProposalExpired,
   peekPaymentKind,
   rfc3339ZToUnixMs,
@@ -23,6 +25,8 @@ import {
   type PaymentStatus,
 } from '../../types/payment';
 import { StorageService } from '../StorageService';
+import { validateTipEndpoint } from './endpointValidation';
+import { extractBolt11Preimage, verifyBolt11Preimage } from './proofVerify';
 
 export type PaymentInboundOutcome =
   | { action: 'applied'; request: PaymentRequestRecord | null }
@@ -38,8 +42,8 @@ export type PaymentInboundOutcome =
  *   to that peer (`direction = sent`).
  * - cancellation: payee only — must reference a request WE received from
  *   that peer (`direction = received`).
- * - proof: payer only, request must be accepted or pending (and not past
- *   proposal expiry if still pending).
+ * - proof: payer only, request must already be accepted. Proof on a
+ *   pending request is marked seen and not applied.
  * - Unknown payment_request_id: mark seen, never apply.
  * - Cross-peer: lookup is always (owner, authenticated peer, request_id).
  *
@@ -115,10 +119,9 @@ async function applyTipList(
     );
     return { action: 'rejected' };
   }
-  const endpoints = Object.entries(envelope.payment_endpoints).map(([identifier, payload]) => ({
-    identifier,
-    payload,
-  }));
+  const endpoints = Object.entries(envelope.payment_endpoints).map(([identifier, payload]) =>
+    validateTipEndpoint(identifier, payload),
+  );
   await StorageService.replaceTipEndpoints(
     input.ownerPubky,
     input.senderPubky,
@@ -212,6 +215,7 @@ async function applyRequest(
     updatedAt: nowMs,
     proofJson: null,
     reason: null,
+    ...EMPTY_PAYMENT_RECORD_EXTRAS,
   };
   await StorageService.savePaymentRequest(record);
   await markSeen(
@@ -292,10 +296,11 @@ async function applyLifecycle(
   const nextStatus: PaymentStatus =
     action === 'accept' ? 'accepted' : action === 'reject' ? 'rejected' : 'cancelled';
   const reason = 'reason' in decoded ? (decoded.reason ?? null) : null;
-  await StorageService.updatePaymentRequest(
+  const applied = await StorageService.compareAndSetPaymentRequest(
     input.ownerPubky,
     input.senderPubky,
     decoded.payment_request_id,
+    expectedStatusesForAction(action),
     { status: nextStatus, reason },
   );
   await markSeen(
@@ -304,8 +309,11 @@ async function applyLifecycle(
     decoded.event_id,
     decoded.kind,
     decoded.payment_request_id,
-    true,
+    applied,
   );
+  if (!applied) {
+    return { action: 'ignored' };
+  }
   const updated = await StorageService.getPaymentRequest(
     input.ownerPubky,
     input.senderPubky,
@@ -404,11 +412,32 @@ async function applyProof(
     return { action: 'rejected' };
   }
 
-  await StorageService.updatePaymentRequest(
+  const preimage = extractBolt11Preimage(decoded.proof);
+  let paymentHash = row.displayedPaymentHash;
+  if (!paymentHash) {
+    const ownTip = await StorageService.getTipEndpoint(
+      input.ownerPubky,
+      input.ownerPubky,
+      decoded.payment_endpoint_identifier,
+    );
+    paymentHash = ownTip?.paymentHash ?? null;
+  }
+  let proofVerified: boolean | null = null;
+  if (preimage && paymentHash) {
+    proofVerified = await verifyBolt11Preimage(preimage, paymentHash);
+  }
+
+  const applied = await StorageService.compareAndSetPaymentRequest(
     input.ownerPubky,
     input.senderPubky,
     decoded.payment_request_id,
-    { status: 'proof_received', proofJson: JSON.stringify(decoded.proof) },
+    expectedStatusesForAction('proof'),
+    {
+      status: 'proof_received',
+      proofJson: JSON.stringify(decoded.proof),
+      proofVerified,
+      ...(paymentHash ? { displayedPaymentHash: paymentHash } : {}),
+    },
   );
   await markSeen(
     input,
@@ -416,8 +445,11 @@ async function applyProof(
     decoded.event_id,
     decoded.kind,
     decoded.payment_request_id,
-    true,
+    applied,
   );
+  if (!applied) {
+    return { action: 'ignored' };
+  }
   const updated = await StorageService.getPaymentRequest(
     input.ownerPubky,
     input.senderPubky,

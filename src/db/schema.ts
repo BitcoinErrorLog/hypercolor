@@ -1,4 +1,26 @@
 /**
+ * Schema v12 — payment outbound send-intent + tip validation columns.
+ *
+ * `payment_requests.pending_event_id` points at the outbound PAM still in
+ * `delivery_queue` / `link_messages.sending` so the UI can show `sending`.
+ * `displayed_payment_hash` is set only when a bolt11 for this request was
+ * decoded for display/handoff. `proof_verified` is 1 only after
+ * sha256(preimage) matches that hash.
+ *
+ * Tip rows store validation outcome: invalid payloads stay as
+ * `validation_status = rejected` (hidden from payable UI).
+ */
+export const SCHEMA_V12_STATEMENTS: readonly string[] = [
+  `ALTER TABLE payment_requests ADD COLUMN pending_event_id TEXT`,
+  `ALTER TABLE payment_requests ADD COLUMN displayed_payment_hash TEXT`,
+  `ALTER TABLE payment_requests ADD COLUMN proof_verified INTEGER`,
+  `ALTER TABLE tip_endpoints ADD COLUMN validation_status TEXT NOT NULL DEFAULT 'valid'`,
+  `ALTER TABLE tip_endpoints ADD COLUMN invoice_amount TEXT`,
+  `ALTER TABLE tip_endpoints ADD COLUMN invoice_expires_at INTEGER`,
+  `ALTER TABLE tip_endpoints ADD COLUMN payment_hash TEXT`,
+];
+
+/**
  * Schema v11 — Paykit payment requests, sender-scoped event dedup, tip lists.
  *
  * Payments are official Paykit PAMs over Encrypted Links. This app never

@@ -17,6 +17,7 @@ import {
   buildPaymentRejectionEnvelope,
   buildPaymentRequestEnvelope,
   decodePaymentEnvelope,
+  expectedStatusesForAction,
   type PaymentStatus,
 } from '../../types/payment';
 import { StorageService } from '../StorageService';
@@ -414,10 +415,11 @@ export async function runLinkLiveProof(
 
     if (
       !(await record('send-payment-acceptance-b', async () => {
-        await StorageService.updatePaymentRequest(
+        await StorageService.compareAndSetPaymentRequest(
           pubkyB,
           pubkyA,
           requestOne.envelope.payment_request_id,
+          expectedStatusesForAction('accept'),
           { status: 'accepted' },
         );
         await native.sendPrivateMessageJson(
@@ -472,10 +474,11 @@ export async function runLinkLiveProof(
 
     if (
       !(await record('send-payment-proof-b', async () => {
-        await StorageService.updatePaymentRequest(
+        await StorageService.compareAndSetPaymentRequest(
           pubkyB,
           pubkyA,
           requestOne.envelope.payment_request_id,
+          expectedStatusesForAction('proof'),
           { status: 'proof_received', proofJson: JSON.stringify(proof.envelope.proof) },
         );
         await native.sendPrivateMessageJson(
@@ -581,10 +584,11 @@ export async function runLinkLiveProof(
 
     if (
       !(await record('send-payment-rejection-b', async () => {
-        await StorageService.updatePaymentRequest(
+        await StorageService.compareAndSetPaymentRequest(
           pubkyB,
           pubkyA,
           requestTwo.envelope.payment_request_id,
+          expectedStatusesForAction('reject'),
           { status: 'rejected', reason: 'liveproof-reject' },
         );
         await native.sendPrivateMessageJson(
@@ -672,6 +676,9 @@ async function persistOutboundRequest(
     updatedAt: nowMs,
     proofJson: null,
     reason: null,
+    pendingEventId: null,
+    displayedPaymentHash: null,
+    proofVerified: null,
   });
   await StorageService.savePaymentEvent({
     ownerPubky,
