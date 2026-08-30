@@ -106,13 +106,20 @@ export function parseLiveProofTokens(
   return null;
 }
 
+/**
+ * These bytes become real identity secrets (`signupWithSecret`), so they are
+ * key material. Fail closed when no CSPRNG is available — `index.js`
+ * polyfills react-native-get-random-values, so this should never trigger in
+ * the app runtime. Never fall back to Math.random().
+ */
 function defaultRandomBytes(size: number): Uint8Array {
-  const bytes = new Uint8Array(size);
-  if (typeof globalThis.crypto?.getRandomValues === 'function') {
-    globalThis.crypto.getRandomValues(bytes);
-    return bytes;
+  if (typeof globalThis.crypto?.getRandomValues !== 'function') {
+    throw new Error(
+      'liveProof: crypto.getRandomValues is unavailable; identity secrets require a CSPRNG',
+    );
   }
-  for (let i = 0; i < size; i++) bytes[i] = Math.floor(Math.random() * 256);
+  const bytes = new Uint8Array(size);
+  globalThis.crypto.getRandomValues(bytes);
   return bytes;
 }
 

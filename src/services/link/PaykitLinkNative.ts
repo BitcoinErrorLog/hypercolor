@@ -53,17 +53,35 @@ export function createLinkNativeError(code: LinkNativeErrorCode, message: string
   return { code, message };
 }
 
+/**
+ * Coarse static messages mirroring the native bridge (`PaykitLinkModule`
+ * `staticMessage`). Unknown / untyped rejections must never forward raw
+ * native exception text to JS logs or UI — it can contain filesystem paths
+ * or key material.
+ */
+const COARSE_NATIVE_MESSAGES: Record<LinkNativeErrorCode, string> = {
+  network: 'network error',
+  auth: 'authentication failed',
+  protocol: 'protocol error',
+  consumed: 'resource consumed',
+  validation: 'validation failed',
+  unavailable: 'unavailable',
+};
+
 export function toLinkNativeError(err: unknown): LinkNativeError {
+  // Already a typed error: created by this wrapper or by the native bridge,
+  // which sends only coarse static messages.
   if (isLinkNativeError(err)) return err;
-  const message = err instanceof Error ? err.message : String(err);
   if (typeof err === 'object' && err !== null) {
     const rec = err as { code?: unknown; userInfo?: { code?: unknown } };
-    if (isLinkNativeErrorCode(rec.code)) return { code: rec.code, message };
+    if (isLinkNativeErrorCode(rec.code)) {
+      return { code: rec.code, message: COARSE_NATIVE_MESSAGES[rec.code] };
+    }
     if (isLinkNativeErrorCode(rec.userInfo?.code)) {
-      return { code: rec.userInfo.code, message };
+      return { code: rec.userInfo.code, message: COARSE_NATIVE_MESSAGES[rec.userInfo.code] };
     }
   }
-  return { code: 'protocol', message };
+  return { code: 'protocol', message: COARSE_NATIVE_MESSAGES.protocol };
 }
 
 export interface ReceiverKeyResult {

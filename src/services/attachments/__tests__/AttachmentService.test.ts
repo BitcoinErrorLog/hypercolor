@@ -565,6 +565,39 @@ describe('AttachmentService', () => {
     expect(mockedFs.writeAsStringAsync).not.toHaveBeenCalled();
   });
 
+  it('rejects an over-limit declared size before any download', async () => {
+    mockedStorage.getAttachment.mockResolvedValue({
+      ownerPubky: OWNER,
+      eventId: EVENT_ID,
+      conversationId: `dm:${PEER}`,
+      channelId: null,
+      senderPubky: PEER,
+      direction: 'received',
+      location: location(),
+      keyRef: attachmentKeyRef(OWNER, PEER, EVENT_ID),
+      contentType: 'application/pdf',
+      size: ATTACHMENT_MAX_BYTES + 1,
+      thumbnailLocation: null,
+      localCachePath: null,
+      createdAt: 1,
+      updatedAt: 1,
+      deliveryState: 'delivered',
+      resolveState: 'pending',
+    });
+    mockedFs.getInfoAsync.mockResolvedValue({
+      exists: false,
+      isDirectory: false,
+      uri: 'x',
+    } as never);
+
+    await expect(AttachmentService.resolveAttachment(OWNER, PEER, EVENT_ID)).rejects.toMatchObject({
+      code: 'too-large',
+    });
+    expect(mockedPubky.get).not.toHaveBeenCalled();
+    expect(mockedKeyStore.getAttachmentSecret).not.toHaveBeenCalled();
+    expect(mockedNative.attachmentDecrypt).not.toHaveBeenCalled();
+  });
+
   it('rejects a decrypted-length mismatch and does not cache', async () => {
     mockedStorage.getAttachment.mockResolvedValue({
       ownerPubky: OWNER,

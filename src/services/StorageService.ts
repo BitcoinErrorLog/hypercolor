@@ -813,11 +813,19 @@ export const StorageService = {
     const db = await getDb();
     const contacts = await StorageService.getAllContacts(ownerPubky);
     const messageRequests = await StorageService.listMessageRequests(ownerPubky);
+    // Re-redact at export time: rows persisted before the M4 redaction rule
+    // could still carry live attachment key material in raw_json, and the
+    // snapshot must never contain attachment content keys.
     const linkMessages = (
       db.executeSync(`SELECT * FROM link_messages WHERE owner_pubky = ? ORDER BY sent_at ASC`, [
         ownerPubky,
       ]).rows ?? []
-    ).map(rowToLinkMessage);
+    )
+      .map(rowToLinkMessage)
+      .map(message => ({
+        ...message,
+        rawJson: persistRawJson(message.kind, message.rawJson),
+      }));
     const readCursors = (
       db.executeSync(
         `SELECT conversation_id, last_read_at FROM link_read_cursors WHERE owner_pubky = ?`,
@@ -835,7 +843,12 @@ export const StorageService = {
       db.executeSync(`SELECT * FROM group_messages WHERE owner_pubky = ? ORDER BY sent_at ASC`, [
         ownerPubky,
       ]).rows ?? []
-    ).map(rowToGroupMessage);
+    )
+      .map(rowToGroupMessage)
+      .map(message => ({
+        ...message,
+        rawJson: persistRawJson(message.kind, message.rawJson),
+      }));
     const paymentRequests = (
       db.executeSync(`SELECT * FROM payment_requests WHERE owner_pubky = ?`, [ownerPubky]).rows ??
       []

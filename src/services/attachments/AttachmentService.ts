@@ -231,6 +231,16 @@ export const AttachmentService = {
       return row.localCachePath;
     }
 
+    // Receive-side cap BEFORE any download: the declared size was validated
+    // at envelope decode, so an over-limit row means tampered/legacy state —
+    // refuse before touching the network.
+    if (row.size > ATTACHMENT_MAX_BYTES) {
+      throw new AttachmentError(
+        'too-large',
+        `Attachment declares ${row.size} bytes; v1 limit is ${ATTACHMENT_MAX_BYTES} bytes (8 MiB)`,
+      );
+    }
+
     const secret = await KeyStore.getAttachmentSecret(ownerPubky, senderPubky, eventId);
     if (!secret) {
       throw new AttachmentError('not-found', 'Attachment key material is not in KeyStore');

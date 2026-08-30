@@ -54,13 +54,17 @@ async function getOrCreateMmkvKey(): Promise<string> {
   const existing = await Keychain.getGenericPassword({ service: MMKV_KEY_SERVICE });
   if (existing !== false) return existing.password;
 
-  // Generate a random 32-byte key, store it in the keychain
-  const randomBytes = new Uint8Array(32);
-  if (typeof globalThis.crypto?.getRandomValues === 'function') {
-    globalThis.crypto.getRandomValues(randomBytes);
-  } else {
-    for (let i = 0; i < 32; i++) randomBytes[i] = Math.floor(Math.random() * 256);
+  // Generate a random 32-byte key, store it in the keychain.
+  // Fail closed: `index.js` polyfills react-native-get-random-values, so a
+  // missing CSPRNG means the runtime is broken — never fall back to
+  // Math.random() for key material.
+  if (typeof globalThis.crypto?.getRandomValues !== 'function') {
+    throw new Error(
+      'KeyStore: crypto.getRandomValues is unavailable; refusing to generate the MMKV encryption key without a CSPRNG',
+    );
   }
+  const randomBytes = new Uint8Array(32);
+  globalThis.crypto.getRandomValues(randomBytes);
   const keyHex = Array.from(randomBytes)
     .map(b => b.toString(16).padStart(2, '0'))
     .join('');

@@ -241,6 +241,86 @@ describe('BackupService', () => {
     expect(blob.nonceB64).toBe('nonce-b64');
   });
 
+  it('export re-redacts legacy raw_json that still carries live attachment keys', async () => {
+    const db = openMemoryDb();
+    setDbForTests(db);
+    await runMigrations(db);
+    mockedKeyStore.getPubky.mockReturnValue(OWNER);
+
+    const liveKey = 'K'.repeat(43);
+    const liveNonce = 'N'.repeat(32);
+    const attachmentId = '11111111-2222-4333-8444-555555555555';
+    const liveJson = JSON.stringify({
+      version: 1,
+      kind: 'chat.attachment.v0',
+      event_id: EVENT,
+      sent_at: 20,
+      location: `pubky://${OWNER}/pub/hypercolor.app/v1/attachments/${attachmentId}`,
+      key: liveKey,
+      nonce: liveNonce,
+      algorithm: 'XChaCha20Poly1305',
+      contentType: 'image/jpeg',
+      size: 12,
+    });
+    // Simulate rows written before M4 redaction-at-persist (raw SQL bypasses
+    // the persistRawJson redaction that saveLinkMessage/saveGroupMessage apply).
+    db.executeSync(
+      `INSERT INTO link_messages
+        (owner_pubky, sender_pubky, kind, event_id, conversation_id, peer_pubky,
+         direction, raw_json, body, sent_at, received_at, delivery_state, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        OWNER,
+        PEER,
+        'chat.attachment.v0',
+        EVENT,
+        `dm:${PEER}`,
+        PEER,
+        'received',
+        liveJson,
+        '[attachment]',
+        20,
+        20,
+        'delivered',
+        20,
+        20,
+      ],
+    );
+    db.executeSync(
+      `INSERT INTO group_messages
+        (owner_pubky, channel_id, sender_pubky, event_id, kind, body, raw_json,
+         sent_at, received_at, delivery_state, reply_to_event_id, reply_to_author_pubky,
+         target_event_id, target_author_pubky, edited_at, deleted, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        OWNER,
+        `${PEER}:${attachmentId}`,
+        PEER,
+        EVENT,
+        'chat.attachment.v0',
+        '[attachment]',
+        liveJson,
+        20,
+        20,
+        'delivered',
+        null,
+        null,
+        null,
+        null,
+        null,
+        0,
+        20,
+        20,
+      ],
+    );
+
+    const snapshot = await StorageService.collectOwnerBackup(OWNER);
+    const serialized = JSON.stringify(snapshot);
+    expect(serialized).not.toContain(liveKey);
+    expect(serialized).not.toContain(liveNonce);
+    expect(serialized).toContain('__keystore__');
+  });
+
   it('restore round-trips via mocked AEAD and real SQL', async () => {
     await openHarness();
     await seedOwnerAndForeign();
