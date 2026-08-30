@@ -752,16 +752,7 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
         return path
     }
 
-    private fun sessionCookieValue(exported: String): String {
-        return try {
-            val obj = JSONObject(exported)
-            listOf("session_secret", "secret", "token", "bearer")
-                .firstNotNullOfOrNull { key -> obj.optString(key).takeIf { it.isNotEmpty() } }
-                ?: exported
-        } catch (_: Exception) {
-            exported
-        }
-    }
+    private fun sessionCookieValue(exported: String): String = exported
 
     private fun requireText(value: String?, name: String): String {
         val trimmed = value?.trim().orEmpty()

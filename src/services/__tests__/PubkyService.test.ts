@@ -22,7 +22,6 @@ jest.mock('../KeyStore', () => ({
 }));
 
 jest.mock('@synonymdev/react-native-pubky', () => ({
-  signIn: jest.fn(),
   signOut: jest.fn(),
   put: (...args: unknown[]) => mockRnPut(...args),
   get: jest.fn(),

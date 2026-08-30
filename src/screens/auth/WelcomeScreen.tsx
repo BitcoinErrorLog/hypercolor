@@ -24,24 +24,11 @@ export default function WelcomeScreen() {
   async function handleConnect() {
     setLoading(true);
     try {
-      const installed = await PubkyRingAuthService.isPubkyRingInstalled();
-      if (!installed) {
-        Alert.alert(
-          'pubky-ring Not Found',
-          'Install pubky-ring to manage your identity. It acts as a secure keystore for Hypercolor.',
-          [{ text: 'OK' }],
-        );
-        return;
-      }
-
-      // Use a stable device ID derived from the bundle ID + a random suffix per session
       const deviceId = `hypercolor-${Date.now().toString(16)}`;
-      await PubkyRingAuthService.requestDelegation(deviceId);
-
-      // Navigate to waiting screen — the deep link callback will complete auth
-      nav.navigate('AwaitingRingAuth');
+      const { url } = await PubkyRingAuthService.requestDelegation(deviceId);
+      nav.navigate('AwaitingRingAuth', { ringAuthUrl: url });
     } catch (err) {
-      Alert.alert('Error', (err as Error).message ?? 'Failed to open pubky-ring');
+      Alert.alert('Error', (err as Error).message ?? 'Failed to start pubky-ring authorization');
     } finally {
       setLoading(false);
     }

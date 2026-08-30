@@ -6,18 +6,23 @@ import type { RootStackParamList } from '../../types';
 import type { LinkConversationSummary } from '../../types/link';
 import { threadRouteParams } from '../../types/link';
 import { StorageService } from '../../services/StorageService';
+import { KeyStore } from '../../services/KeyStore';
 import { LinkService } from '../../services/link/LinkService';
 import { useAuthStore } from '../../stores/authStore';
 import { EnableMessagingCta } from '../../components/EnableMessagingCta';
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
 
+function isMessagingEnabled(): boolean {
+  return LinkService.hasSession() || Boolean(KeyStore.getLinkSession());
+}
+
 export default function ChatsScreen() {
   const nav = useNavigation<Nav>();
   const ownerPubky = useAuthStore(s => s.pubky);
   const [conversations, setConversations] = useState<LinkConversationSummary[]>([]);
   const [pendingRequests, setPendingRequests] = useState(0);
-  const [messagingEnabled, setMessagingEnabled] = useState(LinkService.hasSession());
+  const [messagingEnabled, setMessagingEnabled] = useState(isMessagingEnabled);
 
   const refresh = useCallback(async () => {
     if (!ownerPubky) {
@@ -38,7 +43,7 @@ export default function ChatsScreen() {
     ]);
     setConversations(rows);
     setPendingRequests(pending);
-    setMessagingEnabled(LinkService.hasSession());
+    setMessagingEnabled(isMessagingEnabled());
   }, [ownerPubky]);
 
   useFocusEffect(

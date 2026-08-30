@@ -1,3 +1,5 @@
+# iOS default so `maestro test` works on the sim without extra env.
+# Android: APP_ID=com.hypercolor maestro test .maestro/p7-product.yaml
 appId: org.name.hypercolor
 name: Hypercolor P7
 env:

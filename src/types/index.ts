@@ -79,8 +79,11 @@ export interface MeshPeer {
 
 export type AuthStackParamList = {
   Welcome: undefined;
-  /** Shown while waiting for pubky-ring callback after opening the deep link */
-  AwaitingRingAuth: undefined;
+  /**
+   * Waiting for `hypercolor://ring-callback`.
+   * `ringAuthUrl` is the `pubkyring://paykit-connect…` link shown as QR + copy.
+   */
+  AwaitingRingAuth: { ringAuthUrl: string };
 };
 
 export type MainTabParamList = {

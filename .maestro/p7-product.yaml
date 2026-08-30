@@ -1,4 +1,6 @@
-appId: org.name.hypercolor
+# APP_ID from env. iOS default org.name.hypercolor (.maestro/config.yaml) so
+# `maestro test` works on the iOS sim without extra env. Android: com.hypercolor.
+appId: ${APP_ID}
 name: P7 product screens
 ---
 - launchApp:

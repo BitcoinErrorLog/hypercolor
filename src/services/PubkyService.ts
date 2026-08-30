@@ -1,5 +1,4 @@
 import {
-  signIn as rnSignIn,
   signOut as rnSignOut,
   get as rnGet,
   list as rnList,
@@ -15,13 +14,11 @@ import type { UserProfile, PubkyKey } from '../types';
  * Owner writes (attachments, backup, public channels, profile, contacts)
  * go through the Paykit ChatSession created by `LinkService.enable()` /
  * `startAuthFlow`. AppCert is UKD signing only — it does not authorize
- * homeserver PUT. `signIn()` is not the attach/backup path.
+ * homeserver PUT.
  *
  * Public reads use react-native-pubky get/list (no session). Encrypted DMs
  * stay on Paykit Encrypted Links.
  */
-
-export const DEFAULT_HOMESERVER = 'https://demo.pubky.app';
 
 export type HomeserverListResult = { ok: true; urls: string[] } | { ok: false; message: string };
 
@@ -44,31 +41,10 @@ function unwrap<T>(result: { isOk(): boolean; value?: T; error?: Error }): T {
   return result.value as T;
 }
 
-async function getAppSkOrThrow(): Promise<string> {
-  // Check AppCert validity before using AppKey
-  const certValid = await KeyStore.isAppCertValid();
-  if (!certValid) {
-    throw new Error('AppCert has expired. Re-authorize Hypercolor with pubky-ring.');
-  }
-
-  const keypair = await KeyStore.getAppKeypair();
-  if (!keypair) {
-    throw new Error('No delegated AppKey found. Connect Hypercolor to pubky-ring first.');
-  }
-  return keypair.secretKey;
-}
-
 // ─── PubkyService ─────────────────────────────────────────────────────────────
 
 export const PubkyService = {
   // ── Auth ──────────────────────────────────────────────────────────────────
-
-  async signIn(): Promise<string> {
-    const appSk = await getAppSkOrThrow();
-    const session = unwrap(await rnSignIn(appSk));
-    KeyStore.setSessionSecret(session.session_secret);
-    return session.pubky;
-  },
 
   async signOut(): Promise<void> {
     const sessionSecret = KeyStore.getSessionSecret();

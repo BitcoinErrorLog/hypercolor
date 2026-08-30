@@ -1,5 +1,4 @@
 jest.mock('@synonymdev/react-native-pubky', () => ({
-  signIn: jest.fn(),
   signOut: jest.fn().mockResolvedValue({ isOk: () => true, value: undefined }),
   put: jest.fn(),
   get: jest.fn(),

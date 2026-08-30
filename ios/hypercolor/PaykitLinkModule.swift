@@ -859,15 +859,7 @@ class PaykitLinkModule: NSObject {
     }
 
     private static func sessionCookieValue(_ exported: String) -> String {
-        if let data = exported.data(using: .utf8),
-           let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-            for key in ["session_secret", "secret", "token", "bearer"] {
-                if let value = obj[key] as? String, !value.isEmpty {
-                    return value
-                }
-            }
-        }
-        return exported
+        exported
     }
 
     private static func requireText(_ value: String?, name: String) throws -> String {

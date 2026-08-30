@@ -1,0 +1,12 @@
+{
+  "ignore_dirs": [
+    "android/.gradle",
+    "android/.kotlin",
+    "android/app/build",
+    "android/build",
+    "ios/build",
+    "ios/Pods",
+    "modules/mesh-transport/android/build",
+    "node_modules"
+  ]
+}

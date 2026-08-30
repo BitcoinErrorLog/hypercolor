@@ -34,34 +34,38 @@ let _pending: PendingHandoff | null = null;
 
 // ─── Step 1: Open pubky-ring ──────────────────────────────────────────────────
 
+export function buildPaykitConnectUrl(deviceId: string, ephemeralPkHex: string): string {
+  const callbackUrl = encodeURIComponent('hypercolor://ring-callback');
+  // Advertised; Ring's PaykitConnectParams (inputParser.ts) ignores `caps`. Write caps come from Enable Messaging `pubkyauth`.
+  return (
+    `pubkyring://paykit-connect` +
+    `?deviceId=${encodeURIComponent(deviceId)}` +
+    `&callback=${callbackUrl}` +
+    `&ephemeralPk=${encodeURIComponent(ephemeralPkHex)}` +
+    `&caps=${encodeURIComponent(RING_GRANT_CAPABILITIES)}`
+  );
+}
+
 /**
- * Generates an ephemeral X25519 keypair and opens pubky-ring with the
- * paykit-connect deep link. The user will be prompted to authorize.
+ * Generates an ephemeral X25519 keypair and builds the paykit-connect deep link.
+ * Opens pubky-ring when it is installed on this device. Always returns `{ url }`
+ * so Welcome can show a QR / copy on AwaitingRingAuth even if Ring is elsewhere.
  *
  * @param deviceId - An identifier for this device/session, e.g. "hypercolor-{timestamp}"
  */
-export async function requestDelegation(deviceId: string): Promise<void> {
+export async function requestDelegation(deviceId: string): Promise<{ url: string }> {
   const { secretKey: ephemeralSkHex, publicKey: ephemeralPkHex } = await x25519GenerateKeypair();
 
   _pending = { ephemeralSkHex };
   await KeyStore.setPendingRingHandoff(ephemeralSkHex);
 
-  const callbackUrl = encodeURIComponent('hypercolor://ring-callback');
-
-  const deepLink =
-    `pubkyring://paykit-connect` +
-    `?deviceId=${encodeURIComponent(deviceId)}` +
-    `&callback=${callbackUrl}` +
-    `&ephemeralPk=${encodeURIComponent(ephemeralPkHex)}` +
-    `&caps=${encodeURIComponent(RING_GRANT_CAPABILITIES)}`;
+  const url = buildPaykitConnectUrl(deviceId, ephemeralPkHex);
 
   const canOpen = await Linking.canOpenURL('pubkyring://');
-  if (!canOpen) {
-    _pending = null;
-    await KeyStore.clearPendingRingHandoff();
-    throw new Error('pubky-ring is not installed on this device.');
+  if (canOpen) {
+    await Linking.openURL(url);
   }
-  await Linking.openURL(deepLink);
+  return { url };
 }
 
 /**
@@ -213,14 +217,8 @@ interface HandoffPayload {
   expires_at?: number;
 }
 
-// ─── Utilities ────────────────────────────────────────────────────────────────
-
-export function isPubkyRingInstalled(): Promise<boolean> {
-  return Linking.canOpenURL('pubkyring://');
-}
-
 export const PubkyRingAuthService = {
   requestDelegation,
+  buildPaykitConnectUrl,
   handleRingCallback,
-  isPubkyRingInstalled,
 };

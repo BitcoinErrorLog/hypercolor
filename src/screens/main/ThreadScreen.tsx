@@ -20,6 +20,7 @@ import type { LinkMessage } from '../../types/link';
 import { buildDmConversationId } from '../../types/link';
 import { useAuthStore } from '../../stores/authStore';
 import { StorageService } from '../../services/StorageService';
+import { KeyStore } from '../../services/KeyStore';
 import { LinkService } from '../../services/link/LinkService';
 import { AttachmentBubble } from '../../components/AttachmentBubble';
 import { ComposerAttachButton } from '../../components/ComposerAttachButton';
@@ -32,6 +33,10 @@ import { isPaykitPaymentKind, PaymentError, type PaymentRequestRecord } from '..
 import type { TipEndpointRecord } from '../../types/payment';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Thread'>;
+
+function isMessagingEnabled(): boolean {
+  return LinkService.hasSession() || Boolean(KeyStore.getLinkSession());
+}
 
 type ThreadItem =
   | { id: string; sentAt: number; kind: 'link'; message: LinkMessage }
@@ -57,7 +62,7 @@ export default function ThreadScreen({ route }: Props) {
   const [tipEndpoints, setTipEndpoints] = useState<TipEndpointRecord[]>([]);
   const [composePayment, setComposePayment] = useState(false);
   const [paymentBusy, setPaymentBusy] = useState(false);
-  const [messagingEnabled, setMessagingEnabled] = useState(LinkService.hasSession());
+  const [messagingEnabled, setMessagingEnabled] = useState(isMessagingEnabled);
 
   const conversationId = buildDmConversationId(participantPubky);
 
@@ -89,7 +94,7 @@ export default function ThreadScreen({ route }: Props) {
           }
         }
         await reloadEncrypted();
-        setMessagingEnabled(LinkService.hasSession());
+        setMessagingEnabled(isMessagingEnabled());
       })();
     }, [reloadEncrypted]),
   );

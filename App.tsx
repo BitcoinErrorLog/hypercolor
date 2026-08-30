@@ -92,23 +92,32 @@ export default function App() {
       }
     };
 
+    const markReady = () => {
+      if (!disposed) setReady(true);
+    };
+    // Keychain / keystore2 can hang forever on some emulators (never
+    // resolve or reject). Fail-open to Welcome; do not invent a crypto path.
+    const readyTimer = setTimeout(markReady, 4000);
     KeyStore.initKeyStore()
       .then(async () => {
         if (disposed) return;
-        await hydratePersistedAuth();
+        try {
+          await hydratePersistedAuth();
+        } catch {
+          // Auth hydrate is best-effort; Welcome is still the right screen.
+        }
         if (disposed) return;
-        await recoverAndDrain();
-        if (disposed) return;
+        void recoverAndDrain();
         stopDrain = startLinkRetryDrain();
-        setReady(true);
+        markReady();
       })
-      .catch(() => {
-        if (!disposed) setReady(true);
-      });
+      .catch(markReady)
+      .finally(() => clearTimeout(readyTimer));
 
     const sub = AppState.addEventListener('change', onAppState);
     return () => {
       disposed = true;
+      clearTimeout(readyTimer);
       sub.remove();
       stopDrain?.();
     };

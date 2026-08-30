@@ -8,12 +8,13 @@ import {
   ScrollView,
   ActivityIndicator,
   Linking,
-  Clipboard,
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../../types';
+import { AuthQr } from '../../components/AuthQr';
 import { LinkService } from '../../services/link/LinkService';
+import { copyText } from '../../utils/copyText';
 import {
   createEnableMessagingController,
   INITIAL_ENABLE_MESSAGING_STATE,
@@ -52,7 +53,7 @@ export default function EnableMessagingScreen() {
       getEnableStatus: () => LinkService.getEnableStatus(),
       enable: () => LinkService.enable(),
       openUrl: url => Linking.openURL(url),
-      copyText: text => Clipboard.setString(text),
+      copyText,
     });
     controllerRef.current = controller;
     const unsubscribe = controller.subscribe(setState);
@@ -118,6 +119,10 @@ export default function EnableMessagingScreen() {
         {showAuthUrl && state.authorizationUrl ? (
           <View style={styles.urlBlock}>
             <Text style={styles.sectionTitle}>Authorization URL</Text>
+            <Text testID="enableMessagingScanHint" style={styles.scanHint}>
+              Scan with Pubky Ring on this or another device.
+            </Text>
+            <AuthQr value={state.authorizationUrl} />
             <Text
               style={styles.authUrl}
               selectable
@@ -136,6 +141,7 @@ export default function EnableMessagingScreen() {
               <Text style={styles.primaryButtonText}>Open Pubky Ring</Text>
             </TouchableOpacity>
             <TouchableOpacity
+              testID="enableMessagingCopy"
               style={styles.secondaryButton}
               onPress={() => controllerRef.current?.copyAuthorizationUrl()}
             >
@@ -210,6 +216,7 @@ const styles = StyleSheet.create({
   hint: { fontSize: 12, color: '#4b5563' },
   spinner: { marginVertical: 8 },
   urlBlock: { gap: 12 },
+  scanHint: { fontSize: 14, color: '#9ca3af', lineHeight: 20 },
   sectionTitle: {
     fontSize: 12,
     fontWeight: '600',
