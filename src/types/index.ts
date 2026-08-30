@@ -60,14 +60,41 @@ export interface ChannelMember {
 
 // ─── Contact Types ─────────────────────────────────────────────────────────
 
+/**
+ * How this row first entered the local contacts table.
+ * Homeserver follows and Nexus graph updates set the relationship flags;
+ * `addedManually` stays true if the user pasted/scanned the pubky.
+ */
+export type ContactSource = 'follow' | 'manual' | 'mesh';
+
 export interface Contact {
   pubky: PubkyKey;
+  /** Account that owns this row. Empty string is a pre-v5 / mesh leftover. */
+  ownerPubky: PubkyKey;
   displayName?: string;
   avatarHash?: string;
   homeserver?: string;
   trustScore: number;
+  /** I follow them (homeserver `/pub/pubky.app/follows/` or Nexus following). */
+  isFollowing: boolean;
+  /** They follow me (Nexus followers). */
+  isFollower: boolean;
+  /** Mutual follow (Nexus friends, or isFollowing && isFollower). */
+  isMutual: boolean;
+  /** User added this pubky via paste/QR (eligible for inbox probing). */
+  addedManually: boolean;
   firstSeenAt: number;
   lastInteractionAt?: number;
+}
+
+export type MessageRequestStatus = 'pending' | 'accepted' | 'declined';
+
+export interface MessageRequest {
+  ownerPubky: PubkyKey;
+  peerPubky: PubkyKey;
+  createdAt: number;
+  updatedAt: number;
+  status: MessageRequestStatus;
 }
 
 // ─── Delivery Queue Types ──────────────────────────────────────────────────
@@ -113,6 +140,7 @@ export type RootStackParamList = {
   Thread: { threadId: string; participantPubky: PubkyKey };
   ChannelScreen: { channelId: string };
   ContactSearch: undefined;
+  MessageRequests: undefined;
   Settings: undefined;
   EnableMessaging: undefined;
 };

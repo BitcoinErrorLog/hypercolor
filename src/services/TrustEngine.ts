@@ -1,5 +1,5 @@
 import { StorageService } from './StorageService';
-import type { PubkyKey } from '../types';
+import type { Contact, PubkyKey } from '../types';
 
 /**
  * TrustEngine — soft trust score computation for v1.
@@ -13,7 +13,7 @@ import type { PubkyKey } from '../types';
  * Score components (all additive, each capped):
  *   - Local interaction count:  up to 0.40 points
  *   - Recency:                  up to 0.25 points
- *   - Mutual contacts:          up to 0.25 points (placeholder — not yet computed)
+ *   - Social graph:             up to 0.25 points (mutual 0.25 / following 0.15 / follower 0.05)
  *   - Pubky-verified:           0.10 points (contact has a homeserver resolved via PKDNS)
  *
  * Scores are recomputed lazily (on read) and persisted to SQLite.
@@ -30,8 +30,8 @@ export const TrustEngine = {
    * Returns a full trust explanation for a contact, recomputing the score.
    * Persists the updated score to SQLite.
    */
-  async explain(pubky: PubkyKey): Promise<TrustExplanation> {
-    const contact = await StorageService.getContact(pubky);
+  async explain(pubky: PubkyKey, ownerPubky?: PubkyKey): Promise<TrustExplanation> {
+    const contact = await StorageService.getContact(pubky, ownerPubky);
     if (!contact) {
       return { score: 0, reasons: [] };
     }
@@ -74,10 +74,17 @@ export const TrustEngine = {
       });
     }
 
-    // ── Mutual contacts placeholder ──────────────────────────────────────────
-    // Future: query shared contacts and compute overlap score (max 0.25).
-    // For v1 this is always 0 to avoid false inflation.
-    const mutualScore = 0;
+    // ── Social-graph component (max 0.25) ───────────────────────────────────
+    // Never blocks delivery. Used for sort order and the WoT *request* filter.
+    const social = socialGraphScore(contact);
+    if (social.score > 0) {
+      reasons.push({
+        code: social.code,
+        contribution: social.score,
+        label: social.label,
+      });
+    }
+    const mutualScore = social.score;
 
     const total = parseFloat(
       Math.min(interactionScore + recencyScore + homeserverScore + mutualScore, 1.0).toFixed(3),
@@ -92,8 +99,8 @@ export const TrustEngine = {
   /**
    * Returns just the score for a contact (fast path, no explanation).
    */
-  async getScore(pubky: PubkyKey): Promise<number> {
-    const contact = await StorageService.getContact(pubky);
+  async getScore(pubky: PubkyKey, ownerPubky?: PubkyKey): Promise<number> {
+    const contact = await StorageService.getContact(pubky, ownerPubky);
     return contact?.trustScore ?? 0;
   },
 
@@ -116,3 +123,16 @@ export const TrustEngine = {
     return scores.sort((a, b) => b.score - a.score).map(s => s.pubky);
   },
 };
+
+function socialGraphScore(contact: Contact): { score: number; code: string; label: string } {
+  if (contact.isMutual) {
+    return { score: 0.25, code: 'mutual', label: 'Mutual follow' };
+  }
+  if (contact.isFollowing) {
+    return { score: 0.15, code: 'following', label: 'You follow them' };
+  }
+  if (contact.isFollower) {
+    return { score: 0.05, code: 'follower', label: 'They follow you' };
+  }
+  return { score: 0, code: 'none', label: 'No relationship' };
+}

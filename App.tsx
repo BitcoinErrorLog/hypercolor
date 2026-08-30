@@ -36,6 +36,9 @@ export default function App() {
       try {
         await LinkService.recoverPendingSends();
         await LinkService.drainRetries();
+        if (LinkService.hasSession()) {
+          await LinkService.syncInbox();
+        }
       } catch (err) {
         console.warn('[App] link send recovery failed:', err);
       }

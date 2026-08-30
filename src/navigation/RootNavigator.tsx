@@ -15,6 +15,7 @@ import { MessageRouter } from '../services/MessageRouter';
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
 const ContactSearchScreen = React.lazy(() => import('../screens/main/ContactSearchScreen'));
+const MessageRequestsScreen = React.lazy(() => import('../screens/main/MessageRequestsScreen'));
 const SettingsScreen = React.lazy(() => import('../screens/main/SettingsScreen'));
 const EnableMessagingScreen = React.lazy(() => import('../screens/main/EnableMessagingScreen'));
 
@@ -107,6 +108,11 @@ export function RootNavigator() {
                 name="ContactSearch"
                 component={ContactSearchScreen}
                 options={{ animation: 'slide_from_bottom', headerShown: false }}
+              />
+              <Stack.Screen
+                name="MessageRequests"
+                component={MessageRequestsScreen}
+                options={{ animation: 'slide_from_right', headerShown: false }}
               />
               <Stack.Screen
                 name="Settings"

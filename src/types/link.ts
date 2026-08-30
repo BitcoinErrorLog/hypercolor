@@ -281,6 +281,9 @@ export function parseDmConversationId(
  * - `handshaking-responder`: an inbound handshake is being answered and
  *   completion needs the initiator to come back online for the final round.
  * - `ready`: the link is established; sends/receives are live.
+ * - `message-request`: an inbound link was discovered and held by the WoT
+ *   gate as a pending message request. Handshake state is persisted, but
+ *   the conversation must not surface in the main inbox until accepted.
  * - `error`: the state machine hit an unexpected failure; nothing was
  *   silently swallowed.
  */
@@ -292,6 +295,7 @@ export type LinkStatus =
   | 'handshaking-initiator'
   | 'handshaking-responder'
   | 'ready'
+  | 'message-request'
   | 'error';
 
 export type LinkRole = 'initiator' | 'responder';

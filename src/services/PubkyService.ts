@@ -112,6 +112,38 @@ export const PubkyService = {
       const raw = unwrap(await rnGet(profilePath(pubky)));
       return JSON.parse(raw) as UserProfile;
     } catch {
+      return PubkyService.getPubkyAppProfile(pubky);
+    }
+  },
+
+  /**
+   * Reads the official pubky.app profile (`/pub/pubky.app/profile.json`,
+   * fields `name` / `image` per pubky-app-specs). Used to hydrate contacts
+   * imported from homeserver follows. 404 / missing → null.
+   */
+  async getPubkyAppProfile(pubky: PubkyKey): Promise<UserProfile | null> {
+    const raw = await PubkyService.get(`pubky://${pubky}/pub/pubky.app/profile.json`);
+    if (!raw) return null;
+    try {
+      const parsed = JSON.parse(raw) as {
+        name?: unknown;
+        image?: unknown;
+        status?: unknown;
+      };
+      if (typeof parsed.name !== 'string' || parsed.name.length === 0) return null;
+      const profile: UserProfile = {
+        pubky,
+        displayName: parsed.name,
+        updatedAt: Date.now(),
+      };
+      if (typeof parsed.image === 'string' && parsed.image.length > 0) {
+        profile.avatarHash = parsed.image;
+      }
+      if (typeof parsed.status === 'string' && parsed.status.length > 0) {
+        profile.status = parsed.status;
+      }
+      return profile;
+    } catch {
       return null;
     }
   },

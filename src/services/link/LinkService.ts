@@ -27,6 +27,7 @@ import {
   type LinkStreamItemInput,
 } from '../../types/link';
 import type { DeliveryQueueItem, PubkyKey } from '../../types';
+import { classifyInboundPeer, wotInputFromContact } from './wotGate';
 
 /**
  * LinkService — end-to-end-encrypted DMs over official Paykit Encrypted
@@ -257,6 +258,15 @@ export const LinkService = {
    */
   async sendDm(peerPubky: PubkyKey, body: string): Promise<LinkMessage> {
     return withQueue(peerPubky, async () => {
+      const ownerForRequest = requireOwner();
+      const pending = await StorageService.getMessageRequest(ownerForRequest, peerPubky);
+      if (pending?.status === 'pending') {
+        await StorageService.upsertMessageRequest({
+          ...pending,
+          status: 'accepted',
+          updatedAt: Date.now(),
+        });
+      }
       const outcome = await ensureLinkLocked(peerPubky, true, false);
       if (
         outcome !== 'ready' &&
@@ -371,10 +381,30 @@ export const LinkService = {
    * answers queued inbound ones WITHOUT initiating. Persists every inbound
    * raw item on `link_stream_items` BEFORE the advanced snapshot, then routes
    * known kinds into `link_messages`.
+   *
+   * Encrypted Links cannot enumerate unknown inbound handshakes
+   * (`probeInboundLink` is per-peer). The candidate set this method probes
+   * is therefore assembled from people we already know:
+   *   - my follows (`isFollowing`)
+   *   - my followers (`isFollower`)
+   *   - friends (`isMutual`)
+   *   - manually-added contacts (`addedManually`)
+   *   - existing Encrypted-Link peers
+   * All of those live in `contacts` / `links` and are deduped here.
+   *
+   * When `peers` is omitted, that candidate set is collected automatically.
+   * Tests and callers that already have a list can still pass it explicitly.
+   *
+   * Newly discovered inbound links (`probe` → pending/established with no
+   * prior row) go through the WoT gate: mutual / following / manual-add /
+   * trust ≥ threshold auto-accept; everyone else is a pending MESSAGE
+   * REQUEST and is not returned to the main inbox until accepted.
    */
-  async syncInbox(peers: PubkyKey[]): Promise<LinkMessage[]> {
+  async syncInbox(peers?: PubkyKey[]): Promise<LinkMessage[]> {
+    const ownerPubky = requireOwner();
+    const candidates = peers !== undefined ? peers : await collectInboxCandidates(ownerPubky);
     const received: LinkMessage[] = [];
-    for (const peerPubky of new Set(peers)) {
+    for (const peerPubky of new Set(candidates)) {
       try {
         const batch = await withQueue(peerPubky, () => syncPeerLocked(peerPubky));
         received.push(...batch);
@@ -394,6 +424,57 @@ export const LinkService = {
     const owner = KeyStore.getPubky();
     if (!owner) return;
     await StorageService.setLinkReadCursor(owner, conversationId, readAt);
+  },
+
+  /**
+   * Deduped probe set: follows + followers + friends + manual contacts +
+   * existing link peers. See {@link syncInbox}.
+   */
+  async collectInboxCandidates(): Promise<PubkyKey[]> {
+    return collectInboxCandidates(requireOwner());
+  },
+
+  /**
+   * Promotes a pending message request to a normal conversation and routes
+   * any stream items that were held while it was gated.
+   */
+  async acceptMessageRequest(peerPubky: PubkyKey): Promise<LinkMessage[]> {
+    return withQueue(peerPubky, async () => {
+      const ownerPubky = requireOwner();
+      const existing = await StorageService.getMessageRequest(ownerPubky, peerPubky);
+      const ts = Date.now();
+      await StorageService.upsertMessageRequest({
+        ownerPubky,
+        peerPubky,
+        createdAt: existing?.createdAt ?? ts,
+        updatedAt: ts,
+        status: 'accepted',
+      });
+      return syncPeerLocked(peerPubky);
+    });
+  },
+
+  /**
+   * Declines a message request: close the link, clear the outbox, drop
+   * held stream/message rows, and persist `declined`.
+   */
+  async declineMessageRequest(peerPubky: PubkyKey): Promise<void> {
+    return withQueue(peerPubky, async () => {
+      const ownerPubky = requireOwner();
+      const stored = await StorageService.getLink(ownerPubky, peerPubky);
+      if (stored) await wipeLinkState(stored);
+      await StorageService.deleteLinkStreamItemsForPeer(ownerPubky, peerPubky);
+      await StorageService.deleteLinkMessagesForPeer(ownerPubky, peerPubky);
+      const existing = await StorageService.getMessageRequest(ownerPubky, peerPubky);
+      const ts = Date.now();
+      await StorageService.upsertMessageRequest({
+        ownerPubky,
+        peerPubky,
+        createdAt: existing?.createdAt ?? ts,
+        updatedAt: ts,
+        status: 'declined',
+      });
+    });
   },
 };
 
@@ -1013,10 +1094,92 @@ async function wipeLinkState(stored: LinkRecord): Promise<void> {
 
 // ─── Receive internals ────────────────────────────────────────────────────────
 
+/**
+ * Known counterparties we can probe. Encrypted Links have no inbox
+ * enumeration — inbound from a stranger is invisible until their pubky
+ * appears in this set (follow / follower / friend / manual add / existing
+ * link peer).
+ */
+async function collectInboxCandidates(ownerPubky: PubkyKey): Promise<PubkyKey[]> {
+  const [contacts, links] = await Promise.all([
+    StorageService.getAllContacts(ownerPubky),
+    StorageService.getAllLinks(ownerPubky),
+  ]);
+  const seen = new Set<string>();
+  const out: PubkyKey[] = [];
+  for (const contact of contacts) {
+    if (seen.has(contact.pubky)) continue;
+    seen.add(contact.pubky);
+    out.push(contact.pubky);
+  }
+  for (const link of links) {
+    if (seen.has(link.peerPubky)) continue;
+    seen.add(link.peerPubky);
+    out.push(link.peerPubky);
+  }
+  return out;
+}
+
+async function persistInboundWithoutRouting(
+  ownerPubky: PubkyKey,
+  peerPubky: PubkyKey,
+): Promise<void> {
+  const handle = requireEstablishedHandle(ownerPubky, peerPubky);
+  const { messages, snapshot } = await PaykitLinkNative.receivePrivateMessages(handle);
+  if (messages.length === 0) return;
+  const arrivedAt = Date.now();
+  const streamItems: LinkStreamItemInput[] = messages.map(item => ({
+    id: uuidv4(),
+    ownerPubky,
+    peerPubky,
+    kind: item.kind,
+    rawJson: item.rawJson,
+    receivedAt: arrivedAt,
+  }));
+  await StorageService.saveLinkStreamItems(streamItems);
+  await StorageService.updateLinkSnapshot(ownerPubky, peerPubky, snapshot, 'established');
+}
+
+async function holdAsMessageRequest(ownerPubky: PubkyKey, peerPubky: PubkyKey): Promise<void> {
+  const existing = await StorageService.getMessageRequest(ownerPubky, peerPubky);
+  const ts = Date.now();
+  await StorageService.upsertMessageRequest({
+    ownerPubky,
+    peerPubky,
+    createdAt: existing?.createdAt ?? ts,
+    updatedAt: ts,
+    status: 'pending',
+  });
+}
+
 async function syncPeerLocked(peerPubky: PubkyKey): Promise<LinkMessage[]> {
   const ownerPubky = requireOwner();
+  const prior = await StorageService.getLink(ownerPubky, peerPubky);
+  const existingRequest = await StorageService.getMessageRequest(ownerPubky, peerPubky);
   try {
     const outcome = await ensureLinkLocked(peerPubky, false, false);
+    const isNewInbound =
+      prior === null && (outcome === 'ready' || outcome === 'handshaking-responder');
+
+    if (isNewInbound && existingRequest?.status !== 'accepted') {
+      const contact = await StorageService.getContact(peerPubky, ownerPubky);
+      const decision = classifyInboundPeer(wotInputFromContact(contact));
+      if (decision === 'request') {
+        await holdAsMessageRequest(ownerPubky, peerPubky);
+        if (outcome === 'ready') {
+          await persistInboundWithoutRouting(ownerPubky, peerPubky);
+        }
+        return [];
+      }
+    }
+
+    if (existingRequest?.status === 'pending' && !isNewInbound) {
+      if (outcome === 'ready') {
+        await persistInboundWithoutRouting(ownerPubky, peerPubky);
+      }
+      return [];
+    }
+
     if (outcome !== 'ready') return routeUnprocessedStreamItems(ownerPubky, peerPubky);
 
     const swept = await routeUnprocessedStreamItems(ownerPubky, peerPubky);

@@ -14,6 +14,39 @@
  */
 
 /**
+ * Schema v5 — contacts relationship flags + owner scope, and message requests.
+ *
+ * v4 is committed history and is not rewritten. Contacts keep `pubky` as the
+ * primary key so the v1 `threads.participant_pubky → contacts(pubky)` FK
+ * stays valid. `owner_pubky` is the M1 account scope: queries filter on it.
+ * Relationship flags are stored columns (not derived-only) so Nexus +
+ * homeserver follows can merge independently.
+ *
+ * `message_requests` is the WoT gate: inbound links from peers who are not
+ * mutual/following and who are below the trust threshold sit here as
+ * pending until the user accepts (promote to a normal conversation) or
+ * declines (wipe the link + clear the outbox).
+ */
+export const SCHEMA_V5_STATEMENTS: readonly string[] = [
+  `ALTER TABLE contacts ADD COLUMN owner_pubky TEXT NOT NULL DEFAULT ''`,
+  `ALTER TABLE contacts ADD COLUMN is_following INTEGER NOT NULL DEFAULT 0`,
+  `ALTER TABLE contacts ADD COLUMN is_follower INTEGER NOT NULL DEFAULT 0`,
+  `ALTER TABLE contacts ADD COLUMN is_mutual INTEGER NOT NULL DEFAULT 0`,
+  `ALTER TABLE contacts ADD COLUMN added_manually INTEGER NOT NULL DEFAULT 0`,
+  `CREATE INDEX IF NOT EXISTS idx_contacts_owner ON contacts(owner_pubky)`,
+  `CREATE TABLE IF NOT EXISTS message_requests (
+    owner_pubky  TEXT    NOT NULL,
+    peer_pubky   TEXT    NOT NULL,
+    created_at   INTEGER NOT NULL,
+    updated_at   INTEGER NOT NULL,
+    status       TEXT    NOT NULL,
+    PRIMARY KEY (owner_pubky, peer_pubky)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_message_requests_owner_status
+    ON message_requests(owner_pubky, status, created_at DESC)`,
+];
+
+/**
  * Schema v4 — account-scoped Encrypted Links, opaque AEAD snapshots, stream
  * items, and (owner, sender, kind, event_id) dedup. v3 is committed history
  * and is not rewritten; this migration rebuilds the v3 tables.

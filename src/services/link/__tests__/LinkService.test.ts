@@ -83,6 +83,14 @@ jest.mock('../../StorageService', () => ({
     clearAccountData: jest.fn(),
     listDeliveryQueue: jest.fn(),
     removeFromQueue: jest.fn(),
+    getContact: jest.fn(),
+    getAllContacts: jest.fn(),
+    getMessageRequest: jest.fn(),
+    upsertMessageRequest: jest.fn(),
+    listMessageRequests: jest.fn(),
+    countPendingMessageRequests: jest.fn(),
+    deleteLinkStreamItemsForPeer: jest.fn(),
+    deleteLinkMessagesForPeer: jest.fn(),
   },
 }));
 
@@ -215,6 +223,12 @@ describe('LinkService', () => {
     mockedStorage.hasLinkMessage.mockResolvedValue(false);
     mockedStorage.getUnprocessedLinkStreamItems.mockResolvedValue([]);
     mockedStorage.incrementLinkConsecutiveFailures.mockResolvedValue(1);
+    mockedStorage.getContact.mockResolvedValue(null);
+    mockedStorage.getAllContacts.mockResolvedValue([]);
+    mockedStorage.getMessageRequest.mockResolvedValue(null);
+    mockedStorage.upsertMessageRequest.mockResolvedValue(undefined);
+    mockedStorage.deleteLinkStreamItemsForPeer.mockResolvedValue(undefined);
+    mockedStorage.deleteLinkMessagesForPeer.mockResolvedValue(undefined);
     mockedStorage.getLinkMessage.mockResolvedValue(sendingRow());
     mockedRetryQueue.getDue.mockResolvedValue([]);
 

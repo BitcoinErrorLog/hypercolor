@@ -12,11 +12,11 @@ import {
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../../types';
-import { PubkyService } from '../../services/PubkyService';
-import { StorageService } from '../../services/StorageService';
+import { ContactsService } from '../../services/ContactsService';
 import { SSESubscriptionManager } from '../../services/SSESubscriptionManager';
 import { useAuthStore } from '../../stores/authStore';
 import { useContactStore } from '../../stores/contactStore';
+import { isValidPubky, parsePubky } from '../../utils/pubkyId';
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
 
@@ -26,46 +26,29 @@ export default function ContactSearchScreen() {
   const upsertContact = useContactStore(s => s.upsertContact);
   const [pubkyKey, setPubkyKey] = useState('');
   const [loading, setLoading] = useState(false);
+  const parsed = parsePubky(pubkyKey);
+  const valid = parsed !== null;
 
-  async function handleSearch() {
-    const key = pubkyKey.trim();
-    if (!key) return;
+  async function handleAdd() {
+    if (!localPubky || !parsed) return;
     setLoading(true);
     try {
-      const homeserver = await PubkyService.getHomeserver(key);
-      if (!homeserver) {
-        Alert.alert(
-          'Not Found',
-          'No homeserver found for that pubky key. Make sure the key is correct.',
-        );
+      const result = await ContactsService.addManualContact(localPubky, parsed);
+      if (!result.ok) {
+        Alert.alert(result.reason === 'not-found' ? 'Not Found' : 'Cannot add', result.message);
         return;
       }
-
-      const profile = await PubkyService.getProfile(key);
-
-      const contact = {
-        pubky: key,
-        ...(profile?.displayName !== undefined ? { displayName: profile.displayName } : {}),
-        ...(profile?.avatarHash !== undefined ? { avatarHash: profile.avatarHash } : {}),
-        homeserver,
-        trustScore: 0.0,
-        firstSeenAt: Date.now(),
-      };
-
-      await StorageService.upsertContact(contact);
-      upsertContact(contact);
-
-      if (localPubky) {
-        await SSESubscriptionManager.subscribeToContact(localPubky, key);
-      }
-
+      upsertContact(result.contact);
+      await SSESubscriptionManager.subscribeToContact(localPubky, result.contact.pubky);
       Alert.alert(
         'Contact Added',
-        profile?.displayName ? `${profile.displayName} added to contacts.` : 'Contact added.',
+        result.contact.displayName
+          ? `${result.contact.displayName} added to contacts.`
+          : 'Contact added. They are now eligible for inbox probing.',
         [{ text: 'OK', onPress: () => nav.goBack() }],
       );
     } catch (err) {
-      Alert.alert('Error', (err as Error).message ?? 'Search failed.');
+      Alert.alert('Error', (err as Error).message ?? 'Add failed.');
     } finally {
       setLoading(false);
     }
@@ -92,17 +75,35 @@ export default function ContactSearchScreen() {
           autoCorrect={false}
           autoFocus
         />
+        {pubkyKey.trim().length > 0 && !valid ? (
+          <Text style={styles.validation}>
+            {isValidPubky(pubkyKey)
+              ? null
+              : 'Must be a 52-character z-base-32 pubky (no 0, 2, l, or v).'}
+          </Text>
+        ) : null}
         <TouchableOpacity
-          style={[styles.button, (!pubkyKey.trim() || loading) && styles.buttonDisabled]}
-          onPress={handleSearch}
-          disabled={!pubkyKey.trim() || loading}
+          style={[styles.button, (!valid || loading) && styles.buttonDisabled]}
+          onPress={() => {
+            void handleAdd();
+          }}
+          disabled={!valid || loading}
         >
           {loading ? (
             <ActivityIndicator color="#fff" />
           ) : (
-            <Text style={styles.buttonText}>Search</Text>
+            <Text style={styles.buttonText}>Add contact</Text>
           )}
         </TouchableOpacity>
+
+        <View style={styles.qrFallback}>
+          <Text style={styles.qrTitle}>Scan QR</Text>
+          <Text style={styles.qrBody}>
+            QR scanning requires a camera module that is not installed in this build. Paste or type
+            a pubky above. Adding expo-camera would need a native rebuild (no camera plugin is
+            declared in app.json).
+          </Text>
+        </View>
       </View>
     </SafeAreaView>
   );
@@ -132,6 +133,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 14,
   },
+  validation: { color: '#f59e0b', fontSize: 13 },
   button: {
     backgroundColor: '#7c3aed',
     borderRadius: 12,
@@ -140,4 +142,15 @@ const styles = StyleSheet.create({
   },
   buttonDisabled: { opacity: 0.4 },
   buttonText: { color: '#fff', fontSize: 16, fontWeight: '600' },
+  qrFallback: {
+    marginTop: 8,
+    padding: 14,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#1f2937',
+    backgroundColor: '#111827',
+    gap: 6,
+  },
+  qrTitle: { color: '#9ca3af', fontSize: 14, fontWeight: '600' },
+  qrBody: { color: '#6b7280', fontSize: 13, lineHeight: 18 },
 });

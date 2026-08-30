@@ -78,7 +78,7 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
 
     await runMigrations(db);
 
-    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(4);
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(5);
     expect(db.executeSync('SELECT * FROM link_receivers').rows).toEqual([]);
     expect(
       db.executeSync(
@@ -281,10 +281,78 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
     const failures = await StorageService.incrementLinkConsecutiveFailures(OWNER, PEER);
     expect(failures).toBe(1);
 
+    await StorageService.upsertContact({
+      pubky: PEER,
+      ownerPubky: OWNER,
+      trustScore: 0,
+      isFollowing: true,
+      isFollower: false,
+      isMutual: false,
+      addedManually: false,
+      firstSeenAt: 1,
+    });
+    await StorageService.upsertMessageRequest({
+      ownerPubky: OWNER,
+      peerPubky: PEER,
+      createdAt: 1,
+      updatedAt: 1,
+      status: 'pending',
+    });
+
     await StorageService.clearAccountData(OWNER);
     expect(await StorageService.getLinkReceiver(OWNER)).toBeNull();
     expect(await StorageService.getLink(OWNER, PEER)).toBeNull();
     expect(await StorageService.getLinkMessagesForConversation(OWNER, `dm:${PEER}`)).toEqual([]);
     expect(await StorageService.getUnprocessedLinkStreamItems(OWNER, PEER)).toEqual([]);
+    expect(await StorageService.getContact(PEER, OWNER)).toBeNull();
+    expect(await StorageService.getMessageRequest(OWNER, PEER)).toBeNull();
+  });
+
+  it('applies v5 contact relationship columns and message_requests', async () => {
+    const db = openMemoryDb();
+    setDbForTests(db);
+    await runMigrations(db);
+
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(5);
+    const cols = db.executeSync('PRAGMA table_info(contacts)').rows ?? [];
+    const names = cols.map(row => row.name);
+    expect(names).toEqual(
+      expect.arrayContaining([
+        'owner_pubky',
+        'is_following',
+        'is_follower',
+        'is_mutual',
+        'added_manually',
+      ]),
+    );
+    expect(
+      db.executeSync(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'message_requests'",
+      ).rows,
+    ).toHaveLength(1);
+
+    await StorageService.upsertContact({
+      pubky: PEER,
+      ownerPubky: OWNER,
+      displayName: 'Zed',
+      trustScore: 0.2,
+      isFollowing: true,
+      isFollower: true,
+      isMutual: true,
+      addedManually: true,
+      firstSeenAt: 10,
+    });
+    const contact = await StorageService.getContact(PEER, OWNER);
+    expect(contact).toEqual(
+      expect.objectContaining({
+        ownerPubky: OWNER,
+        displayName: 'Zed',
+        isFollowing: true,
+        isFollower: true,
+        isMutual: true,
+        addedManually: true,
+      }),
+    );
+    expect((await StorageService.getAllContacts(OWNER)).map(c => c.pubky)).toEqual([PEER]);
   });
 });

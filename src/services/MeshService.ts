@@ -209,7 +209,12 @@ function onPeerDiscovered(event: PeerDiscoveredEvent): void {
   if (state.pubky) {
     StorageService.upsertContact({
       pubky: state.pubky,
+      ownerPubky: KeyStore.getPubky() ?? '',
       trustScore: 0.1,
+      isFollowing: false,
+      isFollower: false,
+      isMutual: false,
+      addedManually: false,
       firstSeenAt: Date.now(),
       lastInteractionAt: Date.now(),
     }).catch(() => {});

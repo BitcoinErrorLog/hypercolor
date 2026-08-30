@@ -8,6 +8,8 @@ import type {
   Contact,
   DeliveryQueueItem,
   DeliveryStatus,
+  MessageRequest,
+  MessageRequestStatus,
   PubkyKey,
 } from '../types';
 import type { SqlExecutor } from '../db/sql';
@@ -56,43 +58,74 @@ export const StorageService = {
 
   async upsertContact(contact: Contact): Promise<void> {
     const db = await getDb();
+    const ts = now();
     db.executeSync(
       `INSERT INTO contacts
-        (pubky, display_name, avatar_hash, homeserver, trust_score,
+        (pubky, owner_pubky, display_name, avatar_hash, homeserver, trust_score,
+         is_following, is_follower, is_mutual, added_manually,
          first_seen_at, last_interaction_at, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(pubky) DO UPDATE SET
-         display_name         = excluded.display_name,
-         avatar_hash          = excluded.avatar_hash,
-         homeserver           = excluded.homeserver,
+         owner_pubky          = CASE
+           WHEN excluded.owner_pubky != '' THEN excluded.owner_pubky
+           ELSE owner_pubky
+         END,
+         display_name         = COALESCE(excluded.display_name, display_name),
+         avatar_hash          = COALESCE(excluded.avatar_hash, avatar_hash),
+         homeserver           = COALESCE(excluded.homeserver, homeserver),
          trust_score          = excluded.trust_score,
+         is_following         = excluded.is_following,
+         is_follower          = excluded.is_follower,
+         is_mutual            = excluded.is_mutual,
+         added_manually       = MAX(added_manually, excluded.added_manually),
          last_interaction_at  = excluded.last_interaction_at,
          updated_at           = excluded.updated_at`,
       [
         contact.pubky,
+        contact.ownerPubky,
         contact.displayName ?? null,
         contact.avatarHash ?? null,
         contact.homeserver ?? null,
         contact.trustScore,
+        contact.isFollowing ? 1 : 0,
+        contact.isFollower ? 1 : 0,
+        contact.isMutual ? 1 : 0,
+        contact.addedManually ? 1 : 0,
         contact.firstSeenAt,
         contact.lastInteractionAt ?? null,
         contact.firstSeenAt,
-        now(),
+        ts,
       ],
     );
   },
 
-  async getContact(pubky: PubkyKey): Promise<Contact | null> {
+  async getContact(pubky: PubkyKey, ownerPubky?: PubkyKey): Promise<Contact | null> {
     const db = await getDb();
-    const result = db.executeSync('SELECT * FROM contacts WHERE pubky = ?', [pubky]);
+    const result =
+      ownerPubky !== undefined
+        ? db.executeSync(
+            `SELECT * FROM contacts
+             WHERE pubky = ? AND (owner_pubky = ? OR owner_pubky = '')
+             LIMIT 1`,
+            [pubky, ownerPubky],
+          )
+        : db.executeSync('SELECT * FROM contacts WHERE pubky = ?', [pubky]);
     const row = result.rows?.[0];
     if (!row) return null;
     return rowToContact(row);
   },
 
-  async getAllContacts(): Promise<Contact[]> {
+  async getAllContacts(ownerPubky?: PubkyKey): Promise<Contact[]> {
     const db = await getDb();
-    const result = db.executeSync('SELECT * FROM contacts ORDER BY last_interaction_at DESC');
+    const result =
+      ownerPubky !== undefined
+        ? db.executeSync(
+            `SELECT * FROM contacts
+             WHERE owner_pubky = ? OR owner_pubky = ''
+             ORDER BY last_interaction_at DESC`,
+            [ownerPubky],
+          )
+        : db.executeSync('SELECT * FROM contacts ORDER BY last_interaction_at DESC');
     return (result.rows ?? []).map(rowToContact);
   },
 
@@ -113,6 +146,83 @@ export const StorageService = {
       now(),
       now(),
       pubky,
+    ]);
+  },
+
+  // ── Message requests (WoT inbound gate) ───────────────────────────────────
+
+  async upsertMessageRequest(request: MessageRequest): Promise<void> {
+    const db = await getDb();
+    db.executeSync(
+      `INSERT INTO message_requests
+        (owner_pubky, peer_pubky, created_at, updated_at, status)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(owner_pubky, peer_pubky) DO UPDATE SET
+         status     = excluded.status,
+         updated_at = excluded.updated_at`,
+      [request.ownerPubky, request.peerPubky, request.createdAt, request.updatedAt, request.status],
+    );
+  },
+
+  async getMessageRequest(
+    ownerPubky: PubkyKey,
+    peerPubky: PubkyKey,
+  ): Promise<MessageRequest | null> {
+    const db = await getDb();
+    const result = db.executeSync(
+      'SELECT * FROM message_requests WHERE owner_pubky = ? AND peer_pubky = ?',
+      [ownerPubky, peerPubky],
+    );
+    const row = result.rows?.[0];
+    if (!row) return null;
+    return rowToMessageRequest(row);
+  },
+
+  async listMessageRequests(
+    ownerPubky: PubkyKey,
+    status?: MessageRequestStatus,
+  ): Promise<MessageRequest[]> {
+    const db = await getDb();
+    const result =
+      status !== undefined
+        ? db.executeSync(
+            `SELECT * FROM message_requests
+             WHERE owner_pubky = ? AND status = ?
+             ORDER BY created_at DESC`,
+            [ownerPubky, status],
+          )
+        : db.executeSync(
+            `SELECT * FROM message_requests
+             WHERE owner_pubky = ?
+             ORDER BY created_at DESC`,
+            [ownerPubky],
+          );
+    return (result.rows ?? []).map(rowToMessageRequest);
+  },
+
+  async countPendingMessageRequests(ownerPubky: PubkyKey): Promise<number> {
+    const db = await getDb();
+    const result = db.executeSync(
+      `SELECT COUNT(*) AS n FROM message_requests
+       WHERE owner_pubky = ? AND status = 'pending'`,
+      [ownerPubky],
+    );
+    return (result.rows?.[0]?.n as number) ?? 0;
+  },
+
+  async deleteLinkStreamItemsForPeer(ownerPubky: PubkyKey, peerPubky: PubkyKey): Promise<void> {
+    const db = await getDb();
+    db.executeSync('DELETE FROM link_stream_items WHERE owner_pubky = ? AND peer_pubky = ?', [
+      ownerPubky,
+      peerPubky,
+    ]);
+  },
+
+  async deleteLinkMessagesForPeer(ownerPubky: PubkyKey, peerPubky: PubkyKey): Promise<void> {
+    const db = await getDb();
+    db.executeSync('DELETE FROM link_messages WHERE owner_pubky = ? AND peer_pubky = ?', [
+      ownerPubky,
+      peerPubky,
     ]);
   },
 
@@ -799,6 +909,8 @@ export const StorageService = {
       db.executeSync('DELETE FROM link_read_cursors WHERE owner_pubky = ?', [ownerPubky]);
       db.executeSync('DELETE FROM links WHERE owner_pubky = ?', [ownerPubky]);
       db.executeSync('DELETE FROM link_receivers WHERE owner_pubky = ?', [ownerPubky]);
+      db.executeSync('DELETE FROM message_requests WHERE owner_pubky = ?', [ownerPubky]);
+      db.executeSync('DELETE FROM contacts WHERE owner_pubky = ?', [ownerPubky]);
     });
   },
 };
@@ -807,14 +919,31 @@ export const StorageService = {
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function rowToContact(row: any): Contact {
-  return {
+  const contact: Contact = {
     pubky: row.pubky,
-    displayName: row.display_name ?? undefined,
-    avatarHash: row.avatar_hash ?? undefined,
-    homeserver: row.homeserver ?? undefined,
+    ownerPubky: typeof row.owner_pubky === 'string' ? row.owner_pubky : '',
     trustScore: row.trust_score,
+    isFollowing: row.is_following === 1,
+    isFollower: row.is_follower === 1,
+    isMutual: row.is_mutual === 1,
+    addedManually: row.added_manually === 1,
     firstSeenAt: row.first_seen_at,
-    lastInteractionAt: row.last_interaction_at ?? undefined,
+  };
+  if (row.display_name) contact.displayName = row.display_name;
+  if (row.avatar_hash) contact.avatarHash = row.avatar_hash;
+  if (row.homeserver) contact.homeserver = row.homeserver;
+  if (row.last_interaction_at != null) contact.lastInteractionAt = row.last_interaction_at;
+  return contact;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function rowToMessageRequest(row: any): MessageRequest {
+  return {
+    ownerPubky: row.owner_pubky,
+    peerPubky: row.peer_pubky,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    status: row.status as MessageRequestStatus,
   };
 }
 

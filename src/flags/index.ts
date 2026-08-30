@@ -1,4 +1,14 @@
 import { createMMKV, type MMKV } from 'react-native-mmkv';
+import { DEFAULT_NEXUS_BASE_URL, WOT_AUTO_ACCEPT_TRUST_THRESHOLD } from './config';
+
+export {
+  DEFAULT_NEXUS_BASE_URL,
+  PROFILE_HYDRATE_CONCURRENCY,
+  WOT_AUTO_ACCEPT_TRUST_THRESHOLD,
+} from './config';
+
+const NEXUS_URL_KEY = 'config:nexus_base_url';
+const WOT_THRESHOLD_KEY = 'config:wot_auto_accept_trust_threshold';
 
 // ─── Feature Flag Definitions ──────────────────────────────────────────────
 // All Pubky-dependent paths are gated here. Set to false to disable a feature
@@ -75,5 +85,40 @@ export const FeatureFlags = {
       },
       {} as Record<FeatureFlagKey, boolean>,
     );
+  },
+};
+
+/**
+ * Runtime-overridable config that lives next to feature flags.
+ * Defaults are the staging constants above; tests should inject a
+ * {@link createNexusClient} instead of mutating this.
+ */
+export const AppConfig = {
+  getNexusBaseUrl(): string {
+    try {
+      const stored = getStorage().getString(NEXUS_URL_KEY);
+      return stored && stored.length > 0 ? stored : DEFAULT_NEXUS_BASE_URL;
+    } catch {
+      return DEFAULT_NEXUS_BASE_URL;
+    }
+  },
+
+  setNexusBaseUrl(url: string): void {
+    getStorage().set(NEXUS_URL_KEY, url);
+  },
+
+  getWotAutoAcceptTrustThreshold(): number {
+    try {
+      const stored = getStorage().getNumber(WOT_THRESHOLD_KEY);
+      return typeof stored === 'number' && stored >= 0 && stored <= 1
+        ? stored
+        : WOT_AUTO_ACCEPT_TRUST_THRESHOLD;
+    } catch {
+      return WOT_AUTO_ACCEPT_TRUST_THRESHOLD;
+    }
+  },
+
+  setWotAutoAcceptTrustThreshold(value: number): void {
+    getStorage().set(WOT_THRESHOLD_KEY, value);
   },
 };

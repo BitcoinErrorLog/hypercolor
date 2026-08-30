@@ -1,16 +1,19 @@
-import React, { useEffect, useCallback } from 'react';
+import React, { useEffect, useCallback, useState } from 'react';
 import { View, Text, FlatList, TouchableOpacity, StyleSheet, SafeAreaView } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { RootStackParamList, Thread } from '../../types';
 import { useMessageStore } from '../../stores/messageStore';
 import { StorageService } from '../../services/StorageService';
+import { useAuthStore } from '../../stores/authStore';
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
 
 export default function ChatsScreen() {
   const nav = useNavigation<Nav>();
+  const ownerPubky = useAuthStore(s => s.pubky);
   const threads = useMessageStore(s => Object.values(s.threads));
+  const [pendingRequests, setPendingRequests] = useState(0);
 
   // Load persisted threads on mount
   useEffect(() => {
@@ -18,6 +21,11 @@ export default function ChatsScreen() {
       dbThreads.forEach(t => useMessageStore.getState().upsertThread(t));
     });
   }, []);
+
+  useEffect(() => {
+    if (!ownerPubky) return;
+    StorageService.countPendingMessageRequests(ownerPubky).then(setPendingRequests);
+  }, [ownerPubky]);
 
   const sorted = [...threads].sort((a, b) => (b.lastMessageAt ?? 0) - (a.lastMessageAt ?? 0));
 
@@ -68,9 +76,16 @@ export default function ChatsScreen() {
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
         <Text style={styles.title}>Chats</Text>
-        <TouchableOpacity onPress={() => nav.navigate('ContactSearch')}>
-          <Text style={styles.newChat}>+</Text>
-        </TouchableOpacity>
+        <View style={styles.headerActions}>
+          <TouchableOpacity onPress={() => nav.navigate('MessageRequests')}>
+            <Text style={styles.requests}>
+              Requests{pendingRequests > 0 ? ` (${pendingRequests})` : ''}
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity onPress={() => nav.navigate('ContactSearch')}>
+            <Text style={styles.newChat}>+</Text>
+          </TouchableOpacity>
+        </View>
       </View>
       {sorted.length === 0 ? (
         <View style={styles.empty}>
@@ -114,6 +129,8 @@ const styles = StyleSheet.create({
     borderBottomColor: '#1a1a1a',
   },
   title: { fontSize: 24, fontWeight: '700', color: '#f9fafb' },
+  headerActions: { flexDirection: 'row', alignItems: 'center', gap: 16 },
+  requests: { fontSize: 15, color: '#7c3aed', fontWeight: '600' },
   newChat: { fontSize: 28, color: '#7c3aed', fontWeight: '600' },
   list: { paddingVertical: 4 },
   threadRow: {
