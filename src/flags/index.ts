@@ -26,8 +26,8 @@ const WOT_THRESHOLD_KEY = 'config:wot_auto_accept_trust_threshold';
 
 export type FeatureFlagKey =
   | 'pubky_identity' // Phase 1: Pubky auth and identity
-  | 'pubky_inbox' // Phase 4: Async encrypted delivery
-  | 'mesh_transport' // Phase 3: BLE peer discovery and delivery
+  | 'pubky_inbox' // Unused in v1 — official inbox is Encrypted Links
+  | 'mesh_transport' // Quarantined research-era BLE; OFF for v1
   | 'channel_messaging' // Phase 5: Group channels
   | 'invite_links' // Phase 5: Deep link invites
   | 'trust_scoring' // Phase 6: Soft trust scores
@@ -38,7 +38,9 @@ export type FeatureFlagKey =
 const DEFAULTS: Record<FeatureFlagKey, boolean> = {
   pubky_identity: true,
   pubky_inbox: true,
-  mesh_transport: true,
+  // Mesh delivery was the research-era path. Re-integration over Encrypted
+  // Links is future work. Do not start MeshService from the product path.
+  mesh_transport: false,
   channel_messaging: true,
   invite_links: true,
   trust_scoring: false, // starts off, enabled in Phase 6

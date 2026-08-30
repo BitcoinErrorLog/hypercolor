@@ -92,22 +92,25 @@ export default function ChannelScreen({ route }: Props) {
     const text = draft.trim();
     if (!text || sending || !channel) return;
     setDraft('');
-    const replyId = replyTo?.eventId;
+    const reply = replyTo;
     const editId = editingEventId;
     setReplyTo(null);
     setEditingEventId(null);
     setSending(true);
     try {
+      const replyTarget = reply
+        ? { eventId: reply.eventId, authorPubky: reply.senderPubky }
+        : undefined;
       if (editId) {
         await GroupService.editMessage(channelId, editId, text);
       } else if (channel.isPublic) {
-        if (replyId !== undefined) {
-          await GroupService.sendPublicMessage(channelId, text, replyId);
+        if (replyTarget) {
+          await GroupService.sendPublicMessage(channelId, text, replyTarget);
         } else {
           await GroupService.sendPublicMessage(channelId, text);
         }
-      } else if (replyId !== undefined) {
-        await GroupService.sendGroupMessage(channelId, text, replyId);
+      } else if (replyTarget) {
+        await GroupService.sendGroupMessage(channelId, text, replyTarget);
       } else {
         await GroupService.sendGroupMessage(channelId, text);
       }
@@ -280,9 +283,16 @@ export function ChannelScreenContent({
   onRefreshPublic: () => void;
 }) {
   const flatListRef = useRef<FlatList<GroupMessage>>(null);
-  const byId = useMemo(() => {
+  const byAuthorEvent = useMemo(() => {
     const map = new Map<string, GroupMessage>();
-    for (const msg of messages) map.set(msg.eventId, msg);
+    for (const msg of messages) map.set(`${msg.senderPubky}:${msg.eventId}`, msg);
+    return map;
+  }, [messages]);
+  const byEventId = useMemo(() => {
+    const map = new Map<string, GroupMessage>();
+    for (const msg of messages) {
+      if (!map.has(msg.eventId)) map.set(msg.eventId, msg);
+    }
     return map;
   }, [messages]);
   const reactionsByTarget = useMemo(() => {
@@ -315,7 +325,11 @@ export function ChannelScreenContent({
         );
       }
       const isMine = item.senderPubky === localPubky;
-      const parent = item.replyToEventId ? byId.get(item.replyToEventId) : undefined;
+      const parent = item.replyToEventId
+        ? item.replyToAuthorPubky
+          ? byAuthorEvent.get(`${item.replyToAuthorPubky}:${item.replyToEventId}`)
+          : byEventId.get(item.replyToEventId)
+        : undefined;
       const reactions = reactionsByTarget.get(`${item.senderPubky}:${item.eventId}`);
       const attachment = attachments.find(a => a.eventId === item.eventId);
       return (
@@ -384,7 +398,8 @@ export function ChannelScreenContent({
     [
       attachments,
       localPubky,
-      byId,
+      byAuthorEvent,
+      byEventId,
       reactionsByTarget,
       isPublic,
       selfActive,

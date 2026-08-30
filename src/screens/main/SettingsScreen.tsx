@@ -21,6 +21,7 @@ import {
   type LiveProofReport,
 } from '../../services/link/liveProof';
 import { TipEndpointsSettings } from '../../components/TipEndpointsSettings';
+import { BackupService } from '../../services/backup/BackupService';
 
 type Nav = NativeStackNavigationProp<RootStackParamList, 'Settings'>;
 
@@ -29,17 +30,15 @@ export default function SettingsScreen() {
   const homeserver = useAuthStore(s => s.homeserver);
 
   const [meshEnabled, setMeshEnabled] = useState(() => FeatureFlags.get('mesh_transport'));
-  const [inboxEnabled, setInboxEnabled] = useState(() => FeatureFlags.get('pubky_inbox'));
   const [telemetryEnabled, setTelemetryEnabled] = useState(() => FeatureFlags.get('telemetry'));
+  const [backupBusy, setBackupBusy] = useState(false);
+  const [recoveryCode, setRecoveryCode] = useState<string | null>(null);
+  const [restoreCode, setRestoreCode] = useState('');
+  const [restoreNote, setRestoreNote] = useState<string | null>(null);
 
   function toggleMesh(val: boolean) {
     FeatureFlags.set('mesh_transport', val);
     setMeshEnabled(val);
-  }
-
-  function toggleInbox(val: boolean) {
-    FeatureFlags.set('pubky_inbox', val);
-    setInboxEnabled(val);
   }
 
   function toggleTelemetry(val: boolean) {
@@ -71,9 +70,11 @@ export default function SettingsScreen() {
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Transport</Text>
           <View style={styles.row}>
-            <View>
-              <Text style={styles.rowLabel}>BLE Mesh</Text>
-              <Text style={styles.rowHint}>Local offline delivery</Text>
+            <View style={{ flex: 1, paddingRight: 12 }}>
+              <Text style={styles.rowLabel}>BLE Mesh (quarantined)</Text>
+              <Text style={styles.rowHint}>
+                Research-era path. Off for v1. Re-integration over Encrypted Links is future work.
+              </Text>
             </View>
             <Switch
               value={meshEnabled}
@@ -81,17 +82,89 @@ export default function SettingsScreen() {
               trackColor={{ true: '#7c3aed' }}
             />
           </View>
+        </View>
+
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Encrypted backup</Text>
           <View style={styles.row}>
-            <View>
-              <Text style={styles.rowLabel}>Pubky Inbox</Text>
-              <Text style={styles.rowHint}>Async encrypted delivery</Text>
-            </View>
-            <Switch
-              value={inboxEnabled}
-              onValueChange={toggleInbox}
-              trackColor={{ true: '#7c3aed' }}
-            />
+            <Text style={styles.rowHint}>
+              Backup uses a random recovery code, not a passphrase. History (contacts, chats,
+              groups, payments, tip lists) restores. Live Encrypted Links re-establish on this
+              device. Attachment files without keys show as unavailable until re-shared.
+            </Text>
           </View>
+          <TouchableOpacity
+            style={[styles.liveButton, backupBusy && styles.liveButtonDisabled]}
+            disabled={backupBusy}
+            onPress={() => {
+              setBackupBusy(true);
+              setRestoreNote(null);
+              void BackupService.exportBackup()
+                .then(result => {
+                  setRecoveryCode(result.recoveryCode);
+                })
+                .catch(err => {
+                  setRestoreNote(err instanceof Error ? err.message : 'Backup failed');
+                })
+                .finally(() => setBackupBusy(false));
+            }}
+          >
+            {backupBusy ? (
+              <ActivityIndicator color="#fff" />
+            ) : (
+              <Text style={styles.liveButtonText}>Backup now</Text>
+            )}
+          </TouchableOpacity>
+          {recoveryCode ? (
+            <View style={styles.row}>
+              <View>
+                <Text style={styles.rowLabel}>Write this recovery code down</Text>
+                <Text style={styles.recoveryCode} selectable>
+                  {recoveryCode}
+                </Text>
+                <Text style={styles.rowHint}>
+                  It is shown once here. Store it in Ring or a password manager.
+                </Text>
+              </View>
+            </View>
+          ) : null}
+          <TextInput
+            style={styles.liveInput}
+            value={restoreCode}
+            onChangeText={setRestoreCode}
+            placeholder="Paste recovery code to restore"
+            placeholderTextColor="#4b5563"
+            autoCapitalize="none"
+            autoCorrect={false}
+          />
+          <TouchableOpacity
+            style={[
+              styles.liveButton,
+              (backupBusy || restoreCode.trim().length === 0) && styles.liveButtonDisabled,
+            ]}
+            disabled={backupBusy || restoreCode.trim().length === 0}
+            onPress={() => {
+              setBackupBusy(true);
+              setRestoreNote(null);
+              void BackupService.restoreBackup(restoreCode)
+                .then(() => {
+                  setRestoreNote(
+                    'Restore complete. History is local. Enable messaging again so links re-handshake. Attachments without keys stay unavailable until re-shared.',
+                  );
+                })
+                .catch(err => {
+                  setRestoreNote(err instanceof Error ? err.message : 'Restore failed');
+                })
+                .finally(() => setBackupBusy(false));
+            }}
+          >
+            <Text style={styles.liveButtonText}>Restore from backup</Text>
+          </TouchableOpacity>
+          {restoreNote ? (
+            <View style={styles.row}>
+              <Text style={styles.rowHint}>{restoreNote}</Text>
+            </View>
+          ) : null}
         </View>
 
         <View style={styles.section}>
@@ -176,6 +249,12 @@ const styles = StyleSheet.create({
   rowValue: { fontSize: 13, color: '#6b7280', maxWidth: 200 },
   rowHint: { fontSize: 12, color: '#4b5563', marginTop: 2, flexShrink: 1 },
   chevron: { fontSize: 20, color: '#6b7280' },
+  recoveryCode: {
+    fontSize: 13,
+    color: '#c4b5fd',
+    fontFamily: 'monospace',
+    marginTop: 8,
+  },
   liveInput: {
     backgroundColor: '#1a1a1a',
     borderWidth: 1,

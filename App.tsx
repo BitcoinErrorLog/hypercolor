@@ -27,6 +27,8 @@ export default function App() {
     let disposed = false;
     let stopDrain: (() => void) | undefined;
 
+    // Foreground notification strategy: see docs/NOTIFICATIONS.md.
+    // AppState 'active' restarts the retry drain and syncs the Encrypted-Link inbox.
     const recoverAndDrain = async () => {
       try {
         await LinkService.restorePersistedSession();

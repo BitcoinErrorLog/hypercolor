@@ -1,9 +1,10 @@
-import React, { useEffect, useCallback, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { View, Text, FlatList, TouchableOpacity, StyleSheet, SafeAreaView } from 'react-native';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import type { RootStackParamList, Thread } from '../../types';
-import { useMessageStore } from '../../stores/messageStore';
+import type { RootStackParamList } from '../../types';
+import type { LinkConversationSummary } from '../../types/link';
+import { threadRouteParams } from '../../types/link';
 import { StorageService } from '../../services/StorageService';
 import { LinkService } from '../../services/link/LinkService';
 import { useAuthStore } from '../../stores/authStore';
@@ -13,50 +14,51 @@ type Nav = NativeStackNavigationProp<RootStackParamList>;
 export default function ChatsScreen() {
   const nav = useNavigation<Nav>();
   const ownerPubky = useAuthStore(s => s.pubky);
-  const threads = useMessageStore(s => Object.values(s.threads));
+  const [conversations, setConversations] = useState<LinkConversationSummary[]>([]);
   const [pendingRequests, setPendingRequests] = useState(0);
 
-  // Load persisted threads on mount
-  useEffect(() => {
-    StorageService.getAllThreads().then(dbThreads => {
-      dbThreads.forEach(t => useMessageStore.getState().upsertThread(t));
-    });
-  }, []);
-
-  const refreshPendingRequests = useCallback(() => {
+  const refresh = useCallback(async () => {
     if (!ownerPubky) {
+      setConversations([]);
       setPendingRequests(0);
       return;
     }
-    void StorageService.countPendingMessageRequests(ownerPubky).then(setPendingRequests);
+    if (LinkService.hasSession()) {
+      try {
+        await LinkService.syncInbox();
+      } catch {
+        // Local conversation list still refreshes below.
+      }
+    }
+    const [rows, pending] = await Promise.all([
+      StorageService.listLinkConversations(ownerPubky),
+      StorageService.countPendingMessageRequests(ownerPubky),
+    ]);
+    setConversations(rows);
+    setPendingRequests(pending);
   }, [ownerPubky]);
 
   useFocusEffect(
     useCallback(() => {
-      refreshPendingRequests();
-    }, [refreshPendingRequests]),
+      void refresh();
+    }, [refresh]),
   );
 
   useEffect(() => {
     return LinkService.subscribeInboxSynced(owner => {
-      if (owner === ownerPubky) refreshPendingRequests();
+      if (owner === ownerPubky) void refresh();
     });
-  }, [ownerPubky, refreshPendingRequests]);
-
-  const sorted = [...threads].sort((a, b) => (b.lastMessageAt ?? 0) - (a.lastMessageAt ?? 0));
+  }, [ownerPubky, refresh]);
 
   const handlePress = useCallback(
-    (thread: Thread) => {
-      nav.navigate('Thread', {
-        threadId: thread.id,
-        participantPubky: thread.participantPubky,
-      });
+    (row: LinkConversationSummary) => {
+      nav.navigate('Thread', threadRouteParams(row.participantPubky));
     },
     [nav],
   );
 
   const renderThread = useCallback(
-    ({ item }: { item: Thread }) => (
+    ({ item }: { item: LinkConversationSummary }) => (
       <TouchableOpacity style={styles.threadRow} onPress={() => handlePress(item)}>
         <View style={styles.avatar}>
           <Text style={styles.avatarLetter}>{item.participantPubky.charAt(0).toUpperCase()}</Text>
@@ -72,7 +74,7 @@ export default function ChatsScreen() {
           </View>
           <View style={styles.threadPreview}>
             <Text style={styles.lastMessage} numberOfLines={1}>
-              {item.lastMessage ?? 'No messages yet'}
+              {item.lastMessage || 'No messages yet'}
             </Text>
             {item.unreadCount > 0 ? (
               <View style={styles.badge}>
@@ -103,15 +105,15 @@ export default function ChatsScreen() {
           </TouchableOpacity>
         </View>
       </View>
-      {sorted.length === 0 ? (
+      {conversations.length === 0 ? (
         <View style={styles.empty}>
           <Text style={styles.emptyText}>No conversations yet.</Text>
           <Text style={styles.emptyHint}>Search for a contact to start chatting.</Text>
         </View>
       ) : (
         <FlatList
-          data={sorted}
-          keyExtractor={item => item.id}
+          data={conversations}
+          keyExtractor={item => item.conversationId}
           renderItem={renderThread}
           contentContainerStyle={styles.list}
         />

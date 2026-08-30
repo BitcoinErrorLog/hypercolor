@@ -15,6 +15,7 @@ import type { Contact, MessageRequest, RootStackParamList } from '../../types';
 import { useAuthStore } from '../../stores/authStore';
 import { StorageService } from '../../services/StorageService';
 import { LinkService } from '../../services/link/LinkService';
+import { threadRouteParams } from '../../types/link';
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
 
@@ -50,6 +51,7 @@ export default function MessageRequestsScreen() {
       try {
         await LinkService.acceptMessageRequest(peerPubky);
         await load();
+        nav.navigate('Thread', threadRouteParams(peerPubky));
       } catch (err) {
         Alert.alert(
           'Accept failed',
@@ -60,7 +62,7 @@ export default function MessageRequestsScreen() {
         setBusyPeer(null);
       }
     },
-    [load],
+    [load, nav],
   );
 
   const handleDecline = useCallback(

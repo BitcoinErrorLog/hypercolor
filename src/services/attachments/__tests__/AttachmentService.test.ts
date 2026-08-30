@@ -164,6 +164,7 @@ describe('AttachmentService', () => {
       receivedAt: null,
       deliveryState: 'sent',
       replyToEventId: null,
+      replyToAuthorPubky: null,
       targetEventId: null,
       targetAuthorPubky: null,
       editedAt: null,

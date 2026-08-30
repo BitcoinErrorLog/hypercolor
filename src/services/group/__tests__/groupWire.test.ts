@@ -36,6 +36,34 @@ describe('group wire contracts', () => {
     expect(isGroupWireKind('chat.message.v0')).toBe(false);
   });
 
+  it('emits reply_to_author and decodes its absence', () => {
+    const withAuthor = buildGroupMessageEnvelope({
+      channelId: CHANNEL,
+      eventId: EVENT,
+      sentAt: SENT,
+      body: 'hello',
+      replyTo: TARGET,
+      replyToAuthor: HOST,
+    });
+    expect(withAuthor.envelope.reply_to).toBe(TARGET);
+    expect(withAuthor.envelope.reply_to_author).toBe(HOST);
+    expect(decodeGroupEnvelope(withAuthor.json)).toEqual(withAuthor.envelope);
+
+    const withoutAuthor = JSON.parse(withAuthor.json) as Record<string, unknown>;
+    delete withoutAuthor.reply_to_author;
+    const decoded = decodeGroupEnvelope(JSON.stringify(withoutAuthor));
+    expect(decoded).toEqual(
+      expect.objectContaining({
+        kind: GROUP_MESSAGE_KIND,
+        reply_to: TARGET,
+        body: 'hello',
+      }),
+    );
+    expect(decoded && 'reply_to_author' in decoded ? decoded.reply_to_author : undefined).toBe(
+      undefined,
+    );
+  });
+
   it('round-trips each private-group kind', () => {
     const message = buildGroupMessageEnvelope({
       channelId: CHANNEL,

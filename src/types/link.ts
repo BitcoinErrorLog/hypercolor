@@ -254,6 +254,27 @@ export function buildDmConversationId(counterpartyPubky: PubkyKey): string {
   return `${DM_CONVERSATION_PREFIX}${counterpartyPubky}`;
 }
 
+/** Navigation params for the official DM thread (`threadId` = conversation id). */
+export function threadRouteParams(participantPubky: PubkyKey): {
+  threadId: string;
+  participantPubky: PubkyKey;
+} {
+  return { threadId: buildDmConversationId(participantPubky), participantPubky };
+}
+
+/**
+ * Inbox row for one `dm:{peer}` conversation. Unread counts only messages
+ * that have already arrived on this device after the local read cursor.
+ */
+export interface LinkConversationSummary {
+  conversationId: string;
+  participantPubky: PubkyKey;
+  lastMessage: string;
+  lastMessageAt: number;
+  lastKind: string;
+  unreadCount: number;
+}
+
 /** Splits a `dm:{counterpartyPubky}` conversation id; `null` when the shape does not match. */
 export function parseDmConversationId(
   conversationId: string,

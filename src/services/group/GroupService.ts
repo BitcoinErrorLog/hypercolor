@@ -150,7 +150,11 @@ export const GroupService = {
     return channel;
   },
 
-  async sendGroupMessage(channelId: string, body: string, replyTo?: string): Promise<GroupMessage> {
+  async sendGroupMessage(
+    channelId: string,
+    body: string,
+    replyTo?: { eventId: string; authorPubky: string },
+  ): Promise<GroupMessage> {
     const owner = requireOwner();
     await requireActiveMember(owner, channelId, owner);
     const channel = await requirePrivateChannel(owner, channelId);
@@ -158,7 +162,14 @@ export const GroupService = {
     const sentAt = Date.now();
     const built =
       replyTo !== undefined
-        ? buildGroupMessageEnvelope({ channelId, eventId, sentAt, body, replyTo })
+        ? buildGroupMessageEnvelope({
+            channelId,
+            eventId,
+            sentAt,
+            body,
+            replyTo: replyTo.eventId,
+            replyToAuthor: replyTo.authorPubky,
+          })
         : buildGroupMessageEnvelope({ channelId, eventId, sentAt, body });
     const message = await fanOutEnvelope({
       ownerPubky: owner,
@@ -170,6 +181,7 @@ export const GroupService = {
       body: built.envelope.body,
       rawJson: built.json,
       replyToEventId: built.envelope.reply_to ?? null,
+      replyToAuthorPubky: built.envelope.reply_to_author ?? null,
       targetEventId: null,
     });
     await StorageService.touchGroupChannel(owner, channel.channelId, sentAt);
@@ -501,7 +513,7 @@ export const GroupService = {
   async sendPublicMessage(
     channelId: string,
     body: string,
-    replyTo?: string,
+    replyTo?: { eventId: string; authorPubky: string },
   ): Promise<GroupMessage> {
     const owner = requireOwner();
     const channel = await StorageService.getGroupChannel(owner, channelId);
@@ -527,7 +539,10 @@ export const GroupService = {
       body: text,
       author: owner,
     };
-    if (replyTo !== undefined) doc.reply_to = replyTo;
+    if (replyTo !== undefined) {
+      doc.reply_to = replyTo.eventId;
+      doc.reply_to_author = replyTo.authorPubky;
+    }
     const json = JSON.stringify(doc);
     await PubkyService.put(
       publicChannelMessageUrl(owner, parsed.hostPubky, parsed.localId, sentAt, eventId),
@@ -544,7 +559,8 @@ export const GroupService = {
       sentAt,
       receivedAt: null,
       deliveryState: 'sent',
-      replyToEventId: replyTo ?? null,
+      replyToEventId: replyTo?.eventId ?? null,
+      replyToAuthorPubky: replyTo?.authorPubky ?? null,
       targetEventId: null,
       targetAuthorPubky: null,
       editedAt: null,
@@ -645,6 +661,7 @@ async function refreshPublicChannel(ownerPubky: PubkyKey, channel: GroupChannel)
         receivedAt: Date.now(),
         deliveryState: 'delivered',
         replyToEventId: doc.reply_to ?? null,
+        replyToAuthorPubky: doc.reply_to_author ?? null,
         targetEventId: null,
         targetAuthorPubky: null,
         editedAt: null,
@@ -711,6 +728,7 @@ async function fanOutEnvelope(input: {
   body: string;
   rawJson: string;
   replyToEventId: string | null;
+  replyToAuthorPubky?: string | null;
   targetEventId: string | null;
   targetAuthorPubky?: string | null;
   extraRecipients?: PubkyKey[];
@@ -732,6 +750,7 @@ async function fanOutEnvelope(input: {
     receivedAt: null,
     deliveryState: recipients.length === 0 ? 'sent' : 'sending',
     replyToEventId: input.replyToEventId,
+    replyToAuthorPubky: input.replyToAuthorPubky ?? null,
     targetEventId: input.targetEventId,
     targetAuthorPubky: input.targetAuthorPubky ?? null,
     editedAt: null,

@@ -3,9 +3,9 @@ import { NativeModulesProxy, EventEmitter } from 'expo-modules-core';
 /**
  * MeshTransportModule — TypeScript interface to the native BLE mesh layer.
  *
- * BLE mesh is a best-effort transport. Every failure mode here must be handled
- * gracefully — if BLE is unavailable the MessageRouter falls back to Pubky
- * outbox delivery automatically.
+ * BLE mesh is a best-effort transport, quarantined for v1 (FeatureFlags.mesh_transport
+ * defaults OFF). Re-integration over the official Paykit Encrypted Links stack
+ * is future work — do not delete this module.
  *
  * Fragmentation protocol:
  * Each GATT write carries a 9-byte header:

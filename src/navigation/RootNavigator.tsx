@@ -9,8 +9,6 @@ import { useAuthStore } from '../stores/authStore';
 import ThreadScreen from '../screens/main/ThreadScreen';
 import ChannelScreen from '../screens/main/ChannelScreen';
 import { PubkyRingAuthService } from '../services/PubkyRingAuthService';
-import { PubkyService } from '../services/PubkyService';
-import { MessageRouter } from '../services/MessageRouter';
 import { GroupService, setPendingPublicJoin } from '../services/group/GroupService';
 import { parsePublicChannelRef } from '../types/group';
 
@@ -75,12 +73,6 @@ export function RootNavigator() {
       try {
         const { pubky, homeserver } = await PubkyRingAuthService.handleRingCallback(url);
         setAuthenticated(pubky as import('../types').PubkyKey, homeserver);
-
-        // Publish KeyBinding + legacy inbox key so contacts can discover us
-        await PubkyService.publishKeyBinding(pubky as import('../types').PubkyKey);
-        await PubkyService.publishInboxKey(pubky as import('../types').PubkyKey);
-
-        await MessageRouter.start();
       } catch (err) {
         Alert.alert(
           'Authorization Failed',

@@ -2,7 +2,7 @@
 // imported before anything that generates UUIDs (LinkService message ids).
 import 'react-native-get-random-values';
 
-// Polyfill Buffer for libraries that depend on it (EnvelopeService, PubkyService)
+// Polyfill Buffer for libraries that depend on it (PubkyService, Paykit codecs)
 import { Buffer } from 'buffer';
 global.Buffer = Buffer;
 

@@ -139,6 +139,7 @@ async function persistGroupAttachment(
     receivedAt: input.receivedAt,
     deliveryState: 'delivered',
     replyToEventId: null,
+    replyToAuthorPubky: null,
     targetEventId: null,
     targetAuthorPubky: null,
     editedAt: null,

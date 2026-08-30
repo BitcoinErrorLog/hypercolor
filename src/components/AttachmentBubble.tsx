@@ -16,7 +16,11 @@ export function AttachmentBubble({
   const [thumbUri, setThumbUri] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(
-    record.resolveState === 'failed' ? 'Could not decrypt this attachment' : null,
+    record.resolveState === 'failed'
+      ? 'Could not decrypt this attachment'
+      : record.resolveState === 'unavailable-from-backup'
+        ? 'Unavailable from backup — ask the sender to re-share'
+        : null,
   );
 
   const resolveFull = useCallback(async () => {
@@ -44,6 +48,7 @@ export function AttachmentBubble({
   }, [loading, record.eventId, record.ownerPubky, record.senderPubky]);
 
   useEffect(() => {
+    if (record.resolveState === 'unavailable-from-backup') return;
     if (record.localCachePath) {
       setUri(record.localCachePath);
       return;
@@ -67,10 +72,22 @@ export function AttachmentBubble({
     record.ownerPubky,
     record.senderPubky,
     record.thumbnailLocation,
+    record.resolveState,
   ]);
 
   const textColor = isMine ? '#fff' : '#f9fafb';
   const preview = uri ?? thumbUri;
+
+  if (record.resolveState === 'unavailable-from-backup') {
+    return (
+      <View style={styles.card}>
+        <Text style={[styles.fileName, { color: textColor }]}>Attachment</Text>
+        <Text style={[styles.meta, { color: textColor }]}>
+          Unavailable from backup — keys stay on the original device. Ask the sender to re-share.
+        </Text>
+      </View>
+    );
+  }
 
   if (record.deliveryState === 'sending' || record.resolveState === 'uploading') {
     return (

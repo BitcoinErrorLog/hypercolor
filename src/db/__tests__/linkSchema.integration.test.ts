@@ -51,6 +51,11 @@ import {
   SCHEMA_V5_STATEMENTS,
   SCHEMA_V6_STATEMENTS,
   SCHEMA_V7_STATEMENTS,
+  SCHEMA_V8_STATEMENTS,
+  SCHEMA_V9_STATEMENTS,
+  SCHEMA_V10_STATEMENTS,
+  SCHEMA_V11_STATEMENTS,
+  SCHEMA_V12_STATEMENTS,
 } from '../schema';
 import { StorageService } from '../../services/StorageService';
 import { KeyStore } from '../../services/KeyStore';
@@ -119,7 +124,7 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
 
     await runMigrations(db);
 
-    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(12);
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(13);
     expect(db.executeSync('SELECT * FROM link_receivers').rows).toEqual([]);
     expect(
       db.executeSync(
@@ -354,7 +359,7 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
     setDbForTests(db);
     await runMigrations(db);
 
-    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(12);
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(13);
     const cols = db.executeSync('PRAGMA table_info(contacts)').rows ?? [];
     const names = cols.map(row => row.name);
     expect(names).toEqual(
@@ -587,10 +592,10 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
     expect((await StorageService.getAllContacts(OTHER)).map(c => c.pubky)).toEqual([]);
   });
 
-  it('drops the threads→contacts(pubky) FK so a composite contacts PK is valid', async () => {
+  it('v13 drops research-era tables, keeps delivery_queue, and adds reply_to_author_pubky', async () => {
     const db = openMemoryDb();
     setDbForTests(db);
-    await runMigrations(db);
+    applyThroughV12(db);
     db.executeSync(
       `INSERT INTO threads
         (id, participant_pubky, unread_count, created_at, updated_at)
@@ -598,6 +603,29 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
       [PEER],
     );
     expect(db.executeSync('SELECT id FROM threads').rows?.[0]?.id).toBe('t1');
+
+    await runMigrations(db);
+
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(13);
+    for (const name of ['threads', 'messages', 'channels', 'channel_members', 'cursor_state']) {
+      expect(
+        db.executeSync("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", [name])
+          .rows,
+      ).toHaveLength(0);
+    }
+    expect(
+      db.executeSync(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'delivery_queue'",
+      ).rows,
+    ).toHaveLength(1);
+    expect(
+      db.executeSync("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'mesh_peers'")
+        .rows,
+    ).toHaveLength(1);
+    const groupCols = (db.executeSync('PRAGMA table_info(group_messages)').rows ?? []).map(
+      row => row.name,
+    );
+    expect(groupCols).toEqual(expect.arrayContaining(['reply_to_author_pubky']));
   });
 
   it('creates v8 group tables, wipes them on clearAccountData, and isolates accounts', async () => {
@@ -605,7 +633,7 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
     setDbForTests(db);
     await runMigrations(db);
 
-    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(12);
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(13);
     for (const name of [
       'group_channels',
       'group_members',
@@ -668,6 +696,7 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
       receivedAt: null,
       deliveryState: 'sent',
       replyToEventId: null,
+      replyToAuthorPubky: null,
       targetEventId: null,
       targetAuthorPubky: null,
       editedAt: null,
@@ -685,6 +714,7 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
       receivedAt: null,
       deliveryState: 'sent',
       replyToEventId: null,
+      replyToAuthorPubky: null,
       targetEventId: null,
       targetAuthorPubky: null,
       editedAt: null,
@@ -756,7 +786,7 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
 
     await runMigrations(db);
 
-    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(12);
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(13);
     const row = db.executeSync('SELECT * FROM group_messages').rows?.[0];
     expect(row).toEqual(
       expect.objectContaining({
@@ -782,7 +812,7 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
     setDbForTests(db);
     await runMigrations(db);
 
-    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(12);
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(13);
     expect(
       db.executeSync("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'attachments'")
         .rows,
@@ -924,7 +954,7 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
     setDbForTests(db);
     await runMigrations(db);
 
-    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(12);
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(13);
     const paymentCols = (db.executeSync('PRAGMA table_info(payment_requests)').rows ?? []).map(
       col => col.name,
     );
@@ -1046,4 +1076,18 @@ function applyThroughV7(db: ReturnType<typeof openMemoryDb>): void {
     db.executeSync(statement);
   }
   db.executeSync('PRAGMA user_version = 7');
+}
+
+function applyThroughV12(db: ReturnType<typeof openMemoryDb>): void {
+  applyThroughV7(db);
+  for (const statement of [
+    ...SCHEMA_V8_STATEMENTS,
+    ...SCHEMA_V9_STATEMENTS,
+    ...SCHEMA_V10_STATEMENTS,
+    ...SCHEMA_V11_STATEMENTS,
+    ...SCHEMA_V12_STATEMENTS,
+  ]) {
+    db.executeSync(statement);
+  }
+  db.executeSync('PRAGMA user_version = 12');
 }

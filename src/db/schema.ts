@@ -1,4 +1,25 @@
 /**
+ * Schema v13 — retire research-era DM/channel tables; keep the live
+ * Encrypted-Link retry queue (`delivery_queue`). Add author scoping on
+ * group-message replies (`reply_to_author_pubky`).
+ *
+ * Dropped (no remaining product callers after M6 UI repoint):
+ *   threads, messages, channels, channel_members, cursor_state
+ *
+ * Kept:
+ *   delivery_queue — LinkService / group fan-out retry (M1 nonce-safe path)
+ *   mesh_peers     — MeshService still compiles (quarantined, flag off)
+ */
+export const SCHEMA_V13_STATEMENTS: readonly string[] = [
+  `DROP TABLE IF EXISTS threads`,
+  `DROP TABLE IF EXISTS messages`,
+  `DROP TABLE IF EXISTS channels`,
+  `DROP TABLE IF EXISTS channel_members`,
+  `DROP TABLE IF EXISTS cursor_state`,
+  `ALTER TABLE group_messages ADD COLUMN reply_to_author_pubky TEXT`,
+];
+
+/**
  * Schema v12 — payment outbound send-intent + tip validation columns.
  *
  * `payment_requests.pending_event_id` points at the outbound PAM still in

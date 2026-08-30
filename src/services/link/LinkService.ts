@@ -56,16 +56,17 @@ import { shouldDropOversizedKnownInbound } from './inboundEnvelope';
  * ciphertext — this file persists them and passes them back, and never
  * parses them.
  *
- * ## Wiring-step call sites (do NOT hook these from MessageRouter)
+ * ## Product wiring (v1)
  *
  * - `LinkService.enable()` — present `authorizationUrl` on the messaging-
  *   enable surface (QR / open Ring). `AwaitingRingAuthScreen` is the app-
  *   identity grant, not this `/pub/paykit/:rw` flow.
- * - App startup / `AppState` `'active'` (App.tsx or RootNavigator):
+ * - App startup / `AppState` `'active'` (App.tsx):
  *     `await LinkService.recoverPendingSends();`
  *     `await LinkService.drainRetries();`
- * - Foreground interval: `startLinkRetryDrain()` (30s, matches MessageRouter).
- * - Inbox sync already calls `drainRetries` at the end of `syncInbox`.
+ *     `await LinkService.syncInbox();`
+ * - Foreground interval: `startLinkRetryDrain()` (30s).
+ * - ThreadScreen / ChatsScreen send and render through this service.
  */
 
 /** Discriminator for this transport's items in the shared `delivery_queue`. */

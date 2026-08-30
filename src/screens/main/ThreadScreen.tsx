@@ -12,16 +12,14 @@ import {
   ActivityIndicator,
   Alert,
 } from 'react-native';
-import { useNavigation } from '@react-navigation/native';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
-import type { RootStackParamList, Message } from '../../types';
+import type { RootStackParamList } from '../../types';
 import { CHAT_ATTACHMENT_KIND, type AttachmentRecord } from '../../types/attachment';
 import type { LinkMessage } from '../../types/link';
 import { buildDmConversationId } from '../../types/link';
-import { useMessageStore } from '../../stores/messageStore';
 import { useAuthStore } from '../../stores/authStore';
 import { StorageService } from '../../services/StorageService';
-import { MessageRouter } from '../../services/MessageRouter';
 import { LinkService } from '../../services/link/LinkService';
 import { AttachmentBubble } from '../../components/AttachmentBubble';
 import { ComposerAttachButton } from '../../components/ComposerAttachButton';
@@ -35,7 +33,6 @@ import type { TipEndpointRecord } from '../../types/payment';
 type Props = NativeStackScreenProps<RootStackParamList, 'Thread'>;
 
 type ThreadItem =
-  | { id: string; sentAt: number; kind: 'legacy'; message: Message }
   | { id: string; sentAt: number; kind: 'link'; message: LinkMessage }
   | {
       id: string;
@@ -47,10 +44,9 @@ type ThreadItem =
   | { id: string; sentAt: number; kind: 'payment'; record: PaymentRequestRecord };
 
 export default function ThreadScreen({ route }: Props) {
-  const { threadId, participantPubky } = route.params;
+  const { participantPubky } = route.params;
   const nav = useNavigation();
   const localPubky = useAuthStore(s => s.pubky);
-  const storeMessages = useMessageStore(s => s.messages[threadId] ?? []);
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -75,19 +71,25 @@ export default function ThreadScreen({ route }: Props) {
     setAttachments(atts);
     setPayments(pays);
     setTipEndpoints(tips);
+    setLoading(false);
+    const latest = msgs.reduce((max, m) => Math.max(max, m.sentAt), 0);
+    await LinkService.markRead(conversationId, latest > 0 ? latest : Date.now());
   }, [conversationId, localPubky, participantPubky]);
 
-  useEffect(() => {
-    StorageService.getMessagesForThread(threadId, 50).then(msgs => {
-      msgs.forEach(m => useMessageStore.getState().addMessage(threadId, m));
-      setLoading(false);
-      StorageService.markThreadRead(threadId);
-    });
-  }, [threadId]);
-
-  useEffect(() => {
-    void reloadEncrypted();
-  }, [reloadEncrypted]);
+  useFocusEffect(
+    useCallback(() => {
+      void (async () => {
+        if (LinkService.hasSession()) {
+          try {
+            await LinkService.syncInbox();
+          } catch {
+            // Inbox drain is best-effort on focus; local history still renders.
+          }
+        }
+        await reloadEncrypted();
+      })();
+    }, [reloadEncrypted]),
+  );
 
   useEffect(() => {
     if (!localPubky) return;
@@ -102,11 +104,17 @@ export default function ThreadScreen({ route }: Props) {
     setDraft('');
     setSending(true);
     try {
-      await MessageRouter.sendDM(participantPubky, text, threadId);
+      await LinkService.sendDm(participantPubky, text);
+      await reloadEncrypted();
+    } catch (err) {
+      Alert.alert(
+        'Send failed',
+        err instanceof Error ? err.message : 'Could not send this message over Encrypted Links.',
+      );
     } finally {
       setSending(false);
     }
-  }, [draft, sending, participantPubky, threadId]);
+  }, [draft, sending, participantPubky, reloadEncrypted]);
 
   return (
     <ThreadScreenContent
@@ -115,7 +123,6 @@ export default function ThreadScreen({ route }: Props) {
       draft={draft}
       sending={sending}
       loading={loading}
-      storeMessages={storeMessages}
       linkMessages={linkMessages}
       attachments={attachments}
       payments={payments}
@@ -164,7 +171,6 @@ export function ThreadScreenContent({
   draft,
   sending,
   loading,
-  storeMessages,
   linkMessages,
   attachments,
   payments,
@@ -185,7 +191,6 @@ export function ThreadScreenContent({
   draft: string;
   sending: boolean;
   loading: boolean;
-  storeMessages: Message[];
   linkMessages: LinkMessage[];
   attachments: AttachmentRecord[];
   payments: PaymentRequestRecord[];
@@ -203,8 +208,8 @@ export function ThreadScreenContent({
 }) {
   const flatListRef = useRef<FlatList<ThreadItem>>(null);
   const items = useMemo(
-    () => mergeThreadItems(storeMessages, linkMessages, attachments, payments),
-    [storeMessages, linkMessages, attachments, payments],
+    () => mergeThreadItems(linkMessages, attachments, payments),
+    [linkMessages, attachments, payments],
   );
 
   useEffect(() => {
@@ -243,31 +248,15 @@ export function ThreadScreenContent({
           </View>
         );
       }
-      if (item.kind === 'link') {
-        const isMine = item.message.senderPubky === localPubky;
-        return (
-          <View style={[styles.bubble, isMine ? styles.mine : styles.theirs]}>
-            <Text style={[styles.bubbleText, isMine ? styles.mineText : styles.theirsText]}>
-              {item.message.body}
-            </Text>
-            <View style={styles.meta}>
-              <Text style={styles.time}>{formatTime(item.message.sentAt)}</Text>
-              {isMine ? <Text style={styles.status}>{item.message.deliveryState}</Text> : null}
-            </View>
-          </View>
-        );
-      }
       const isMine = item.message.senderPubky === localPubky;
       return (
         <View style={[styles.bubble, isMine ? styles.mine : styles.theirs]}>
           <Text style={[styles.bubbleText, isMine ? styles.mineText : styles.theirsText]}>
-            {item.message.content}
+            {item.message.body}
           </Text>
           <View style={styles.meta}>
-            <Text style={styles.time}>{formatTime(item.message.createdAt)}</Text>
-            {isMine ? (
-              <Text style={styles.status}>{statusIcon(item.message.deliveryStatus)}</Text>
-            ) : null}
+            <Text style={styles.time}>{formatTime(item.message.sentAt)}</Text>
+            {isMine ? <Text style={styles.status}>{item.message.deliveryState}</Text> : null}
           </View>
         </View>
       );
@@ -353,7 +342,6 @@ export function ThreadScreenContent({
 }
 
 function mergeThreadItems(
-  legacy: Message[],
   linkMessages: LinkMessage[],
   attachments: AttachmentRecord[],
   payments: PaymentRequestRecord[],
@@ -362,9 +350,6 @@ function mergeThreadItems(
   const attachmentByEvent = new Map(attachments.map(a => [a.eventId, a]));
   const seenAttachment = new Set<string>();
 
-  for (const message of legacy) {
-    items.push({ id: `legacy:${message.id}`, sentAt: message.createdAt, kind: 'legacy', message });
-  }
   for (const record of payments) {
     items.push({
       id: `pay:${record.peerPubky}:${record.paymentRequestId}`,
@@ -413,23 +398,6 @@ function mergeThreadItems(
 function formatTime(ms: number): string {
   const d = new Date(ms);
   return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-}
-
-function statusIcon(status: Message['deliveryStatus']): string {
-  switch (status) {
-    case 'pending':
-      return '○';
-    case 'sent_mesh':
-      return '✓';
-    case 'sent_pubky':
-      return '✓';
-    case 'delivered':
-      return '✓✓';
-    case 'failed':
-      return '✗';
-    default:
-      return '';
-  }
 }
 
 const styles = StyleSheet.create({

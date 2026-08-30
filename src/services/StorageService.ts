@@ -1,19 +1,14 @@
 import { getDb } from '../db';
 import type {
-  Message,
-  MessageId,
-  Thread,
-  Channel,
-  ChannelMember,
   Contact,
   DeliveryQueueItem,
-  DeliveryStatus,
   MessageRequest,
   MessageRequestStatus,
   PubkyKey,
 } from '../types';
 import type { SqlExecutor } from '../db/sql';
 import type {
+  LinkConversationSummary,
   LinkDeliveryState,
   LinkMessage,
   LinkMessageDirection,
@@ -48,8 +43,10 @@ import type {
   PaymentStatus,
   TipEndpointRecord,
 } from '../types/payment';
+import { isPaykitPaymentKind } from '../types/payment';
 import { KeyStore } from './KeyStore';
 import { cachePathsForAttachment, deleteCacheFiles } from './attachments/fileIo';
+import { OWNER_BACKUP_VERSION, type OwnerBackupSnapshot } from './backup/snapshot';
 
 /**
  * StorageService — the single point of access for all SQLite persistence.
@@ -123,7 +120,7 @@ export const StorageService = {
    * Owner-scoped read. The WoT gate and every account-facing caller MUST pass
    * a non-empty `ownerPubky` — the empty-owner fallback was removed in v6.
    * Omitting owner is a legacy unscoped lookup that only returns a row when
-   * exactly one contact exists for that pubky (MessageRouter-era callers).
+   * exactly one contact exists for that pubky.
    */
   async getContact(pubky: PubkyKey, ownerPubky?: PubkyKey): Promise<Contact | null> {
     const db = await getDb();
@@ -343,238 +340,6 @@ export const StorageService = {
     ]);
   },
 
-  // ── Threads ───────────────────────────────────────────────────────────────
-
-  async upsertThread(thread: Thread): Promise<void> {
-    const db = await getDb();
-    db.executeSync(
-      `INSERT INTO threads
-        (id, participant_pubky, last_message, last_message_at,
-         unread_count, noise_context_id, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT(id) DO UPDATE SET
-         last_message      = excluded.last_message,
-         last_message_at   = excluded.last_message_at,
-         unread_count      = excluded.unread_count,
-         updated_at        = excluded.updated_at`,
-      [
-        thread.id,
-        thread.participantPubky,
-        thread.lastMessage ?? null,
-        thread.lastMessageAt ?? null,
-        thread.unreadCount,
-        thread.sb2ContextId ?? null,
-        now(),
-        now(),
-      ],
-    );
-  },
-
-  async setThreadContextId(threadId: string, contextIdHex: string): Promise<void> {
-    const db = await getDb();
-    db.executeSync('UPDATE threads SET noise_context_id = ?, updated_at = ? WHERE id = ?', [
-      contextIdHex,
-      now(),
-      threadId,
-    ]);
-  },
-
-  async getThread(threadId: string): Promise<Thread | null> {
-    const db = await getDb();
-    const result = db.executeSync('SELECT * FROM threads WHERE id = ?', [threadId]);
-    const row = result.rows?.[0];
-    if (!row) return null;
-    return rowToThread(row);
-  },
-
-  async getThreadForParticipant(participantPubky: PubkyKey): Promise<Thread | null> {
-    const db = await getDb();
-    const result = db.executeSync('SELECT * FROM threads WHERE participant_pubky = ? LIMIT 1', [
-      participantPubky,
-    ]);
-    const row = result.rows?.[0];
-    if (!row) return null;
-    return rowToThread(row);
-  },
-
-  async getAllThreads(): Promise<Thread[]> {
-    const db = await getDb();
-    const result = db.executeSync('SELECT * FROM threads ORDER BY last_message_at DESC');
-    return (result.rows ?? []).map(rowToThread);
-  },
-
-  async markThreadRead(threadId: string): Promise<void> {
-    const db = await getDb();
-    db.executeSync('UPDATE threads SET unread_count = 0, updated_at = ? WHERE id = ?', [
-      now(),
-      threadId,
-    ]);
-  },
-
-  async markChannelRead(channelId: string): Promise<void> {
-    const db = await getDb();
-    db.executeSync('UPDATE channels SET unread_count = 0, updated_at = ? WHERE id = ?', [
-      now(),
-      channelId,
-    ]);
-  },
-
-  async incrementThreadUnread(threadId: string): Promise<void> {
-    const db = await getDb();
-    db.executeSync(
-      'UPDATE threads SET unread_count = unread_count + 1, updated_at = ? WHERE id = ?',
-      [now(), threadId],
-    );
-  },
-
-  // ── Channels ──────────────────────────────────────────────────────────────
-
-  async upsertChannel(channel: Channel): Promise<void> {
-    const db = await getDb();
-    db.executeSync(
-      `INSERT INTO channels
-        (id, name, channel_key_base64, member_count, last_message,
-         last_message_at, unread_count, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT(id) DO UPDATE SET
-         name               = excluded.name,
-         channel_key_base64 = excluded.channel_key_base64,
-         member_count       = excluded.member_count,
-         last_message       = excluded.last_message,
-         last_message_at    = excluded.last_message_at,
-         unread_count       = excluded.unread_count,
-         updated_at         = excluded.updated_at`,
-      [
-        channel.id,
-        channel.name,
-        channel.channelInboxPkHex ?? null,
-        channel.memberCount,
-        channel.lastMessage ?? null,
-        channel.lastMessageAt ?? null,
-        channel.unreadCount,
-        now(),
-        now(),
-      ],
-    );
-  },
-
-  async getAllChannels(): Promise<Channel[]> {
-    const db = await getDb();
-    const result = db.executeSync('SELECT * FROM channels ORDER BY last_message_at DESC');
-    return (result.rows ?? []).map(rowToChannel);
-  },
-
-  async getChannel(channelId: string): Promise<Channel | null> {
-    const db = await getDb();
-    const result = db.executeSync('SELECT * FROM channels WHERE id = ?', [channelId]);
-    const row = result.rows?.[0];
-    if (!row) return null;
-    return rowToChannel(row);
-  },
-
-  async getChannelMembers(channelId: string): Promise<ChannelMember[]> {
-    const db = await getDb();
-    const result = db.executeSync(
-      'SELECT * FROM channel_members WHERE channel_id = ? ORDER BY joined_at ASC',
-      [channelId],
-    );
-    return (result.rows ?? []).map(rowToChannelMember);
-  },
-
-  async upsertChannelMember(member: ChannelMember): Promise<void> {
-    const db = await getDb();
-    db.executeSync(
-      `INSERT INTO channel_members (channel_id, pubky, display_name, joined_at)
-       VALUES (?, ?, ?, ?)
-       ON CONFLICT(channel_id, pubky) DO UPDATE SET
-         display_name = excluded.display_name`,
-      [member.channelId, member.pubky, member.displayName ?? null, member.joinedAt],
-    );
-  },
-
-  // ── Messages ──────────────────────────────────────────────────────────────
-
-  async saveMessage(message: Message): Promise<void> {
-    const db = await getDb();
-    const dedupHash = message.id; // id is already SHA-256 of content
-    db.executeSync(
-      `INSERT OR IGNORE INTO messages
-        (id, thread_id, channel_id, sender_pubky, recipient_pubky,
-         content, created_at, delivery_status, delivery_path, dedup_hash, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        message.id,
-        message.threadId,
-        message.channelId ?? null,
-        message.senderPubky,
-        message.recipientPubky ?? null,
-        message.content,
-        message.createdAt,
-        message.deliveryStatus,
-        message.deliveryPath ?? null,
-        dedupHash,
-        now(),
-      ],
-    );
-  },
-
-  async getMessagesForThread(threadId: string, limit = 50, beforeMs?: number): Promise<Message[]> {
-    const db = await getDb();
-    const result = beforeMs
-      ? db.executeSync(
-          'SELECT * FROM messages WHERE thread_id = ? AND created_at < ? ORDER BY created_at DESC LIMIT ?',
-          [threadId, beforeMs, limit],
-        )
-      : db.executeSync(
-          'SELECT * FROM messages WHERE thread_id = ? ORDER BY created_at DESC LIMIT ?',
-          [threadId, limit],
-        );
-    return (result.rows ?? []).map(rowToMessage).reverse();
-  },
-
-  async getMessagesForChannel(
-    channelId: string,
-    limit = 50,
-    beforeMs?: number,
-  ): Promise<Message[]> {
-    const db = await getDb();
-    const result = beforeMs
-      ? db.executeSync(
-          'SELECT * FROM messages WHERE channel_id = ? AND created_at < ? ORDER BY created_at DESC LIMIT ?',
-          [channelId, beforeMs, limit],
-        )
-      : db.executeSync(
-          'SELECT * FROM messages WHERE channel_id = ? ORDER BY created_at DESC LIMIT ?',
-          [channelId, limit],
-        );
-    return (result.rows ?? []).map(rowToMessage).reverse();
-  },
-
-  async markDelivered(messageId: MessageId, path: string): Promise<void> {
-    const db = await getDb();
-    db.executeSync(
-      "UPDATE messages SET delivery_status = 'delivered', delivery_path = ?, updated_at = ? WHERE id = ?",
-      [path, now(), messageId],
-    );
-  },
-
-  async updateDeliveryStatus(messageId: MessageId, status: DeliveryStatus): Promise<void> {
-    const db = await getDb();
-    db.executeSync('UPDATE messages SET delivery_status = ?, updated_at = ? WHERE id = ?', [
-      status,
-      now(),
-      messageId,
-    ]);
-  },
-
-  async isDuplicate(dedupHash: string): Promise<boolean> {
-    const db = await getDb();
-    const result = db.executeSync('SELECT 1 FROM messages WHERE dedup_hash = ? LIMIT 1', [
-      dedupHash,
-    ]);
-    return (result.rows?.length ?? 0) > 0;
-  },
-
   // ── Delivery Queue ────────────────────────────────────────────────────────
 
   async enqueue(item: DeliveryQueueItem): Promise<void> {
@@ -626,45 +391,6 @@ export const StorageService = {
   async removeFromQueue(id: string): Promise<void> {
     const db = await getDb();
     db.executeSync('DELETE FROM delivery_queue WHERE id = ?', [id]);
-  },
-
-  // ── Cursor State ──────────────────────────────────────────────────────────
-
-  async getCursor(
-    senderPubky: PubkyKey,
-    scopeKey: string,
-    scopeType: 'dm' | 'channel',
-  ): Promise<number> {
-    const db = await getDb();
-    const result = db.executeSync(
-      'SELECT last_cursor_ms FROM cursor_state WHERE sender_pubky = ? AND scope_key = ? AND scope_type = ?',
-      [senderPubky, scopeKey, scopeType],
-    );
-    return (result.rows?.[0]?.last_cursor_ms as number) ?? 0;
-  },
-
-  async advanceCursor(
-    senderPubky: PubkyKey,
-    scopeKey: string,
-    scopeType: 'dm' | 'channel',
-    cursorMs: number,
-  ): Promise<void> {
-    const db = await getDb();
-    db.executeSync(
-      `INSERT INTO cursor_state (id, sender_pubky, scope_key, scope_type, last_cursor_ms, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?)
-       ON CONFLICT(sender_pubky, scope_key, scope_type) DO UPDATE SET
-         last_cursor_ms = MAX(last_cursor_ms, excluded.last_cursor_ms),
-         updated_at     = excluded.updated_at`,
-      [
-        `${senderPubky}:${scopeKey}:${scopeType}`,
-        senderPubky,
-        scopeKey,
-        scopeType,
-        cursorMs,
-        now(),
-      ],
-    );
   },
 
   // ── Link receivers (Paykit Encrypted Links) ───────────────────────────────
@@ -940,6 +666,57 @@ export const StorageService = {
     return (result.rows ?? []).map(rowToLinkMessage).reverse();
   },
 
+  /**
+   * Inbox rows: one per `dm:{peer}` conversation that already has a
+   * persisted link message. Pending message requests stay on the Requests
+   * screen and are excluded here.
+   */
+  async listLinkConversations(ownerPubky: PubkyKey): Promise<LinkConversationSummary[]> {
+    const db = await getDb();
+    const result = db.executeSync(
+      `SELECT m.conversation_id, m.peer_pubky, m.body, m.kind, m.sent_at,
+              COALESCE(c.last_read_at, 0) AS last_read_at,
+              (
+                SELECT COUNT(*) FROM link_messages u
+                 WHERE u.owner_pubky = m.owner_pubky
+                   AND u.conversation_id = m.conversation_id
+                   AND u.direction = 'received'
+                   AND u.sent_at > COALESCE(c.last_read_at, 0)
+              ) AS unread_count
+         FROM link_messages m
+         LEFT JOIN link_read_cursors c
+           ON c.owner_pubky = m.owner_pubky AND c.conversation_id = m.conversation_id
+        WHERE m.owner_pubky = ?
+          AND m.rowid = (
+            SELECT m2.rowid FROM link_messages m2
+             WHERE m2.owner_pubky = m.owner_pubky
+               AND m2.conversation_id = m.conversation_id
+             ORDER BY m2.sent_at DESC, m2.event_id DESC
+             LIMIT 1
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM message_requests r
+             WHERE r.owner_pubky = m.owner_pubky
+               AND r.peer_pubky = m.peer_pubky
+               AND r.status = 'pending'
+          )
+        ORDER BY m.sent_at DESC`,
+      [ownerPubky],
+    );
+    return (result.rows ?? []).map(row => {
+      const kind = String(row.kind);
+      const body = String(row.body);
+      return {
+        conversationId: String(row.conversation_id),
+        participantPubky: String(row.peer_pubky),
+        lastMessage: conversationPreview(kind, body),
+        lastMessageAt: Number(row.sent_at),
+        lastKind: kind,
+        unreadCount: Number(row.unread_count ?? 0),
+      };
+    });
+  },
+
   async updateLinkMessageDeliveryState(
     ownerPubky: PubkyKey,
     senderPubky: PubkyKey,
@@ -1026,6 +803,143 @@ export const StorageService = {
          updated_at   = excluded.updated_at`,
       [ownerPubky, conversationId, lastReadAt, now()],
     );
+  },
+
+  /**
+   * Owner-scoped backup collection. Never includes device-bound secrets
+   * (link snapshots, receiver aliases, attachment keys/plaintext).
+   */
+  async collectOwnerBackup(ownerPubky: PubkyKey): Promise<OwnerBackupSnapshot> {
+    const db = await getDb();
+    const contacts = await StorageService.getAllContacts(ownerPubky);
+    const messageRequests = await StorageService.listMessageRequests(ownerPubky);
+    const linkMessages = (
+      db.executeSync(`SELECT * FROM link_messages WHERE owner_pubky = ? ORDER BY sent_at ASC`, [
+        ownerPubky,
+      ]).rows ?? []
+    ).map(rowToLinkMessage);
+    const readCursors = (
+      db.executeSync(
+        `SELECT conversation_id, last_read_at FROM link_read_cursors WHERE owner_pubky = ?`,
+        [ownerPubky],
+      ).rows ?? []
+    ).map(row => ({
+      conversationId: String(row.conversation_id),
+      lastReadAt: Number(row.last_read_at),
+    }));
+    const groupChannels = await StorageService.listGroupChannels(ownerPubky);
+    const groupMembers = (
+      db.executeSync(`SELECT * FROM group_members WHERE owner_pubky = ?`, [ownerPubky]).rows ?? []
+    ).map(rowToGroupMember);
+    const groupMessages = (
+      db.executeSync(`SELECT * FROM group_messages WHERE owner_pubky = ? ORDER BY sent_at ASC`, [
+        ownerPubky,
+      ]).rows ?? []
+    ).map(rowToGroupMessage);
+    const paymentRequests = (
+      db.executeSync(`SELECT * FROM payment_requests WHERE owner_pubky = ?`, [ownerPubky]).rows ??
+      []
+    ).map(rowToPaymentRequest);
+    const tipEndpoints = (
+      db.executeSync(`SELECT * FROM tip_endpoints WHERE owner_pubky = ?`, [ownerPubky]).rows ?? []
+    ).map(rowToTipEndpoint);
+    const attachments = (
+      db.executeSync(`SELECT * FROM attachments WHERE owner_pubky = ?`, [ownerPubky]).rows ?? []
+    )
+      .map(rowToAttachment)
+      .map(record => ({
+        ...record,
+        keyRef: '',
+        localCachePath: null,
+        resolveState: 'unavailable-from-backup' as const,
+      }));
+    return {
+      version: OWNER_BACKUP_VERSION,
+      ownerPubky,
+      exportedAt: now(),
+      contacts,
+      messageRequests,
+      linkMessages,
+      readCursors,
+      groupChannels,
+      groupMembers,
+      groupMessages,
+      paymentRequests,
+      tipEndpoints,
+      attachments,
+    };
+  },
+
+  /**
+   * Dedup-safe restore of an owner-scoped snapshot. Rows whose owner does
+   * not match `ownerPubky` are skipped. Existing primary keys are left
+   * untouched (`INSERT OR IGNORE` / contact upsert merge).
+   */
+  async importOwnerBackup(ownerPubky: PubkyKey, snapshot: OwnerBackupSnapshot): Promise<void> {
+    if (snapshot.ownerPubky !== ownerPubky) {
+      throw new Error('Backup belongs to a different account');
+    }
+    const db = await getDb();
+    for (const contact of snapshot.contacts) {
+      if (contact.ownerPubky !== ownerPubky) continue;
+      await StorageService.upsertContact(contact);
+    }
+    for (const request of snapshot.messageRequests) {
+      if (request.ownerPubky !== ownerPubky) continue;
+      await StorageService.upsertMessageRequest(request);
+    }
+    for (const message of snapshot.linkMessages) {
+      if (message.ownerPubky !== ownerPubky) continue;
+      await StorageService.saveLinkMessage(message);
+    }
+    for (const cursor of snapshot.readCursors) {
+      await StorageService.setLinkReadCursor(ownerPubky, cursor.conversationId, cursor.lastReadAt);
+    }
+    for (const channel of snapshot.groupChannels) {
+      if (channel.ownerPubky !== ownerPubky) continue;
+      await StorageService.upsertGroupChannel(channel);
+    }
+    for (const member of snapshot.groupMembers) {
+      if (member.ownerPubky !== ownerPubky) continue;
+      await StorageService.upsertGroupMember(member);
+    }
+    for (const message of snapshot.groupMessages) {
+      if (message.ownerPubky !== ownerPubky) continue;
+      await StorageService.saveGroupMessage(message);
+    }
+    for (const payment of snapshot.paymentRequests) {
+      if (payment.ownerPubky !== ownerPubky) continue;
+      await StorageService.savePaymentRequest(payment);
+    }
+    for (const tip of snapshot.tipEndpoints) {
+      if (tip.ownerPubky !== ownerPubky) continue;
+      db.executeSync(
+        `INSERT OR REPLACE INTO tip_endpoints
+          (owner_pubky, peer_pubky, identifier, payload, updated_at,
+           validation_status, invoice_amount, invoice_expires_at, payment_hash)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          ownerPubky,
+          tip.peerPubky,
+          tip.identifier,
+          tip.payload,
+          tip.updatedAt,
+          tip.validationStatus,
+          tip.invoiceAmount,
+          tip.invoiceExpiresAt,
+          tip.paymentHash,
+        ],
+      );
+    }
+    for (const attachment of snapshot.attachments) {
+      if (attachment.ownerPubky !== ownerPubky) continue;
+      await StorageService.saveAttachment({
+        ...attachment,
+        keyRef: '',
+        localCachePath: null,
+        resolveState: 'unavailable-from-backup',
+      });
+    }
   },
 
   /**
@@ -2175,56 +2089,6 @@ function rowToMessageRequest(row: any): MessageRequest {
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function rowToThread(row: any): Thread {
-  return {
-    id: row.id,
-    participantPubky: row.participant_pubky,
-    lastMessage: row.last_message ?? undefined,
-    lastMessageAt: row.last_message_at ?? undefined,
-    unreadCount: row.unread_count,
-    sb2ContextId: row.noise_context_id ?? undefined,
-  };
-}
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function rowToChannel(row: any): Channel {
-  return {
-    id: row.id,
-    name: row.name,
-    memberCount: row.member_count,
-    lastMessage: row.last_message ?? undefined,
-    lastMessageAt: row.last_message_at ?? undefined,
-    unreadCount: row.unread_count,
-    channelInboxPkHex: row.channel_key_base64 ?? undefined,
-  };
-}
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function rowToChannelMember(row: any): ChannelMember {
-  return {
-    channelId: row.channel_id,
-    pubky: row.pubky,
-    joinedAt: row.joined_at,
-    displayName: row.display_name ?? undefined,
-  };
-}
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function rowToMessage(row: any): Message {
-  return {
-    id: row.id,
-    threadId: row.thread_id,
-    channelId: row.channel_id ?? undefined,
-    senderPubky: row.sender_pubky,
-    recipientPubky: row.recipient_pubky ?? undefined,
-    content: row.content,
-    createdAt: row.created_at,
-    deliveryStatus: row.delivery_status as DeliveryStatus,
-    deliveryPath: row.delivery_path ?? undefined,
-  };
-}
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function rowToQueueItem(row: any): DeliveryQueueItem {
   return {
     id: row.id,
@@ -2400,9 +2264,9 @@ function insertGroupMessage(db: SqlExecutor, message: GroupMessage): void {
   db.executeSync(
     `INSERT OR IGNORE INTO group_messages
       (owner_pubky, channel_id, sender_pubky, event_id, kind, body, raw_json,
-       sent_at, received_at, delivery_state, reply_to_event_id, target_event_id,
-       target_author_pubky, edited_at, deleted, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       sent_at, received_at, delivery_state, reply_to_event_id, reply_to_author_pubky,
+       target_event_id, target_author_pubky, edited_at, deleted, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       message.ownerPubky,
       message.channelId,
@@ -2415,6 +2279,7 @@ function insertGroupMessage(db: SqlExecutor, message: GroupMessage): void {
       message.receivedAt,
       message.deliveryState,
       message.replyToEventId,
+      message.replyToAuthorPubky,
       message.targetEventId,
       message.targetAuthorPubky,
       message.editedAt,
@@ -2439,6 +2304,7 @@ function rowToGroupMessage(row: any): GroupMessage {
     receivedAt: row.received_at ?? null,
     deliveryState: row.delivery_state,
     replyToEventId: row.reply_to_event_id ?? null,
+    replyToAuthorPubky: row.reply_to_author_pubky ?? null,
     targetEventId: row.target_event_id ?? null,
     targetAuthorPubky: row.target_author_pubky ?? null,
     editedAt: row.edited_at ?? null,
@@ -2461,6 +2327,12 @@ function rowToGroupDeferred(row: any): GroupDeferredEvent {
     targetEventId: row.target_event_id,
     targetAuthorPubky: row.target_author_pubky,
   };
+}
+
+function conversationPreview(kind: string, body: string): string {
+  if (kind === CHAT_ATTACHMENT_KIND) return 'Attachment';
+  if (isPaykitPaymentKind(kind)) return 'Payment';
+  return body;
 }
 
 function persistRawJson(kind: string | null | undefined, rawJson: string): string {

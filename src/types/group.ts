@@ -234,6 +234,8 @@ export interface GroupMessageEnvelope {
   sent_at: number;
   body: string;
   reply_to?: string;
+  /** Additive; older peers may omit. Targets `(channel, author, event_id)`. */
+  reply_to_author?: string;
 }
 
 export interface GroupReactionEnvelope {
@@ -304,6 +306,7 @@ export interface PublicChannelMessageDocument {
   body: string;
   author: PubkyKey;
   reply_to?: string;
+  reply_to_author?: string;
 }
 
 // ─── Local rows ─────────────────────────────────────────────────────────────
@@ -342,6 +345,7 @@ export interface GroupMessage {
   receivedAt: number | null;
   deliveryState: LinkDeliveryState;
   replyToEventId: string | null;
+  replyToAuthorPubky: PubkyKey | null;
   targetEventId: string | null;
   targetAuthorPubky: PubkyKey | null;
   editedAt: number | null;
@@ -450,6 +454,7 @@ export function buildGroupMessageEnvelope(input: {
   sentAt: number;
   body: string;
   replyTo?: string;
+  replyToAuthor?: string;
 }): { envelope: GroupMessageEnvelope; json: string; byteSize: number } {
   if (!UUID_PATTERN.test(input.eventId)) {
     throw new GroupServiceError('invalid-input', `${GROUP_MESSAGE_KIND} event_id must be a UUID`);
@@ -467,6 +472,12 @@ export function buildGroupMessageEnvelope(input: {
   if (input.replyTo !== undefined && !UUID_PATTERN.test(input.replyTo)) {
     throw new GroupServiceError('invalid-input', `${GROUP_MESSAGE_KIND} reply_to must be a UUID`);
   }
+  if (input.replyToAuthor !== undefined && input.replyToAuthor.length !== PUBKY_LENGTH) {
+    throw new GroupServiceError(
+      'invalid-input',
+      `${GROUP_MESSAGE_KIND} reply_to_author is invalid`,
+    );
+  }
   const envelope: GroupMessageEnvelope = {
     version: 1,
     kind: GROUP_MESSAGE_KIND,
@@ -477,6 +488,9 @@ export function buildGroupMessageEnvelope(input: {
   };
   if (input.replyTo !== undefined) {
     envelope.reply_to = input.replyTo;
+  }
+  if (input.replyToAuthor !== undefined) {
+    envelope.reply_to_author = input.replyToAuthor;
   }
   const json = JSON.stringify(envelope);
   const byteSize = assertSerializedSize(json, GROUP_MESSAGE_KIND);
@@ -693,6 +707,10 @@ export function decodeGroupEnvelope(rawJson: string): GroupEnvelope | null {
         if (!UUID_PATTERN.test(candidate.reply_to)) return null;
         envelope.reply_to = candidate.reply_to;
       }
+      if (typeof candidate.reply_to_author === 'string') {
+        if (candidate.reply_to_author.length !== PUBKY_LENGTH) return null;
+        envelope.reply_to_author = candidate.reply_to_author;
+      }
       return envelope;
     }
     case GROUP_REACTION_KIND: {
@@ -826,6 +844,10 @@ export function decodePublicChannelMessage(
     if (!UUID_PATTERN.test(candidate.reply_to)) return null;
     doc.reply_to = candidate.reply_to;
   }
+  if (typeof candidate.reply_to_author === 'string') {
+    if (candidate.reply_to_author.length !== PUBKY_LENGTH) return null;
+    doc.reply_to_author = candidate.reply_to_author;
+  }
   return doc;
 }
 
@@ -870,6 +892,12 @@ export function groupTargetAuthorPubky(envelope: GroupEnvelope): string | null {
 export function groupReplyToEventId(envelope: GroupEnvelope): string | null {
   return envelope.kind === GROUP_MESSAGE_KIND && envelope.reply_to !== undefined
     ? envelope.reply_to
+    : null;
+}
+
+export function groupReplyToAuthorPubky(envelope: GroupEnvelope): string | null {
+  return envelope.kind === GROUP_MESSAGE_KIND && envelope.reply_to_author !== undefined
+    ? envelope.reply_to_author
     : null;
 }
 

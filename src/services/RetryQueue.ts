@@ -7,7 +7,7 @@ import type { DeliveryQueueItem } from '../types';
  * deliveries.
  *
  * Items survive app restarts because they live in SQLite. The queue is
- * drained periodically by MessageRouter and on reconnect events.
+ * drained by LinkService.drainRetries (and after syncInbox).
  *
  * Backoff schedule (capped at 30 minutes):
  *   attempt 1 → 30 s

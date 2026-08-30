@@ -12,6 +12,7 @@ import {
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { Contact, RootStackParamList } from '../../types';
+import { threadRouteParams } from '../../types/link';
 import { useAuthStore } from '../../stores/authStore';
 import { useContactStore } from '../../stores/contactStore';
 import { StorageService } from '../../services/StorageService';
@@ -84,6 +85,7 @@ export default function ContactsScreen() {
       }}
       onAdd={() => nav.navigate('ContactSearch')}
       onRequests={() => nav.navigate('MessageRequests')}
+      onOpenChat={pubky => nav.navigate('Thread', threadRouteParams(pubky))}
     />
   );
 }
@@ -106,6 +108,7 @@ export function ContactsScreenContent({
   onRefresh,
   onAdd,
   onRequests,
+  onOpenChat,
 }: {
   contacts: Contact[];
   pendingCount: number;
@@ -115,10 +118,11 @@ export function ContactsScreenContent({
   onRefresh: () => void;
   onAdd: () => void;
   onRequests: () => void;
+  onOpenChat: (pubky: string) => void;
 }) {
   const renderContact = useCallback(
     ({ item }: { item: Contact }) => (
-      <View style={styles.row}>
+      <TouchableOpacity style={styles.row} onPress={() => onOpenChat(item.pubky)}>
         <View style={styles.avatar}>
           <Text style={styles.avatarLetter}>
             {(item.displayName ?? item.pubky).charAt(0).toUpperCase()}
@@ -139,9 +143,9 @@ export function ContactsScreenContent({
             ))}
           </View>
         </View>
-      </View>
+      </TouchableOpacity>
     ),
-    [],
+    [onOpenChat],
   );
 
   return (

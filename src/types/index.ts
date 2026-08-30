@@ -12,51 +12,7 @@ export interface UserProfile {
 
 // ─── Messaging Types ───────────────────────────────────────────────────────
 
-export type MessageId = string; // SHA-256 hex of (sender + recipient + content + timestamp)
-
-export type DeliveryStatus = 'pending' | 'sent_mesh' | 'sent_pubky' | 'delivered' | 'failed';
-
-export type DeliveryPath = 'mesh' | 'pubky' | 'queued';
-
-export interface Message {
-  id: MessageId;
-  threadId: string;
-  senderPubky: PubkyKey;
-  recipientPubky?: PubkyKey; // null for channel messages
-  channelId?: string;
-  content: string;
-  createdAt: number;
-  deliveryStatus: DeliveryStatus;
-  deliveryPath?: DeliveryPath;
-}
-
-// ─── Thread / Channel Types ────────────────────────────────────────────────
-
-export interface Thread {
-  id: string;
-  participantPubky: PubkyKey;
-  lastMessage?: string;
-  lastMessageAt?: number;
-  unreadCount: number;
-  sb2ContextId?: string; // SB2 thread context ID (hex, 32 bytes) — stored per thread
-}
-
-export interface Channel {
-  id: string;
-  name: string;
-  memberCount: number;
-  lastMessage?: string;
-  lastMessageAt?: number;
-  unreadCount: number;
-  channelInboxPkHex?: string; // X25519 inbox public key for SealedBlob channel encryption
-}
-
-export interface ChannelMember {
-  channelId: string;
-  pubky: PubkyKey;
-  joinedAt: number;
-  displayName?: string;
-}
+export type MessageId = string;
 
 // ─── Contact Types ─────────────────────────────────────────────────────────
 
@@ -103,7 +59,7 @@ export interface DeliveryQueueItem {
   id: string;
   messageId: MessageId;
   recipientPubky: PubkyKey;
-  payload: string; // JSON serialized OutboxEnvelope
+  payload: string; // JSON serialized link / group retry payload
   attempts: number;
   nextRetryAt: number;
   createdAt: number;

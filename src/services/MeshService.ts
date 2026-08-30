@@ -18,9 +18,17 @@ import {
 } from '../../modules/mesh-transport/src';
 import { KeyStore } from './KeyStore';
 import { StorageService } from './StorageService';
+import { FeatureFlags } from '../flags';
 import type { MeshPeer, PubkyKey } from '../types';
 
 /**
+ * MeshService — quarantined research-era BLE transport.
+ *
+ * v1 product DMs use Paykit Encrypted Links (`LinkService`). Mesh delivery
+ * is feature-flagged OFF by default (`mesh_transport`). This module is kept
+ * compiling so BLE can be re-integrated over the official stack later.
+ * Do not delete this file.
+ *
  * MeshService manages BLE peer sessions with end-to-end Noise Protocol encryption.
  *
  * Frame protocol (all payloads base64-encoded over BLE):
@@ -87,6 +95,9 @@ export const MeshService = {
    * pubky-ring handoff for Noise sessions (key separation per §4.7).
    */
   async start(localPubky: PubkyKey): Promise<void> {
+    if (!FeatureFlags.get('mesh_transport')) {
+      return;
+    }
     if (started) return;
     started = true;
 

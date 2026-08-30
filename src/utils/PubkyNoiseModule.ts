@@ -1,9 +1,11 @@
 /**
- * PubkyNoiseModule - React Native bridge to pubky-noise Rust library
+ * PubkyNoiseModule — TypeScript wrapper over the native pubky-noise FFI.
  *
- * This module provides TypeScript bindings for the native PubkyNoiseModule,
- * which bridges the pubky-noise Rust FFI for X25519 key derivation and
- * Noise Protocol session management.
+ * Product scope (v1): Ring-auth interop only. `PubkyRingAuthService` uses
+ * sealed-blob encrypt/decrypt for the Ring callback handoff. Do not use
+ * this module for DM/channel envelopes — those go through Paykit Encrypted
+ * Links (`PaykitLinkNative`). Mesh Noise sessions remain in `MeshService`
+ * (quarantined, flag off). Native ios/android sources are not modified here.
  */
 
 import { NativeModules } from 'react-native';

@@ -4,7 +4,6 @@ import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useAuthStore } from '../../stores/authStore';
 import { PubkyService } from '../../services/PubkyService';
-import { MessageRouter } from '../../services/MessageRouter';
 import type { RootStackParamList } from '../../types';
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
@@ -23,7 +22,6 @@ export default function ProfileScreen() {
           text: 'Disconnect',
           style: 'destructive',
           onPress: async () => {
-            await MessageRouter.stop();
             await PubkyService.signOut();
             clearSession();
           },

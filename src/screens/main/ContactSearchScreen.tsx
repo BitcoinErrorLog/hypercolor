@@ -13,7 +13,7 @@ import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../../types';
 import { ContactsService } from '../../services/ContactsService';
-import { SSESubscriptionManager } from '../../services/SSESubscriptionManager';
+import { threadRouteParams } from '../../types/link';
 import { useAuthStore } from '../../stores/authStore';
 import { useContactStore } from '../../stores/contactStore';
 import { isValidPubky, parsePubky } from '../../utils/pubkyId';
@@ -39,13 +39,17 @@ export default function ContactSearchScreen() {
         return;
       }
       upsertContact(result.contact);
-      await SSESubscriptionManager.subscribeToContact(localPubky, result.contact.pubky);
       Alert.alert(
         'Contact Added',
         result.contact.displayName
-          ? `${result.contact.displayName} added to contacts.`
-          : 'Contact added. They are now eligible for inbox probing.',
-        [{ text: 'OK', onPress: () => nav.goBack() }],
+          ? `${result.contact.displayName} added. Open the chat to send over Encrypted Links.`
+          : 'Contact added. Open the chat to send over Encrypted Links.',
+        [
+          {
+            text: 'Chat',
+            onPress: () => nav.replace('Thread', threadRouteParams(result.contact.pubky)),
+          },
+        ],
       );
     } catch (err) {
       Alert.alert('Error', (err as Error).message ?? 'Add failed.');

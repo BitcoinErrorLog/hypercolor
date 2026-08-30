@@ -31,7 +31,13 @@ const PUBKY_LENGTH = 52;
 const ATTACHMENTS_PATH_PREFIX = '/pub/hypercolor.app/v1/attachments/';
 const BASE64URL_UNPADDED = /^[A-Za-z0-9_-]+$/;
 
-export type AttachmentResolveState = 'pending' | 'uploading' | 'resolving' | 'ready' | 'failed';
+export type AttachmentResolveState =
+  | 'pending'
+  | 'uploading'
+  | 'resolving'
+  | 'ready'
+  | 'failed'
+  | 'unavailable-from-backup';
 
 export interface AttachmentThumbnailAccess {
   location: string;
