@@ -84,7 +84,7 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
 
     await runMigrations(db);
 
-    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(6);
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(7);
     expect(db.executeSync('SELECT * FROM link_receivers').rows).toEqual([]);
     expect(
       db.executeSync(
@@ -319,7 +319,7 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
     setDbForTests(db);
     await runMigrations(db);
 
-    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(6);
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(7);
     const cols = db.executeSync('PRAGMA table_info(contacts)').rows ?? [];
     const names = cols.map(row => row.name);
     expect(names).toEqual(
@@ -563,6 +563,104 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
       [PEER],
     );
     expect(db.executeSync('SELECT id FROM threads').rows?.[0]?.id).toBe('t1');
+  });
+
+  it('creates v7 group tables, wipes them on clearAccountData, and isolates accounts', async () => {
+    const db = openMemoryDb();
+    setDbForTests(db);
+    await runMigrations(db);
+
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(7);
+    for (const name of ['group_channels', 'group_members', 'group_messages']) {
+      expect(
+        db.executeSync("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", [name])
+          .rows,
+      ).toHaveLength(1);
+    }
+
+    const channelId = '00000000-0000-4000-8000-0000000000aa';
+    const eventId = '00000000-0000-4000-8000-0000000000bb';
+    await StorageService.upsertGroupChannel({
+      ownerPubky: OWNER,
+      channelId,
+      name: 'Crew',
+      createdAt: 1,
+      updatedAt: 1,
+      createdBy: OWNER,
+      isPublic: false,
+      lastMessageAt: 10,
+      membershipEpoch: 0,
+    });
+    await StorageService.upsertGroupChannel({
+      ownerPubky: OTHER,
+      channelId,
+      name: 'Other crew',
+      createdAt: 1,
+      updatedAt: 1,
+      createdBy: OTHER,
+      isPublic: false,
+      lastMessageAt: 11,
+      membershipEpoch: 2,
+    });
+    await StorageService.upsertGroupMember({
+      ownerPubky: OWNER,
+      channelId,
+      memberPubky: PEER,
+      role: 'member',
+      addedAt: 1,
+      removedAt: null,
+      status: 'active',
+    });
+    await StorageService.saveGroupMessage({
+      ownerPubky: OWNER,
+      channelId,
+      eventId,
+      senderPubky: OWNER,
+      kind: CHAT_MESSAGE_KIND,
+      body: 'hi',
+      rawJson: '{}',
+      sentAt: 10,
+      receivedAt: null,
+      deliveryState: 'sent',
+      replyToEventId: null,
+      targetEventId: null,
+      editedAt: null,
+      deleted: false,
+    });
+    await StorageService.saveGroupMessage({
+      ownerPubky: OTHER,
+      channelId,
+      eventId,
+      senderPubky: OTHER,
+      kind: CHAT_MESSAGE_KIND,
+      body: 'other',
+      rawJson: '{}',
+      sentAt: 11,
+      receivedAt: null,
+      deliveryState: 'sent',
+      replyToEventId: null,
+      targetEventId: null,
+      editedAt: null,
+      deleted: false,
+    });
+
+    expect(await StorageService.getGroupChannel(OWNER, channelId)).toEqual(
+      expect.objectContaining({ name: 'Crew', membershipEpoch: 0 }),
+    );
+    expect(await StorageService.getGroupChannel(OTHER, channelId)).toEqual(
+      expect.objectContaining({ name: 'Other crew', membershipEpoch: 2 }),
+    );
+
+    await StorageService.clearAccountData(OWNER);
+    expect(await StorageService.getGroupChannel(OWNER, channelId)).toBeNull();
+    expect(await StorageService.listGroupMembers(OWNER, channelId)).toEqual([]);
+    expect(await StorageService.getGroupMessage(OWNER, channelId, eventId)).toBeNull();
+    expect(await StorageService.getGroupChannel(OTHER, channelId)).toEqual(
+      expect.objectContaining({ name: 'Other crew' }),
+    );
+    expect(await StorageService.getGroupMessage(OTHER, channelId, eventId)).toEqual(
+      expect.objectContaining({ body: 'other' }),
+    );
   });
 });
 

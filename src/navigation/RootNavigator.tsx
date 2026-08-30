@@ -11,6 +11,8 @@ import ChannelScreen from '../screens/main/ChannelScreen';
 import { PubkyRingAuthService } from '../services/PubkyRingAuthService';
 import { PubkyService } from '../services/PubkyService';
 import { MessageRouter } from '../services/MessageRouter';
+import { GroupService, setPendingPublicJoin } from '../services/group/GroupService';
+import { parsePublicChannelRef } from '../types/group';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
@@ -52,6 +54,22 @@ export function RootNavigator() {
 
   const handleDeepLink = useCallback(
     async (url: string) => {
+      if (url.startsWith('hypercolor://join-public')) {
+        if (!parsePublicChannelRef(url)) return;
+        if (!isAuthenticated) {
+          setPendingPublicJoin(url);
+          return;
+        }
+        try {
+          await GroupService.joinPublicChannel(url);
+        } catch (err) {
+          Alert.alert(
+            'Join failed',
+            err instanceof Error ? err.message : 'Could not join that public channel.',
+          );
+        }
+        return;
+      }
       if (!url.startsWith('hypercolor://ring-callback')) return;
 
       try {
@@ -70,7 +88,7 @@ export function RootNavigator() {
         );
       }
     },
-    [setAuthenticated],
+    [isAuthenticated, setAuthenticated],
   );
 
   useEffect(() => {

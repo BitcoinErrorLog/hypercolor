@@ -19,6 +19,8 @@ import {
   type LinkRecord,
 } from '../../../types/link';
 import type { DeliveryQueueItem } from '../../../types';
+import { applyGroupInbound } from '../../group/applyGroupInbound';
+import { GROUP_MESSAGE_KIND } from '../../../types/group';
 
 jest.mock('../PaykitLinkNative', () => ({
   PaykitLinkNative: {
@@ -93,7 +95,15 @@ jest.mock('../../StorageService', () => ({
     deleteLinkMessagesForPeer: jest.fn(),
     countLinkMessagesForPeer: jest.fn(),
     setContactRelationshipFlags: jest.fn(),
+    hasGroupMessage: jest.fn(),
+    finalizeGroupFanoutSend: jest.fn(),
+    countDeliveryQueueForMessage: jest.fn(),
+    updateGroupMessageDeliveryState: jest.fn(),
   },
+}));
+
+jest.mock('../../group/applyGroupInbound', () => ({
+  applyGroupInbound: jest.fn().mockResolvedValue(undefined),
 }));
 
 jest.mock('../../KeyStore', () => ({
@@ -229,6 +239,10 @@ describe('LinkService', () => {
     mockedStorage.getAllContacts.mockResolvedValue([]);
     mockedStorage.getMessageRequest.mockResolvedValue(null);
     mockedStorage.countLinkMessagesForPeer.mockResolvedValue(0);
+    mockedStorage.hasGroupMessage.mockResolvedValue(true);
+    mockedStorage.finalizeGroupFanoutSend.mockResolvedValue(undefined);
+    mockedStorage.countDeliveryQueueForMessage.mockResolvedValue(0);
+    mockedStorage.updateGroupMessageDeliveryState.mockResolvedValue(undefined);
     mockedStorage.upsertMessageRequest.mockResolvedValue(undefined);
     mockedStorage.deleteLinkStreamItemsForPeer.mockResolvedValue(undefined);
     mockedStorage.deleteLinkMessagesForPeer.mockResolvedValue(undefined);
@@ -1002,6 +1016,46 @@ describe('LinkService', () => {
       expect(received.map(m => m.eventId).sort()).toEqual([EVT_DM, EVT_NEW].sort());
       expect(received.find(m => m.eventId === EVT_DM)?.kind).toBe(PUBKY_APP_DM_KIND);
       expect(mockedStorage.markLinkStreamItemProcessed).not.toHaveBeenCalledWith('s4');
+    });
+
+    it('routes group kinds into GroupService and leaves unknown kinds unprocessed', async () => {
+      givenEstablishedLink();
+      const groupJson = JSON.stringify({
+        version: 1,
+        kind: GROUP_MESSAGE_KIND,
+        channel_id: EVENT_ID,
+        event_id: EVENT_ID,
+        sent_at: NOW,
+        body: 'group hi',
+      });
+      mockedNative.receivePrivateMessages.mockResolvedValue({
+        messages: [{ rawJson: groupJson, kind: GROUP_MESSAGE_KIND, version: 1 }],
+        snapshot: 'est-2',
+      });
+      mockedStorage.getUnprocessedLinkStreamItems.mockResolvedValueOnce([]).mockResolvedValueOnce([
+        {
+          id: 'sg',
+          ownerPubky: OWNER,
+          peerPubky: PEER,
+          kind: GROUP_MESSAGE_KIND,
+          rawJson: groupJson,
+          receivedAt: NOW,
+          processed: false,
+        },
+      ]);
+
+      const received = await LinkService.syncInbox([PEER]);
+
+      expect(received).toEqual([]);
+      expect(applyGroupInbound).toHaveBeenCalledWith(
+        expect.objectContaining({
+          ownerPubky: OWNER,
+          senderPubky: PEER,
+          rawJson: groupJson,
+        }),
+      );
+      expect(mockedStorage.markLinkStreamItemProcessed).toHaveBeenCalledWith('sg');
+      expect(mockedStorage.saveLinkMessage).not.toHaveBeenCalled();
     });
 
     it('does not persist a snapshot when the drain returned nothing', async () => {

@@ -26,6 +26,7 @@ import type {
   LinkStreamItemInput,
   StoredLinkStatus,
 } from '../types/link';
+import type { GroupChannel, GroupMember, GroupMemberStatus, GroupMessage } from '../types/group';
 
 /**
  * StorageService — the single point of access for all SQLite persistence.
@@ -975,6 +976,9 @@ export const StorageService = {
   async clearAccountData(ownerPubky: PubkyKey): Promise<void> {
     const db = await getDb();
     transact(db, () => {
+      db.executeSync('DELETE FROM group_messages WHERE owner_pubky = ?', [ownerPubky]);
+      db.executeSync('DELETE FROM group_members WHERE owner_pubky = ?', [ownerPubky]);
+      db.executeSync('DELETE FROM group_channels WHERE owner_pubky = ?', [ownerPubky]);
       db.executeSync('DELETE FROM link_stream_items WHERE owner_pubky = ?', [ownerPubky]);
       db.executeSync('DELETE FROM link_messages WHERE owner_pubky = ?', [ownerPubky]);
       db.executeSync('DELETE FROM link_read_cursors WHERE owner_pubky = ?', [ownerPubky]);
@@ -983,6 +987,336 @@ export const StorageService = {
       db.executeSync('DELETE FROM message_requests WHERE owner_pubky = ?', [ownerPubky]);
       db.executeSync('DELETE FROM contacts WHERE owner_pubky = ?', [ownerPubky]);
     });
+  },
+
+  // ── Group channels (M3, owner-scoped) ─────────────────────────────────────
+
+  async upsertGroupChannel(channel: GroupChannel): Promise<void> {
+    const db = await getDb();
+    db.executeSync(
+      `INSERT INTO group_channels
+        (owner_pubky, channel_id, name, created_at, updated_at, created_by,
+         is_public, last_message_at, membership_epoch)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(owner_pubky, channel_id) DO UPDATE SET
+         name              = excluded.name,
+         updated_at        = excluded.updated_at,
+         created_by        = excluded.created_by,
+         is_public         = excluded.is_public,
+         last_message_at   = excluded.last_message_at,
+         membership_epoch  = excluded.membership_epoch`,
+      [
+        channel.ownerPubky,
+        channel.channelId,
+        channel.name,
+        channel.createdAt,
+        channel.updatedAt,
+        channel.createdBy,
+        channel.isPublic ? 1 : 0,
+        channel.lastMessageAt,
+        channel.membershipEpoch,
+      ],
+    );
+  },
+
+  async getGroupChannel(ownerPubky: PubkyKey, channelId: string): Promise<GroupChannel | null> {
+    const db = await getDb();
+    const result = db.executeSync(
+      'SELECT * FROM group_channels WHERE owner_pubky = ? AND channel_id = ?',
+      [ownerPubky, channelId],
+    );
+    const row = result.rows?.[0];
+    if (!row) return null;
+    return rowToGroupChannel(row);
+  },
+
+  async listGroupChannels(ownerPubky: PubkyKey): Promise<GroupChannel[]> {
+    const db = await getDb();
+    const result = db.executeSync(
+      `SELECT * FROM group_channels
+       WHERE owner_pubky = ?
+       ORDER BY last_message_at DESC, updated_at DESC`,
+      [ownerPubky],
+    );
+    return (result.rows ?? []).map(rowToGroupChannel);
+  },
+
+  async touchGroupChannel(
+    ownerPubky: PubkyKey,
+    channelId: string,
+    lastMessageAt: number,
+  ): Promise<void> {
+    const db = await getDb();
+    db.executeSync(
+      `UPDATE group_channels
+       SET last_message_at = ?, updated_at = ?
+       WHERE owner_pubky = ? AND channel_id = ?`,
+      [lastMessageAt, now(), ownerPubky, channelId],
+    );
+  },
+
+  async bumpGroupMembershipEpoch(ownerPubky: PubkyKey, channelId: string): Promise<number> {
+    const db = await getDb();
+    const ts = now();
+    db.executeSync(
+      `UPDATE group_channels
+       SET membership_epoch = membership_epoch + 1, updated_at = ?
+       WHERE owner_pubky = ? AND channel_id = ?`,
+      [ts, ownerPubky, channelId],
+    );
+    const result = db.executeSync(
+      'SELECT membership_epoch FROM group_channels WHERE owner_pubky = ? AND channel_id = ?',
+      [ownerPubky, channelId],
+    );
+    return (result.rows?.[0]?.membership_epoch as number) ?? 0;
+  },
+
+  async upsertGroupMember(member: GroupMember): Promise<void> {
+    const db = await getDb();
+    db.executeSync(
+      `INSERT INTO group_members
+        (owner_pubky, channel_id, member_pubky, role, added_at, removed_at, status)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(owner_pubky, channel_id, member_pubky) DO UPDATE SET
+         role        = excluded.role,
+         added_at    = excluded.added_at,
+         removed_at  = excluded.removed_at,
+         status      = excluded.status`,
+      [
+        member.ownerPubky,
+        member.channelId,
+        member.memberPubky,
+        member.role,
+        member.addedAt,
+        member.removedAt,
+        member.status,
+      ],
+    );
+  },
+
+  async getGroupMember(
+    ownerPubky: PubkyKey,
+    channelId: string,
+    memberPubky: PubkyKey,
+  ): Promise<GroupMember | null> {
+    const db = await getDb();
+    const result = db.executeSync(
+      `SELECT * FROM group_members
+       WHERE owner_pubky = ? AND channel_id = ? AND member_pubky = ?`,
+      [ownerPubky, channelId, memberPubky],
+    );
+    const row = result.rows?.[0];
+    if (!row) return null;
+    return rowToGroupMember(row);
+  },
+
+  async listGroupMembers(
+    ownerPubky: PubkyKey,
+    channelId: string,
+    status?: GroupMemberStatus,
+  ): Promise<GroupMember[]> {
+    const db = await getDb();
+    const result =
+      status !== undefined
+        ? db.executeSync(
+            `SELECT * FROM group_members
+             WHERE owner_pubky = ? AND channel_id = ? AND status = ?
+             ORDER BY added_at ASC`,
+            [ownerPubky, channelId, status],
+          )
+        : db.executeSync(
+            `SELECT * FROM group_members
+             WHERE owner_pubky = ? AND channel_id = ?
+             ORDER BY added_at ASC`,
+            [ownerPubky, channelId],
+          );
+    return (result.rows ?? []).map(rowToGroupMember);
+  },
+
+  async countActiveGroupMembers(ownerPubky: PubkyKey, channelId: string): Promise<number> {
+    const db = await getDb();
+    const result = db.executeSync(
+      `SELECT COUNT(*) AS n FROM group_members
+       WHERE owner_pubky = ? AND channel_id = ? AND status = 'active'`,
+      [ownerPubky, channelId],
+    );
+    return (result.rows?.[0]?.n as number) ?? 0;
+  },
+
+  async saveGroupMessage(message: GroupMessage): Promise<boolean> {
+    const db = await getDb();
+    const existed = await this.hasGroupMessage(
+      message.ownerPubky,
+      message.channelId,
+      message.eventId,
+    );
+    if (existed) return false;
+    insertGroupMessage(db, message);
+    return true;
+  },
+
+  async hasGroupMessage(
+    ownerPubky: PubkyKey,
+    channelId: string,
+    eventId: string,
+  ): Promise<boolean> {
+    const db = await getDb();
+    const result = db.executeSync(
+      `SELECT 1 FROM group_messages
+       WHERE owner_pubky = ? AND channel_id = ? AND event_id = ?
+       LIMIT 1`,
+      [ownerPubky, channelId, eventId],
+    );
+    return (result.rows?.length ?? 0) > 0;
+  },
+
+  async getGroupMessage(
+    ownerPubky: PubkyKey,
+    channelId: string,
+    eventId: string,
+  ): Promise<GroupMessage | null> {
+    const db = await getDb();
+    const result = db.executeSync(
+      `SELECT * FROM group_messages
+       WHERE owner_pubky = ? AND channel_id = ? AND event_id = ?`,
+      [ownerPubky, channelId, eventId],
+    );
+    const row = result.rows?.[0];
+    if (!row) return null;
+    return rowToGroupMessage(row);
+  },
+
+  async listGroupMessages(
+    ownerPubky: PubkyKey,
+    channelId: string,
+    limit = 100,
+    beforeMs?: number,
+  ): Promise<GroupMessage[]> {
+    const db = await getDb();
+    const result =
+      beforeMs !== undefined
+        ? db.executeSync(
+            `SELECT * FROM group_messages
+             WHERE owner_pubky = ? AND channel_id = ? AND sent_at < ?
+             ORDER BY sent_at DESC LIMIT ?`,
+            [ownerPubky, channelId, beforeMs, limit],
+          )
+        : db.executeSync(
+            `SELECT * FROM group_messages
+             WHERE owner_pubky = ? AND channel_id = ?
+             ORDER BY sent_at DESC LIMIT ?`,
+            [ownerPubky, channelId, limit],
+          );
+    return (result.rows ?? []).map(rowToGroupMessage).reverse();
+  },
+
+  async listGroupMessagesForTarget(
+    ownerPubky: PubkyKey,
+    channelId: string,
+    targetEventId: string,
+  ): Promise<GroupMessage[]> {
+    const db = await getDb();
+    const result = db.executeSync(
+      `SELECT * FROM group_messages
+       WHERE owner_pubky = ? AND channel_id = ? AND target_event_id = ?
+       ORDER BY sent_at ASC`,
+      [ownerPubky, channelId, targetEventId],
+    );
+    return (result.rows ?? []).map(rowToGroupMessage);
+  },
+
+  async updateGroupMessageDeliveryState(
+    ownerPubky: PubkyKey,
+    channelId: string,
+    eventId: string,
+    state: LinkDeliveryState,
+  ): Promise<void> {
+    const db = await getDb();
+    db.executeSync(
+      `UPDATE group_messages
+       SET delivery_state = ?, updated_at = ?
+       WHERE owner_pubky = ? AND channel_id = ? AND event_id = ?`,
+      [state, now(), ownerPubky, channelId, eventId],
+    );
+  },
+
+  async applyGroupMessageEdit(
+    ownerPubky: PubkyKey,
+    channelId: string,
+    eventId: string,
+    body: string,
+    editedAt: number,
+  ): Promise<void> {
+    const db = await getDb();
+    db.executeSync(
+      `UPDATE group_messages
+       SET body = ?, edited_at = ?, updated_at = ?
+       WHERE owner_pubky = ? AND channel_id = ? AND event_id = ?`,
+      [body, editedAt, now(), ownerPubky, channelId, eventId],
+    );
+  },
+
+  async tombstoneGroupMessage(
+    ownerPubky: PubkyKey,
+    channelId: string,
+    eventId: string,
+  ): Promise<void> {
+    const db = await getDb();
+    db.executeSync(
+      `UPDATE group_messages
+       SET deleted = 1, updated_at = ?
+       WHERE owner_pubky = ? AND channel_id = ? AND event_id = ?`,
+      [now(), ownerPubky, channelId, eventId],
+    );
+  },
+
+  /**
+   * Atomic pre-fan-out persist: the group message row AND one retry item
+   * per recipient, before any native send.
+   */
+  async persistGroupSendIntent(input: {
+    message: GroupMessage;
+    queueItems: DeliveryQueueItem[];
+  }): Promise<void> {
+    const db = await getDb();
+    transact(db, () => {
+      insertGroupMessage(db, input.message);
+      for (const item of input.queueItems) {
+        insertQueueItem(db, item);
+      }
+    });
+  },
+
+  /**
+   * Post-send persist for one fan-out recipient: advanced snapshot + dequeue.
+   * Does not rewrite `group_messages.delivery_state` (that is settled after
+   * the remaining queue for this event_id is empty).
+   */
+  async finalizeGroupFanoutSend(input: {
+    ownerPubky: PubkyKey;
+    peerPubky: PubkyKey;
+    snapshot: string;
+    queueId: string;
+  }): Promise<void> {
+    const db = await getDb();
+    const ts = now();
+    transact(db, () => {
+      db.executeSync(
+        `UPDATE links
+         SET snapshot = ?, status = 'established', consecutive_failures = 0, updated_at = ?
+         WHERE owner_pubky = ? AND peer_pubky = ?`,
+        [input.snapshot, ts, input.ownerPubky, input.peerPubky],
+      );
+      db.executeSync('DELETE FROM delivery_queue WHERE id = ?', [input.queueId]);
+    });
+  },
+
+  async countDeliveryQueueForMessage(messageId: string): Promise<number> {
+    const db = await getDb();
+    const result = db.executeSync('SELECT COUNT(*) AS n FROM delivery_queue WHERE message_id = ?', [
+      messageId,
+    ]);
+    return (result.rows?.[0]?.n as number) ?? 0;
   },
 };
 
@@ -1186,5 +1520,82 @@ function rowToLinkStreamItem(row: any): LinkStreamItem {
     rawJson: row.raw_json,
     receivedAt: row.received_at,
     processed: row.processed === 1,
+  };
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function rowToGroupChannel(row: any): GroupChannel {
+  return {
+    ownerPubky: row.owner_pubky,
+    channelId: row.channel_id,
+    name: row.name,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    createdBy: row.created_by,
+    isPublic: row.is_public === 1,
+    lastMessageAt: row.last_message_at ?? null,
+    membershipEpoch: row.membership_epoch,
+  };
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function rowToGroupMember(row: any): GroupMember {
+  return {
+    ownerPubky: row.owner_pubky,
+    channelId: row.channel_id,
+    memberPubky: row.member_pubky,
+    role: row.role,
+    addedAt: row.added_at,
+    removedAt: row.removed_at ?? null,
+    status: row.status,
+  };
+}
+
+function insertGroupMessage(db: SqlExecutor, message: GroupMessage): void {
+  const ts = now();
+  db.executeSync(
+    `INSERT OR IGNORE INTO group_messages
+      (owner_pubky, channel_id, event_id, sender_pubky, kind, body, raw_json,
+       sent_at, received_at, delivery_state, reply_to_event_id, target_event_id,
+       edited_at, deleted, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      message.ownerPubky,
+      message.channelId,
+      message.eventId,
+      message.senderPubky,
+      message.kind,
+      message.body,
+      message.rawJson,
+      message.sentAt,
+      message.receivedAt,
+      message.deliveryState,
+      message.replyToEventId,
+      message.targetEventId,
+      message.editedAt,
+      message.deleted ? 1 : 0,
+      ts,
+      ts,
+    ],
+  );
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function rowToGroupMessage(row: any): GroupMessage {
+  return {
+    ownerPubky: row.owner_pubky,
+    channelId: row.channel_id,
+    eventId: row.event_id,
+    senderPubky: row.sender_pubky,
+    kind: row.kind,
+    body: row.body,
+    rawJson: row.raw_json,
+    sentAt: row.sent_at,
+    receivedAt: row.received_at ?? null,
+    deliveryState: row.delivery_state,
+    replyToEventId: row.reply_to_event_id ?? null,
+    targetEventId: row.target_event_id ?? null,
+    editedAt: row.edited_at ?? null,
+    deleted: row.deleted === 1,
   };
 }

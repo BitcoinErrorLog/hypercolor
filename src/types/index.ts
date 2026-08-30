@@ -144,3 +144,11 @@ export type RootStackParamList = {
   Settings: undefined;
   EnableMessaging: undefined;
 };
+
+export type {
+  GroupChannel,
+  GroupMember,
+  GroupMessage,
+  GroupMemberRole,
+  GroupMemberStatus,
+} from './group';

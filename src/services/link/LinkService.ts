@@ -27,6 +27,13 @@ import {
   type LinkStreamItemInput,
 } from '../../types/link';
 import type { DeliveryQueueItem, PubkyKey } from '../../types';
+import {
+  decodeGroupEnvelope,
+  isGroupWireKind,
+  LINK_GROUP_FANOUT_PAYLOAD_TYPE,
+  peekEnvelopeKind,
+} from '../../types/group';
+import { applyGroupInbound } from '../group/applyGroupInbound';
 import { classifyInboundPeer, wotInputFromContact } from './wotGate';
 
 /**
@@ -51,6 +58,8 @@ import { classifyInboundPeer, wotInputFromContact } from './wotGate';
 
 /** Discriminator for this transport's items in the shared `delivery_queue`. */
 export const LINK_RETRY_PAYLOAD_TYPE = 'link.chat.message';
+
+export { LINK_GROUP_FANOUT_PAYLOAD_TYPE };
 
 /**
  * Consecutive handshake advance/restore failures before the wedged wipe.
@@ -82,6 +91,19 @@ interface LinkRetryPayload {
   eventId: string;
   rawJson: string;
 }
+
+interface GroupFanoutRetryPayload {
+  type: typeof LINK_GROUP_FANOUT_PAYLOAD_TYPE;
+  ownerPubky: PubkyKey;
+  peerPubky: PubkyKey;
+  senderPubky: PubkyKey;
+  kind: string;
+  eventId: string;
+  channelId: string;
+  rawJson: string;
+}
+
+type AnyLinkRetryPayload = LinkRetryPayload | GroupFanoutRetryPayload;
 
 type ActiveSession = { alias: string; pubky: string };
 type LiveHandle =
@@ -337,6 +359,51 @@ export const LinkService = {
   },
 
   /**
+   * Sends an already-persisted PAM JSON over a 1:1 Encrypted Link.
+   * Used by GroupService pairwise fan-out. The caller MUST persist the
+   * exact `rawJson` in `delivery_queue` first (nonce-safe). Returns
+   * `queued` when the link is not ready or the send fails — the queue
+   * item stays for {@link drainRetries} / {@link recoverPendingSends}.
+   */
+  async sendPersistedLinkJson(input: {
+    peerPubky: PubkyKey;
+    queueId: string;
+    kind: string;
+    eventId: string;
+    rawJson: string;
+    channelId: string;
+  }): Promise<'sent' | 'queued'> {
+    return withQueue(input.peerPubky, async () => {
+      let outcome: EnsureOutcome;
+      try {
+        outcome = await ensureLinkLocked(input.peerPubky, true, false);
+      } catch (err) {
+        if (isTransientLinkError(err)) return 'queued';
+        return 'queued';
+      }
+      if (outcome !== 'ready') return 'queued';
+      try {
+        const ownerPubky = requireOwner();
+        const handle = requireEstablishedHandle(ownerPubky, input.peerPubky);
+        const { snapshot } = await PaykitLinkNative.sendPrivateMessageJson(handle, input.rawJson);
+        await StorageService.finalizeGroupFanoutSend({
+          ownerPubky,
+          peerPubky: input.peerPubky,
+          snapshot,
+          queueId: input.queueId,
+        });
+        return 'sent';
+      } catch (err) {
+        console.warn(
+          `[LinkService] Group fan-out send failed for ${input.peerPubky}:`,
+          errorMessage(err),
+        );
+        return 'queued';
+      }
+    });
+  },
+
+  /**
    * Replays exact queued rawJson for items whose row is still `sending`.
    * Intended call site: app startup / foreground (see file header).
    */
@@ -345,13 +412,15 @@ export const LinkService = {
     for (const item of items) {
       const payload = parseRetryPayload(item.payload);
       if (!payload || !isCurrentOwner(payload.ownerPubky)) continue;
-      const row = await StorageService.getLinkMessage(
-        payload.ownerPubky,
-        payload.senderPubky,
-        payload.kind,
-        payload.eventId,
-      );
-      if (!row || row.deliveryState !== 'sending') continue;
+      if (payload.type === LINK_RETRY_PAYLOAD_TYPE) {
+        const row = await StorageService.getLinkMessage(
+          payload.ownerPubky,
+          payload.senderPubky,
+          payload.kind,
+          payload.eventId,
+        );
+        if (!row || row.deliveryState !== 'sending') continue;
+      }
       await deliverQueuedPayload(item, payload);
     }
   },
@@ -1288,6 +1357,21 @@ async function routeUnprocessedStreamItems(
   const received: LinkMessage[] = [];
   const seenInBatch = new Set<string>();
   for (const item of items) {
+    const peeked = peekEnvelopeKind(item.rawJson);
+    if (peeked !== null && isGroupWireKind(peeked)) {
+      const groupEnvelope = decodeGroupEnvelope(item.rawJson);
+      if (groupEnvelope) {
+        await applyGroupInbound({
+          ownerPubky,
+          senderPubky: peerPubky,
+          envelope: groupEnvelope,
+          rawJson: item.rawJson,
+          receivedAt: item.receivedAt,
+        });
+      }
+      await StorageService.markLinkStreamItemProcessed(item.id);
+      continue;
+    }
     const envelope = decodeLinkEnvelope(item.rawJson);
     if (!envelope) continue;
     const dedupKey = `${envelope.kind}:${envelope.event_id}`;
@@ -1327,18 +1411,30 @@ async function routeUnprocessedStreamItems(
 
 async function deliverQueuedPayload(
   item: DeliveryQueueItem,
-  payload: LinkRetryPayload,
+  payload: AnyLinkRetryPayload,
 ): Promise<void> {
   await withQueue(payload.peerPubky, async () => {
-    const row = await StorageService.getLinkMessage(
-      payload.ownerPubky,
-      payload.senderPubky,
-      payload.kind,
-      payload.eventId,
-    );
-    if (!row || row.deliveryState !== 'sending') {
-      await RetryQueue.recordSuccess(item.id);
-      return;
+    if (payload.type === LINK_RETRY_PAYLOAD_TYPE) {
+      const row = await StorageService.getLinkMessage(
+        payload.ownerPubky,
+        payload.senderPubky,
+        payload.kind,
+        payload.eventId,
+      );
+      if (!row || row.deliveryState !== 'sending') {
+        await RetryQueue.recordSuccess(item.id);
+        return;
+      }
+    } else {
+      const exists = await StorageService.hasGroupMessage(
+        payload.ownerPubky,
+        payload.channelId,
+        payload.eventId,
+      );
+      if (!exists) {
+        await RetryQueue.recordSuccess(item.id);
+        return;
+      }
     }
 
     let outcome: EnsureOutcome;
@@ -1362,15 +1458,33 @@ async function deliverQueuedPayload(
     try {
       const handle = requireEstablishedHandle(payload.ownerPubky, payload.peerPubky);
       const { snapshot } = await PaykitLinkNative.sendPrivateMessageJson(handle, payload.rawJson);
-      await StorageService.finalizeLinkSend({
-        ownerPubky: payload.ownerPubky,
-        peerPubky: payload.peerPubky,
-        senderPubky: payload.senderPubky,
-        kind: payload.kind,
-        eventId: payload.eventId,
-        snapshot,
-        queueId: item.id,
-      });
+      if (payload.type === LINK_GROUP_FANOUT_PAYLOAD_TYPE) {
+        await StorageService.finalizeGroupFanoutSend({
+          ownerPubky: payload.ownerPubky,
+          peerPubky: payload.peerPubky,
+          snapshot,
+          queueId: item.id,
+        });
+        const remaining = await StorageService.countDeliveryQueueForMessage(payload.eventId);
+        if (remaining === 0) {
+          await StorageService.updateGroupMessageDeliveryState(
+            payload.ownerPubky,
+            payload.channelId,
+            payload.eventId,
+            'sent',
+          );
+        }
+      } else {
+        await StorageService.finalizeLinkSend({
+          ownerPubky: payload.ownerPubky,
+          peerPubky: payload.peerPubky,
+          senderPubky: payload.senderPubky,
+          kind: payload.kind,
+          eventId: payload.eventId,
+          snapshot,
+          queueId: item.id,
+        });
+      }
       await RetryQueue.recordSuccess(item.id);
     } catch (err) {
       if (isTransientLinkError(err)) {
@@ -1387,7 +1501,19 @@ function isTransientLinkError(err: unknown): boolean {
   return isLinkNativeError(err) && (err.code === 'unavailable' || err.code === 'network');
 }
 
-async function markFailed(payload: LinkRetryPayload): Promise<void> {
+async function markFailed(payload: AnyLinkRetryPayload): Promise<void> {
+  if (payload.type === LINK_GROUP_FANOUT_PAYLOAD_TYPE) {
+    const remaining = await StorageService.countDeliveryQueueForMessage(payload.eventId);
+    if (remaining === 0) {
+      await StorageService.updateGroupMessageDeliveryState(
+        payload.ownerPubky,
+        payload.channelId,
+        payload.eventId,
+        'sent',
+      );
+    }
+    return;
+  }
   await StorageService.updateLinkMessageDeliveryState(
     payload.ownerPubky,
     payload.senderPubky,
@@ -1414,7 +1540,7 @@ function retryPayload(
   };
 }
 
-function parseRetryPayload(payload: string): LinkRetryPayload | null {
+function parseRetryPayload(payload: string): AnyLinkRetryPayload | null {
   let value: unknown;
   try {
     value = JSON.parse(payload);
@@ -1423,13 +1549,26 @@ function parseRetryPayload(payload: string): LinkRetryPayload | null {
   }
   if (typeof value !== 'object' || value === null) return null;
   const candidate = value as Record<string, unknown>;
-  if (candidate.type !== LINK_RETRY_PAYLOAD_TYPE) return null;
   if (typeof candidate.ownerPubky !== 'string') return null;
   if (typeof candidate.peerPubky !== 'string') return null;
   if (typeof candidate.senderPubky !== 'string') return null;
   if (typeof candidate.kind !== 'string') return null;
   if (typeof candidate.eventId !== 'string') return null;
   if (typeof candidate.rawJson !== 'string') return null;
+  if (candidate.type === LINK_GROUP_FANOUT_PAYLOAD_TYPE) {
+    if (typeof candidate.channelId !== 'string') return null;
+    return {
+      type: LINK_GROUP_FANOUT_PAYLOAD_TYPE,
+      ownerPubky: candidate.ownerPubky,
+      peerPubky: candidate.peerPubky,
+      senderPubky: candidate.senderPubky,
+      kind: candidate.kind,
+      eventId: candidate.eventId,
+      channelId: candidate.channelId,
+      rawJson: candidate.rawJson,
+    };
+  }
+  if (candidate.type !== LINK_RETRY_PAYLOAD_TYPE) return null;
   return {
     type: LINK_RETRY_PAYLOAD_TYPE,
     ownerPubky: candidate.ownerPubky,

@@ -1,4 +1,73 @@
 /**
+ * Schema v7 — owner-scoped private groups + public channels.
+ *
+ * v1 `channels` / `channel_members` / `messages` stay in place (research-era,
+ * not owner-scoped). M3 does not rewrite them. New group state lives here
+ * and is wiped by `clearAccountData(owner_pubky)`.
+ *
+ * Private groups: pairwise fan-out over Encrypted Links (no shared key).
+ * `membership_epoch` is a local bookkeeping counter bumped on remove/leave
+ * so UI and tests can observe cutoff; there is no group secret to rotate.
+ *
+ * `group_messages.target_event_id` holds the referenced event for
+ * reaction / edit / delete kinds. `reply_to_event_id` is only for
+ * `chat.group.message.v0` threads. Unknown targets stay stored (deferred).
+ */
+export const SCHEMA_V7_STATEMENTS: readonly string[] = [
+  `CREATE TABLE IF NOT EXISTS group_channels (
+    owner_pubky        TEXT    NOT NULL,
+    channel_id         TEXT    NOT NULL,
+    name               TEXT    NOT NULL,
+    created_at         INTEGER NOT NULL,
+    updated_at         INTEGER NOT NULL,
+    created_by         TEXT    NOT NULL,
+    is_public          INTEGER NOT NULL DEFAULT 0,
+    last_message_at    INTEGER,
+    membership_epoch   INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (owner_pubky, channel_id)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_group_channels_owner_activity
+    ON group_channels(owner_pubky, last_message_at DESC, updated_at DESC)`,
+
+  `CREATE TABLE IF NOT EXISTS group_members (
+    owner_pubky    TEXT    NOT NULL,
+    channel_id     TEXT    NOT NULL,
+    member_pubky   TEXT    NOT NULL,
+    role           TEXT    NOT NULL,
+    added_at       INTEGER NOT NULL,
+    removed_at     INTEGER,
+    status         TEXT    NOT NULL,
+    PRIMARY KEY (owner_pubky, channel_id, member_pubky)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_group_members_active
+    ON group_members(owner_pubky, channel_id, status)`,
+
+  `CREATE TABLE IF NOT EXISTS group_messages (
+    owner_pubky         TEXT    NOT NULL,
+    channel_id          TEXT    NOT NULL,
+    event_id            TEXT    NOT NULL,
+    sender_pubky        TEXT    NOT NULL,
+    kind                TEXT    NOT NULL,
+    body                TEXT    NOT NULL,
+    raw_json            TEXT    NOT NULL,
+    sent_at             INTEGER NOT NULL,
+    received_at         INTEGER,
+    delivery_state      TEXT    NOT NULL,
+    reply_to_event_id   TEXT,
+    target_event_id     TEXT,
+    edited_at           INTEGER,
+    deleted             INTEGER NOT NULL DEFAULT 0,
+    created_at          INTEGER NOT NULL,
+    updated_at          INTEGER NOT NULL,
+    PRIMARY KEY (owner_pubky, channel_id, event_id)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_group_messages_channel
+    ON group_messages(owner_pubky, channel_id, sent_at DESC)`,
+  `CREATE INDEX IF NOT EXISTS idx_group_messages_target
+    ON group_messages(owner_pubky, channel_id, target_event_id)`,
+];
+
+/**
  * SQLite schema v1 for Hypercolor.
  *
  * All DDL statements are plain SQL. The migration runner in migrations.ts

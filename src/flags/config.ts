@@ -18,3 +18,10 @@ export const WOT_AUTO_ACCEPT_TRUST_THRESHOLD = 0.5;
 
 /** Bounded concurrency when hydrating pubky.app profiles during follows import. */
 export const PROFILE_HYDRATE_CONCURRENCY = 4;
+
+/**
+ * Hard cap on private-group membership, including the creator.
+ * Pairwise fan-out is O(n) Noise writes; 50 is the product limit (dossier §9).
+ * Public channels are uncapped (homeserver read, no Encrypted Link fan-out).
+ */
+export const PRIVATE_GROUP_MEMBER_CAP = 50;
