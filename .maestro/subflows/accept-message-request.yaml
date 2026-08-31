@@ -6,7 +6,7 @@ appId: ${APP_ID}
 - extendedWaitUntil:
     visible:
       id: chatsScreen
-    timeout: 15000
+    timeout: 120000
 - extendedWaitUntil:
     visible: Requests (1)
     timeout: 180000

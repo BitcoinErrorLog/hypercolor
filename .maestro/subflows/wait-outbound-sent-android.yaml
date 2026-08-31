@@ -1,0 +1,25 @@
+# Wait until B's own queued DM leaves the outbox. The bubble status reads
+# "sending…" while the link is still handshaking and "sent" once the send
+# actually went out, so this waits on delivery, not on local text. "sending…"
+# does not contain "sent", so the matcher cannot pass on the queued state.
+# Each sync-inbox call runs on B's session only: it steps B's own handshake and
+# then drains B's own retry queue.
+appId: ${APP_ID}
+---
+- repeat:
+    while:
+      notVisible: sent
+    times: 12
+    commands:
+      - runScript:
+          file: ../scripts/androidE2eCmd.js
+          env:
+            E2E_URL: 'hypercolor://e2e/sync-inbox?peer=${PEER_PUBKY}&open=0'
+      - runFlow:
+          file: back-to-chats.yaml
+      - tapOn:
+          id: chatRow
+      - extendedWaitUntil:
+          visible:
+            id: threadScreen
+          timeout: 60000

@@ -179,6 +179,52 @@ name: P7 product screens
     env:
       PEER_PUBKY: ${output.pubkyA}
 
+# B's sends are queued, not delivered: B answered A with Noise message 2 and is
+# still `handshaking`. Only A can write message 3, and only B can read it, so on
+# a single device — where exactly one session is active at a time — each party
+# needs its own foreground turn. Give A one so it writes message 3, then give B
+# one so it reads it, reaches `established`, and drains its own outbox. Neither
+# side ever touches the other's handshake handle; two devices reach the same
+# sequence through their own foreground ticks.
+- runFlow:
+    file: subflows/back-to-chats.yaml
+- tapOn:
+    id: tabProfile
+- runFlow:
+    when:
+      platform: iOS
+    file: subflows/switch-account.yaml
+    env:
+      SLOT: A
+- runFlow:
+    when:
+      platform: Android
+    file: subflows/switch-account-android-a.yaml
+- runFlow:
+    file: subflows/back-to-chats.yaml
+- tapOn:
+    id: tabProfile
+- runFlow:
+    when:
+      platform: iOS
+    file: subflows/switch-account.yaml
+    env:
+      SLOT: B
+      THEN_THREAD_SLOT: A
+- runFlow:
+    when:
+      platform: Android
+    file: subflows/switch-account-android-b.yaml
+- runFlow:
+    when:
+      platform: Android
+    file: subflows/wait-outbound-sent-android.yaml
+    env:
+      PEER_PUBKY: ${output.pubkyA}
+- extendedWaitUntil:
+    visible: sent
+    timeout: 120000
+
 # A receives the DM and the payment-request bubble on the real thread.
 - runFlow:
     file: subflows/back-to-chats.yaml

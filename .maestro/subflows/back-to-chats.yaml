@@ -2,6 +2,11 @@
 # Sidecar/deep-link openThread pushes Thread on top of whatever was showing
 # (Profile after a switch, Message requests after accept). Message requests
 # uses messageRequestsBack, not threadBack, and has no tab bar.
+# The tab-bar wait is generous on purpose: this subflow runs right after a
+# send, so the JS thread is still finishing homeserver writes and the driver
+# can need well over 15s to report the tab bar on a loaded emulator
+# (2026-08-31_212405 recorded tabChats present, clickable and on screen while
+# a 15s wait expired).
 appId: ${APP_ID}
 ---
 - repeat:
@@ -24,10 +29,10 @@ appId: ${APP_ID}
 - extendedWaitUntil:
     visible:
       id: tabChats
-    timeout: 15000
+    timeout: 120000
 - tapOn:
     id: tabChats
 - extendedWaitUntil:
     visible:
       id: chatsScreen
-    timeout: 30000
+    timeout: 120000
