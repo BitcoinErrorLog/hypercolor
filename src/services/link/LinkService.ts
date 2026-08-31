@@ -92,14 +92,17 @@ export const HANDSHAKE_FAILURE_LIMIT = 5;
 export const HANDSHAKE_ADVANCE_BATCH_LIMIT = 10;
 
 /**
- * Advances that returned `pending` before a handshake is declared
- * unestablishable. A `pending` advance is not a native error, so it never
- * increments `consecutiveFailures` and {@link HANDSHAKE_FAILURE_LIMIT} never
- * trips on a peer that simply stops answering — this is the bound that does.
+ * Unproductive handshake steps against one peer before the handshake is
+ * declared unestablishable: an advance that returned `pending`, or a wipe of a
+ * still-unestablished handshake. A `pending` advance is not a native error, so
+ * it never increments `consecutiveFailures` and {@link HANDSHAKE_FAILURE_LIMIT}
+ * never trips on a peer that simply stops answering — this is the bound that
+ * does.
  *
- * On the shared retry backoff (30s, 1m, 2m, … capped at 30m) ten advances is
- * about two hours of unattended stepping. At the limit the link row and its
- * outbox are dropped and every queued send to that peer surfaces as `failed`.
+ * On the shared retry backoff (30s, 1m, 2m, … capped at 30m) ten steps is about
+ * two hours of unattended stepping. At the limit the link row and its outbox are
+ * dropped, every queued send to that peer surfaces as `failed`, and the durable
+ * budget keeps the peer out of all timer and sync work until the user acts.
  */
 export const HANDSHAKE_PENDING_ADVANCE_LIMIT = 10;
 
@@ -146,6 +149,29 @@ type LiveHandle =
   | { status: 'handshaking'; linkId: string; role: LinkRole };
 type SessionLookup = ActiveSession | { status: 'offline' } | null;
 type EnsureOutcome = LinkStatus | 'idle';
+
+/**
+ * Why we are touching a link. Two independent policies hang off this, and
+ * conflating them is what let a hostile peer farm periodic work:
+ *
+ * - `user` — a deliberate action (thread open, send, payment, attachment,
+ *   group fan-out). May initiate. CLEARS the durable handshake abuse budget:
+ *   the user choosing to talk to this peer is out-of-band evidence that the
+ *   peer is not merely a hostile stranger, and it is the documented escape
+ *   from exhaustion, so exhaustion can never be a permanent denial state.
+ *   An attacker cannot manufacture these; they are bounded by the user.
+ * - `queued` — background re-delivery of an ALREADY-persisted user send. May
+ *   initiate (the send has to be able to establish), but must NOT clear the
+ *   budget: a timer replaying one stuck item would otherwise refresh the
+ *   budget forever and the send would never surface as `failed`.
+ * - `background` — periodic tick, inbox sync. Must never initiate, never
+ *   clears, and is refused outright for an exhausted peer.
+ */
+type LinkIntent = 'user' | 'queued' | 'background';
+
+function mayInitiate(intent: LinkIntent): boolean {
+  return intent !== 'background';
+}
 
 let session: ActiveSession | null = null;
 let restoreInFlight: Promise<SessionLookup> | null = null;
@@ -353,7 +379,7 @@ export const LinkService = {
   async ensureLinkWith(peerPubky: PubkyKey): Promise<LinkStatus> {
     return withQueue(peerPubky, async () => {
       try {
-        const outcome = await ensureLinkLocked(peerPubky, true, false);
+        const outcome = await ensureLinkLocked(peerPubky, 'user', false);
         return outcome === 'idle' ? 'error' : outcome;
       } catch (err) {
         if (isLinkNativeError(err) && err.code === 'unavailable') return 'native-missing';
@@ -379,7 +405,7 @@ export const LinkService = {
    */
   async sendDm(peerPubky: PubkyKey, body: string): Promise<LinkMessage> {
     return withQueue(peerPubky, async () => {
-      const outcome = await ensureLinkLocked(peerPubky, true, false);
+      const outcome = await ensureLinkLocked(peerPubky, 'user', false);
       if (
         outcome !== 'ready' &&
         outcome !== 'handshaking-initiator' &&
@@ -431,7 +457,7 @@ export const LinkService = {
     sentAt: number;
   }): Promise<LinkMessage> {
     return withQueue(input.peerPubky, async () => {
-      const outcome = await ensureLinkLocked(input.peerPubky, true, false);
+      const outcome = await ensureLinkLocked(input.peerPubky, 'user', false);
       if (
         outcome !== 'ready' &&
         outcome !== 'handshaking-initiator' &&
@@ -485,7 +511,7 @@ export const LinkService = {
   }): Promise<'sent' | 'queued'> {
     let outcome: EnsureOutcome;
     try {
-      outcome = await ensureLinkLocked(input.peerPubky, true, false);
+      outcome = await ensureLinkLocked(input.peerPubky, 'user', false);
     } catch {
       return 'queued';
     }
@@ -554,7 +580,7 @@ export const LinkService = {
     return withQueue(input.peerPubky, async () => {
       let outcome: EnsureOutcome;
       try {
-        outcome = await ensureLinkLocked(input.peerPubky, true, false);
+        outcome = await ensureLinkLocked(input.peerPubky, 'user', false);
       } catch (err) {
         if (isTransientLinkError(err)) return 'queued';
         return 'queued';
@@ -646,17 +672,20 @@ export const LinkService = {
    * `handshaking-responder`.
    *
    * Never initiates: a periodic tick answers and completes handshakes, it
-   * does not start new ones (same policy as {@link syncInbox}). `false` here
-   * is threaded all the way through the failure path, so even a wedged link's
-   * recovery cannot write Noise message 1 from a background timer.
+   * does not start new ones (same policy as {@link syncInbox}). The
+   * `background` intent is threaded all the way through the failure path, so
+   * even a wedged link's recovery cannot write Noise message 1 from a
+   * background timer.
    *
    * Bounded, not exhaustive. Link rows are created by inbound probing as well
    * as by the user (`adoptInboundHandshake` from {@link syncInbox}), so a peer
    * who writes message 1 and never answers message 3 would otherwise cost
-   * homeserver IO on every tick forever. Only links whose backoff is due are
-   * stepped, at most {@link HANDSHAKE_ADVANCE_BATCH_LIMIT} per run, and a
-   * handshake that stays `pending` past
-   * {@link HANDSHAKE_PENDING_ADVANCE_LIMIT} is abandoned.
+   * homeserver IO on every tick forever. Only links whose durable budget is due
+   * are stepped, at most {@link HANDSHAKE_ADVANCE_BATCH_LIMIT} per run, and a
+   * handshake still unestablished after
+   * {@link HANDSHAKE_PENDING_ADVANCE_LIMIT} steps is abandoned. Because the
+   * budget outlives the link row, deleting and re-adopting the row does not buy
+   * the peer a fresh allowance.
    */
   async advancePendingLinks(): Promise<void> {
     const lookup = await sessionOrRestore();
@@ -667,7 +696,9 @@ export const LinkService = {
     );
     for (const link of links) {
       try {
-        await withQueue(link.peerPubky, () => ensureLinkLocked(link.peerPubky, false, false));
+        await withQueue(link.peerPubky, () =>
+          ensureLinkLocked(link.peerPubky, 'background', false),
+        );
       } catch (err) {
         console.warn(
           `[LinkService] Handshake advance failed for ${link.peerPubky}:`,
@@ -958,9 +989,22 @@ function isUnusableReceiverAliasError(err: unknown): boolean {
 
 // ─── State machine internals ──────────────────────────────────────────────────
 
+/**
+ * Handshake abuse budget recovery policy, in one place so it cannot drift:
+ *
+ * A `user` intent clears the budget before anything else happens, so a peer is
+ * never permanently denied — one deliberate send or thread open restores a full
+ * allowance. Every other intent is refused outright once the budget is
+ * exhausted, BEFORE the marker fetch and inbound probe, so an exhausted peer
+ * costs zero homeserver IO and cannot be re-adopted by timer or sync activity
+ * however many times it rewrites Noise message 1.
+ *
+ * The gate deliberately sits after the established branches: an exhausted
+ * budget must never interfere with a link that actually completed.
+ */
 async function ensureLinkLocked(
   peerPubky: PubkyKey,
-  allowInitiate: boolean,
+  intent: LinkIntent,
   alreadyRecovered: boolean,
 ): Promise<EnsureOutcome> {
   if (!PaykitLinkNative.isAvailable()) return 'native-missing';
@@ -984,27 +1028,28 @@ async function ensureLinkLocked(
       ownerPubky,
       peerPubky,
       live,
-      allowInitiate,
+      intent,
       alreadyRecovered,
     );
   }
 
   const stored = await StorageService.getLink(ownerPubky, peerPubky);
   if (stored?.status === 'established') {
-    return restoreEstablished(activeSession, receiver, stored, allowInitiate, alreadyRecovered);
+    return restoreEstablished(activeSession, receiver, stored, intent, alreadyRecovered);
   }
+
+  if (intent === 'user') {
+    await StorageService.clearHandshakeBudget(ownerPubky, peerPubky);
+  } else if (await isHandshakeBudgetExhausted(ownerPubky, peerPubky)) {
+    return 'idle';
+  }
+
   if (stored?.status === 'handshaking') {
-    return restoreAndAdvanceHandshake(
-      activeSession,
-      receiver,
-      stored,
-      allowInitiate,
-      alreadyRecovered,
-    );
+    return restoreAndAdvanceHandshake(activeSession, receiver, stored, intent, alreadyRecovered);
   }
 
   const marker = await PaykitLinkNative.getReceiverMarker(peerPubky, localPath);
-  if (marker === null) return allowInitiate ? 'not-enrolled' : 'idle';
+  if (marker === null) return mayInitiate(intent) ? 'not-enrolled' : 'idle';
 
   let inbound: Extract<LinkProbeResult, { result: 'pending' | 'established' }> | null;
   try {
@@ -1019,7 +1064,7 @@ async function ensureLinkLocked(
         localPath,
         LINK_RECEIVER_PATH,
       );
-      if (!allowInitiate) return 'idle';
+      if (!mayInitiate(intent)) return 'idle';
       return initiateHandshake(
         activeSession,
         receiver,
@@ -1027,6 +1072,7 @@ async function ensureLinkLocked(
         peerPubky,
         marker,
         localPath,
+        intent,
         alreadyRecovered,
       );
     }
@@ -1036,7 +1082,7 @@ async function ensureLinkLocked(
     return adoptInboundHandshake(ownerPubky, peerPubky, marker, localPath, inbound);
   }
 
-  if (!allowInitiate) return 'idle';
+  if (!mayInitiate(intent)) return 'idle';
 
   return initiateHandshake(
     activeSession,
@@ -1045,6 +1091,7 @@ async function ensureLinkLocked(
     peerPubky,
     marker,
     localPath,
+    intent,
     alreadyRecovered,
   );
 }
@@ -1053,7 +1100,7 @@ async function restoreEstablished(
   activeSession: ActiveSession,
   receiver: LinkReceiver,
   stored: LinkRecord,
-  allowInitiate: boolean,
+  intent: LinkIntent,
   alreadyRecovered: boolean,
 ): Promise<EnsureOutcome> {
   const localPath = coerceReceiverPath(stored.localReceiverPath);
@@ -1075,7 +1122,7 @@ async function restoreEstablished(
     await StorageService.resetLinkConsecutiveFailures(stored.ownerPubky, stored.peerPubky);
     return 'ready';
   } catch (err) {
-    return handleLinkFailure(err, stored, allowInitiate, alreadyRecovered);
+    return handleLinkFailure(err, stored, intent, alreadyRecovered);
   }
 }
 
@@ -1083,7 +1130,7 @@ async function restoreAndAdvanceHandshake(
   activeSession: ActiveSession,
   receiver: LinkReceiver,
   stored: LinkRecord,
-  allowInitiate: boolean,
+  intent: LinkIntent,
   alreadyRecovered: boolean,
 ): Promise<EnsureOutcome> {
   const localPath = coerceReceiverPath(stored.localReceiverPath);
@@ -1127,12 +1174,12 @@ async function restoreAndAdvanceHandshake(
       stored.ownerPubky,
       stored.peerPubky,
       { status: 'handshaking', linkId: restored.linkId, role: stored.role },
-      allowInitiate,
+      intent,
       alreadyRecovered,
     );
   } catch (err) {
     const current = await StorageService.getLink(stored.ownerPubky, stored.peerPubky);
-    return handleLinkFailure(err, current ?? stored, allowInitiate, alreadyRecovered);
+    return handleLinkFailure(err, current ?? stored, intent, alreadyRecovered);
   }
 }
 
@@ -1142,7 +1189,7 @@ async function advanceLiveHandshake(
   ownerPubky: PubkyKey,
   peerPubky: PubkyKey,
   live: Extract<LiveHandle, { status: 'handshaking' }>,
-  allowInitiate: boolean,
+  intent: LinkIntent,
   alreadyRecovered: boolean,
 ): Promise<EnsureOutcome> {
   const stored = await StorageService.getLink(ownerPubky, peerPubky);
@@ -1171,18 +1218,12 @@ async function advanceLiveHandshake(
 
     // `pending` is a real Noise XX step, not a failure — but it is also the
     // shape of a peer that answered once and went silent, so it has to cost
-    // something. Persist the advanced snapshot, then push this link's timer
-    // schedule out on the shared retry curve.
-    const pendingAdvances = (stored?.pendingAdvances ?? 0) + 1;
-    await StorageService.recordPendingHandshakeAdvance({
-      ownerPubky,
-      peerPubky,
-      snapshot: result.snapshot,
-      pendingAdvances,
-      nextAdvanceAt: RetryQueue.nextAttemptAt(pendingAdvances),
-    });
+    // something. Charge the durable budget BEFORE persisting the snapshot: a
+    // crash between the two loses a handshake step, never a charge.
+    const budget = await chargeHandshakeBudget(ownerPubky, peerPubky);
+    await StorageService.updateLinkSnapshot(ownerPubky, peerPubky, result.snapshot, 'handshaking');
 
-    if (pendingAdvances >= HANDSHAKE_PENDING_ADVANCE_LIMIT) {
+    if (budget.exhausted) {
       return abandonUnestablishedLink(
         stored ?? fallbackLinkRecord(ownerPubky, peerPubky, receiver, live.role),
       );
@@ -1215,7 +1256,7 @@ async function advanceLiveHandshake(
     // established would wipe a live link.
     const current = await StorageService.getLink(ownerPubky, peerPubky);
     const fallback = current ?? fallbackLinkRecord(ownerPubky, peerPubky, receiver, live.role);
-    return handleLinkFailure(err, fallback, allowInitiate, alreadyRecovered);
+    return handleLinkFailure(err, fallback, intent, alreadyRecovered);
   }
 }
 
@@ -1235,10 +1276,45 @@ function fallbackLinkRecord(
     localReceiverPath: receiver.receiverPath,
     remoteReceiverPath: LINK_RECEIVER_PATH,
     consecutiveFailures: 0,
-    pendingAdvances: 0,
-    nextAdvanceAt: 0,
     updatedAt: Date.now(),
   };
+}
+
+/**
+ * Charges one unproductive handshake step against this peer and returns the
+ * resulting budget.
+ *
+ * Lives in `link_handshake_budgets`, NOT on the link row, because every caller
+ * that could charge it (`pending` advance, protocol wipe, failure-limit wipe)
+ * is followed by a path that deletes the link row. A counter on the row was
+ * reset by the very failure that should have charged it, which let a peer cycle
+ * message 1 → pending → malformed message 3 → wipe → re-adoption for a fresh
+ * budget every 30–60s. Safe to read-modify-write: all link work for a peer runs
+ * inside `withQueue(peer)`.
+ */
+async function chargeHandshakeBudget(
+  ownerPubky: PubkyKey,
+  peerPubky: PubkyKey,
+): Promise<{ advances: number; exhausted: boolean }> {
+  const current = await StorageService.getHandshakeBudget(ownerPubky, peerPubky);
+  const advances = (current?.pendingAdvances ?? 0) + 1;
+  const exhausted = advances >= HANDSHAKE_PENDING_ADVANCE_LIMIT;
+  await StorageService.upsertHandshakeBudget({
+    ownerPubky,
+    peerPubky,
+    pendingAdvances: advances,
+    nextAdvanceAt: RetryQueue.nextAttemptAt(advances),
+    exhaustedAt: exhausted ? (current?.exhaustedAt ?? Date.now()) : null,
+  });
+  return { advances, exhausted };
+}
+
+async function isHandshakeBudgetExhausted(
+  ownerPubky: PubkyKey,
+  peerPubky: PubkyKey,
+): Promise<boolean> {
+  const budget = await StorageService.getHandshakeBudget(ownerPubky, peerPubky);
+  return !!budget && budget.exhaustedAt !== null;
 }
 
 /**
@@ -1248,11 +1324,14 @@ function fallbackLinkRecord(
  * state a permanently dropped retry produces and the same one ThreadScreen
  * already renders. Without this the send sits in `sending` forever while a
  * timer spins behind it.
+ *
+ * The budget row deliberately outlives this: it carries `exhausted_at`, which
+ * is what stops the peer from buying more periodic work by rewriting message 1.
  */
 async function abandonUnestablishedLink(stored: LinkRecord): Promise<EnsureOutcome> {
   console.warn(
-    `[LinkService] Handshake with ${stored.peerPubky} still pending after ` +
-      `${HANDSHAKE_PENDING_ADVANCE_LIMIT} advances; abandoning`,
+    `[LinkService] Handshake with ${stored.peerPubky} unestablished after ` +
+      `${HANDSHAKE_PENDING_ADVANCE_LIMIT} steps; abandoning`,
   );
   await failQueuedSendsForPeer(stored.ownerPubky, stored.peerPubky);
   await wipeLinkState(stored);
@@ -1284,6 +1363,9 @@ async function completeEstablished(
   remotePath: string,
   handshakeLinkId: string,
 ): Promise<LinkStatus> {
+  // A completed Noise XX handshake is proof of a real counterparty, so it is
+  // the one non-user event that forgives everything charged against this peer.
+  await StorageService.clearHandshakeBudget(ownerPubky, peerPubky);
   await StorageService.upsertLink({
     ownerPubky,
     peerPubky,
@@ -1326,6 +1408,7 @@ async function initiateHandshake(
   peerPubky: PubkyKey,
   marker: ReceiverMarker,
   localPath: string,
+  intent: LinkIntent,
   alreadyRecovered: boolean,
 ): Promise<EnsureOutcome> {
   const remotePath = LINK_RECEIVER_PATH;
@@ -1360,7 +1443,7 @@ async function initiateHandshake(
     ownerPubky,
     peerPubky,
     { status: 'handshaking', linkId: initiated.linkId, role: 'initiator' },
-    true,
+    intent,
     alreadyRecovered,
   );
 }
@@ -1404,6 +1487,7 @@ async function adoptInboundHandshake(
   const remotePath = LINK_RECEIVER_PATH;
   const key = linkKey(ownerPubky, peerPubky);
   if (inbound.result === 'established') {
+    await StorageService.clearHandshakeBudget(ownerPubky, peerPubky);
     await StorageService.upsertLink({
       ownerPubky,
       peerPubky,
@@ -1435,8 +1519,8 @@ async function adoptInboundHandshake(
 }
 
 /**
- * `allowInitiate` is the CALLER's policy, threaded through unchanged. It is
- * not a detail of how the failure is classified: recovery from a wedged link
+ * The {@link LinkIntent} is the CALLER's policy, threaded through unchanged. It
+ * is not a detail of how the failure is classified: recovery from a wedged link
  * ends in {@link initiateHandshake}, which writes Noise message 1 to a
  * peer-visible location. A background tick and an inbox sync must never reach
  * that, however the failure arrived.
@@ -1444,7 +1528,7 @@ async function adoptInboundHandshake(
 async function handleLinkFailure(
   err: unknown,
   stored: LinkRecord,
-  allowInitiate: boolean,
+  intent: LinkIntent,
   alreadyRecovered: boolean,
 ): Promise<EnsureOutcome> {
   if (isLinkNativeError(err) && err.code === 'unavailable') return 'native-missing';
@@ -1467,12 +1551,12 @@ async function handleLinkFailure(
       stored.peerPubky,
     );
     if (failures >= HANDSHAKE_FAILURE_LIMIT) {
-      return recoverWedgedLink(stored, allowInitiate, alreadyRecovered, err);
+      return recoverWedgedLink(stored, intent, alreadyRecovered, err);
     }
     return roleStatus(stored.role);
   }
   if (isLinkNativeError(err) && err.code === 'protocol') {
-    return recoverWedgedLink(stored, allowInitiate, alreadyRecovered, err);
+    return recoverWedgedLink(stored, intent, alreadyRecovered, err);
   }
 
   if (established) {
@@ -1488,7 +1572,7 @@ async function handleLinkFailure(
     stored.peerPubky,
   );
   if (failures >= HANDSHAKE_FAILURE_LIMIT) {
-    return recoverWedgedLink(stored, allowInitiate, alreadyRecovered, err);
+    return recoverWedgedLink(stored, intent, alreadyRecovered, err);
   }
   console.warn(`[LinkService] Handshake step failed for ${stored.peerPubky}:`, errorMessage(err));
   return roleStatus(stored.role);
@@ -1499,15 +1583,22 @@ async function handleLinkFailure(
  * failures: delete the link row, clear the outbox, and restart a fresh
  * handshake. If the peer marker's noise key changed, this is re-enrollment.
  *
- * Restarting is gated on `allowInitiate`. When the caller forbids initiating
- * (periodic tick, inbox sync) the wipe still happens and this returns `idle`
- * or `error` — the row and its dead outbox are gone, so the peer's own
- * message 1 can be adopted on the next sync, and the user's next send or
- * thread open initiates. Nothing is left wedged; only the timer is silent.
+ * Restarting is gated on the caller's {@link LinkIntent}. When the caller
+ * forbids initiating (periodic tick, inbox sync) the wipe still happens and
+ * this returns `idle` or `error` — the row and its dead outbox are gone, so the
+ * peer's own message 1 can be adopted on the next sync, and the user's next
+ * send or thread open initiates. Nothing is left wedged; only the timer is
+ * silent.
+ *
+ * Wiping an unestablished handshake also charges the durable abuse budget. The
+ * wipe is peer-triggerable — a malformed Noise message 3 produces `protocol` on
+ * demand — so without a charge the cycle wipe → re-adopt → wipe would be free
+ * and the budget would never decay. An established link is never charged: its
+ * failures are transport problems, not an unfinished handshake.
  */
 async function recoverWedgedLink(
   stored: LinkRecord,
-  allowInitiate: boolean,
+  intent: LinkIntent,
   alreadyRecovered: boolean,
   cause: unknown,
 ): Promise<EnsureOutcome> {
@@ -1529,10 +1620,15 @@ async function recoverWedgedLink(
     }
   }
 
+  if (stored.status !== 'established') {
+    const budget = await chargeHandshakeBudget(stored.ownerPubky, stored.peerPubky);
+    if (budget.exhausted) return abandonUnestablishedLink(stored);
+  }
+
   await wipeLinkState(stored);
 
   if (alreadyRecovered) return 'error';
-  return ensureLinkLocked(stored.peerPubky, allowInitiate, true);
+  return ensureLinkLocked(stored.peerPubky, intent, true);
 }
 
 async function wipeLinkState(stored: LinkRecord): Promise<void> {
@@ -1714,7 +1810,7 @@ async function syncPeerLocked(peerPubky: PubkyKey): Promise<LinkMessage[]> {
     return [];
   }
   try {
-    const outcome = await ensureLinkLocked(peerPubky, false, false);
+    const outcome = await ensureLinkLocked(peerPubky, 'background', false);
     const priorMessageCount = await StorageService.countLinkMessagesForPeer(ownerPubky, peerPubky);
     const hasPriorRoutedConversation = priorMessageCount > 0;
     const isNewInbound =
@@ -1762,7 +1858,7 @@ async function syncPeerLocked(peerPubky: PubkyKey): Promise<LinkMessage[]> {
   } catch (err) {
     if (isLinkNativeError(err) && err.code === 'protocol') {
       const stored = await StorageService.getLink(ownerPubky, peerPubky);
-      if (stored) await recoverWedgedLink(stored, false, false, err);
+      if (stored) await recoverWedgedLink(stored, 'background', false, err);
     }
     throw err;
   }
@@ -1917,7 +2013,7 @@ async function deliverQueuedPayload(
 
     let outcome: EnsureOutcome;
     try {
-      outcome = await ensureLinkLocked(payload.peerPubky, true, false);
+      outcome = await ensureLinkLocked(payload.peerPubky, 'queued', false);
     } catch (err) {
       if (isTransientLinkError(err)) {
         await RetryQueue.defer(item.id, item.attempts);

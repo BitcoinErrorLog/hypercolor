@@ -52,6 +52,9 @@ jest.mock('../../StorageService', () => ({
     getLink: jest.fn(),
     getAllLinks: jest.fn(),
     updateLinkSnapshot: jest.fn(),
+    getHandshakeBudget: jest.fn(),
+    upsertHandshakeBudget: jest.fn(),
+    clearHandshakeBudget: jest.fn(),
     incrementLinkConsecutiveFailures: jest.fn(),
     resetLinkConsecutiveFailures: jest.fn(),
     deleteLink: jest.fn(),
@@ -298,8 +301,6 @@ describe('LinkService message requests', () => {
       localReceiverPath: LINK_RECEIVER_PATH,
       remoteReceiverPath: LINK_RECEIVER_PATH,
       consecutiveFailures: 0,
-      pendingAdvances: 0,
-      nextAdvanceAt: 0,
       updatedAt: NOW,
     } satisfies LinkRecord);
     mockedNative.restoreLink.mockResolvedValue({ linkId: 'handle-1' });
@@ -342,8 +343,6 @@ describe('LinkService message requests', () => {
       localReceiverPath: LINK_RECEIVER_PATH,
       remoteReceiverPath: LINK_RECEIVER_PATH,
       consecutiveFailures: 0,
-      pendingAdvances: 0,
-      nextAdvanceAt: 0,
       updatedAt: NOW,
     };
     mockedStorage.getLink.mockResolvedValue(stored);
@@ -385,8 +384,6 @@ describe('LinkService message requests', () => {
         localReceiverPath: LINK_RECEIVER_PATH,
         remoteReceiverPath: LINK_RECEIVER_PATH,
         consecutiveFailures: 0,
-        pendingAdvances: 0,
-        nextAdvanceAt: 0,
         updatedAt: NOW,
       },
     ]);

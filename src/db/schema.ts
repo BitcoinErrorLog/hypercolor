@@ -1,4 +1,36 @@
 /**
+ * Schema v15 — move the handshake advance budget off the `links` row.
+ *
+ * v14 put `pending_advances` / `next_advance_at` on `links`, which is deleted
+ * by `recoverWedgedLink` and `abandonUnestablishedLink`. A hostile peer could
+ * therefore cycle valid message 1 → pending → malformed message 3 → protocol
+ * wipe → re-adoption and get a fresh budget on every cycle, so the budget
+ * never decayed and the batch cap only limited the rate.
+ *
+ * `link_handshake_budgets` is keyed by (owner, peer) and is NOT touched by any
+ * link wipe, so it survives wipe, abandonment, re-adoption, role flips,
+ * delete/recreate cycles and app restart. `exhausted_at` is the terminal mark:
+ * a peer that carries it gets no timer or sync work at all. Only reaching
+ * `established`, a deliberate user action, or account teardown removes a row.
+ */
+export const SCHEMA_V15_STATEMENTS: readonly string[] = [
+  // The index has to go first: SQLite refuses to drop an indexed column.
+  `DROP INDEX IF EXISTS idx_links_handshake_due`,
+  `ALTER TABLE links DROP COLUMN pending_advances`,
+  `ALTER TABLE links DROP COLUMN next_advance_at`,
+  `CREATE INDEX IF NOT EXISTS idx_links_owner_status ON links(owner_pubky, status)`,
+  `CREATE TABLE IF NOT EXISTS link_handshake_budgets (
+    owner_pubky      TEXT NOT NULL,
+    peer_pubky       TEXT NOT NULL,
+    pending_advances INTEGER NOT NULL DEFAULT 0,
+    next_advance_at  INTEGER NOT NULL DEFAULT 0,
+    exhausted_at     INTEGER,
+    updated_at       INTEGER NOT NULL,
+    PRIMARY KEY (owner_pubky, peer_pubky)
+  )`,
+];
+
+/**
  * Schema v14 — bound the periodic handshake stepper.
  *
  * `advancePendingLinks` steps every `handshaking` link on the foreground
@@ -12,6 +44,10 @@
  * `next_advance_at` is the earliest Unix-ms the timer may step the row again
  * (`0` = due now, which is also the correct value for every pre-existing
  * row). Both are reset when the link reaches `established`.
+ *
+ * Superseded by v15, which moves both onto `link_handshake_budgets` so they
+ * survive a link wipe. Kept verbatim because a released migration is never
+ * edited; v15 drops the two columns.
  */
 export const SCHEMA_V14_STATEMENTS: readonly string[] = [
   `ALTER TABLE links ADD COLUMN pending_advances INTEGER NOT NULL DEFAULT 0`,

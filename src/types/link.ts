@@ -375,30 +375,46 @@ export interface LinkRecord {
   localReceiverPath: string;
   remoteReceiverPath: string;
   consecutiveFailures: number;
-  /**
-   * Handshake advances that returned `pending` (Noise XX not complete yet).
-   * A native advance is not an error, so it never touches
-   * `consecutiveFailures`; this counter is what bounds a handshake that the
-   * counterparty never answers. Reset when the link reaches `established`.
-   */
-  pendingAdvances: number;
-  /**
-   * Earliest Unix-ms at which the periodic tick may step this handshake
-   * again, on the same exponential schedule as the delivery retry queue.
-   * `0` means due now. User-driven paths (send, thread focus, inbox sync)
-   * ignore it — only the unattended timer is throttled.
-   */
-  nextAdvanceAt: number;
   updatedAt: number;
 }
 
+export type LinkRecordInput = Omit<LinkRecord, 'updatedAt'>;
+
 /**
- * Writable link columns. The advance schedule is owned by the handshake
- * stepper (see {@link LinkRecord.pendingAdvances}), not by callers that
- * upsert link state, so a re-adopted inbound handshake cannot reset its own
- * backoff.
+ * Durable per-(owner, peer) cost of trying to complete a Noise XX handshake.
+ *
+ * Deliberately NOT part of {@link LinkRecord}: the link row is deleted by
+ * every wipe and abandonment, so a counter living there is reset by the same
+ * peer-triggered failure that should have charged it. This survives wipe,
+ * abandonment, re-adoption, role flips and app restart.
  */
-export type LinkRecordInput = Omit<LinkRecord, 'updatedAt' | 'pendingAdvances' | 'nextAdvanceAt'>;
+export interface HandshakeBudget {
+  ownerPubky: PubkyKey;
+  peerPubky: PubkyKey;
+  /**
+   * Unproductive handshake steps charged against this peer: an advance that
+   * returned `pending`, or a wipe of a still-unestablished handshake. A native
+   * `pending` is not an error, so it never touches `consecutiveFailures`; this
+   * is what bounds a handshake the counterparty never completes.
+   */
+  pendingAdvances: number;
+  /**
+   * Earliest Unix-ms at which the periodic tick may step this handshake again,
+   * on the same exponential schedule as the delivery retry queue. `0` means
+   * due now. Survives the link row so a peer cannot buy an immediate retry by
+   * forcing a wipe.
+   */
+  nextAdvanceAt: number;
+  /**
+   * Set once the budget is spent. A peer carrying this gets no timer or sync
+   * work at all: not stepped, not probed, not re-adopted. Cleared only by a
+   * deliberate user action, by reaching `established`, or by account teardown.
+   */
+  exhaustedAt: number | null;
+  updatedAt: number;
+}
+
+export type HandshakeBudgetInput = Omit<HandshakeBudget, 'updatedAt'>;
 
 /**
  * Device-local message history (plaintext bodies — never log them). Dedup

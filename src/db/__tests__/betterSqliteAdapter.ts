@@ -1,19 +1,34 @@
 import Database from 'better-sqlite3';
 import type { SqlExecutor, SqlParams, SqlValue } from '../sql';
 
+type TestDb = SqlExecutor & { raw: Database.Database; close: () => void };
+
 /**
  * Thin adapter so the REAL migration SQL and StorageService statements run
  * against in-memory SQLite. op-sqlite cannot load under Jest without its
  * native binaries; better-sqlite3 executes the identical SQL strings.
  */
-export function openMemoryDb(): SqlExecutor & { raw: Database.Database } {
-  const db = new Database(':memory:');
+export function openMemoryDb(): TestDb {
+  return adapt(new Database(':memory:'));
+}
+
+/**
+ * File-backed variant, for the cases where the point of the test is that state
+ * survives the process — closing and re-opening the same file is the closest
+ * available stand-in for an app restart.
+ */
+export function openFileDb(path: string): TestDb {
+  return adapt(new Database(path));
+}
+
+function adapt(db: Database.Database): TestDb {
   // Match production `getDb()` connection preamble so FK-dependent SQL
   // behaves as it does on device.
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
   return {
     raw: db,
+    close: () => db.close(),
     executeSync(query: string, params: SqlParams | SqlValue[] = []) {
       const sql = query.trim();
       if (/^(BEGIN|COMMIT|ROLLBACK)\b/i.test(sql)) {

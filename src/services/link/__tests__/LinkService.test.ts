@@ -19,6 +19,7 @@ import {
   RING_GRANT_CAPABILITIES,
   PUBKY_APP_DM_KIND,
   type LinkMessage,
+  type HandshakeBudget,
   type LinkReceiver,
   type LinkRecord,
 } from '../../../types/link';
@@ -85,7 +86,9 @@ jest.mock('../../StorageService', () => ({
     getAllLinks: jest.fn(),
     getDueHandshakingLinks: jest.fn(),
     updateLinkSnapshot: jest.fn(),
-    recordPendingHandshakeAdvance: jest.fn(),
+    getHandshakeBudget: jest.fn(),
+    upsertHandshakeBudget: jest.fn(),
+    clearHandshakeBudget: jest.fn(),
     incrementLinkConsecutiveFailures: jest.fn(),
     resetLinkConsecutiveFailures: jest.fn(),
     deleteLink: jest.fn(),
@@ -217,11 +220,77 @@ function storedLink(overrides: Partial<LinkRecord> = {}): LinkRecord {
     localReceiverPath: LINK_RECEIVER_PATH,
     remoteReceiverPath: LINK_RECEIVER_PATH,
     consecutiveFailures: 0,
-    pendingAdvances: 0,
-    nextAdvanceAt: 0,
     updatedAt: NOW,
     ...overrides,
   };
+}
+
+function storedBudget(overrides: Partial<HandshakeBudget> = {}): HandshakeBudget {
+  return {
+    ownerPubky: OWNER,
+    peerPubky: PEER,
+    pendingAdvances: 0,
+    nextAdvanceAt: 0,
+    exhaustedAt: null,
+    updatedAt: NOW,
+    ...overrides,
+  };
+}
+
+/**
+ * Models the two tables the handshake stepper depends on, with the property
+ * that makes them different tables: a wipe deletes the `links` row and MUST
+ * NOT delete the `link_handshake_budgets` row. The responder answered with
+ * Noise message 2 and persisted `handshaking`; only the counterparty's own
+ * process can write message 3, so nothing here exposes PEER-as-owner state.
+ */
+function givenResponderHandshake(seededBudget: HandshakeBudget | null = null): {
+  link: () => LinkRecord | null;
+  budget: () => HandshakeBudget | null;
+} {
+  let link: LinkRecord | null = storedLink({
+    role: 'responder',
+    status: 'handshaking',
+    snapshot: 'b-msg2',
+  });
+  let budget: HandshakeBudget | null = seededBudget;
+
+  mockedStorage.getDueHandshakingLinks.mockImplementation(async (owner, limit = 10) => {
+    if (owner !== OWNER || !link || link.status !== 'handshaking') return [];
+    if (budget && budget.exhaustedAt !== null) return [];
+    if ((budget?.nextAdvanceAt ?? 0) > Date.now()) return [];
+    return [link].slice(0, limit);
+  });
+  mockedStorage.getLink.mockImplementation(async (owner, peer) =>
+    owner === OWNER && peer === PEER ? link : null,
+  );
+  mockedStorage.upsertLink.mockImplementation(async record => {
+    link = storedLink(record);
+  });
+  mockedStorage.updateLinkSnapshot.mockImplementation(async (owner, peer, snapshot, status) => {
+    if (owner === OWNER && peer === PEER && link) link = storedLink({ ...link, snapshot, status });
+  });
+  mockedStorage.deleteLink.mockImplementation(async (owner, peer) => {
+    if (owner === OWNER && peer === PEER) link = null;
+  });
+  mockedStorage.getHandshakeBudget.mockImplementation(async (owner, peer) =>
+    owner === OWNER && peer === PEER ? budget : null,
+  );
+  mockedStorage.upsertHandshakeBudget.mockImplementation(async input => {
+    budget = storedBudget(input);
+  });
+  mockedStorage.clearHandshakeBudget.mockImplementation(async (owner, peer) => {
+    if (owner === OWNER && peer === PEER) budget = null;
+  });
+  mockedNative.restoreHandshake.mockResolvedValue({ linkId: 'hs-b', status: 'pending' });
+  mockedNative.restoreLink.mockResolvedValue({ linkId: 'link-b' });
+  return { link: () => link, budget: () => budget };
+}
+
+/** Runs one periodic tick at the earliest moment the durable schedule allows. */
+async function tickWhenDue(budget: HandshakeBudget | null): Promise<void> {
+  jest.spyOn(Date, 'now').mockReturnValue(Math.max(NOW, budget?.nextAdvanceAt ?? 0));
+  await LinkService.advancePendingLinks();
 }
 
 function wireMessage(eventId: string, body = 'hello', kind = CHAT_MESSAGE_KIND): string {
@@ -288,7 +357,9 @@ describe('LinkService', () => {
     mockedStorage.getLink.mockResolvedValue(null);
     mockedStorage.getAllLinks.mockResolvedValue([]);
     mockedStorage.getDueHandshakingLinks.mockResolvedValue([]);
-    mockedStorage.recordPendingHandshakeAdvance.mockResolvedValue(undefined);
+    mockedStorage.getHandshakeBudget.mockResolvedValue(null);
+    mockedStorage.upsertHandshakeBudget.mockResolvedValue(undefined);
+    mockedStorage.clearHandshakeBudget.mockResolvedValue(undefined);
     mockedStorage.hasQueueItem.mockResolvedValue(true);
     mockedStorage.listDeliveryQueue.mockResolvedValue([]);
     mockedStorage.listPaymentRequestsWithPendingEvent.mockResolvedValue([]);
@@ -553,13 +624,14 @@ describe('LinkService', () => {
         remoteReceiverPath: LINK_RECEIVER_PATH,
         consecutiveFailures: 0,
       });
-      expect(mockedStorage.recordPendingHandshakeAdvance).toHaveBeenCalledWith(
-        expect.objectContaining({
-          ownerPubky: OWNER,
-          peerPubky: PEER,
-          snapshot: 'hs-2',
-          pendingAdvances: 1,
-        }),
+      expect(mockedStorage.updateLinkSnapshot).toHaveBeenCalledWith(
+        OWNER,
+        PEER,
+        'hs-2',
+        'handshaking',
+      );
+      expect(mockedStorage.upsertHandshakeBudget).toHaveBeenCalledWith(
+        expect.objectContaining({ ownerPubky: OWNER, peerPubky: PEER, pendingAdvances: 1 }),
       );
     });
 
@@ -713,8 +785,11 @@ describe('LinkService', () => {
 
       await expect(LinkService.ensureLinkWith(PEER)).resolves.toBe('handshaking-responder');
 
-      expect(mockedStorage.recordPendingHandshakeAdvance).toHaveBeenCalledWith(
-        expect.objectContaining({ ownerPubky: OWNER, peerPubky: PEER, snapshot: 'hs-3' }),
+      expect(mockedStorage.updateLinkSnapshot).toHaveBeenCalledWith(
+        OWNER,
+        PEER,
+        'hs-3',
+        'handshaking',
       );
       expect(mockedStorage.upsertLink).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -1562,43 +1637,11 @@ describe('LinkService', () => {
       createdAt: NOW,
     };
 
-    /**
-     * The responder answered with Noise message 2 and persisted
-     * `handshaking`; its send is queued as `sending`. Only the counterparty's
-     * own process can write message 3, so this fixture exposes no session,
-     * receiver, or link row for PEER-as-owner.
-     */
-    function givenQueuedResponderHandshake(): { rows: () => LinkRecord } {
-      let linkRow = storedLink({ role: 'responder', status: 'handshaking', snapshot: 'b-msg2' });
-      mockedStorage.getDueHandshakingLinks.mockImplementation(async owner =>
-        owner === OWNER && linkRow.status === 'handshaking' ? [linkRow] : [],
-      );
-      mockedStorage.getLink.mockImplementation(async (owner, peer) =>
-        owner === OWNER && peer === PEER ? linkRow : null,
-      );
+    function givenQueuedResponderHandshake(): ReturnType<typeof givenResponderHandshake> {
       mockedStorage.getLinkReceiver.mockImplementation(async owner =>
         owner === OWNER ? receiverRow : null,
       );
-      mockedStorage.upsertLink.mockImplementation(async record => {
-        const established = record.status === 'established';
-        linkRow = storedLink({
-          ...record,
-          pendingAdvances: established ? 0 : linkRow.pendingAdvances,
-          nextAdvanceAt: established ? 0 : linkRow.nextAdvanceAt,
-        });
-      });
-      mockedStorage.recordPendingHandshakeAdvance.mockImplementation(async input => {
-        linkRow = storedLink({
-          ...linkRow,
-          status: 'handshaking',
-          snapshot: input.snapshot,
-          pendingAdvances: input.pendingAdvances,
-          nextAdvanceAt: input.nextAdvanceAt,
-        });
-      });
-      mockedNative.restoreHandshake.mockResolvedValue({ linkId: 'hs-b', status: 'pending' });
-      mockedNative.restoreLink.mockResolvedValue({ linkId: 'link-b' });
-      return { rows: () => linkRow };
+      return givenResponderHandshake();
     }
 
     it('completes a responder handshake on a later tick and delivers its queued sends', async () => {
@@ -1612,8 +1655,8 @@ describe('LinkService', () => {
       await LinkService.advancePendingLinks();
       await LinkService.drainRetries();
 
-      expect(state.rows().status).toBe('established');
-      expect(state.rows().role).toBe('responder');
+      expect(state.link()!.status).toBe('established');
+      expect(state.link()!.role).toBe('responder');
       expect(mockedNative.sendPrivateMessageJson).toHaveBeenCalledWith(
         'link-b',
         wireMessage(EVENT_ID),
@@ -1656,7 +1699,7 @@ describe('LinkService', () => {
       await LinkService.advancePendingLinks();
 
       expect(mockedNative.advanceHandshake).toHaveBeenCalledWith('hs-b');
-      expect(state.rows().status).toBe('established');
+      expect(state.link()!.status).toBe('established');
     });
 
     it('keeps a pending handshake handshaking and never initiates from a tick', async () => {
@@ -1666,19 +1709,14 @@ describe('LinkService', () => {
 
       await LinkService.advancePendingLinks();
 
-      expect(state.rows().status).toBe('handshaking');
+      expect(state.link()!.status).toBe('handshaking');
+      expect(state.link()!.snapshot).toBe('b-msg2b');
       expect(mockedNative.initiateLink).not.toHaveBeenCalled();
-      expect(mockedStorage.recordPendingHandshakeAdvance).toHaveBeenCalledWith(
-        expect.objectContaining({
-          ownerPubky: OWNER,
-          peerPubky: PEER,
-          snapshot: 'b-msg2b',
-          pendingAdvances: 1,
-        }),
+      // A pending advance is persisted progress on the Noise state but is still
+      // charged against the durable budget, on the shared retry curve.
+      expect(state.budget()).toEqual(
+        expect.objectContaining({ pendingAdvances: 1, nextAdvanceAt: NOW + 30_000 }),
       );
-      // A pending advance must not look like progress — `updateLinkSnapshot`
-      // clears the backoff schedule, so this path must not use it.
-      expect(mockedStorage.updateLinkSnapshot).not.toHaveBeenCalled();
     });
 
     it('asks storage only for handshaking links whose backoff is due, bounded per tick', async () => {
@@ -1732,70 +1770,22 @@ describe('LinkService', () => {
       createdAt: NOW,
     };
 
-    /**
-     * A responder row that behaves like the real table: the tick only sees it
-     * while it is `handshaking` AND its backoff has elapsed, a pending advance
-     * writes the new schedule, and a wipe removes it.
-     */
-    function givenStoredResponderHandshake(): { row: () => LinkRecord | null } {
-      let row: LinkRecord | null = storedLink({
-        role: 'responder',
-        status: 'handshaking',
-        snapshot: 'b-msg2',
-      });
-      mockedStorage.getDueHandshakingLinks.mockImplementation(async owner =>
-        owner === OWNER && row && row.status === 'handshaking' && row.nextAdvanceAt <= Date.now()
-          ? [row]
-          : [],
-      );
-      mockedStorage.getLink.mockImplementation(async (owner, peer) =>
-        owner === OWNER && peer === PEER ? row : null,
-      );
-      mockedStorage.upsertLink.mockImplementation(async record => {
-        const established = record.status === 'established';
-        row = storedLink({
-          ...record,
-          pendingAdvances: established ? 0 : (row?.pendingAdvances ?? 0),
-          nextAdvanceAt: established ? 0 : (row?.nextAdvanceAt ?? 0),
-        });
-      });
-      mockedStorage.recordPendingHandshakeAdvance.mockImplementation(async input => {
-        row = storedLink({
-          ...(row ?? {}),
-          status: 'handshaking',
-          snapshot: input.snapshot,
-          pendingAdvances: input.pendingAdvances,
-          nextAdvanceAt: input.nextAdvanceAt,
-        });
-      });
-      mockedStorage.deleteLink.mockImplementation(async () => {
-        row = null;
-      });
-      mockedNative.restoreHandshake.mockResolvedValue({ linkId: 'hs-b', status: 'pending' });
-      return { row: () => row };
-    }
-
     /** Runs one tick with the clock moved to this link's next due instant. */
-    async function tickWhenDue(row: LinkRecord | null): Promise<void> {
-      jest.spyOn(Date, 'now').mockReturnValue(Math.max(NOW, row?.nextAdvanceAt ?? 0));
-      await LinkService.advancePendingLinks();
-    }
-
     it('does not write Noise message 1 when a tick hits a protocol error', async () => {
-      const state = givenStoredResponderHandshake();
+      const state = givenResponderHandshake();
       mockedNative.restoreHandshake.mockRejectedValue({ code: 'protocol', message: 'bad state' });
 
       await LinkService.advancePendingLinks();
 
       // The wedged row and its dead outbox are gone...
       expect(mockedStorage.deleteLink).toHaveBeenCalledWith(OWNER, PEER);
-      expect(state.row()).toBeNull();
+      expect(state.link()).toBeNull();
       // ...but recovery must not turn a background timer into an initiator.
       expect(mockedNative.initiateLink).not.toHaveBeenCalled();
     });
 
     it('does not initiate when a tick exhausts the handshake failure limit', async () => {
-      givenStoredResponderHandshake();
+      givenResponderHandshake();
       mockedNative.restoreHandshake.mockRejectedValue({ code: 'network', message: 'timeout' });
       mockedStorage.incrementLinkConsecutiveFailures.mockResolvedValue(HANDSHAKE_FAILURE_LIMIT);
 
@@ -1806,12 +1796,12 @@ describe('LinkService', () => {
     });
 
     it('lets the next user-driven send initiate the link the tick refused to restart', async () => {
-      const state = givenStoredResponderHandshake();
+      const state = givenResponderHandshake();
       mockedNative.restoreHandshake.mockRejectedValue({ code: 'protocol', message: 'bad state' });
 
       await LinkService.advancePendingLinks();
       expect(mockedNative.initiateLink).not.toHaveBeenCalled();
-      expect(state.row()).toBeNull();
+      expect(state.link()).toBeNull();
 
       mockedNative.initiateLink.mockResolvedValue({ linkId: 'hs-fresh', snapshot: 'fresh-msg1' });
       mockedNative.advanceHandshake.mockResolvedValue({
@@ -1822,17 +1812,17 @@ describe('LinkService', () => {
       await LinkService.ensureLinkWith(PEER);
 
       expect(mockedNative.initiateLink).toHaveBeenCalledTimes(1);
-      expect(state.row()).toEqual(
+      expect(state.link()).toEqual(
         expect.objectContaining({ role: 'initiator', status: 'handshaking' }),
       );
     });
 
     it('throttles a repeatedly pending handshake instead of stepping it every tick', async () => {
-      const state = givenStoredResponderHandshake();
+      const state = givenResponderHandshake();
       mockedNative.advanceHandshake.mockResolvedValue({ status: 'pending', snapshot: 'b-msg2b' });
 
       await LinkService.advancePendingLinks();
-      const firstDueAt = state.row()!.nextAdvanceAt;
+      const firstDueAt = state.budget()!.nextAdvanceAt;
       expect(firstDueAt).toBeGreaterThan(NOW);
       expect(mockedNative.advanceHandshake).toHaveBeenCalledTimes(1);
 
@@ -1841,23 +1831,23 @@ describe('LinkService', () => {
       expect(mockedNative.advanceHandshake).toHaveBeenCalledTimes(1);
 
       // Once the backoff elapses it steps again, and the next window is wider.
-      await tickWhenDue(state.row());
+      await tickWhenDue(state.budget());
       expect(mockedNative.advanceHandshake).toHaveBeenCalledTimes(2);
-      expect(state.row()!.pendingAdvances).toBe(2);
-      expect(state.row()!.nextAdvanceAt - firstDueAt).toBeGreaterThan(firstDueAt - NOW);
+      expect(state.budget()!.pendingAdvances).toBe(2);
+      expect(state.budget()!.nextAdvanceAt - firstDueAt).toBeGreaterThan(firstDueAt - NOW);
     });
 
     it('abandons a handshake the peer never finishes and fails its queued sends', async () => {
-      const state = givenStoredResponderHandshake();
+      const state = givenResponderHandshake();
       mockedNative.advanceHandshake.mockResolvedValue({ status: 'pending', snapshot: 'b-msg2b' });
       mockedStorage.listDeliveryQueue.mockResolvedValue([queuedItem]);
 
       for (let advance = 0; advance < HANDSHAKE_PENDING_ADVANCE_LIMIT; advance += 1) {
-        await tickWhenDue(state.row());
+        await tickWhenDue(state.budget());
       }
 
       expect(mockedNative.advanceHandshake).toHaveBeenCalledTimes(HANDSHAKE_PENDING_ADVANCE_LIMIT);
-      expect(state.row()).toBeNull();
+      expect(state.link()).toBeNull();
       expect(mockedStorage.deleteLink).toHaveBeenCalledWith(OWNER, PEER);
       // The stuck send stops pretending: `failed` is what ThreadScreen renders
       // in red, and the outbox entry is gone so nothing keeps spinning.
@@ -1881,7 +1871,7 @@ describe('LinkService', () => {
       const flush = async (): Promise<void> => {
         for (let turn = 0; turn < 50; turn += 1) await Promise.resolve();
       };
-      givenStoredResponderHandshake();
+      givenResponderHandshake();
       let releaseAdvance: (() => void) | null = null;
       mockedNative.advanceHandshake.mockImplementation(
         () =>
@@ -1917,7 +1907,7 @@ describe('LinkService', () => {
     });
 
     it('does not charge a handshake failure when the transport restore fails after establishing', async () => {
-      const state = givenStoredResponderHandshake();
+      const state = givenResponderHandshake();
       mockedNative.advanceHandshake.mockResolvedValue({ status: 'established', snapshot: 'b-est' });
       mockedNative.restoreLink.mockRejectedValueOnce({ code: 'network', message: 'timeout' });
 
@@ -1925,7 +1915,7 @@ describe('LinkService', () => {
 
       // The row really is established; the stale pre-advance read must not be
       // what the failure is charged against.
-      expect(state.row()).toEqual(expect.objectContaining({ status: 'established' }));
+      expect(state.link()).toEqual(expect.objectContaining({ status: 'established' }));
       expect(mockedStorage.incrementLinkConsecutiveFailures).not.toHaveBeenCalled();
       expect(mockedStorage.deleteLink).not.toHaveBeenCalled();
 
@@ -1954,6 +1944,178 @@ describe('LinkService', () => {
 
       expect(mockedNative.sendPrivateMessageJson).toHaveBeenCalledTimes(1);
       expect(mockedStorage.finalizeLinkSend).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  /**
+   * The abuse budget has to survive the link row, because every way a peer can
+   * make us give up on a handshake also deletes that row. A hostile follower
+   * whose budget reset on wipe could cycle valid message 1 → pending →
+   * malformed message 3 → protocol wipe → re-adoption and buy a fresh
+   * allowance every 30–60s forever.
+   */
+  describe('handshake abuse budget — durable across wipe and re-adoption', () => {
+    /** Makes the peer's next inbound probe look like a fresh Noise message 1. */
+    function givenHostileInboundMessage1(): void {
+      mockedNative.probeInboundLink.mockResolvedValue({
+        result: 'pending',
+        linkId: 'hs-hostile',
+        snapshot: 'hostile-msg1',
+      });
+    }
+
+    it('keeps the pending budget when a protocol wipe is followed by re-adoption', async () => {
+      const state = givenResponderHandshake();
+      mockedNative.advanceHandshake.mockResolvedValue({ status: 'pending', snapshot: 'b-msg2b' });
+
+      // One honest pending advance charges the budget.
+      await LinkService.advancePendingLinks();
+      expect(state.budget()!.pendingAdvances).toBe(1);
+
+      // The peer now answers with a malformed message 3 and the wipe deletes
+      // the link row. Re-adoption immediately re-creates it from the peer's
+      // rewritten message 1 — which is the exploit's whole cycle.
+      jest.spyOn(Date, 'now').mockReturnValue(state.budget()!.nextAdvanceAt);
+      mockedNative.advanceHandshake.mockRejectedValue({ code: 'protocol', message: 'bad msg3' });
+      givenHostileInboundMessage1();
+
+      await LinkService.advancePendingLinks();
+
+      // The row is gone and rebuilt, but the charge is not refunded: the wipe
+      // itself costs a unit on top of the earlier pending advance. Before the
+      // budget was durable this cycle came back at 1 — a fresh allowance.
+      expect(state.budget()!.pendingAdvances).toBe(2);
+      expect(mockedStorage.clearHandshakeBudget).not.toHaveBeenCalled();
+      expect(mockedNative.initiateLink).not.toHaveBeenCalled();
+    });
+
+    it('runs the budget down to exhaustion across repeated wipe/re-adopt cycles', async () => {
+      const state = givenResponderHandshake();
+      mockedNative.advanceHandshake.mockRejectedValue({ code: 'protocol', message: 'bad msg3' });
+      givenHostileInboundMessage1();
+
+      // Each cycle is a wipe plus a re-adoption, the cheapest attack loop.
+      for (let cycle = 0; cycle < HANDSHAKE_PENDING_ADVANCE_LIMIT; cycle += 1) {
+        jest.spyOn(Date, 'now').mockReturnValue(Math.max(NOW, state.budget()?.nextAdvanceAt ?? 0));
+        await LinkService.advancePendingLinks();
+      }
+
+      expect(state.budget()!.exhaustedAt).not.toBeNull();
+      const advancesAtExhaustion = mockedNative.advanceHandshake.mock.calls.length;
+
+      // A fresh hostile message 1 must not restart periodic work.
+      mockedStorage.upsertLink.mockClear();
+      for (let tick = 0; tick < 5; tick += 1) {
+        jest.spyOn(Date, 'now').mockReturnValue(NOW + (tick + 1) * 60 * 60 * 1000);
+        await LinkService.advancePendingLinks();
+      }
+
+      expect(mockedNative.advanceHandshake).toHaveBeenCalledTimes(advancesAtExhaustion);
+      expect(mockedStorage.upsertLink).not.toHaveBeenCalled();
+      expect(mockedNative.initiateLink).not.toHaveBeenCalled();
+    });
+
+    it('refuses an exhausted peer on the sync path before any homeserver IO', async () => {
+      givenResponderHandshake(
+        storedBudget({ pendingAdvances: HANDSHAKE_PENDING_ADVANCE_LIMIT, exhaustedAt: NOW }),
+      );
+      mockedStorage.getLink.mockResolvedValue(null);
+      givenHostileInboundMessage1();
+
+      await LinkService.syncInbox([PEER]);
+
+      expect(mockedNative.getReceiverMarker).not.toHaveBeenCalled();
+      expect(mockedNative.probeInboundLink).not.toHaveBeenCalled();
+      expect(mockedStorage.upsertLink).not.toHaveBeenCalled();
+      expect(mockedNative.initiateLink).not.toHaveBeenCalled();
+    });
+
+    it('scopes exhaustion to the exact owner and peer', async () => {
+      const other = 'c'.repeat(52);
+      givenResponderHandshake();
+      mockedStorage.getLink.mockResolvedValue(null);
+      mockedStorage.getHandshakeBudget.mockImplementation(async (owner, peer) =>
+        owner === OWNER && peer === PEER
+          ? storedBudget({ pendingAdvances: HANDSHAKE_PENDING_ADVANCE_LIMIT, exhaustedAt: NOW })
+          : null,
+      );
+      mockedNative.probeInboundLink.mockResolvedValue({ result: 'none' });
+
+      await LinkService.syncInbox([PEER, other]);
+
+      expect(mockedNative.getReceiverMarker).toHaveBeenCalledTimes(1);
+      expect(mockedNative.getReceiverMarker).toHaveBeenCalledWith(other, LINK_RECEIVER_PATH);
+    });
+
+    it('lets a deliberate user send clear exhaustion and hand back a full allowance', async () => {
+      const state = givenResponderHandshake(
+        storedBudget({ pendingAdvances: HANDSHAKE_PENDING_ADVANCE_LIMIT, exhaustedAt: NOW }),
+      );
+      mockedNative.advanceHandshake.mockResolvedValue({ status: 'pending', snapshot: 'b-msg2b' });
+
+      // The timer refuses the peer outright...
+      await LinkService.advancePendingLinks();
+      expect(mockedNative.advanceHandshake).not.toHaveBeenCalled();
+
+      // ...and the user deliberately choosing this conversation is the
+      // documented override, so exhaustion is never a permanent denial.
+      await expect(LinkService.sendDm(PEER, 'hello')).resolves.toEqual(
+        expect.objectContaining({ deliveryState: 'sending' }),
+      );
+
+      expect(mockedStorage.clearHandshakeBudget).toHaveBeenCalledWith(OWNER, PEER);
+      expect(mockedNative.advanceHandshake).toHaveBeenCalledWith('hs-b');
+      expect(state.budget()!.pendingAdvances).toBe(1);
+      expect(state.budget()!.exhaustedAt).toBeNull();
+    });
+
+    it('does not let a background replay of a queued send clear the budget', async () => {
+      givenResponderHandshake(
+        storedBudget({ pendingAdvances: HANDSHAKE_PENDING_ADVANCE_LIMIT, exhaustedAt: NOW }),
+      );
+      mockedStorage.getLinkMessage.mockResolvedValue(sendingRow());
+      mockedRetryQueue.getDue.mockResolvedValue([
+        {
+          id: 'q-stale',
+          messageId: EVENT_ID,
+          recipientPubky: PEER,
+          payload: JSON.stringify({
+            type: LINK_RETRY_PAYLOAD_TYPE,
+            ownerPubky: OWNER,
+            peerPubky: PEER,
+            senderPubky: OWNER,
+            kind: CHAT_MESSAGE_KIND,
+            eventId: EVENT_ID,
+            rawJson: wireMessage(EVENT_ID),
+          }),
+          attempts: 0,
+          nextRetryAt: NOW,
+          createdAt: NOW,
+        },
+      ]);
+
+      await LinkService.drainRetries();
+
+      // A timer replaying one stuck item must not refresh the allowance, or the
+      // send would never surface as `failed` and the peer keeps its work.
+      expect(mockedStorage.clearHandshakeBudget).not.toHaveBeenCalled();
+      expect(mockedNative.advanceHandshake).not.toHaveBeenCalled();
+      expect(mockedNative.sendPrivateMessageJson).not.toHaveBeenCalled();
+    });
+
+    it('forgives the budget when the handshake actually completes', async () => {
+      const state = givenResponderHandshake();
+      mockedNative.advanceHandshake
+        .mockResolvedValueOnce({ status: 'pending', snapshot: 'b-msg2b' })
+        .mockResolvedValue({ status: 'established', snapshot: 'b-est' });
+
+      await LinkService.advancePendingLinks();
+      expect(state.budget()!.pendingAdvances).toBe(1);
+
+      await tickWhenDue(state.budget());
+
+      expect(state.link()!.status).toBe('established');
+      expect(state.budget()).toBeNull();
     });
   });
 
