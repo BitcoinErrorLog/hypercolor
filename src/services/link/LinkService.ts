@@ -1011,12 +1011,13 @@ function isUnusableReceiverAliasError(err: unknown): boolean {
 /**
  * Handshake abuse budget recovery policy, in one place so it cannot drift:
  *
- * A `user` intent clears the budget before anything else happens, so a peer is
- * never permanently denied — one deliberate send or thread open restores a full
- * allowance. Every other intent is refused outright once the budget is
- * exhausted, BEFORE the marker fetch and inbound probe, so an exhausted peer
- * costs zero homeserver IO and cannot be re-adopted by timer or sync activity
- * however many times it rewrites Noise message 1.
+ * A `user` intent clears the budget before any handshake work is dispatched, so
+ * a peer is never permanently denied — one deliberate send or thread open
+ * restores a full allowance, whether or not a handshake handle is already live.
+ * Every other intent is refused outright once the budget is exhausted, BEFORE
+ * the marker fetch and inbound probe, so an exhausted peer costs zero homeserver
+ * IO and cannot be re-adopted by timer or sync activity however many times it
+ * rewrites Noise message 1.
  *
  * The gate deliberately sits after the established branches: an exhausted
  * budget must never interfere with a link that actually completed.
@@ -1040,6 +1041,15 @@ async function ensureLinkLocked(
   const key = linkKey(ownerPubky, peerPubky);
   const live = liveHandles.get(key);
   if (live?.status === 'established') return 'ready';
+
+  // Above the live-handle dispatch on purpose. A handshake in progress keeps a
+  // handle in memory for as long as the app stays foregrounded, and clearing
+  // below that branch made the documented recovery unreachable in exactly the
+  // case that needs it: the peer whose budget the handshake itself ran down.
+  if (intent === 'user') {
+    await StorageService.clearHandshakeBudget(ownerPubky, peerPubky);
+  }
+
   if (live?.status === 'handshaking') {
     return advanceLiveHandshake(
       activeSession,
@@ -1057,9 +1067,7 @@ async function ensureLinkLocked(
     return restoreEstablished(activeSession, receiver, stored, intent, alreadyRecovered);
   }
 
-  if (intent === 'user') {
-    await StorageService.clearHandshakeBudget(ownerPubky, peerPubky);
-  } else if (await isHandshakeBudgetExhausted(ownerPubky, peerPubky)) {
+  if (intent !== 'user' && (await isHandshakeBudgetExhausted(ownerPubky, peerPubky))) {
     return 'idle';
   }
 
@@ -1237,9 +1245,13 @@ async function advanceLiveHandshake(
 
     // `pending` is a real Noise XX step, not a failure — but it is also the
     // shape of a peer that answered once and went silent, so it has to cost
-    // something. Charge the durable budget BEFORE persisting the snapshot: a
-    // crash between the two loses a handshake step, never a charge.
-    const budget = await chargeHandshakeBudget(ownerPubky, peerPubky);
+    // something. What it costs is decided in one place: see the charge policy on
+    // `chargeHandshakeBudget`. Charged BEFORE persisting the snapshot: a crash
+    // between the two loses a handshake step, never a charge.
+    const budget = await chargeHandshakeBudget(ownerPubky, peerPubky, {
+      reason: 'pending-advance',
+      intent,
+    });
     await StorageService.updateLinkSnapshot(ownerPubky, peerPubky, result.snapshot, 'handshaking');
 
     if (budget.exhausted) {
@@ -1300,6 +1312,16 @@ function fallbackLinkRecord(
 }
 
 /**
+ * Why a handshake step is being charged. The whole charge policy lives in
+ * {@link chargeHandshakeBudget} so the two call sites cannot drift apart.
+ */
+type HandshakeCharge =
+  /** An advance that returned `pending`: throttled, see below. */
+  | { reason: 'pending-advance'; intent: LinkIntent }
+  /** A wipe of a still-unestablished handshake: never throttled, see below. */
+  | { reason: 'unestablished-wipe' };
+
+/**
  * Charges one unproductive handshake step against this peer and returns the
  * resulting budget.
  *
@@ -1310,13 +1332,43 @@ function fallbackLinkRecord(
  * message 1 → pending → malformed message 3 → wipe → re-adoption for a fresh
  * budget every 30–60s. Safe to read-modify-write: all link work for a peer runs
  * inside `withQueue(peer)`.
+ *
+ * Charge policy — the budget bounds UNATTENDED, REPEATED work, because that is
+ * the only cost a peer who never completes can impose:
+ *
+ * - A `pending` advance charges at most once per backoff window. Charging
+ *   closes the window, so the first step in a window costs one unit and every
+ *   later step by any caller in that window is free. Without this the cost
+ *   scaled with how many callers happened to step the handshake — the tick, a
+ *   queued-delivery retry, a thread open and an inbox sync all land inside the
+ *   same 30s window — so a handshake converging normally consumed half the
+ *   allowance, and one with a queued send ran itself to exhaustion. The rate a
+ *   hostile peer can farm is unchanged: the tick only steps links whose window
+ *   has elapsed, so it still costs exactly one unit per due step, ten steps
+ *   across roughly two hours.
+ * - A `user` intent never charges. It has already cleared the budget by the
+ *   time it gets here (see {@link ensureLinkLocked}), and a deliberate action
+ *   is attended by definition.
+ * - A wipe of a still-unestablished handshake always charges, window or not.
+ *   That one is peer-triggerable on demand — a malformed message 3 forces it —
+ *   so throttling it would hand back the free re-adoption cycle the durable
+ *   budget exists to close.
  */
 async function chargeHandshakeBudget(
   ownerPubky: PubkyKey,
   peerPubky: PubkyKey,
+  charge: HandshakeCharge,
 ): Promise<{ advances: number; exhausted: boolean }> {
   const current = await StorageService.getHandshakeBudget(ownerPubky, peerPubky);
-  const advances = (current?.pendingAdvances ?? 0) + 1;
+  const held = {
+    advances: current?.pendingAdvances ?? 0,
+    exhausted: current ? current.exhaustedAt !== null : false,
+  };
+  if (charge.reason === 'pending-advance') {
+    if (charge.intent === 'user') return held;
+    if (current && current.nextAdvanceAt > Date.now()) return held;
+  }
+  const advances = held.advances + 1;
   const exhausted = advances >= HANDSHAKE_PENDING_ADVANCE_LIMIT;
   await StorageService.upsertHandshakeBudget({
     ownerPubky,
@@ -1640,7 +1692,9 @@ async function recoverWedgedLink(
   }
 
   if (stored.status !== 'established') {
-    const budget = await chargeHandshakeBudget(stored.ownerPubky, stored.peerPubky);
+    const budget = await chargeHandshakeBudget(stored.ownerPubky, stored.peerPubky, {
+      reason: 'unestablished-wipe',
+    });
     if (budget.exhausted) return abandonUnestablishedLink(stored);
   }
 
