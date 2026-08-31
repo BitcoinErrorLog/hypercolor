@@ -131,8 +131,6 @@ type EnsureOutcome = LinkStatus | 'idle';
 let session: ActiveSession | null = null;
 let restoreInFlight: Promise<SessionLookup> | null = null;
 const liveHandles = new Map<string, LiveHandle>();
-/** Native session aliases that still exist in this process (slot-switch). */
-const nativeSessions = new Map<string, string>();
 const queues = new Map<string, Promise<unknown>>();
 let drainTimer: ReturnType<typeof setInterval> | null = null;
 const inboxSyncListeners = new Set<(ownerPubky: PubkyKey) => void>();
@@ -150,7 +148,6 @@ export const LinkService = {
     KeyStore.setPubky(pubky);
     KeyStore.setLinkSession(sessionAlias);
     session = { alias: sessionAlias, pubky };
-    rememberNativeSession(sessionAlias, pubky);
     return { pubky };
   },
 
@@ -239,7 +236,6 @@ export const LinkService = {
     }
     session = null;
     liveHandles.clear();
-    nativeSessions.clear();
     queues.clear();
     KeyStore.deleteLinkSession();
   },
@@ -258,7 +254,6 @@ export const LinkService = {
     KeyStore.setPubky(id);
     KeyStore.setLinkSession(alias);
     session = { alias, pubky: id };
-    rememberNativeSession(alias, id);
   },
 
   /**
@@ -308,7 +303,6 @@ export const LinkService = {
         KeyStore.setPubky(pubky);
         KeyStore.setLinkSession(sessionAlias);
         session = { alias: sessionAlias, pubky };
-        rememberNativeSession(sessionAlias, pubky);
         return provisionReceiver(sessionAlias, pubky);
       },
     };
@@ -610,6 +604,38 @@ export const LinkService = {
     }
   },
 
+  /**
+   * Steps every still-handshaking link owned by the active session.
+   *
+   * Noise XX needs one advance per party per message. A responder that has
+   * answered with message 2 still has to read message 3, and only its own
+   * session can do that — the counterparty's handshake handle lives in
+   * another process on another device. `drainRetries` alone is not enough:
+   * it reaches `ensureLinkLocked` only for peers that happen to have a due
+   * `delivery_queue` item, so a handshake with nothing queued never steps
+   * and both sides stay wedged at `handshaking-initiator` /
+   * `handshaking-responder`.
+   *
+   * Never initiates: a periodic tick answers and completes handshakes, it
+   * does not start new ones (same policy as {@link syncInbox}).
+   */
+  async advancePendingLinks(): Promise<void> {
+    const lookup = await sessionOrRestore();
+    if (!isActiveSession(lookup)) return;
+    const links = await StorageService.getAllLinks(lookup.pubky);
+    for (const link of links) {
+      if (link.status !== 'handshaking') continue;
+      try {
+        await withQueue(link.peerPubky, () => ensureLinkLocked(link.peerPubky, false, false));
+      } catch (err) {
+        console.warn(
+          `[LinkService] Handshake advance failed for ${link.peerPubky}:`,
+          errorMessage(err),
+        );
+      }
+    }
+  },
+
   /** @deprecated Use {@link drainRetries}. */
   async retryPendingSends(): Promise<void> {
     await LinkService.drainRetries();
@@ -739,9 +765,27 @@ export const LinkService = {
 export function startLinkRetryDrain(intervalMs = LINK_RETRY_DRAIN_INTERVAL_MS): () => void {
   stopLinkRetryDrain();
   drainTimer = setInterval(() => {
-    void LinkService.drainRetries();
+    void linkRetryTick();
   }, intervalMs);
   return stopLinkRetryDrain;
+}
+
+/**
+ * One foreground tick: step live handshakes first, then deliver whatever the
+ * transition to `ready` unblocked. Ordering matters — draining first would
+ * defer every queued send for another interval.
+ */
+async function linkRetryTick(): Promise<void> {
+  try {
+    await LinkService.advancePendingLinks();
+  } catch (err) {
+    console.warn('[LinkService] Handshake advance tick failed:', errorMessage(err));
+  }
+  try {
+    await LinkService.drainRetries();
+  } catch (err) {
+    console.warn('[LinkService] Retry drain tick failed:', errorMessage(err));
+  }
 }
 
 export function stopLinkRetryDrain(): void {
@@ -763,7 +807,6 @@ export function linkQueueEntryCountForTests(): number {
 export function resetLinkServiceHarnessState(): void {
   session = null;
   liveHandles.clear();
-  nativeSessions.clear();
   queues.clear();
 }
 
@@ -785,7 +828,6 @@ async function restoreFromKeyStore(): Promise<SessionLookup> {
   try {
     const { pubky } = await PaykitLinkNative.restoreSession(stored);
     session = { alias: stored, pubky };
-    rememberNativeSession(stored, pubky);
     return session;
   } catch (err) {
     if (isLinkNativeError(err) && err.code === 'auth') {
@@ -932,15 +974,7 @@ async function ensureLinkLocked(
     throw err;
   }
   if (inbound !== null) {
-    return adoptInboundHandshake(
-      activeSession,
-      receiver,
-      ownerPubky,
-      peerPubky,
-      marker,
-      localPath,
-      inbound,
-    );
+    return adoptInboundHandshake(ownerPubky, peerPubky, marker, localPath, inbound);
   }
 
   if (!allowInitiate) return 'idle';
@@ -1080,39 +1114,10 @@ async function advanceLiveHandshake(
         if (inbound !== null) {
           await closeQuietly(live.linkId);
           liveHandles.delete(linkKey(ownerPubky, peerPubky));
-          return adoptInboundHandshake(
-            activeSession,
-            receiver,
-            ownerPubky,
-            peerPubky,
-            marker,
-            LINK_RECEIVER_PATH,
-            inbound,
-          );
+          return adoptInboundHandshake(ownerPubky, peerPubky, marker, LINK_RECEIVER_PATH, inbound);
         }
       }
     }
-
-    await nudgeCounterpartHandshake(ownerPubky, peerPubky);
-    const stepped = await PaykitLinkNative.advanceHandshake(live.linkId);
-    if (stepped.status === 'established') {
-      const remoteKey = stored?.remoteNoisePublicKey ?? '';
-      const localPath = coerceReceiverPath(stored?.localReceiverPath ?? receiver.receiverPath);
-      const remotePath = coerceReceiverPath(stored?.remoteReceiverPath ?? LINK_RECEIVER_PATH);
-      return completeEstablished(
-        activeSession,
-        receiver,
-        ownerPubky,
-        peerPubky,
-        live.role,
-        stepped.snapshot,
-        remoteKey,
-        localPath,
-        remotePath,
-        live.linkId,
-      );
-    }
-    await StorageService.updateLinkSnapshot(ownerPubky, peerPubky, stepped.snapshot, 'handshaking');
 
     return roleStatus(live.role);
   } catch (err) {
@@ -1243,14 +1248,12 @@ async function probeInbound(
 }
 
 async function adoptInboundHandshake(
-  activeSession: ActiveSession,
-  receiver: LinkReceiver,
   ownerPubky: PubkyKey,
   peerPubky: PubkyKey,
   marker: ReceiverMarker,
   localPath: string,
   inbound: Extract<LinkProbeResult, { result: 'pending' | 'established' }>,
-): Promise<EnsureOutcome> {
+): Promise<LinkStatus> {
   const remotePath = LINK_RECEIVER_PATH;
   const key = linkKey(ownerPubky, peerPubky);
   if (inbound.result === 'established') {
@@ -1280,88 +1283,8 @@ async function adoptInboundHandshake(
     remoteReceiverPath: remotePath,
     consecutiveFailures: 0,
   });
-  const live: Extract<LiveHandle, { status: 'handshaking' }> = {
-    status: 'handshaking',
-    linkId: inbound.linkId,
-    role: 'responder',
-  };
-  liveHandles.set(key, live);
-  return advanceLiveHandshake(activeSession, receiver, ownerPubky, peerPubky, live, false);
-}
-
-/**
- * Noise XX needs both parties to advance. On one process (debug slot-switch)
- * the counterparty handshake handle is still live; drive it so a responder
- * send can finish instead of sitting in `sending` forever.
- */
-async function nudgeCounterpartHandshake(localOwner: PubkyKey, peerPubky: PubkyKey): Promise<void> {
-  const reverseKey = linkKey(peerPubky, localOwner);
-  const existing = liveHandles.get(reverseKey);
-  if (existing?.status === 'established') return;
-
-  const stored = await StorageService.getLink(peerPubky, localOwner);
-  let live = existing?.status === 'handshaking' ? existing : null;
-
-  if (!live) {
-    if (stored?.status !== 'handshaking') return;
-    const alias = nativeSessions.get(peerPubky);
-    const receiver = await StorageService.getLinkReceiver(peerPubky);
-    if (!alias || !receiver) return;
-    try {
-      const restored = await PaykitLinkNative.restoreHandshake(
-        alias,
-        receiver.receiverAlias,
-        localOwner,
-        stored.remoteNoisePublicKey,
-        coerceReceiverPath(stored.localReceiverPath),
-        coerceReceiverPath(stored.remoteReceiverPath),
-        stored.snapshot,
-      );
-      live = {
-        status: 'handshaking',
-        linkId: restored.linkId,
-        role: stored.role,
-      };
-      liveHandles.set(reverseKey, live);
-    } catch {
-      return;
-    }
-  }
-
-  try {
-    const result = await PaykitLinkNative.advanceHandshake(live.linkId);
-    if (result.status === 'established') {
-      if (stored) {
-        await StorageService.upsertLink({
-          ownerPubky: peerPubky,
-          peerPubky: localOwner,
-          role: live.role,
-          status: 'established',
-          snapshot: result.snapshot,
-          remoteNoisePublicKey: stored.remoteNoisePublicKey,
-          localReceiverPath: stored.localReceiverPath,
-          remoteReceiverPath: stored.remoteReceiverPath,
-          consecutiveFailures: 0,
-        });
-      } else {
-        await StorageService.updateLinkSnapshot(
-          peerPubky,
-          localOwner,
-          result.snapshot,
-          'established',
-        );
-      }
-      liveHandles.set(reverseKey, { status: 'established', linkId: live.linkId });
-      return;
-    }
-    await StorageService.updateLinkSnapshot(peerPubky, localOwner, result.snapshot, 'handshaking');
-  } catch {
-    // The counterparty will advance when its own session is active.
-  }
-}
-
-function rememberNativeSession(alias: string, pubky: string): void {
-  nativeSessions.set(pubky, alias);
+  liveHandles.set(key, { status: 'handshaking', linkId: inbound.linkId, role: 'responder' });
+  return 'handshaking-responder';
 }
 
 async function handleLinkFailure(
