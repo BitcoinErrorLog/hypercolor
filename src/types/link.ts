@@ -339,7 +339,8 @@ export type LinkMessageDirection = 'sent' | 'received';
  * Outbound delivery lifecycle for one message. `delivered` and `read` are
  * driven by the reserved receipt kind and stay unused until receipt logic
  * ships; received messages persist as `delivered` on arrival. `failed` is
- * set when the retry queue permanently drops an outbound item.
+ * set when a native send attempt fails or when the retry queue permanently
+ * drops an outbound item.
  */
 export type LinkDeliveryState = 'sending' | 'sent' | 'delivered' | 'read' | 'failed';
 

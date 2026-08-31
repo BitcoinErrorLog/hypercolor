@@ -897,18 +897,27 @@ describe('LinkService', () => {
       expect(sendOrder).toBeLessThan(finalizeOrder);
     });
 
-    it('leaves the row in sending when the native send fails (already queued)', async () => {
+    it('marks failed and throws when the native send fails (retry item kept)', async () => {
       givenEstablishedLink();
-      mockedNative.sendPrivateMessageJson.mockRejectedValue(new Error('outbox write failed'));
+      mockedNative.sendPrivateMessageJson.mockRejectedValue({
+        code: 'protocol',
+        message: 'protocol error',
+      });
 
-      const message = await LinkService.sendDm(PEER, 'hello');
+      await expect(LinkService.sendDm(PEER, 'hello')).rejects.toThrow('protocol error');
 
-      expect(message.deliveryState).toBe('sending');
+      expect(mockedStorage.updateLinkMessageDeliveryState).toHaveBeenCalledWith(
+        OWNER,
+        OWNER,
+        CHAT_MESSAGE_KIND,
+        EVENT_ID,
+        'failed',
+      );
       expect(mockedStorage.finalizeLinkSend).not.toHaveBeenCalled();
       expect(mockedStorage.persistLinkSendIntent).toHaveBeenCalledTimes(1);
     });
 
-    it('queues instead of sending while the link is still handshaking', async () => {
+    it('keeps sending when native send was not attempted yet (link handshaking)', async () => {
       mockedStorage.getLink.mockResolvedValue(storedLink({ snapshot: 'hs-2' }));
       mockedNative.restoreHandshake.mockResolvedValue({ linkId: 'hs-handle', status: 'pending' });
       mockedNative.advanceHandshake.mockResolvedValue({ status: 'pending', snapshot: 'hs-3' });
@@ -1419,7 +1428,25 @@ describe('LinkService', () => {
       );
     });
 
-    it('skips a queued item whose message is no longer sending and does not send again', async () => {
+    it('retries due link items whose delivery state is failed', async () => {
+      givenEstablishedLink();
+      mockedRetryQueue.getDue.mockResolvedValue([linkItem]);
+      mockedStorage.getLinkMessage.mockResolvedValue(sendingRow({ deliveryState: 'failed' }));
+      mockedNative.sendPrivateMessageJson.mockResolvedValue({ snapshot: 'est-3' });
+
+      await LinkService.drainRetries();
+
+      expect(mockedNative.sendPrivateMessageJson).toHaveBeenCalledWith(
+        'handle-1',
+        wireMessage(EVENT_ID),
+      );
+      expect(mockedStorage.finalizeLinkSend).toHaveBeenCalledWith(
+        expect.objectContaining({ eventId: EVENT_ID, snapshot: 'est-3', queueId: 'q-link' }),
+      );
+      expect(mockedRetryQueue.recordSuccess).toHaveBeenCalledWith('q-link');
+    });
+
+    it('skips a queued item whose message is no longer retryable and does not send again', async () => {
       givenEstablishedLink();
       mockedRetryQueue.getDue.mockResolvedValue([linkItem]);
       mockedStorage.getLinkMessage.mockResolvedValue(sendingRow({ deliveryState: 'sent' }));

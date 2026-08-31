@@ -3,6 +3,7 @@ import {
   PaykitLinkNative,
   createLinkNativeError,
   isLinkNativeError,
+  toLinkNativeError,
   type LinkNativeError,
   type LinkProbeResult,
   type ReceiverMarker,
@@ -583,7 +584,7 @@ export const LinkService = {
           payload.kind,
           payload.eventId,
         );
-        if (!row || row.deliveryState !== 'sending') continue;
+        if (!row || !isRetryableDeliveryState(row.deliveryState)) continue;
       }
       await deliverQueuedPayload(item, payload);
     }
@@ -1668,7 +1669,11 @@ async function deliverQueuedPayload(
         payload.kind,
         payload.eventId,
       );
-      if (!row || row.deliveryState !== 'sending') {
+      if (!row) {
+        await RetryQueue.recordSuccess(item.id);
+        return;
+      }
+      if (!isRetryableDeliveryState(row.deliveryState)) {
         await RetryQueue.recordSuccess(item.id);
         return;
       }
@@ -1763,6 +1768,39 @@ async function deliverQueuedPayload(
 
 function isTransientLinkError(err: unknown): boolean {
   return isLinkNativeError(err) && (err.code === 'unavailable' || err.code === 'network');
+}
+
+function isRetryableDeliveryState(state: LinkMessage['deliveryState']): boolean {
+  return state === 'sending' || state === 'failed';
+}
+
+async function markImmediateSendFailed(input: {
+  ownerPubky: PubkyKey;
+  peerPubky: PubkyKey;
+  senderPubky: PubkyKey;
+  kind: string;
+  eventId: string;
+}): Promise<void> {
+  await StorageService.updateLinkMessageDeliveryState(
+    input.ownerPubky,
+    input.senderPubky,
+    input.kind,
+    input.eventId,
+    'failed',
+  );
+  if (input.kind === CHAT_ATTACHMENT_KIND) {
+    await StorageService.updateAttachmentDelivery(
+      input.ownerPubky,
+      input.senderPubky,
+      input.eventId,
+      'failed',
+    );
+  }
+}
+
+function toSendError(err: unknown): Error {
+  const native = toLinkNativeError(err);
+  return new Error(native.message);
 }
 
 async function markFailed(payload: AnyLinkRetryPayload): Promise<void> {
@@ -1922,7 +1960,7 @@ async function reconcilePaymentPendingSends(): Promise<void> {
       await StorageService.clearPaymentPendingEvent(ownerPubky, eventId);
       continue;
     }
-    if (message.deliveryState !== 'sending') continue;
+    if (!isRetryableDeliveryState(message.deliveryState)) continue;
     if (await StorageService.hasQueueItemForMessage(eventId)) continue;
     const ts = Date.now();
     await StorageService.enqueue({
@@ -2024,7 +2062,14 @@ async function dispatchPreparedDm(input: {
     return { ...message, deliveryState: 'sent' };
   } catch (err) {
     console.warn(`[LinkService] Send failed for ${input.peerPubky}:`, errorMessage(err));
-    return message;
+    await markImmediateSendFailed({
+      ownerPubky: input.ownerPubky,
+      peerPubky: input.peerPubky,
+      senderPubky: input.ownerPubky,
+      kind: input.kind,
+      eventId: input.eventId,
+    });
+    throw toSendError(err);
   }
 }
 

@@ -277,7 +277,16 @@ export function ThreadScreenContent({
           </Text>
           <View style={styles.meta}>
             <Text style={styles.time}>{formatTime(item.message.sentAt)}</Text>
-            {isMine ? <Text style={styles.status}>{item.message.deliveryState}</Text> : null}
+            {isMine ? (
+              <Text
+                style={[
+                  styles.status,
+                  item.message.deliveryState === 'failed' ? styles.statusFailed : null,
+                ]}
+              >
+                {formatDeliveryState(item.message.deliveryState)}
+              </Text>
+            ) : null}
           </View>
         </View>
       );
@@ -444,6 +453,23 @@ function formatTime(ms: number): string {
   return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
+function formatDeliveryState(state: LinkMessage['deliveryState']): string {
+  switch (state) {
+    case 'sending':
+      return 'sending…';
+    case 'failed':
+      return 'failed to send';
+    case 'sent':
+      return 'sent';
+    case 'delivered':
+      return 'delivered';
+    case 'read':
+      return 'read';
+    default:
+      return state;
+  }
+}
+
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#0a0a0a' },
   header: {
@@ -483,6 +509,7 @@ const styles = StyleSheet.create({
   meta: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 4 },
   time: { fontSize: 10, color: 'rgba(255,255,255,0.5)' },
   status: { fontSize: 10, color: 'rgba(255,255,255,0.5)' },
+  statusFailed: { color: '#fca5a5' },
   composer: {
     flexDirection: 'row',
     alignItems: 'flex-end',
