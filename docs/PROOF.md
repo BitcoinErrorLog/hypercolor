@@ -43,8 +43,9 @@ The existing live harness talks to `PaykitLinkNative` directly and **bypasses** 
 
 - Three staging identities: A follows B; C is a stranger.
 - A can add B (paste pubky; camera QR is out of scope per `docs/DECISIONS.md`).
-- Inbound from B auto-accepts (follow / mutual / prior routed conversation).
+- Inbound from B lands in message requests. Follow, mutual follow, and paste/manual add do **not** auto-accept.
 - Inbound from C lands in message requests and does **not** auto-accept. A unilateral Nexus follower bit must not open the gate.
+- The only auto-accept path is a prior routed conversation (`hasPriorRoutedConversation`: existing `link_messages` for this owner+peer). That is compatibility, not a trust signal.
 - Optional Nexus: if staging Nexus is reachable, friends/followers import matches public graph; if not, record the skip and still prove the local WoT bits.
 
 ### P2 — Private groups (three-party)
@@ -108,7 +109,7 @@ Payment *PAM* lifecycle on staging is already green. This row is execution:
 Keep and extend Jest for anything a live run cannot cheaply adversarial-test:
 
 - LinkService: nonce-safe persist-before-send, wedged-handshake recovery, inbound keyed to authenticated peer.
-- `wotGate`: relationship-only auto-accept; no trust-score / unilateral-follower bypass.
+- `wotGate`: prior-routed-conversation auto-accept only; follow / mutual / manual add / trust-score / unilateral-follower must all stay `request`.
 - `applyGroupInbound`: authorize-before-persist, founder-bound ids, sender-scoped events, bounded deferral.
 - Attachments: redaction, sender-bound location, size caps, AAD mismatch.
 - Payments: CAS transitions, authorization, URI injection failures.
@@ -127,8 +128,8 @@ All runners live under `src/services/link/liveProof*.ts`. `App.tsx` dynamic-impo
 
 | Row | Function | Tokens | What parent should see |
 |---|---|---|---|
-| P0 | `runLinkServiceLiveProof` | A, B | `add-contact-ab-paste` (local WoT so the first inbox poll is not held as a request), then `send-dm-a` / `sync-inbox-b` / `persist-inbound-b` / `send-dm-b` / `sync-inbox-a` / `replay-inbox-dedup` through `LinkService.sendDm` + `syncInbox` |
-| P1 | `runContactsLiveProof` | A, B, C | `add-contact-b-paste`, `nexus-import` (or `skipped nexus:`), `inbound-b-auto-accept`, `inbound-c-request`, `unilateral-follower-closed` |
+| P0 | `runLinkServiceLiveProof` | A, B | Paste/follow does **not** skip the request queue. First inbound is a message request unless a prior routed conversation already exists; after explicit accept, `send-dm-a` / `sync-inbox-b` / `persist-inbound-b` / `send-dm-b` / `sync-inbox-a` / `replay-inbox-dedup` through `LinkService.sendDm` + `syncInbox` |
+| P1 | `runContactsLiveProof` | A, B, C | `add-contact-b-paste`, `nexus-import` (or `skipped nexus:`), `inbound-b-request`, `inbound-c-request`, `unilateral-follower-closed` |
 | P2 | `runGroupLiveProof` | A, B, C | `create-channel-a`, `membership-fanout`, `group-message-a`, `remove-c`, `removed-c-message-rejected`, `forged-channel-and-event-rejected` |
 | P3 | `runAttachmentLiveProof` | A, B | `send-attachment-a`, `resolve-attachment-b`, `attachment-invariants`, `aad-path-bind`, `over-limit-rejected` |
 | P4 | `runPaymentHandoffLiveProof` | A, B | `build-payment-request`, `handoff-bind-amount`, `handoff-injection-closed`, `wallet-handoff-open`. Attach `openWalletUri` (Bitkit / `Linking.openURL` of the validated URI) to close the row. Dummy `proofData` hex does **not** mark P4 green. |
