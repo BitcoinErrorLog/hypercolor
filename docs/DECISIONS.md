@@ -177,3 +177,31 @@ an exhausted peer's request routes through the background sync path and
 does not clear exhaustion; the user must also send something. Kept:
 accepting reveals intent to read, sending reveals intent to engage, and
 only the latter should refund an abuse budget.
+
+## Kimi charge-policy audit close-out (bf312d1 + a22a193, verdict SHIP)
+
+The budget over-charge (legitimate peers exhausted during ordinary
+convergence; iOS tick starved by its own schedule) was fixed by the
+charge-once-per-backoff-window policy, the free 'user' intent, and the
+hoisted user clear; the tick got a 20s phase budget with
+slot-retained-until-settled semantics. Non-blocking observations waived
+in writing:
+
+**Group fan-out clears a hostile member's budget.** Every victim post
+to a group containing an attacker fans out as a 'user' intent per
+member, clearing that member's budget and stepping their handshake
+free. Attacker-unmanufacturable (bounded by the victim's own posting),
+consistent with the SHIP rationale, but wider after the hoist. Accepted
+follow-up if it ever matters: a distinct 'fanout' intent that neither
+clears nor charges.
+
+**Wedged-phase recovery is per-phase, not per-round.** A genuinely
+never-settling tick phase holds its slot for the process lifetime (and
+a never-settling drain latches the drain chain). This is the deliberate
+safe choice — restarting wedged native handshake work risks nonce-unsafe
+double steps — and strictly better than the old whole-tick latch. The
+a22a193 commit message overstates recovery as "one round"; this waiver
+is the corrected record.
+
+**Free within-window initiator steps still pay marker-fetch/probe IO**
+per caller per window. Bounded, defender-cadenced, exponentially spaced.
