@@ -219,7 +219,13 @@ describe('LinkService message requests', () => {
     expect(mockedNative.initiateLink).not.toHaveBeenCalled();
   });
 
-  it('applies group membership while holding a stranger DM as a request', async () => {
+  // Previously asserted that a held stranger's membership `create` was
+  // applied. That was the bug: `channel_id` is sender-chosen, so the
+  // founder-bound check self-certifies and the create landed a named channel
+  // plus a roster containing the recipient with no acceptance. It is now
+  // deferred on the carrying stream item. Full coverage of the gate,
+  // including accept replay and decline, lives in groupAcceptGate.test.ts.
+  it('defers a stranger group membership create while holding the DM as a request', async () => {
     const channelId = `${PEER}:00000000-0000-4000-8000-00000000aaaa`;
     const packed = buildGroupMembershipEnvelope({
       channelId,
@@ -262,7 +268,10 @@ describe('LinkService message requests', () => {
     expect(mockedStorage.upsertMessageRequest).toHaveBeenCalledWith(
       expect.objectContaining({ status: 'pending' }),
     );
-    expect(mockedStorage.insertInboundPrivateCreate).toHaveBeenCalled();
+    expect(mockedStorage.insertInboundPrivateCreate).not.toHaveBeenCalled();
+    expect(mockedStorage.markGroupEventSeen).not.toHaveBeenCalled();
+    expect(mockedStorage.markLinkStreamItemProcessed).not.toHaveBeenCalled();
+    expect(held.filter(item => !item.processed)).toHaveLength(1);
     expect(mockedStorage.saveLinkMessage).not.toHaveBeenCalled();
   });
 

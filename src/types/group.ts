@@ -57,6 +57,13 @@ import { CHAT_ATTACHMENT_KIND } from './attachment';
  *   deferred in a bounded store (per-sender quota + TTL) only after
  *   membership admission. They apply when the matching target arrives.
  *
+ * The checks above are all evaluated against the receiver's own rows, so a
+ * peer whose DM sits in the accept queue may still act inside a group the
+ * receiver already knows. The one exception is `create` on an unknown
+ * `channel_id`, where the founder check self-certifies: the sender picks
+ * `channel_id`. Those ops need an accepted peer — see
+ * {@link requiresAcceptedPeer} and `services/group/groupInboundGate.ts`.
+ *
  * Unknown kinds stay on `link_stream_items` unprocessed (M1 rule).
  * Malformed *known* group kinds are rejected (not applied) and marked
  * processed so they cannot wedged-retry.
@@ -288,6 +295,56 @@ export type GroupEnvelope =
   | GroupEditEnvelope
   | GroupDeleteEnvelope
   | GroupMembershipEnvelope;
+
+/**
+ * Whether the recipient has explicitly accepted the Encrypted-Link peer that
+ * carried an inbound group envelope.
+ *
+ * `gated` covers a pending message request and a declined peer: in both cases
+ * the user has not said yes to this counterparty.
+ */
+export type GroupPeerTrust = 'accepted' | 'gated';
+
+/**
+ * Single source of truth for which inbound group ops may be applied on the
+ * authority of a peer the user has NOT accepted.
+ *
+ * `authorizeInbound` derives authority from the recipient's own
+ * `group_channels` / `group_members` rows, with one exception: `op:'create'`
+ * for an unknown `channel_id`. There the only check is
+ * `parsePrivateChannelId(channel_id).founderPubky === senderPubky`, and the
+ * sender picks `channel_id` — so the check is self-certifying. Applying it
+ * inserts a `group_channels` row with a sender-chosen name plus a
+ * `group_members` roster that contains the recipient.
+ *
+ * An envelope is therefore gated when it can
+ *   - add a channel to the recipient's channel list, or rename one (`create`),
+ *   - place the recipient in a roster (`add` whose subject is the recipient),
+ *   - or when it names a channel the recipient does not know locally.
+ *
+ * The last clause is what keeps a batch coherent. Content and non-subject
+ * membership ops for an unknown channel are inert today — `authorizeInbound`
+ * rejects them and burns a `group_seen_events` dedup marker — and they only
+ * become meaningful once a gated `create` lands. Holding them instead lets the
+ * whole batch replay in arrival order after accept, rather than silently
+ * dropping the messages that shipped alongside the create.
+ *
+ * Everything else stays applicable while a DM request is pending: being in a
+ * group with someone is its own trust context, granted by the recipient's own
+ * roster rows, and it does not require accepting that peer's DM.
+ */
+export function requiresAcceptedPeer(input: {
+  envelope: GroupEnvelope;
+  ownerPubky: PubkyKey;
+  channelKnownLocally: boolean;
+}): boolean {
+  const { envelope, ownerPubky, channelKnownLocally } = input;
+  if (!channelKnownLocally) return true;
+  if (envelope.kind !== GROUP_MEMBERSHIP_KIND) return false;
+  if (envelope.op === 'create') return true;
+  if (envelope.op === 'add' && envelope.subject_pubky === ownerPubky) return true;
+  return false;
+}
 
 export interface PublicChannelMeta {
   version: 1;

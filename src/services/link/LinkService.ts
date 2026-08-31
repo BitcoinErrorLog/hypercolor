@@ -26,6 +26,7 @@ import {
   type LinkRecord,
   type LinkRole,
   type LinkStatus,
+  type LinkStreamItem,
   type LinkStreamItemInput,
 } from '../../types/link';
 import type { DeliveryQueueItem, PubkyKey } from '../../types';
@@ -34,8 +35,10 @@ import {
   isGroupWireKind,
   LINK_GROUP_FANOUT_PAYLOAD_TYPE,
   peekEnvelopeKind,
+  type GroupPeerTrust,
 } from '../../types/group';
 import { applyGroupInbound } from '../group/applyGroupInbound';
+import { isGroupInboundGated } from '../group/groupInboundGate';
 import { classifyInboundPeer, wotInputFromContact } from './wotGate';
 import {
   attachmentKeyRef,
@@ -1378,6 +1381,11 @@ async function collectInboxCandidates(ownerPubky: PubkyKey): Promise<PubkyKey[]>
   return out;
 }
 
+/**
+ * Persists a held peer's inbound PAMs without routing them. Only reached
+ * while the peer sits behind the accept gate, hence the hard-coded
+ * `'gated'` trust handed to {@link routeHeldGroupInbound}.
+ */
 async function persistInboundWithoutRouting(
   ownerPubky: PubkyKey,
   peerPubky: PubkyKey,
@@ -1392,15 +1400,21 @@ async function persistInboundWithoutRouting(
   }
   await StorageService.updateLinkSnapshot(ownerPubky, peerPubky, snapshot, 'established');
   // Group fan-out is not a DM inbox item. WoT holds chat messages as a
-  // request; membership still applies on an established Encrypted Link.
-  await routeHeldGroupInbound(ownerPubky, peerPubky);
+  // request; group ops that cannot touch the channel list or the roster
+  // still apply on an established Encrypted Link.
+  await routeHeldGroupInbound(ownerPubky, peerPubky, 'gated');
 }
 
 /**
  * Applies group PAMs that arrived while a message request is pending.
- * Chat / attachment / payment items stay unprocessed until accept.
+ * Chat / attachment / payment items stay unprocessed until accept, and so do
+ * the group ops {@link isGroupInboundGated} reserves for an accepted peer.
  */
-async function routeHeldGroupInbound(ownerPubky: PubkyKey, peerPubky: PubkyKey): Promise<void> {
+async function routeHeldGroupInbound(
+  ownerPubky: PubkyKey,
+  peerPubky: PubkyKey,
+  peerTrust: GroupPeerTrust,
+): Promise<void> {
   const items = await StorageService.getUnprocessedLinkStreamItems(ownerPubky, peerPubky);
   for (const item of items) {
     if (shouldDropOversizedKnownInbound(item.rawJson, item.kind)) {
@@ -1422,18 +1436,46 @@ async function routeHeldGroupInbound(ownerPubky: PubkyKey, peerPubky: PubkyKey):
     }
     const peeked = peekEnvelopeKind(item.rawJson);
     if (peeked === null || !isGroupWireKind(peeked)) continue;
-    const groupEnvelope = decodeGroupEnvelope(item.rawJson);
-    if (groupEnvelope) {
-      await applyGroupInbound({
-        ownerPubky,
-        senderPubky: peerPubky,
-        envelope: groupEnvelope,
-        rawJson: item.rawJson,
-        receivedAt: item.receivedAt,
-      });
-    }
+    const outcome = await routeGroupStreamItem({
+      ownerPubky,
+      peerPubky,
+      item,
+      peerTrust,
+    });
+    if (outcome === 'deferred') continue;
     await StorageService.markLinkStreamItemProcessed(item.id);
   }
+}
+
+/**
+ * Settles one group `link_stream_items` row, or reports `'deferred'` when the
+ * accept gate reserves that op for an accepted peer. A malformed known group
+ * kind settles too, so it cannot wedged-retry (M1 rule).
+ *
+ * A deferred row is left unprocessed on purpose:
+ * {@link LinkService.acceptMessageRequest} replays it through
+ * {@link routeUnprocessedStreamItems}, and
+ * {@link LinkService.declineMessageRequest} deletes it with the rest of the
+ * peer's held items, so a decline leaves no group rows behind.
+ */
+async function routeGroupStreamItem(input: {
+  ownerPubky: PubkyKey;
+  peerPubky: PubkyKey;
+  item: LinkStreamItem;
+  peerTrust: GroupPeerTrust;
+}): Promise<'settled' | 'deferred'> {
+  const { ownerPubky, peerPubky, item, peerTrust } = input;
+  const envelope = decodeGroupEnvelope(item.rawJson);
+  if (!envelope) return 'settled';
+  if (await isGroupInboundGated({ ownerPubky, envelope, peerTrust })) return 'deferred';
+  await applyGroupInbound({
+    ownerPubky,
+    senderPubky: peerPubky,
+    envelope,
+    rawJson: item.rawJson,
+    receivedAt: item.receivedAt,
+  });
+  return 'settled';
 }
 
 async function holdAsMessageRequest(ownerPubky: PubkyKey, peerPubky: PubkyKey): Promise<void> {
@@ -1533,9 +1575,16 @@ async function syncPeerLocked(peerPubky: PubkyKey): Promise<LinkMessage[]> {
       return [];
     }
 
-    if (outcome !== 'ready') return routeUnprocessedStreamItems(ownerPubky, peerPubky);
+    // Past the two gated early-returns above, this peer is accepted or was
+    // never gated. `pending` + `!isNewInbound` returned already, and an
+    // `isNewInbound` peer always classifies as `request`: the only
+    // auto-accept path needs prior routed messages, which `isNewInbound`
+    // excludes. So group ops may apply in full from here on.
+    const peerTrust: GroupPeerTrust = 'accepted';
 
-    const swept = await routeUnprocessedStreamItems(ownerPubky, peerPubky);
+    if (outcome !== 'ready') return routeUnprocessedStreamItems(ownerPubky, peerPubky, peerTrust);
+
+    const swept = await routeUnprocessedStreamItems(ownerPubky, peerPubky, peerTrust);
     const handle = requireEstablishedHandle(ownerPubky, peerPubky);
     const { messages, snapshot } = await PaykitLinkNative.receivePrivateMessages(handle);
 
@@ -1546,7 +1595,7 @@ async function syncPeerLocked(peerPubky: PubkyKey): Promise<LinkMessage[]> {
     if (streamItems.length > 0) {
       await StorageService.saveLinkStreamItems(streamItems);
     }
-    const routed = await routeUnprocessedStreamItems(ownerPubky, peerPubky);
+    const routed = await routeUnprocessedStreamItems(ownerPubky, peerPubky, peerTrust);
     await StorageService.updateLinkSnapshot(ownerPubky, peerPubky, snapshot, 'established');
     return [...swept, ...routed];
   } catch (err) {
@@ -1561,6 +1610,7 @@ async function syncPeerLocked(peerPubky: PubkyKey): Promise<LinkMessage[]> {
 async function routeUnprocessedStreamItems(
   ownerPubky: PubkyKey,
   peerPubky: PubkyKey,
+  peerTrust: GroupPeerTrust,
 ): Promise<LinkMessage[]> {
   const items = await StorageService.getUnprocessedLinkStreamItems(ownerPubky, peerPubky);
   const received: LinkMessage[] = [];
@@ -1608,17 +1658,15 @@ async function routeUnprocessedStreamItems(
       continue;
     }
     if (peeked !== null && isGroupWireKind(peeked)) {
-      const groupEnvelope = decodeGroupEnvelope(item.rawJson);
-      if (groupEnvelope) {
-        await applyGroupInbound({
-          ownerPubky,
-          senderPubky: peerPubky,
-          envelope: groupEnvelope,
-          rawJson: item.rawJson,
-          receivedAt: item.receivedAt,
-        });
+      const outcome = await routeGroupStreamItem({
+        ownerPubky,
+        peerPubky,
+        item,
+        peerTrust,
+      });
+      if (outcome === 'settled') {
+        await StorageService.markLinkStreamItemProcessed(item.id);
       }
-      await StorageService.markLinkStreamItemProcessed(item.id);
       continue;
     }
     const envelope = decodeLinkEnvelope(item.rawJson);
