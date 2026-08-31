@@ -131,6 +131,8 @@ type EnsureOutcome = LinkStatus | 'idle';
 let session: ActiveSession | null = null;
 let restoreInFlight: Promise<SessionLookup> | null = null;
 const liveHandles = new Map<string, LiveHandle>();
+/** Native session aliases that still exist in this process (slot-switch). */
+const nativeSessions = new Map<string, string>();
 const queues = new Map<string, Promise<unknown>>();
 let drainTimer: ReturnType<typeof setInterval> | null = null;
 const inboxSyncListeners = new Set<(ownerPubky: PubkyKey) => void>();
@@ -148,6 +150,7 @@ export const LinkService = {
     KeyStore.setPubky(pubky);
     KeyStore.setLinkSession(sessionAlias);
     session = { alias: sessionAlias, pubky };
+    rememberNativeSession(sessionAlias, pubky);
     return { pubky };
   },
 
@@ -236,6 +239,7 @@ export const LinkService = {
     }
     session = null;
     liveHandles.clear();
+    nativeSessions.clear();
     queues.clear();
     KeyStore.deleteLinkSession();
   },
@@ -254,6 +258,7 @@ export const LinkService = {
     KeyStore.setPubky(id);
     KeyStore.setLinkSession(alias);
     session = { alias, pubky: id };
+    rememberNativeSession(alias, id);
   },
 
   /**
@@ -303,6 +308,7 @@ export const LinkService = {
         KeyStore.setPubky(pubky);
         KeyStore.setLinkSession(sessionAlias);
         session = { alias: sessionAlias, pubky };
+        rememberNativeSession(sessionAlias, pubky);
         return provisionReceiver(sessionAlias, pubky);
       },
     };
@@ -757,6 +763,7 @@ export function linkQueueEntryCountForTests(): number {
 export function resetLinkServiceHarnessState(): void {
   session = null;
   liveHandles.clear();
+  nativeSessions.clear();
   queues.clear();
 }
 
@@ -778,6 +785,7 @@ async function restoreFromKeyStore(): Promise<SessionLookup> {
   try {
     const { pubky } = await PaykitLinkNative.restoreSession(stored);
     session = { alias: stored, pubky };
+    rememberNativeSession(stored, pubky);
     return session;
   } catch (err) {
     if (isLinkNativeError(err) && err.code === 'auth') {
@@ -924,7 +932,15 @@ async function ensureLinkLocked(
     throw err;
   }
   if (inbound !== null) {
-    return adoptInboundHandshake(ownerPubky, peerPubky, marker, localPath, inbound);
+    return adoptInboundHandshake(
+      activeSession,
+      receiver,
+      ownerPubky,
+      peerPubky,
+      marker,
+      localPath,
+      inbound,
+    );
   }
 
   if (!allowInitiate) return 'idle';
@@ -1064,10 +1080,39 @@ async function advanceLiveHandshake(
         if (inbound !== null) {
           await closeQuietly(live.linkId);
           liveHandles.delete(linkKey(ownerPubky, peerPubky));
-          return adoptInboundHandshake(ownerPubky, peerPubky, marker, LINK_RECEIVER_PATH, inbound);
+          return adoptInboundHandshake(
+            activeSession,
+            receiver,
+            ownerPubky,
+            peerPubky,
+            marker,
+            LINK_RECEIVER_PATH,
+            inbound,
+          );
         }
       }
     }
+
+    await nudgeCounterpartHandshake(ownerPubky, peerPubky);
+    const stepped = await PaykitLinkNative.advanceHandshake(live.linkId);
+    if (stepped.status === 'established') {
+      const remoteKey = stored?.remoteNoisePublicKey ?? '';
+      const localPath = coerceReceiverPath(stored?.localReceiverPath ?? receiver.receiverPath);
+      const remotePath = coerceReceiverPath(stored?.remoteReceiverPath ?? LINK_RECEIVER_PATH);
+      return completeEstablished(
+        activeSession,
+        receiver,
+        ownerPubky,
+        peerPubky,
+        live.role,
+        stepped.snapshot,
+        remoteKey,
+        localPath,
+        remotePath,
+        live.linkId,
+      );
+    }
+    await StorageService.updateLinkSnapshot(ownerPubky, peerPubky, stepped.snapshot, 'handshaking');
 
     return roleStatus(live.role);
   } catch (err) {
@@ -1198,12 +1243,14 @@ async function probeInbound(
 }
 
 async function adoptInboundHandshake(
+  activeSession: ActiveSession,
+  receiver: LinkReceiver,
   ownerPubky: PubkyKey,
   peerPubky: PubkyKey,
   marker: ReceiverMarker,
   localPath: string,
   inbound: Extract<LinkProbeResult, { result: 'pending' | 'established' }>,
-): Promise<LinkStatus> {
+): Promise<EnsureOutcome> {
   const remotePath = LINK_RECEIVER_PATH;
   const key = linkKey(ownerPubky, peerPubky);
   if (inbound.result === 'established') {
@@ -1233,8 +1280,88 @@ async function adoptInboundHandshake(
     remoteReceiverPath: remotePath,
     consecutiveFailures: 0,
   });
-  liveHandles.set(key, { status: 'handshaking', linkId: inbound.linkId, role: 'responder' });
-  return 'handshaking-responder';
+  const live: Extract<LiveHandle, { status: 'handshaking' }> = {
+    status: 'handshaking',
+    linkId: inbound.linkId,
+    role: 'responder',
+  };
+  liveHandles.set(key, live);
+  return advanceLiveHandshake(activeSession, receiver, ownerPubky, peerPubky, live, false);
+}
+
+/**
+ * Noise XX needs both parties to advance. On one process (debug slot-switch)
+ * the counterparty handshake handle is still live; drive it so a responder
+ * send can finish instead of sitting in `sending` forever.
+ */
+async function nudgeCounterpartHandshake(localOwner: PubkyKey, peerPubky: PubkyKey): Promise<void> {
+  const reverseKey = linkKey(peerPubky, localOwner);
+  const existing = liveHandles.get(reverseKey);
+  if (existing?.status === 'established') return;
+
+  const stored = await StorageService.getLink(peerPubky, localOwner);
+  let live = existing?.status === 'handshaking' ? existing : null;
+
+  if (!live) {
+    if (stored?.status !== 'handshaking') return;
+    const alias = nativeSessions.get(peerPubky);
+    const receiver = await StorageService.getLinkReceiver(peerPubky);
+    if (!alias || !receiver) return;
+    try {
+      const restored = await PaykitLinkNative.restoreHandshake(
+        alias,
+        receiver.receiverAlias,
+        localOwner,
+        stored.remoteNoisePublicKey,
+        coerceReceiverPath(stored.localReceiverPath),
+        coerceReceiverPath(stored.remoteReceiverPath),
+        stored.snapshot,
+      );
+      live = {
+        status: 'handshaking',
+        linkId: restored.linkId,
+        role: stored.role,
+      };
+      liveHandles.set(reverseKey, live);
+    } catch {
+      return;
+    }
+  }
+
+  try {
+    const result = await PaykitLinkNative.advanceHandshake(live.linkId);
+    if (result.status === 'established') {
+      if (stored) {
+        await StorageService.upsertLink({
+          ownerPubky: peerPubky,
+          peerPubky: localOwner,
+          role: live.role,
+          status: 'established',
+          snapshot: result.snapshot,
+          remoteNoisePublicKey: stored.remoteNoisePublicKey,
+          localReceiverPath: stored.localReceiverPath,
+          remoteReceiverPath: stored.remoteReceiverPath,
+          consecutiveFailures: 0,
+        });
+      } else {
+        await StorageService.updateLinkSnapshot(
+          peerPubky,
+          localOwner,
+          result.snapshot,
+          'established',
+        );
+      }
+      liveHandles.set(reverseKey, { status: 'established', linkId: live.linkId });
+      return;
+    }
+    await StorageService.updateLinkSnapshot(peerPubky, localOwner, result.snapshot, 'handshaking');
+  } catch {
+    // The counterparty will advance when its own session is active.
+  }
+}
+
+function rememberNativeSession(alias: string, pubky: string): void {
+  nativeSessions.set(pubky, alias);
 }
 
 async function handleLinkFailure(

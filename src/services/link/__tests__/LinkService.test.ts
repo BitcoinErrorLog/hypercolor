@@ -270,6 +270,7 @@ describe('LinkService', () => {
     mockedNative.clearAllNativeSecrets.mockResolvedValue(undefined);
     mockedNative.closeLink.mockResolvedValue(undefined);
     mockedNative.probeInboundLink.mockResolvedValue({ result: 'none' });
+    mockedNative.advanceHandshake.mockResolvedValue({ status: 'pending', snapshot: 'hs-adv' });
     mockedNative.getReceiverMarker.mockResolvedValue({
       noisePublicKey: PEER_NOISE,
       capabilitiesJson: '{}',
@@ -927,6 +928,67 @@ describe('LinkService', () => {
       expect(message.deliveryState).toBe('sending');
       expect(mockedStorage.persistLinkSendIntent).toHaveBeenCalledTimes(1);
       expect(mockedNative.sendPrivateMessageJson).not.toHaveBeenCalled();
+    });
+
+    it('completes a live in-process counterpart handshake so the responder send is delivered', async () => {
+      const sessionB = 'session-alias-b';
+      let initiatorAdvances = 0;
+      let responderAdvances = 0;
+      let initiatorLink: LinkRecord | null = null;
+
+      mockedNative.initiateLink.mockResolvedValue({ linkId: 'hs-a', snapshot: 'a-0' });
+      mockedNative.advanceHandshake.mockImplementation(async (linkId: string) => {
+        if (linkId === 'hs-a') {
+          initiatorAdvances += 1;
+          if (responderAdvances >= 1) {
+            return { status: 'established' as const, snapshot: 'a-est' };
+          }
+          return { status: 'pending' as const, snapshot: `a-${initiatorAdvances}` };
+        }
+        responderAdvances += 1;
+        if (responderAdvances >= 2) {
+          return { status: 'established' as const, snapshot: 'b-est' };
+        }
+        return { status: 'pending' as const, snapshot: `b-${responderAdvances}` };
+      });
+      mockedStorage.getLink.mockImplementation(async (owner, peer) => {
+        if (owner === OWNER && peer === PEER) return initiatorLink;
+        return null;
+      });
+      mockedStorage.upsertLink.mockImplementation(async (...args) => {
+        const link = args[0] as LinkRecord;
+        if (link.ownerPubky === OWNER && link.peerPubky === PEER) {
+          initiatorLink = storedLink(link);
+        }
+      });
+      mockedStorage.getLinkReceiver.mockImplementation(async owner =>
+        owner === PEER
+          ? { ...receiverRow, ownerPubky: PEER, receiverAlias: 'recv-b' }
+          : receiverRow,
+      );
+
+      await expect(LinkService.ensureLinkWith(PEER)).resolves.toBe('handshaking-initiator');
+
+      await LinkService.adoptHarnessSession(sessionB, PEER);
+      mockedNative.probeInboundLink.mockResolvedValue({
+        result: 'pending',
+        linkId: 'hs-b',
+        snapshot: 'b-0',
+      });
+      mockedNative.restoreLink.mockResolvedValue({ linkId: 'est-b' });
+      mockedNative.sendPrivateMessageJson.mockResolvedValue({ snapshot: 'sent-b' });
+
+      const message = await LinkService.sendDm(OWNER, 'maestro-p7-dm');
+
+      expect(message.deliveryState).toBe('sent');
+      expect(mockedNative.sendPrivateMessageJson).toHaveBeenCalledTimes(1);
+      expect(mockedStorage.upsertLink).toHaveBeenCalledWith(
+        expect.objectContaining({
+          ownerPubky: OWNER,
+          peerPubky: PEER,
+          status: 'established',
+        }),
+      );
     });
 
     it('throws without persisting anything when the peer is not enrolled', async () => {
