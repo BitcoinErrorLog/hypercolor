@@ -527,6 +527,126 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
     expect(items.map(item => item.id)).toEqual(['later-id', 'earlier-id']);
   });
 
+  it('settles excess unprocessed stream items per peer, keeping the oldest', async () => {
+    const db = openMemoryDb();
+    setDbForTests(db);
+    await runMigrations(db);
+
+    await StorageService.saveLinkStreamItems([
+      {
+        id: 'keep-1',
+        ownerPubky: OWNER,
+        peerPubky: PEER,
+        kind: CHAT_MESSAGE_KIND,
+        rawJson: '{"n":1}',
+        receivedAt: 10,
+      },
+      {
+        id: 'keep-2',
+        ownerPubky: OWNER,
+        peerPubky: PEER,
+        kind: CHAT_MESSAGE_KIND,
+        rawJson: '{"n":2}',
+        receivedAt: 20,
+      },
+      {
+        id: 'drop-3',
+        ownerPubky: OWNER,
+        peerPubky: PEER,
+        kind: CHAT_MESSAGE_KIND,
+        rawJson: '{"n":3}',
+        receivedAt: 30,
+      },
+      {
+        id: 'other-peer',
+        ownerPubky: OWNER,
+        peerPubky: OTHER,
+        kind: CHAT_MESSAGE_KIND,
+        rawJson: '{"n":9}',
+        receivedAt: 10,
+      },
+    ]);
+
+    const settled = await StorageService.settleExcessUnprocessedLinkStreamItems(OWNER, PEER, 2);
+    expect(settled).toBe(1);
+    expect(
+      (await StorageService.getUnprocessedLinkStreamItems(OWNER, PEER)).map(item => item.id),
+    ).toEqual(['keep-1', 'keep-2']);
+    expect(
+      (await StorageService.getUnprocessedLinkStreamItems(OWNER, OTHER)).map(item => item.id),
+    ).toEqual(['other-peer']);
+    expect(await StorageService.settleExcessUnprocessedLinkStreamItems(OWNER, PEER, 2)).toBe(0);
+  });
+
+  it('deletes one sender deferred events and seen markers without touching group_messages', async () => {
+    const db = openMemoryDb();
+    setDbForTests(db);
+    await runMigrations(db);
+
+    const channelId = `${OWNER}:00000000-0000-4000-8000-00000000aaaa`;
+    const eventId = '00000000-0000-4000-8000-0000000000aa';
+    const otherEvent = '00000000-0000-4000-8000-0000000000bb';
+    await StorageService.saveGroupMessage({
+      ownerPubky: OWNER,
+      channelId,
+      eventId,
+      senderPubky: PEER,
+      kind: CHAT_MESSAGE_KIND,
+      body: 'keep me',
+      rawJson: '{}',
+      sentAt: 10,
+      receivedAt: 10,
+      deliveryState: 'delivered',
+      replyToEventId: null,
+      replyToAuthorPubky: null,
+      targetEventId: null,
+      targetAuthorPubky: null,
+      editedAt: null,
+      deleted: false,
+    });
+    await StorageService.saveGroupDeferred({
+      ownerPubky: OWNER,
+      channelId,
+      senderPubky: PEER,
+      eventId: '00000000-0000-4000-8000-0000000000cc',
+      kind: 'chat.group.edit.v0',
+      body: 'later',
+      rawJson: '{}',
+      sentAt: 12,
+      receivedAt: 12,
+      targetEventId: eventId,
+      targetAuthorPubky: OWNER,
+    });
+    await StorageService.saveGroupDeferred({
+      ownerPubky: OWNER,
+      channelId,
+      senderPubky: OTHER,
+      eventId: '00000000-0000-4000-8000-0000000000dd',
+      kind: 'chat.group.reaction.v0',
+      body: '👍',
+      rawJson: '{}',
+      sentAt: 13,
+      receivedAt: 13,
+      targetEventId: eventId,
+      targetAuthorPubky: OWNER,
+    });
+    await StorageService.markGroupEventSeen(OWNER, channelId, PEER, otherEvent, 14);
+    await StorageService.markGroupEventSeen(OWNER, channelId, OTHER, otherEvent, 15);
+
+    await StorageService.deleteGroupDeferredForSender(OWNER, PEER);
+    await StorageService.deleteGroupSeenEventsForSender(OWNER, PEER);
+
+    expect(await StorageService.listGroupDeferredForSender(OWNER, channelId, PEER)).toEqual([]);
+    expect(await StorageService.listGroupDeferredForSender(OWNER, channelId, OTHER)).toHaveLength(
+      1,
+    );
+    expect(await StorageService.hasGroupEventSeen(OWNER, channelId, PEER, otherEvent)).toBe(false);
+    expect(await StorageService.hasGroupEventSeen(OWNER, channelId, OTHER, otherEvent)).toBe(true);
+    expect(await StorageService.getGroupMessage(OWNER, channelId, PEER, eventId)).toEqual(
+      expect.objectContaining({ body: 'keep me' }),
+    );
+  });
+
   it('backfills empty-owner contacts to the sole receiver and drops ambiguous orphans', async () => {
     const sole = openMemoryDb();
     applyThroughV5(sole);

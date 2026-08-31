@@ -205,6 +205,7 @@ function createProductLink(): LiveProofLinkApi & {
         envelope,
         rawJson: item.rawJson,
         receivedAt: Date.now(),
+        peerTrust: 'accepted',
       });
     }
   };

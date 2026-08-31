@@ -12,13 +12,17 @@ import {
   type LinkStreamItem,
 } from '../../../types/link';
 import {
+  GROUP_REACTION_KIND,
   buildGroupMembershipEnvelope,
   buildGroupMessageEnvelope,
+  buildGroupReactionEnvelope,
   type GroupChannel,
+  type GroupDeferredEvent,
   type GroupMember,
   type GroupMessage,
 } from '../../../types/group';
 import type { MessageRequest } from '../../../types';
+import { LINK_HELD_UNPROCESSED_CAP_PER_PEER } from '../../../flags/config';
 
 /**
  * Regression suite for the group accept gate.
@@ -97,6 +101,7 @@ jest.mock('../../StorageService', () => ({
     deleteLinkStreamItemsForPeer: jest.fn(),
     deleteLinkMessagesForPeer: jest.fn(),
     countLinkMessagesForPeer: jest.fn(),
+    settleExcessUnprocessedLinkStreamItems: jest.fn(),
     getLinkReadCursor: jest.fn(),
     setLinkReadCursor: jest.fn(),
     clearAccountData: jest.fn(),
@@ -126,6 +131,8 @@ jest.mock('../../StorageService', () => ({
     saveGroupDeferred: jest.fn(),
     listGroupDeferredForTarget: jest.fn(),
     deleteGroupDeferred: jest.fn(),
+    deleteGroupDeferredForSender: jest.fn(),
+    deleteGroupSeenEventsForSender: jest.fn(),
     applyGroupMessageEdit: jest.fn(),
     tombstoneGroupMessage: jest.fn(),
   },
@@ -171,12 +178,15 @@ const mockedRetryQueue = jest.mocked(RetryQueue);
 const NOW = 1_700_000_000_000;
 const OWNER = 'a'.repeat(52);
 const PEER = 'z'.repeat(52);
+const OTHER = 'y'.repeat(52);
 const SESSION_ALIAS = 'session-alias-1';
 const RECEIVER_ALIAS = 'receiver-alias-1';
 const PEER_NOISE = 'peer-noise-pk';
 const CHANNEL_ID = `${PEER}:00000000-0000-4000-8000-00000000aaaa`;
 const CREATE_EVENT_ID = '00000000-0000-4000-8000-0000000000c1';
 const MESSAGE_EVENT_ID = '00000000-0000-4000-8000-0000000000c2';
+const REACTION_EVENT_ID = '00000000-0000-4000-8000-0000000000c3';
+const OTHER_TARGET_EVENT_ID = '00000000-0000-4000-8000-0000000000c4';
 
 const receiverRow: LinkReceiver = {
   ownerPubky: OWNER,
@@ -196,6 +206,7 @@ type Db = {
   members: Map<string, GroupMember>;
   groupMessages: GroupMessage[];
   seenEvents: Set<string>;
+  deferred: GroupDeferredEvent[];
 };
 
 let db: Db;
@@ -210,6 +221,11 @@ function memberKey(channelId: string, memberPubky: string): string {
 
 function groupEventKey(channelId: string, senderPubky: string, eventId: string): string {
   return `${channelId}|${senderPubky}|${eventId}`;
+}
+
+function parseSeenKey(key: string): { channelId: string; sender: string; eventId: string } {
+  const parts = key.split('|');
+  return { channelId: parts[0] ?? '', sender: parts[1] ?? '', eventId: parts[2] ?? '' };
 }
 
 function establishedLink(): LinkRecord {
@@ -283,13 +299,24 @@ function wireInMemoryStorage(): void {
       db.streamItems.push({ ...item, id: `stream-${streamItemSeq}`, processed: false });
     }
   });
-  mockedStorage.getUnprocessedLinkStreamItems.mockImplementation(async () =>
-    db.streamItems.filter(item => !item.processed),
+  mockedStorage.getUnprocessedLinkStreamItems.mockImplementation(async (_owner, peerPubky) =>
+    db.streamItems.filter(item => item.peerPubky === peerPubky && !item.processed),
   );
   mockedStorage.markLinkStreamItemProcessed.mockImplementation(async id => {
     const item = db.streamItems.find(row => row.id === id);
     if (item) item.processed = true;
   });
+  mockedStorage.settleExcessUnprocessedLinkStreamItems.mockImplementation(
+    async (_owner, peerPubky, keepOldest = LINK_HELD_UNPROCESSED_CAP_PER_PEER) => {
+      const unprocessed = db.streamItems.filter(
+        item => item.peerPubky === peerPubky && !item.processed,
+      );
+      if (unprocessed.length <= keepOldest) return 0;
+      const excess = unprocessed.slice(keepOldest);
+      for (const item of excess) item.processed = true;
+      return excess.length;
+    },
+  );
   mockedStorage.deleteLinkStreamItemsForPeer.mockImplementation(async (_owner, peerPubky) => {
     db.streamItems = db.streamItems.filter(item => item.peerPubky !== peerPubky);
   });
@@ -313,6 +340,13 @@ function wireInMemoryStorage(): void {
 
   mockedStorage.hasGroupEvent.mockImplementation(async (_owner, channelId, sender, eventId) => {
     if (db.seenEvents.has(groupEventKey(channelId, sender, eventId))) return true;
+    if (
+      db.deferred.some(
+        ev => ev.channelId === channelId && ev.senderPubky === sender && ev.eventId === eventId,
+      )
+    ) {
+      return true;
+    }
     return db.groupMessages.some(
       row => row.channelId === channelId && row.senderPubky === sender && row.eventId === eventId,
     );
@@ -367,7 +401,41 @@ function wireInMemoryStorage(): void {
       ) ?? null,
   );
   mockedStorage.findGroupMessageByAuthorEvent.mockResolvedValue(null);
-  mockedStorage.listGroupDeferredForTarget.mockResolvedValue([]);
+  mockedStorage.saveGroupDeferred.mockImplementation(async event => {
+    const exists = db.deferred.some(
+      ev =>
+        ev.channelId === event.channelId &&
+        ev.senderPubky === event.senderPubky &&
+        ev.eventId === event.eventId,
+    );
+    if (!exists) db.deferred.push(event);
+  });
+  mockedStorage.listGroupDeferredForTarget.mockImplementation(
+    async (_owner, channelId, targetAuthorPubky, targetEventId) =>
+      db.deferred.filter(
+        ev =>
+          ev.channelId === channelId &&
+          ev.targetAuthorPubky === targetAuthorPubky &&
+          ev.targetEventId === targetEventId,
+      ),
+  );
+  mockedStorage.deleteGroupDeferred.mockImplementation(
+    async (_owner, channelId, sender, eventId) => {
+      db.deferred = db.deferred.filter(
+        ev => !(ev.channelId === channelId && ev.senderPubky === sender && ev.eventId === eventId),
+      );
+    },
+  );
+  mockedStorage.deleteGroupDeferredForSender.mockImplementation(async (_owner, senderPubky) => {
+    db.deferred = db.deferred.filter(ev => ev.senderPubky !== senderPubky);
+  });
+  mockedStorage.deleteGroupSeenEventsForSender.mockImplementation(async (_owner, senderPubky) => {
+    const next = new Set<string>();
+    for (const key of db.seenEvents) {
+      if (parseSeenKey(key).sender !== senderPubky) next.add(key);
+    }
+    db.seenEvents = next;
+  });
 }
 
 describe('group accept gate', () => {
@@ -384,6 +452,7 @@ describe('group accept gate', () => {
       members: new Map(),
       groupMessages: [],
       seenEvents: new Set(),
+      deferred: [],
     };
     groupNotifications = [];
     unsubscribeGroupEvents = subscribeGroupEvents((ownerPubky, channelId) => {
@@ -433,6 +502,31 @@ describe('group accept gate', () => {
         snapshot: 'est-in',
       })
       .mockResolvedValue({ messages: [], snapshot: 'est-in' });
+  }
+
+  function seedSharedChannel(memberPubkys: string[]): void {
+    db.channels.set(CHANNEL_ID, {
+      ownerPubky: OWNER,
+      channelId: CHANNEL_ID,
+      name: 'shared',
+      createdAt: NOW,
+      updatedAt: NOW,
+      createdBy: OWNER,
+      isPublic: false,
+      lastMessageAt: null,
+      membershipEpoch: 0,
+    });
+    for (const memberPubky of memberPubkys) {
+      db.members.set(memberKey(CHANNEL_ID, memberPubky), {
+        ownerPubky: OWNER,
+        channelId: CHANNEL_ID,
+        memberPubky,
+        role: memberPubky === OWNER ? 'admin' : 'member',
+        addedAt: NOW,
+        removedAt: null,
+        status: 'active',
+      });
+    }
   }
 
   it('does not let a pending peer create a channel, roster row, or notification', async () => {
@@ -518,5 +612,107 @@ describe('group accept gate', () => {
     expect(db.groupMessages.map(row => row.eventId)).toEqual([CREATE_EVENT_ID]);
     expect(db.streamItems.filter(item => !item.processed)).toHaveLength(0);
     expect(groupNotifications).toEqual([{ ownerPubky: OWNER, channelId: CHANNEL_ID }]);
+  });
+
+  it('applies a pending co-member message on a locally known channel', async () => {
+    seedSharedChannel([OWNER, PEER]);
+    deliverOnce([groupMessageJson('co-member hello')]);
+
+    await LinkService.syncInbox([PEER]);
+
+    expect(db.requests.get(PEER)?.status).toBe('pending');
+    expect(db.groupMessages.map(row => row.body)).toEqual(['co-member hello']);
+    expect(db.groupMessages[0]?.senderPubky).toBe(PEER);
+    expect(db.streamItems.filter(item => !item.processed)).toHaveLength(0);
+    expect(db.streamItems.every(item => item.processed)).toBe(true);
+    expect(groupNotifications).toEqual([{ ownerPubky: OWNER, channelId: CHANNEL_ID }]);
+  });
+
+  it('on decline drops deferred and seen from that sender but keeps persisted group messages', async () => {
+    seedSharedChannel([OWNER, PEER, OTHER]);
+    db.links.set(OTHER, { ...establishedLink(), peerPubky: OTHER, role: 'initiator' });
+    db.requests.set(OTHER, {
+      ownerPubky: OWNER,
+      peerPubky: OTHER,
+      createdAt: NOW,
+      updatedAt: NOW,
+      status: 'accepted',
+    });
+    const reactionJson = buildGroupReactionEnvelope({
+      channelId: CHANNEL_ID,
+      eventId: REACTION_EVENT_ID,
+      targetEventId: OTHER_TARGET_EVENT_ID,
+      targetAuthorPubky: OTHER,
+      emoji: '👍',
+      sentAt: NOW + 1,
+    }).json;
+
+    deliverOnce([groupMessageJson('already in history'), reactionJson]);
+    await LinkService.syncInbox([PEER]);
+
+    expect(db.groupMessages.some(row => row.body === 'already in history')).toBe(true);
+    expect(db.deferred).toHaveLength(1);
+    expect(db.deferred[0]?.senderPubky).toBe(PEER);
+    expect(db.deferred[0]?.eventId).toBe(REACTION_EVENT_ID);
+
+    await LinkService.declineMessageRequest(PEER);
+
+    expect(db.requests.get(PEER)?.status).toBe('declined');
+    expect(db.deferred).toEqual([]);
+    expect([...db.seenEvents].every(key => parseSeenKey(key).sender !== PEER)).toBe(true);
+    expect(
+      db.groupMessages.some(row => row.body === 'already in history' && row.senderPubky === PEER),
+    ).toBe(true);
+
+    deliverOnce([
+      buildGroupMessageEnvelope({
+        channelId: CHANNEL_ID,
+        eventId: OTHER_TARGET_EVENT_ID,
+        sentAt: NOW + 2,
+        body: 'target from other',
+      }).json,
+    ]);
+    await LinkService.syncInbox([OTHER]);
+
+    expect(db.groupMessages.some(row => row.body === 'target from other')).toBe(true);
+    expect(db.groupMessages.some(row => row.eventId === REACTION_EVENT_ID)).toBe(false);
+    expect(db.groupMessages.filter(row => row.kind === GROUP_REACTION_KIND)).toEqual([]);
+  });
+
+  it('caps held unprocessed items per peer and still replays an earlier legitimate batch on accept', async () => {
+    deliverOnce([membershipCreateJson('held-group'), groupMessageJson('hello group')]);
+    await LinkService.syncInbox([PEER]);
+    expect(db.streamItems.filter(item => !item.processed)).toHaveLength(2);
+
+    const flood: string[] = [];
+    for (let i = 0; i < LINK_HELD_UNPROCESSED_CAP_PER_PEER + 5; i += 1) {
+      const localId = `00000000-0000-4000-8000-${(0xbbbb + i).toString(16).padStart(12, '0')}`;
+      const eventId = `00000000-0000-4000-8000-${(0xcccc + i).toString(16).padStart(12, '0')}`;
+      flood.push(
+        buildGroupMembershipEnvelope({
+          channelId: `${PEER}:${localId}`,
+          eventId,
+          sentAt: NOW + 10 + i,
+          op: 'create',
+          name: `flood-${i}`,
+          members: [OWNER, PEER],
+        }).json,
+      );
+    }
+    deliverOnce(flood);
+    await LinkService.syncInbox([PEER]);
+
+    const unprocessed = db.streamItems.filter(item => !item.processed);
+    expect(unprocessed).toHaveLength(LINK_HELD_UNPROCESSED_CAP_PER_PEER);
+    expect(unprocessed[0]?.rawJson).toContain('held-group');
+    expect(unprocessed[1]?.rawJson).toContain('hello group');
+    expect(db.channels.size).toBe(0);
+
+    await LinkService.acceptMessageRequest(PEER);
+
+    expect(db.channels.get(CHANNEL_ID)?.name).toBe('held-group');
+    expect(db.groupMessages.some(row => row.body === 'hello group')).toBe(true);
+    // Cap kept 66 rows: the original create+message plus 64 flood creates.
+    expect(db.channels.size).toBe(LINK_HELD_UNPROCESSED_CAP_PER_PEER - 1);
   });
 });

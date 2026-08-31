@@ -29,6 +29,6 @@ export async function isGroupInboundGated(input: {
   return requiresAcceptedPeer({
     envelope,
     ownerPubky,
-    channelKnownLocally: channel !== null,
+    channelKnownLocally: channel != null,
   });
 }

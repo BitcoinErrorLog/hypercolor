@@ -707,7 +707,12 @@ export const LinkService = {
 
   /**
    * Declines a message request: close the link, clear the outbox, drop
-   * held stream/message rows, and persist `declined`.
+   * held stream/message rows, drop that sender's `group_deferred_events`
+   * and `group_seen_events`, and persist `declined`.
+   *
+   * Already-persisted `group_messages` in shared channels stay: decline is
+   * a 1:1 inbox action (see `docs/DECISIONS.md`). A stranger-exploit create
+   * never applied, so that shape still leaves no group rows.
    */
   async declineMessageRequest(peerPubky: PubkyKey): Promise<void> {
     return withQueue(peerPubky, async () => {
@@ -716,6 +721,8 @@ export const LinkService = {
       if (stored) await wipeLinkState(stored);
       await StorageService.deleteLinkStreamItemsForPeer(ownerPubky, peerPubky);
       await StorageService.deleteLinkMessagesForPeer(ownerPubky, peerPubky);
+      await StorageService.deleteGroupDeferredForSender(ownerPubky, peerPubky);
+      await StorageService.deleteGroupSeenEventsForSender(ownerPubky, peerPubky);
       const existing = await StorageService.getMessageRequest(ownerPubky, peerPubky);
       const ts = Date.now();
       await StorageService.upsertMessageRequest({
@@ -1399,6 +1406,7 @@ async function persistInboundWithoutRouting(
     await StorageService.saveLinkStreamItems(streamItems);
   }
   await StorageService.updateLinkSnapshot(ownerPubky, peerPubky, snapshot, 'established');
+  await StorageService.settleExcessUnprocessedLinkStreamItems(ownerPubky, peerPubky);
   // Group fan-out is not a DM inbox item. WoT holds chat messages as a
   // request; group ops that cannot touch the channel list or the roster
   // still apply on an established Encrypted Link.
@@ -1455,8 +1463,10 @@ async function routeHeldGroupInbound(
  * A deferred row is left unprocessed on purpose:
  * {@link LinkService.acceptMessageRequest} replays it through
  * {@link routeUnprocessedStreamItems}, and
- * {@link LinkService.declineMessageRequest} deletes it with the rest of the
- * peer's held items, so a decline leaves no group rows behind.
+ * {@link LinkService.declineMessageRequest} deletes the held stream items
+ * plus that sender's `group_deferred_events` and `group_seen_events`.
+ * Already-persisted `group_messages` in shared channels stay — decline is
+ * a 1:1 inbox action, not a group-history wipe.
  */
 async function routeGroupStreamItem(input: {
   ownerPubky: PubkyKey;
@@ -1474,6 +1484,7 @@ async function routeGroupStreamItem(input: {
     envelope,
     rawJson: item.rawJson,
     receivedAt: item.receivedAt,
+    peerTrust,
   });
   return 'settled';
 }

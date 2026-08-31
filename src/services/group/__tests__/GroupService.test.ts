@@ -130,6 +130,7 @@ describe('GroupService', () => {
       members: [OWNER, PEER_A],
     });
     await applyGroupInbound({
+      peerTrust: 'accepted',
       ownerPubky: OWNER,
       senderPubky: PEER_A,
       envelope: built.envelope,
@@ -148,6 +149,7 @@ describe('GroupService', () => {
     const channelId = await createPrivateGroup();
 
     await applyGroupInbound({
+      peerTrust: 'accepted',
       ownerPubky: OWNER,
       senderPubky: PEER_A,
       envelope: buildGroupMembershipEnvelope({
@@ -163,6 +165,7 @@ describe('GroupService', () => {
     expect(await StorageService.getGroupMember(OWNER, channelId, PEER_C)).toBeNull();
 
     await applyGroupInbound({
+      peerTrust: 'accepted',
       ownerPubky: OWNER,
       senderPubky: OWNER,
       envelope: buildGroupMembershipEnvelope({
@@ -183,6 +186,7 @@ describe('GroupService', () => {
   it('rejects edit and delete from a non-author', async () => {
     const channelId = await createPrivateGroup();
     await applyGroupInbound({
+      peerTrust: 'accepted',
       ownerPubky: OWNER,
       senderPubky: PEER_A,
       envelope: buildGroupMessageEnvelope({
@@ -196,6 +200,7 @@ describe('GroupService', () => {
     });
 
     await applyGroupInbound({
+      peerTrust: 'accepted',
       ownerPubky: OWNER,
       senderPubky: PEER_B,
       envelope: buildGroupEditEnvelope({
@@ -210,6 +215,7 @@ describe('GroupService', () => {
       receivedAt: NOW + 1,
     });
     await applyGroupInbound({
+      peerTrust: 'accepted',
       ownerPubky: OWNER,
       senderPubky: PEER_B,
       envelope: buildGroupDeleteEnvelope({
@@ -236,6 +242,7 @@ describe('GroupService', () => {
     const channelId = await createPrivateGroup();
     const EVENT4 = '00000000-0000-4000-8000-000000000004';
     await applyGroupInbound({
+      peerTrust: 'accepted',
       ownerPubky: OWNER,
       senderPubky: PEER_A,
       envelope: buildGroupReactionEnvelope({
@@ -250,6 +257,7 @@ describe('GroupService', () => {
       receivedAt: NOW,
     });
     await applyGroupInbound({
+      peerTrust: 'accepted',
       ownerPubky: OWNER,
       senderPubky: PEER_A,
       envelope: buildGroupEditEnvelope({
@@ -264,6 +272,7 @@ describe('GroupService', () => {
       receivedAt: NOW + 1,
     });
     await applyGroupInbound({
+      peerTrust: 'accepted',
       ownerPubky: OWNER,
       senderPubky: PEER_A,
       envelope: buildGroupDeleteEnvelope({
@@ -287,6 +296,7 @@ describe('GroupService', () => {
     );
 
     await applyGroupInbound({
+      peerTrust: 'accepted',
       ownerPubky: OWNER,
       senderPubky: PEER_A,
       envelope: buildGroupMessageEnvelope({
@@ -315,6 +325,7 @@ describe('GroupService', () => {
       body: 'once',
     }).envelope;
     await applyGroupInbound({
+      peerTrust: 'accepted',
       ownerPubky: OWNER,
       senderPubky: PEER_A,
       envelope,
@@ -322,6 +333,7 @@ describe('GroupService', () => {
       receivedAt: NOW,
     });
     await applyGroupInbound({
+      peerTrust: 'accepted',
       ownerPubky: OWNER,
       senderPubky: PEER_A,
       envelope,

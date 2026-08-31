@@ -52,6 +52,18 @@ export const GROUP_DEFERRED_QUOTA_PER_SENDER = 32;
 export const GROUP_DEFERRED_TTL_MS = 48 * 60 * 60 * 1000;
 
 /**
+ * Max unprocessed `link_stream_items` kept per (owner, peer) while that peer
+ * sits behind the accept gate. Oldest rows (arrival order) stay; the rest are
+ * marked processed so they cannot retry or be replayed on accept.
+ *
+ * Sized at `PRIVATE_GROUP_MEMBER_CAP + 16` so a full 50-member create
+ * fan-out (create + overflow `add`s) plus a small content batch still
+ * replays on accept. Keep-oldest (not newest) so a create-then-content
+ * invite is not evicted by a subsequent flood of random `channel_id`s.
+ */
+export const LINK_HELD_UNPROCESSED_CAP_PER_PEER = PRIVATE_GROUP_MEMBER_CAP + 16;
+
+/**
  * v1 ciphertext is read/written as a base64 string across the RN JSON bridge.
  * 8 MiB plaintext is a conservative cap (~10.7 MiB base64). Chunking and
  * large-media streaming are future work — do not raise this without a

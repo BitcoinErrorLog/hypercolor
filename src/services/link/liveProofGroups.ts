@@ -315,6 +315,7 @@ export async function runGroupLiveProof(
           envelope: forgedCreate.envelope,
           rawJson: forgedCreate.json,
           receivedAt: now(),
+          peerTrust: 'accepted',
         });
         if (await storage.getGroupChannel(pubkyA, forgedChannelId)) {
           throw new Error('forged channel_id from C was persisted on A');
@@ -333,6 +334,7 @@ export async function runGroupLiveProof(
           envelope: reused.envelope,
           rawJson: reused.json,
           receivedAt: now(),
+          peerTrust: 'accepted',
         });
         const after = await storage.getGroupMessage(pubkyA, channelId, pubkyA, groupEventId);
         if (!before || !after || after.body !== before.body) {

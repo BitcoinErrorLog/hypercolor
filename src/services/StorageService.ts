@@ -29,7 +29,11 @@ import type {
   GroupMessage,
 } from '../types/group';
 import { peekEnvelopeKind } from '../types/group';
-import { GROUP_DEFERRED_QUOTA_PER_SENDER, GROUP_DEFERRED_TTL_MS } from '../flags/config';
+import {
+  GROUP_DEFERRED_QUOTA_PER_SENDER,
+  GROUP_DEFERRED_TTL_MS,
+  LINK_HELD_UNPROCESSED_CAP_PER_PEER,
+} from '../flags/config';
 import type { AttachmentRecord, AttachmentResolveState } from '../types/attachment';
 import {
   CHAT_ATTACHMENT_KIND,
@@ -775,6 +779,35 @@ export const StorageService = {
   async markLinkStreamItemProcessed(id: string): Promise<void> {
     const db = await getDb();
     db.executeSync('UPDATE link_stream_items SET processed = 1 WHERE id = ?', [id]);
+  },
+
+  /**
+   * Bounds unprocessed stream items for one peer. Keeps the oldest
+   * {@link LINK_HELD_UNPROCESSED_CAP_PER_PEER} rows (arrival order) and
+   * marks the rest processed so they cannot retry or replay on accept.
+   * Returns how many rows were settled.
+   */
+  async settleExcessUnprocessedLinkStreamItems(
+    ownerPubky: PubkyKey,
+    peerPubky: PubkyKey,
+    keepOldest = LINK_HELD_UNPROCESSED_CAP_PER_PEER,
+  ): Promise<number> {
+    const db = await getDb();
+    const result = db.executeSync(
+      `SELECT id FROM link_stream_items
+       WHERE owner_pubky = ? AND peer_pubky = ? AND processed = 0
+       ORDER BY received_at ASC, rowid ASC`,
+      [ownerPubky, peerPubky],
+    );
+    const ids = (result.rows ?? []).map(row => String(row.id));
+    if (ids.length <= keepOldest) return 0;
+    const excess = ids.slice(keepOldest);
+    transact(db, () => {
+      for (const id of excess) {
+        db.executeSync('UPDATE link_stream_items SET processed = 1 WHERE id = ?', [id]);
+      }
+    });
+    return excess.length;
   },
 
   // ── Link read cursors (Paykit Encrypted Links) ────────────────────────────
@@ -1633,6 +1666,32 @@ export const StorageService = {
        WHERE owner_pubky = ? AND channel_id = ? AND sender_pubky = ? AND event_id = ?`,
       [ownerPubky, channelId, senderPubky, eventId],
     );
+  },
+
+  /**
+   * Drop every deferred reaction/edit/delete from this sender across all
+   * channels. Used on message-request decline so a later matching target
+   * cannot promote declined-peer content into `group_messages`.
+   */
+  async deleteGroupDeferredForSender(ownerPubky: PubkyKey, senderPubky: PubkyKey): Promise<void> {
+    const db = await getDb();
+    db.executeSync(`DELETE FROM group_deferred_events WHERE owner_pubky = ? AND sender_pubky = ?`, [
+      ownerPubky,
+      senderPubky,
+    ]);
+  },
+
+  /**
+   * Drop this sender's `group_seen_events` markers. Used on decline so a
+   * declined peer cannot leave burned dedup holes in shared channels.
+   * Does not touch already-persisted `group_messages`.
+   */
+  async deleteGroupSeenEventsForSender(ownerPubky: PubkyKey, senderPubky: PubkyKey): Promise<void> {
+    const db = await getDb();
+    db.executeSync(`DELETE FROM group_seen_events WHERE owner_pubky = ? AND sender_pubky = ?`, [
+      ownerPubky,
+      senderPubky,
+    ]);
   },
 
   async listGroupMessages(

@@ -86,6 +86,9 @@ jest.mock('../../StorageService', () => ({
     deleteLinkStreamItemsForPeer: jest.fn(),
     deleteLinkMessagesForPeer: jest.fn(),
     countLinkMessagesForPeer: jest.fn(),
+    settleExcessUnprocessedLinkStreamItems: jest.fn(),
+    deleteGroupDeferredForSender: jest.fn(),
+    deleteGroupSeenEventsForSender: jest.fn(),
     setContactRelationshipFlags: jest.fn(),
   },
 }));
@@ -360,6 +363,8 @@ describe('LinkService message requests', () => {
     expect(mockedStorage.deleteLink).toHaveBeenCalledWith(OWNER, PEER);
     expect(mockedStorage.deleteLinkStreamItemsForPeer).toHaveBeenCalledWith(OWNER, PEER);
     expect(mockedStorage.deleteLinkMessagesForPeer).toHaveBeenCalledWith(OWNER, PEER);
+    expect(mockedStorage.deleteGroupDeferredForSender).toHaveBeenCalledWith(OWNER, PEER);
+    expect(mockedStorage.deleteGroupSeenEventsForSender).toHaveBeenCalledWith(OWNER, PEER);
     expect(mockedStorage.upsertMessageRequest).toHaveBeenCalledWith(
       expect.objectContaining({ status: 'declined' }),
     );
