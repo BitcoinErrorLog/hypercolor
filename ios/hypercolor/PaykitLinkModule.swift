@@ -1021,17 +1021,39 @@ enum PaykitLinkStore {
     }
 
     static func put(_ value: Data, account: String) throws {
-        try delete(account: account)
-        let query: [String: Any] = [
+        let identity: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
-            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
-            kSecValueData as String: value,
         ]
-        let status = SecItemAdd(query as CFDictionary, nil)
+        if try get(account) != nil {
+            let updated: [String: Any] = [kSecValueData as String: value]
+            let status = SecItemUpdate(identity as CFDictionary, updated as CFDictionary)
+            if status != errSecSuccess {
+                throw PaykitLinkBridgeError(
+                    code: "protocol",
+                    message: "keychain update failed (\(status))",
+                )
+            }
+            return
+        }
+        var add = identity
+        add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        add[kSecValueData as String] = value
+        let status = SecItemAdd(add as CFDictionary, nil)
+        if status == errSecDuplicateItem {
+            let updated: [String: Any] = [kSecValueData as String: value]
+            let retry = SecItemUpdate(identity as CFDictionary, updated as CFDictionary)
+            if retry != errSecSuccess {
+                throw PaykitLinkBridgeError(
+                    code: "protocol",
+                    message: "keychain update failed (\(retry))",
+                )
+            }
+            return
+        }
         if status != errSecSuccess {
-            throw PaykitLinkBridgeError(code: "protocol", message: "keychain write failed")
+            throw PaykitLinkBridgeError(code: "protocol", message: "keychain write failed (\(status))")
         }
     }
 
@@ -1045,11 +1067,14 @@ enum PaykitLinkStore {
         ]
         var result: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
-        if status == errSecItemNotFound {
+        if status == errSecItemNotFound
+            || status == errSecInteractionNotAllowed
+            || status == errSecNotAvailable
+        {
             return nil
         }
         if status != errSecSuccess {
-            throw PaykitLinkBridgeError(code: "protocol", message: "keychain read failed")
+            throw PaykitLinkBridgeError(code: "protocol", message: "keychain read failed (\(status))")
         }
         return result as? Data
     }
@@ -1067,7 +1092,10 @@ enum PaykitLinkStore {
         ]
         let status = SecItemDelete(query as CFDictionary)
         if status != errSecSuccess && status != errSecItemNotFound {
-            throw PaykitLinkBridgeError(code: "protocol", message: "keychain delete failed")
+            throw PaykitLinkBridgeError(
+                code: "protocol",
+                message: "keychain delete failed (\(status))",
+            )
         }
     }
 
@@ -1103,7 +1131,10 @@ enum PaykitLinkStore {
         ]
         let wipeStatus = SecItemDelete(wipe as CFDictionary)
         if wipeStatus != errSecSuccess && wipeStatus != errSecItemNotFound {
-            throw PaykitLinkBridgeError(code: "protocol", message: "keychain delete failed")
+            throw PaykitLinkBridgeError(
+                code: "protocol",
+                message: "keychain delete failed (\(wipeStatus))",
+            )
         }
     }
 
@@ -1132,7 +1163,10 @@ enum PaykitLinkStore {
             ]
             let delStatus = SecItemDelete(del as CFDictionary)
             if delStatus != errSecSuccess && delStatus != errSecItemNotFound {
-                throw PaykitLinkBridgeError(code: "protocol", message: "keychain delete failed")
+                throw PaykitLinkBridgeError(
+                    code: "protocol",
+                    message: "keychain delete failed (\(delStatus))",
+                )
             }
         }
     }

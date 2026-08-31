@@ -1,12 +1,37 @@
 # APP_ID from env. iOS default org.name.hypercolor (.maestro/config.yaml). Android: com.hypercolor.
 appId: ${APP_ID}
 ---
+- runFlow:
+    when:
+      visible: OK
+    commands:
+      - tapOn: OK
+- runFlow:
+    when:
+      visible:
+        id: debugSignupContinue
+    commands:
+      - tapOn:
+          id: debugSignupContinue
 - tapOn:
     id: tabProfile
+- extendedWaitUntil:
+    visible:
+      id: profileScreen
+    timeout: 15000
 - tapOn:
     id: profileSettings
+- scrollUntilVisible:
+    element:
+      id: settingsEnableMessaging
+    direction: DOWN
+    timeout: 15000
 - tapOn:
     id: settingsEnableMessaging
+- extendedWaitUntil:
+    visible:
+      id: enableMessagingScreen
+    timeout: 30000
 - extendedWaitUntil:
     visible: Already enabled
     timeout: 60000

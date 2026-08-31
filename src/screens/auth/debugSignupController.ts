@@ -31,7 +31,7 @@ export type DebugSignupResult = {
 const IDENTITY_SECRET_HEX = /^[0-9a-f]{64}$/;
 
 export function normalizeIdentitySecret(raw: string): string {
-  return raw.trim().toLowerCase();
+  return raw.trim().toLowerCase().replace(/\s+/g, '');
 }
 
 export function isIdentitySecretHex(raw: string): boolean {

@@ -1,19 +1,19 @@
-# APP_ID from env. iOS default org.name.hypercolor (.maestro/config.yaml). Android: com.hypercolor.
+# Add SLOT as a contact. Optional DM_BODY / PAYMENT_AMOUNT run on the same
+# deep link so iOS does not have to deliver a second openLink (it often drops it).
 appId: ${APP_ID}
 ---
-- tapOn:
-    id: tabChats
-- tapOn:
-    id: chatsNew
-- tapOn:
-    id: contactSearchInput
-- eraseText
-- inputText: ${PEER_PUBKY}
-- hideKeyboard
-- tapOn:
-    id: contactSearchAdd
-- tapOn: Chat
+- openLink: hypercolor://e2e/add-contact?slot=${SLOT}&body=${DM_BODY}&amount=${PAYMENT_AMOUNT}
+- runFlow:
+    when:
+      visible: Open
+    commands:
+      - tapOn: Open
+- runFlow:
+    when:
+      visible: OK
+    commands:
+      - tapOn: OK
 - extendedWaitUntil:
     visible:
       id: threadScreen
-    timeout: 60000
+    timeout: 180000

@@ -36,6 +36,7 @@ export default function WelcomeScreen() {
 
   return (
     <SafeAreaView style={styles.container} testID="welcomeScreen">
+      {__DEV__ ? <View testID="e2eClipboardChannel" /> : null}
       <ScrollView contentContainerStyle={styles.scroll}>
         <View style={styles.content}>
           <Text style={styles.logo}>hypercolor</Text>

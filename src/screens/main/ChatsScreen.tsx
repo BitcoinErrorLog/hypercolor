@@ -24,18 +24,11 @@ export default function ChatsScreen() {
   const [pendingRequests, setPendingRequests] = useState(0);
   const [messagingEnabled, setMessagingEnabled] = useState(isMessagingEnabled);
 
-  const refresh = useCallback(async () => {
+  const loadLocal = useCallback(async () => {
     if (!ownerPubky) {
       setConversations([]);
       setPendingRequests(0);
       return;
-    }
-    if (LinkService.hasSession()) {
-      try {
-        await LinkService.syncInbox();
-      } catch {
-        // Local conversation list still refreshes below.
-      }
     }
     const [rows, pending] = await Promise.all([
       StorageService.listLinkConversations(ownerPubky),
@@ -46,6 +39,17 @@ export default function ChatsScreen() {
     setMessagingEnabled(isMessagingEnabled());
   }, [ownerPubky]);
 
+  const refresh = useCallback(async () => {
+    if (ownerPubky && LinkService.hasSession()) {
+      try {
+        await LinkService.syncInbox();
+      } catch {
+        // Local conversation list still refreshes below.
+      }
+    }
+    await loadLocal();
+  }, [loadLocal, ownerPubky]);
+
   useFocusEffect(
     useCallback(() => {
       void refresh();
@@ -54,9 +58,9 @@ export default function ChatsScreen() {
 
   useEffect(() => {
     return LinkService.subscribeInboxSynced(owner => {
-      if (owner === ownerPubky) void refresh();
+      if (owner === ownerPubky) void loadLocal();
     });
-  }, [ownerPubky, refresh]);
+  }, [loadLocal, ownerPubky]);
 
   const handlePress = useCallback(
     (row: LinkConversationSummary) => {

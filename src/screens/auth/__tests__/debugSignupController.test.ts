@@ -24,6 +24,7 @@ describe('debugSignupController', () => {
   it('accepts a 64-character hex identity secret', () => {
     expect(isIdentitySecretHex(SECRET)).toBe(true);
     expect(isIdentitySecretHex('AB'.repeat(32))).toBe(true);
+    expect(isIdentitySecretHex(`${SECRET.slice(0, 32)} ${SECRET.slice(32)}`)).toBe(true);
     expect(isIdentitySecretHex('ab'.repeat(31))).toBe(false);
     expect(isIdentitySecretHex('')).toBe(false);
   });

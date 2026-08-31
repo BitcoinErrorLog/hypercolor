@@ -1,7 +1,7 @@
-# Fresh staging signup. Requires HOMESERVER_PUBKY, SIGNUP_TOKEN, SLOT.
+# Sign in a slot saved by debug-signup. Requires SLOT=A|B.
 appId: ${APP_ID}
 ---
-- openLink: hypercolor://e2e/debug-signup?homeserver=${HOMESERVER_PUBKY}&token=${SIGNUP_TOKEN}&slot=${SLOT}
+- openLink: hypercolor://e2e/switch?slot=${SLOT}&thenThreadSlot=${THEN_THREAD_SLOT}
 - runFlow:
     when:
       visible: Open

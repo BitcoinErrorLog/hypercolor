@@ -38,7 +38,14 @@ public class AppDelegate: ExpoAppDelegate {
     open url: URL,
     options: [UIApplication.OpenURLOptionsKey: Any] = [:]
   ) -> Bool {
-    return super.application(app, open: url, options: options) || RCTLinkingManager.application(app, open: url, options: options)
+    let expoHandled = super.application(app, open: url, options: options)
+    let rctHandled = RCTLinkingManager.application(app, open: url, options: options)
+    NotificationCenter.default.post(
+      name: NSNotification.Name("RCTOpenURLNotification"),
+      object: nil,
+      userInfo: ["url": url.absoluteString]
+    )
+    return expoHandled || rctHandled
   }
 
   // Universal Links

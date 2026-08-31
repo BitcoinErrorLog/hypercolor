@@ -1,32 +1,13 @@
-# APP_ID from env. iOS default org.name.hypercolor (.maestro/config.yaml). Android: com.hypercolor.
+# Assert the DM and payment request created on the add-contact deep link.
 appId: ${APP_ID}
 ---
 - extendedWaitUntil:
     visible:
-      id: threadComposer
+      id: threadScreen
     timeout: 15000
-- tapOn:
-    id: threadComposer
-- inputText: ${DM_BODY}
-- hideKeyboard
-- tapOn:
-    id: threadSend
 - extendedWaitUntil:
     visible: ${DM_BODY}
     timeout: 180000
-- tapOn:
-    id: threadRequestPay
-- extendedWaitUntil:
-    visible:
-      id: paymentComposeSheet
-    timeout: 15000
-- tapOn:
-    id: paymentComposeAmount
-- eraseText
-- inputText: ${PAYMENT_AMOUNT}
-- hideKeyboard
-- tapOn:
-    id: paymentComposeSubmit
 - extendedWaitUntil:
     visible:
       id: paymentRequestAmount

@@ -80,7 +80,6 @@ jest.mock('../../StorageService', () => ({
     getGroupChannel: jest.fn(),
     insertInboundPrivateCreate: jest.fn(),
     saveGroupMessage: jest.fn(),
-    markGroupEventSeen: jest.fn(),
     upsertMessageRequest: jest.fn(),
     listMessageRequests: jest.fn(),
     countPendingMessageRequests: jest.fn(),
@@ -88,6 +87,14 @@ jest.mock('../../StorageService', () => ({
     deleteLinkMessagesForPeer: jest.fn(),
     countLinkMessagesForPeer: jest.fn(),
     setContactRelationshipFlags: jest.fn(),
+  },
+}));
+
+jest.mock('../../homeserverOrigin', () => ({
+  resolveHomeserverOrigin: async () => 'https://homeserver.example',
+  parsePubkyOwner: (url: string) => {
+    const match = /^pubky:\/\/([^/]+)/.exec(url);
+    return match?.[1] ?? null;
   },
 }));
 
@@ -222,8 +229,15 @@ describe('LinkService message requests', () => {
       name: 'held-group',
       members: [OWNER, PEER],
     });
-    let held: Array<{ id: string; rawJson: string; kind: string | null; receivedAt: number; processed?: boolean }> =
-      [];
+    let held: Array<{
+      id: string;
+      ownerPubky: string;
+      peerPubky: string;
+      rawJson: string;
+      kind: string | null;
+      receivedAt: number;
+      processed?: boolean;
+    }> = [];
     mockedStorage.saveLinkStreamItems.mockImplementation(async items => {
       held = items.map(item => ({ ...item, processed: false }));
     });
