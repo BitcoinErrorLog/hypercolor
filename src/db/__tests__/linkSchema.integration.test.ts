@@ -56,13 +56,17 @@ import {
   SCHEMA_V10_STATEMENTS,
   SCHEMA_V11_STATEMENTS,
   SCHEMA_V12_STATEMENTS,
+  SCHEMA_V13_STATEMENTS,
 } from '../schema';
 import { StorageService } from '../../services/StorageService';
 import { KeyStore } from '../../services/KeyStore';
-import { CHAT_MESSAGE_KIND } from '../../types/link';
+import { CHAT_MESSAGE_KIND, type HandshakeBudgetInput } from '../../types/link';
 import { GROUP_MEMBERSHIP_KIND } from '../../types/group';
 import { EMPTY_PAYMENT_RECORD_EXTRAS } from '../../types/payment';
-import { openMemoryDb } from './betterSqliteAdapter';
+import { openFileDb, openMemoryDb } from './betterSqliteAdapter';
+import { mkdtempSync, rmSync } from 'fs';
+import { tmpdir } from 'os';
+import { dirname, join } from 'path';
 
 const OWNER = 'a'.repeat(52);
 const PEER = 'z'.repeat(52);
@@ -125,7 +129,7 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
 
     await runMigrations(db);
 
-    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(13);
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(15);
     expect(db.executeSync('SELECT * FROM link_receivers').rows).toEqual([]);
     expect(
       db.executeSync(
@@ -360,7 +364,7 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
     setDbForTests(db);
     await runMigrations(db);
 
-    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(13);
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(15);
     const cols = db.executeSync('PRAGMA table_info(contacts)').rows ?? [];
     const names = cols.map(row => row.name);
     expect(names).toEqual(
@@ -821,7 +825,7 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
 
     await runMigrations(db);
 
-    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(13);
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(15);
     for (const name of ['threads', 'messages', 'channels', 'channel_members', 'cursor_state']) {
       expect(
         db.executeSync("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", [name])
@@ -848,7 +852,7 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
     setDbForTests(db);
     await runMigrations(db);
 
-    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(13);
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(15);
     for (const name of [
       'group_channels',
       'group_members',
@@ -1001,7 +1005,7 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
 
     await runMigrations(db);
 
-    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(13);
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(15);
     const row = db.executeSync('SELECT * FROM group_messages').rows?.[0];
     expect(row).toEqual(
       expect.objectContaining({
@@ -1027,7 +1031,7 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
     setDbForTests(db);
     await runMigrations(db);
 
-    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(13);
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(15);
     expect(
       db.executeSync("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'attachments'")
         .rows,
@@ -1169,7 +1173,7 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
     setDbForTests(db);
     await runMigrations(db);
 
-    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(13);
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(15);
     const paymentCols = (db.executeSync('PRAGMA table_info(payment_requests)').rows ?? []).map(
       col => col.name,
     );
@@ -1272,6 +1276,209 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
   });
 });
 
+describe('link schema v15 — durable handshake abuse budget (real SQL)', () => {
+  afterEach(() => {
+    setDbForTests(null);
+  });
+
+  async function seedLink(
+    peerPubky: string,
+    status: 'handshaking' | 'established' = 'handshaking',
+  ): Promise<void> {
+    await StorageService.upsertLink({
+      ownerPubky: OWNER,
+      peerPubky,
+      role: 'responder',
+      status,
+      snapshot: `cipher-${peerPubky.slice(0, 4)}`,
+      remoteNoisePublicKey: 'noise',
+      localReceiverPath: 'hypercolor/wallet',
+      remoteReceiverPath: 'hypercolor/wallet',
+      consecutiveFailures: 0,
+    });
+  }
+
+  async function seedBudget(
+    peerPubky: string,
+    overrides: Partial<HandshakeBudgetInput> = {},
+  ): Promise<void> {
+    await StorageService.upsertHandshakeBudget({
+      ownerPubky: OWNER,
+      peerPubky,
+      pendingAdvances: 1,
+      nextAdvanceAt: 0,
+      exhaustedAt: null,
+      ...overrides,
+    });
+  }
+
+  it('migrates an existing link row off the per-row advance columns', async () => {
+    const db = openMemoryDb();
+    applyThroughV13(db);
+    db.executeSync(
+      `INSERT INTO links
+        (owner_pubky, peer_pubky, role, status, snapshot, remote_noise_public_key,
+         local_receiver_path, remote_receiver_path, consecutive_failures,
+         created_at, updated_at)
+       VALUES (?, ?, 'responder', 'handshaking', 'cipher', 'noise',
+               'hypercolor/wallet', 'hypercolor/wallet', 0, 1, 1)`,
+      [OWNER, PEER],
+    );
+
+    await runMigrations(db);
+
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(15);
+    const row = db.executeSync('SELECT * FROM links').rows?.[0] ?? {};
+    expect(row).toEqual(expect.objectContaining({ owner_pubky: OWNER, peer_pubky: PEER }));
+    expect(Object.keys(row)).not.toContain('pending_advances');
+    expect(Object.keys(row)).not.toContain('next_advance_at');
+    // A row that predates the budget table has never been charged, so it is
+    // due now rather than silently exempt from stepping.
+    setDbForTests(db);
+    expect(await StorageService.getHandshakeBudget(OWNER, PEER)).toBeNull();
+    expect((await StorageService.getDueHandshakingLinks(OWNER)).map(l => l.peerPubky)).toEqual([
+      PEER,
+    ]);
+  });
+
+  it('returns only handshaking links whose budget is due and unexhausted, oldest first', async () => {
+    const db = openMemoryDb();
+    setDbForTests(db);
+    await runMigrations(db);
+    const soon = 'c'.repeat(52);
+    const later = 'd'.repeat(52);
+    const notDue = 'e'.repeat(52);
+    const spent = 'f'.repeat(52);
+
+    await seedLink(PEER, 'established');
+    for (const peer of [soon, later, notDue, spent]) {
+      await seedLink(peer);
+    }
+    // Another owner's handshake must never appear in this account's batch.
+    await StorageService.upsertLink({
+      ownerPubky: OTHER,
+      peerPubky: PEER,
+      role: 'responder',
+      status: 'handshaking',
+      snapshot: 'hs',
+      remoteNoisePublicKey: 'noise',
+      localReceiverPath: 'hypercolor/wallet',
+      remoteReceiverPath: 'hypercolor/wallet',
+      consecutiveFailures: 0,
+    });
+
+    await seedBudget(soon, { nextAdvanceAt: 1 });
+    await seedBudget(later, { nextAdvanceAt: 2 });
+    await seedBudget(notDue, { nextAdvanceAt: Date.now() + 60 * 60 * 1000 });
+    await seedBudget(spent, { pendingAdvances: 10, nextAdvanceAt: 1, exhaustedAt: 1 });
+
+    const due = await StorageService.getDueHandshakingLinks(OWNER);
+    expect(due.map(link => link.peerPubky)).toEqual([soon, later]);
+
+    const capped = await StorageService.getDueHandshakingLinks(OWNER, 1);
+    expect(capped.map(link => link.peerPubky)).toEqual([soon]);
+  });
+
+  it('keeps the budget when the link row is deleted and re-adopted', async () => {
+    const db = openMemoryDb();
+    setDbForTests(db);
+    await runMigrations(db);
+    await seedLink(PEER);
+    await seedBudget(PEER, { pendingAdvances: 4, nextAdvanceAt: Date.now() + 60_000 });
+
+    // Exactly what `recoverWedgedLink` / `abandonUnestablishedLink` do, then
+    // the peer rewrites message 1 and sync re-adopts it.
+    await StorageService.deleteLink(OWNER, PEER);
+    await seedLink(PEER);
+
+    expect(await StorageService.getHandshakeBudget(OWNER, PEER)).toEqual(
+      expect.objectContaining({ pendingAdvances: 4 }),
+    );
+    expect(await StorageService.getDueHandshakingLinks(OWNER)).toEqual([]);
+  });
+
+  it('preserves exhaustion across an app restart', async () => {
+    const file = join(mkdtempSync(join(tmpdir(), 'hypercolor-budget-')), 'hypercolor.db');
+    try {
+      const first = openFileDb(file);
+      setDbForTests(first);
+      await runMigrations(first);
+      await seedLink(PEER);
+      await seedBudget(PEER, { pendingAdvances: 10, nextAdvanceAt: 1, exhaustedAt: 4242 });
+      first.close();
+
+      // A cold start re-opens the same file and re-runs migrations, exactly as
+      // the app does. Nothing in-process carries the exhaustion over.
+      const second = openFileDb(file);
+      setDbForTests(second);
+      await runMigrations(second);
+
+      expect(await StorageService.getHandshakeBudget(OWNER, PEER)).toEqual(
+        expect.objectContaining({ pendingAdvances: 10, exhaustedAt: 4242 }),
+      );
+      expect(await StorageService.getDueHandshakingLinks(OWNER)).toEqual([]);
+      second.close();
+    } finally {
+      rmSync(dirname(file), { recursive: true, force: true });
+    }
+  });
+
+  it('drops budget rows for the signed-out account only', async () => {
+    const db = openMemoryDb();
+    setDbForTests(db);
+    await runMigrations(db);
+    await seedBudget(PEER, { pendingAdvances: 7, exhaustedAt: 1 });
+    await StorageService.upsertHandshakeBudget({
+      ownerPubky: OTHER,
+      peerPubky: PEER,
+      pendingAdvances: 3,
+      nextAdvanceAt: 0,
+      exhaustedAt: null,
+    });
+
+    await StorageService.clearAccountData(OWNER);
+
+    expect(await StorageService.getHandshakeBudget(OWNER, PEER)).toBeNull();
+    expect(await StorageService.getHandshakeBudget(OTHER, PEER)).toEqual(
+      expect.objectContaining({ pendingAdvances: 3 }),
+    );
+  });
+
+  it('forgets the budget on an explicit clear', async () => {
+    const db = openMemoryDb();
+    setDbForTests(db);
+    await runMigrations(db);
+    await seedLink(PEER);
+    await seedBudget(PEER, { pendingAdvances: 10, nextAdvanceAt: 1, exhaustedAt: 1 });
+
+    await StorageService.clearHandshakeBudget(OWNER, PEER);
+
+    expect(await StorageService.getHandshakeBudget(OWNER, PEER)).toBeNull();
+    expect((await StorageService.getDueHandshakingLinks(OWNER)).map(l => l.peerPubky)).toEqual([
+      PEER,
+    ]);
+  });
+
+  it('reports whether a specific queue item is still outstanding', async () => {
+    const db = openMemoryDb();
+    setDbForTests(db);
+    await runMigrations(db);
+    await StorageService.enqueue({
+      id: 'q-race',
+      messageId: EVENT,
+      recipientPubky: PEER,
+      payload: '{"type":"link.chat.message"}',
+      attempts: 0,
+      nextRetryAt: 1,
+      createdAt: 1,
+    });
+
+    expect(await StorageService.hasQueueItem('q-race')).toBe(true);
+    await StorageService.removeFromQueue('q-race');
+    expect(await StorageService.hasQueueItem('q-race')).toBe(false);
+  });
+});
+
 function applyThroughV5(db: ReturnType<typeof openMemoryDb>): void {
   for (const statement of [
     ...SCHEMA_V1_STATEMENTS,
@@ -1305,4 +1512,12 @@ function applyThroughV12(db: ReturnType<typeof openMemoryDb>): void {
     db.executeSync(statement);
   }
   db.executeSync('PRAGMA user_version = 12');
+}
+
+function applyThroughV13(db: ReturnType<typeof openMemoryDb>): void {
+  applyThroughV12(db);
+  for (const statement of SCHEMA_V13_STATEMENTS) {
+    db.executeSync(statement);
+  }
+  db.executeSync('PRAGMA user_version = 13');
 }

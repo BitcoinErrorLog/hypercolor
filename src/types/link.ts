@@ -381,6 +381,42 @@ export interface LinkRecord {
 export type LinkRecordInput = Omit<LinkRecord, 'updatedAt'>;
 
 /**
+ * Durable per-(owner, peer) cost of trying to complete a Noise XX handshake.
+ *
+ * Deliberately NOT part of {@link LinkRecord}: the link row is deleted by
+ * every wipe and abandonment, so a counter living there is reset by the same
+ * peer-triggered failure that should have charged it. This survives wipe,
+ * abandonment, re-adoption, role flips and app restart.
+ */
+export interface HandshakeBudget {
+  ownerPubky: PubkyKey;
+  peerPubky: PubkyKey;
+  /**
+   * Unproductive handshake steps charged against this peer: an advance that
+   * returned `pending`, or a wipe of a still-unestablished handshake. A native
+   * `pending` is not an error, so it never touches `consecutiveFailures`; this
+   * is what bounds a handshake the counterparty never completes.
+   */
+  pendingAdvances: number;
+  /**
+   * Earliest Unix-ms at which the periodic tick may step this handshake again,
+   * on the same exponential schedule as the delivery retry queue. `0` means
+   * due now. Survives the link row so a peer cannot buy an immediate retry by
+   * forcing a wipe.
+   */
+  nextAdvanceAt: number;
+  /**
+   * Set once the budget is spent. A peer carrying this gets no timer or sync
+   * work at all: not stepped, not probed, not re-adopted. Cleared only by a
+   * deliberate user action, by reaching `established`, or by account teardown.
+   */
+  exhaustedAt: number | null;
+  updatedAt: number;
+}
+
+export type HandshakeBudgetInput = Omit<HandshakeBudget, 'updatedAt'>;
+
+/**
  * Device-local message history (plaintext bodies — never log them). Dedup
  * key is `(owner_pubky, sender_pubky, kind, event_id)` so a peer cannot
  * suppress another sender's message by reusing a UUID.

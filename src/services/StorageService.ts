@@ -8,6 +8,8 @@ import type {
 } from '../types';
 import type { SqlExecutor } from '../db/sql';
 import type {
+  HandshakeBudget,
+  HandshakeBudgetInput,
   LinkConversationSummary,
   LinkDeliveryState,
   LinkMessage,
@@ -393,6 +395,17 @@ export const StorageService = {
     return (result.rows ?? []).map(rowToQueueItem);
   },
 
+  /**
+   * True while this exact queue item is still outstanding. A drain re-checks
+   * it inside the per-peer lock so two overlapping drains holding the same
+   * `dequeue` snapshot cannot both send the item's `rawJson`.
+   */
+  async hasQueueItem(id: string): Promise<boolean> {
+    const db = await getDb();
+    const result = db.executeSync('SELECT 1 FROM delivery_queue WHERE id = ? LIMIT 1', [id]);
+    return (result.rows?.length ?? 0) > 0;
+  },
+
   async removeFromQueue(id: string): Promise<void> {
     const db = await getDb();
     db.executeSync('DELETE FROM delivery_queue WHERE id = ?', [id]);
@@ -492,6 +505,35 @@ export const StorageService = {
     return (result.rows ?? []).map(rowToLink);
   },
 
+  /**
+   * Handshaking links the periodic stepper is allowed to advance right now,
+   * oldest schedule first. Bounded like {@link dequeue} so one tick cannot fan
+   * out across every stale handshake on the device.
+   *
+   * The schedule and the exhaustion mark are joined from
+   * `link_handshake_budgets` rather than read off the link row, because the
+   * link row is deleted by every wipe and a peer must not be able to buy an
+   * immediate retry by forcing one. A missing budget row means "never charged",
+   * which is due now.
+   */
+  async getDueHandshakingLinks(ownerPubky: PubkyKey, limit = 10): Promise<LinkRecord[]> {
+    const db = await getDb();
+    const result = db.executeSync(
+      `SELECT links.* FROM links
+        LEFT JOIN link_handshake_budgets AS budget
+          ON budget.owner_pubky = links.owner_pubky
+         AND budget.peer_pubky  = links.peer_pubky
+        WHERE links.owner_pubky = ?
+          AND links.status = 'handshaking'
+          AND COALESCE(budget.next_advance_at, 0) <= ?
+          AND budget.exhausted_at IS NULL
+        ORDER BY COALESCE(budget.next_advance_at, 0) ASC, links.updated_at ASC
+        LIMIT ?`,
+      [ownerPubky, now(), limit],
+    );
+    return (result.rows ?? []).map(rowToLink);
+  },
+
   async updateLinkSnapshot(
     ownerPubky: PubkyKey,
     peerPubky: PubkyKey,
@@ -505,6 +547,64 @@ export const StorageService = {
        WHERE owner_pubky = ? AND peer_pubky = ?`,
       [snapshot, status, now(), ownerPubky, peerPubky],
     );
+  },
+
+  // ── Handshake abuse budget (survives link wipe) ────────────────────────────
+
+  async getHandshakeBudget(
+    ownerPubky: PubkyKey,
+    peerPubky: PubkyKey,
+  ): Promise<HandshakeBudget | null> {
+    const db = await getDb();
+    const result = db.executeSync(
+      'SELECT * FROM link_handshake_budgets WHERE owner_pubky = ? AND peer_pubky = ?',
+      [ownerPubky, peerPubky],
+    );
+    const row = result.rows?.[0];
+    if (!row) return null;
+    return {
+      ownerPubky: String(row.owner_pubky),
+      peerPubky: String(row.peer_pubky),
+      pendingAdvances: Number(row.pending_advances),
+      nextAdvanceAt: Number(row.next_advance_at),
+      exhaustedAt: row.exhausted_at === null ? null : Number(row.exhausted_at),
+      updatedAt: Number(row.updated_at),
+    };
+  },
+
+  async upsertHandshakeBudget(budget: HandshakeBudgetInput): Promise<void> {
+    const db = await getDb();
+    db.executeSync(
+      `INSERT INTO link_handshake_budgets
+        (owner_pubky, peer_pubky, pending_advances, next_advance_at, exhausted_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT(owner_pubky, peer_pubky) DO UPDATE SET
+         pending_advances = excluded.pending_advances,
+         next_advance_at  = excluded.next_advance_at,
+         exhausted_at     = excluded.exhausted_at,
+         updated_at       = excluded.updated_at`,
+      [
+        budget.ownerPubky,
+        budget.peerPubky,
+        budget.pendingAdvances,
+        budget.nextAdvanceAt,
+        budget.exhaustedAt,
+        now(),
+      ],
+    );
+  },
+
+  /**
+   * Forgets everything charged against this peer. Reaching `established` and a
+   * deliberate user action are the only callers — see the recovery policy on
+   * `LinkService.ensureLinkLocked`.
+   */
+  async clearHandshakeBudget(ownerPubky: PubkyKey, peerPubky: PubkyKey): Promise<void> {
+    const db = await getDb();
+    db.executeSync('DELETE FROM link_handshake_budgets WHERE owner_pubky = ? AND peer_pubky = ?', [
+      ownerPubky,
+      peerPubky,
+    ]);
   },
 
   async resetLinkConsecutiveFailures(ownerPubky: PubkyKey, peerPubky: PubkyKey): Promise<void> {
@@ -1079,6 +1179,7 @@ export const StorageService = {
       db.executeSync('DELETE FROM link_messages WHERE owner_pubky = ?', [ownerPubky]);
       db.executeSync('DELETE FROM link_read_cursors WHERE owner_pubky = ?', [ownerPubky]);
       db.executeSync('DELETE FROM links WHERE owner_pubky = ?', [ownerPubky]);
+      db.executeSync('DELETE FROM link_handshake_budgets WHERE owner_pubky = ?', [ownerPubky]);
       db.executeSync('DELETE FROM link_receivers WHERE owner_pubky = ?', [ownerPubky]);
       db.executeSync('DELETE FROM message_requests WHERE owner_pubky = ?', [ownerPubky]);
       db.executeSync('DELETE FROM contacts WHERE owner_pubky = ?', [ownerPubky]);
