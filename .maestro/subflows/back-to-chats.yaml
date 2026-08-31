@@ -1,8 +1,32 @@
-# Leave ThreadScreen and wait for the Chats tab shell.
+# Leave ThreadScreen (and any request screen under it) and land on Chats.
+# Sidecar/deep-link openThread pushes Thread on top of whatever was showing
+# (Profile after a switch, Message requests after accept). Message requests
+# uses messageRequestsBack, not threadBack, and has no tab bar.
 appId: ${APP_ID}
 ---
+- repeat:
+    times: 3
+    commands:
+      - runFlow:
+          when:
+            visible:
+              id: threadBack
+          commands:
+            - tapOn:
+                id: threadBack
+      - runFlow:
+          when:
+            visible:
+              id: messageRequestsBack
+          commands:
+            - tapOn:
+                id: messageRequestsBack
+- extendedWaitUntil:
+    visible:
+      id: tabChats
+    timeout: 15000
 - tapOn:
-    id: threadBack
+    id: tabChats
 - extendedWaitUntil:
     visible:
       id: chatsScreen

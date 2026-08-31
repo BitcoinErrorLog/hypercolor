@@ -1,29 +1,13 @@
-# Add PEER_PUBKY via the product Find Contact screen, then open Chat.
+# Add PEER_PUBKY via the e2e file sidecar (same handler as iOS openLink).
+# Optional DM_BODY is sent before the thread is opened so ThreadScreen's
+# first load includes the message (re-open of an already-focused thread
+# does not refetch).
 appId: ${APP_ID}
 ---
-- tapOn:
-    id: tabChats
-- extendedWaitUntil:
-    visible:
-      id: chatsScreen
-    timeout: 15000
-- tapOn:
-    id: chatsNew
-- extendedWaitUntil:
-    visible:
-      id: contactSearchInput
-    timeout: 15000
-- tapOn:
-    id: contactSearchInput
-- inputText: ${PEER_PUBKY}
-- hideKeyboard
-- tapOn:
-    id: contactSearchAdd
-- runFlow:
-    when:
-      visible: Chat
-    commands:
-      - tapOn: Chat
+- runScript:
+    file: ../scripts/androidE2eCmd.js
+    env:
+      E2E_URL: 'hypercolor://e2e/add-contact?peer=${PEER_PUBKY}&body=${DM_BODY}'
 - extendedWaitUntil:
     visible:
       id: threadScreen

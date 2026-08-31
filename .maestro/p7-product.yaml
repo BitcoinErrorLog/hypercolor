@@ -117,8 +117,17 @@ name: P7 product screens
     file: subflows/add-contact-android.yaml
     env:
       PEER_PUBKY: ${output.pubkyB}
+      DM_BODY: ${STARTER_BODY}
 - runFlow:
+    when:
+      platform: iOS
     file: subflows/send-starter-dm.yaml
+- runFlow:
+    when:
+      platform: Android
+    file: subflows/send-starter-dm-android.yaml
+    env:
+      PEER_PUBKY: ${output.pubkyB}
 - runFlow:
     file: subflows/back-to-chats.yaml
 
@@ -150,6 +159,7 @@ name: P7 product screens
     file: subflows/add-contact-android.yaml
     env:
       PEER_PUBKY: ${output.pubkyA}
+      DM_BODY: ""
 - runFlow:
     file: subflows/back-to-chats.yaml
 - runFlow:
@@ -166,6 +176,8 @@ name: P7 product screens
     when:
       platform: Android
     file: subflows/send-dm-and-payment-android.yaml
+    env:
+      PEER_PUBKY: ${output.pubkyA}
 
 # A receives the DM and the payment-request bubble on the real thread.
 - runFlow:
@@ -199,6 +211,12 @@ name: P7 product screens
     visible:
       id: threadScreen
     timeout: 30000
+- runFlow:
+    when:
+      platform: Android
+    file: subflows/wait-inbound-dm-android.yaml
+    env:
+      PEER_PUBKY: ${output.pubkyB}
 - extendedWaitUntil:
     visible: ${DM_BODY}
     timeout: 180000

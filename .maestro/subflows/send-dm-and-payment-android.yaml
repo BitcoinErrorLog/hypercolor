@@ -1,29 +1,23 @@
-# Send a DM and a payment request from the real Thread composer.
+# Send a DM and payment request in one sidecar command so the app cannot
+# overwrite send-dm with request-payment before the first ACK. Then reopen
+# the thread so ThreadScreen reloads. Maestro 2.9 inputText hangs.
 appId: ${APP_ID}
 ---
+- runScript:
+    file: ../scripts/androidE2eCmd.js
+    env:
+      E2E_URL: 'hypercolor://e2e/add-contact?peer=${PEER_PUBKY}&body=${DM_BODY}&amount=${PAYMENT_AMOUNT}&reference=p7-maestro-ref'
+- runFlow:
+    file: back-to-chats.yaml
+- tapOn:
+    id: chatRow
 - extendedWaitUntil:
     visible:
-      id: threadComposer
-    timeout: 15000
-- tapOn:
-    id: threadComposer
-- inputText: ${DM_BODY}
-- hideKeyboard
-- tapOn:
-    id: threadSend
+      id: threadScreen
+    timeout: 30000
 - extendedWaitUntil:
     visible: ${DM_BODY}
     timeout: 180000
-- tapOn:
-    id: threadRequestPay
-- extendedWaitUntil:
-    visible:
-      id: paymentComposeSheet
-    timeout: 15000
-- tapOn:
-    id: paymentComposeReference
-- inputText: p7-maestro-ref
-- tapOn: Send request
 - extendedWaitUntil:
     visible:
       id: paymentRequestBubble
