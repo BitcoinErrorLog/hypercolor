@@ -31,11 +31,17 @@ export interface Contact {
   avatarHash?: string;
   homeserver?: string;
   trustScore: number;
-  /** I follow them (homeserver `/pub/pubky.app/follows/` or Nexus following). */
+  /** I follow them (homeserver `/pub/pubky.app/follows/` document). */
   isFollowing: boolean;
-  /** They follow me (Nexus followers). */
+  /**
+   * They follow me. Display / sort only — never written from Nexus.
+   * The inbound auto-accept gate must not treat this as evidence.
+   */
   isFollower: boolean;
-  /** Mutual follow (Nexus friends, or isFollowing && isFollower). */
+  /**
+   * Mutual follow. Display / sort only from graph import.
+   * Unused by `wotGate` accept; import never sets it from Nexus.
+   */
   isMutual: boolean;
   /** User added this pubky via paste/QR (eligible for inbox probing). */
   addedManually: boolean;
