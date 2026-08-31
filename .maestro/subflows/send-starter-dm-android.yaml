@@ -1,0 +1,19 @@
+# The starter DM is sent during add-contact. If ThreadScreen was already
+# focused, bounce to Chats so the list reloads from storage.
+appId: ${APP_ID}
+---
+- runFlow:
+    when:
+      notVisible: ${STARTER_BODY}
+    commands:
+      - tapOn:
+          id: threadBack
+      - extendedWaitUntil:
+          visible:
+            id: chatsScreen
+          timeout: 15000
+      - tapOn:
+          id: chatRow
+- extendedWaitUntil:
+    visible: ${STARTER_BODY}
+    timeout: 180000

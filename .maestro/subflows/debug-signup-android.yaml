@@ -1,32 +1,15 @@
-# Android: type into the product Debug signup panel. Maestro openLink
-# VIEW intents are not delivered reliably on this emulator (singleTask).
+# Android: seed debug signup through the HC_E2E file sidecar.
+# Maestro 2.9 inputText/eraseText hangs the driver (DEADLINE_EXCEEDED).
 appId: ${APP_ID}
 ---
-# The debug panel sits below the fold on a medium phone.
-- scrollUntilVisible:
-    element:
-      id: debugSignupToken
-    direction: DOWN
-    timeout: 15000
-- tapOn:
-    id: debugSignupToken
-- inputText: ${SIGNUP_TOKEN}
-- hideKeyboard
-- scrollUntilVisible:
-    element:
-      id: debugSignupSubmit
-    direction: DOWN
-    timeout: 10000
-- tapOn:
-    id: debugSignupSubmit
+- runScript:
+    file: ../scripts/androidE2eCmd.js
+    env:
+      E2E_URL: hypercolor://e2e/debug-signup?p=${HOMESERVER_PUBKY}_${SIGNUP_TOKEN}_${SLOT}
 - extendedWaitUntil:
-    visible: Encrypted messaging enabled
-    timeout: 180000
-- scrollUntilVisible:
-    element:
+    visible:
       id: debugSignupContinue
-    direction: DOWN
-    timeout: 120000
+    timeout: 180000
 - copyTextFrom:
     id: debugSignupPubky
 - evalScript: ${output.pubky = maestro.copiedText}

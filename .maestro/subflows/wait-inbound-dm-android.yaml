@@ -1,0 +1,25 @@
+# Pull the Encrypted-Link inbox until the inbound DM is on ThreadScreen.
+# Opening the thread once is not enough: the conversation already has the
+# starter handshake, so a single sync can return before the new DM lands.
+appId: ${APP_ID}
+---
+- repeat:
+    while:
+      notVisible: ${DM_BODY}
+    times: 12
+    commands:
+      - runScript:
+          file: ../scripts/androidE2eCmd.js
+          env:
+            E2E_URL: 'hypercolor://e2e/sync-inbox?peer=${PEER_PUBKY}&open=0'
+      - runFlow:
+          file: back-to-chats.yaml
+      - tapOn:
+          id: chatRow
+      - extendedWaitUntil:
+          visible:
+            id: threadScreen
+          timeout: 15000
+- extendedWaitUntil:
+    visible: ${DM_BODY}
+    timeout: 30000
