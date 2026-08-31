@@ -36,7 +36,7 @@ export type LiveProofDeps = {
   pollIntervalMs?: number;
 };
 
-export type NamedLiveProofRow = 'native' | 'p0' | 'p1' | 'p2' | 'p3' | 'p4' | 'p5' | 'p6';
+export type NamedLiveProofRow = 'native' | 'p0' | 'p1' | 'p2' | 'p3' | 'p4' | 'p5' | 'p6' | 'tips';
 
 export type NamedLiveProofConfig = {
   homeserverPubky: string;
@@ -59,6 +59,7 @@ export type LiveProofLinkApi = {
     body: string,
   ) => Promise<{ eventId: string; body: string; deliveryState: string }>;
   syncInbox: (peers?: string[]) => Promise<Array<{ eventId: string; body: string }>>;
+  acceptMessageRequest: (peerPubky: string) => Promise<Array<{ eventId: string; body: string }>>;
   sendPreparedMessage: (input: {
     peerPubky: string;
     kind: string;
@@ -170,7 +171,17 @@ export function parseLiveProofTokenList(
 
 export function parseNamedLiveProofRows(raw: string | undefined): NamedLiveProofRow[] {
   if (raw === undefined || raw.trim().length === 0) return ['p0'];
-  const allowed: readonly NamedLiveProofRow[] = ['native', 'p0', 'p1', 'p2', 'p3', 'p4', 'p5', 'p6'];
+  const allowed: readonly NamedLiveProofRow[] = [
+    'native',
+    'p0',
+    'p1',
+    'p2',
+    'p3',
+    'p4',
+    'p5',
+    'p6',
+    'tips',
+  ];
   const rows: NamedLiveProofRow[] = [];
   for (const part of raw.split(',')) {
     const trimmed = part.trim().toLowerCase() as NamedLiveProofRow;
@@ -291,6 +302,7 @@ export function defaultLinkApi(): LiveProofLinkApi {
     ensureLinkWith: peer => LinkService.ensureLinkWith(peer),
     sendDm: (peer, body) => LinkService.sendDm(peer, body),
     syncInbox: peers => LinkService.syncInbox(peers),
+    acceptMessageRequest: peer => LinkService.acceptMessageRequest(peer),
     sendPreparedMessage: input => LinkService.sendPreparedMessage(input),
   };
 }
@@ -342,10 +354,23 @@ export async function signupParty(
   signupToken: string,
 ): Promise<boolean> {
   return record(`signup-${party.label.toLowerCase()}`, async () => {
-    const session = await native.signupWithSecret(party.secretHex, homeserverPubky, signupToken);
-    party.sessionAlias = session.sessionAlias;
-    party.pubky = session.pubky;
-    return session.pubky;
+    try {
+      const session = await native.signupWithSecret(party.secretHex, homeserverPubky, signupToken);
+      party.sessionAlias = session.sessionAlias;
+      party.pubky = session.pubky;
+      KeyStore.setHomeserver(homeserverPubky);
+      return session.pubky;
+    } catch (err) {
+      try {
+        const session = await native.signinWithSecret(party.secretHex);
+        party.sessionAlias = session.sessionAlias;
+        party.pubky = session.pubky;
+        KeyStore.setHomeserver(homeserverPubky);
+        return `signin-after-signup ${session.pubky}`;
+      } catch {
+        throw err;
+      }
+    }
   });
 }
 
@@ -457,7 +482,10 @@ export async function cleanupNativeParties(
       try {
         await native.removeReceiverMarker(party.sessionAlias, LINK_RECEIVER_PATH);
       } catch (err) {
-        errors.push(`${party.label}: ${errorMessage(err)}`);
+        const message = errorMessage(err);
+        // p5 wipe-local already deleted native session aliases.
+        if (/session alias not found/i.test(message)) continue;
+        errors.push(`${party.label}: ${message}`);
       }
     }
     if (errors.length > 0) throw new Error(errors.join('; '));
@@ -505,7 +533,7 @@ export async function cleanupProductParties(
   });
 }
 
-/** Paste/QR contact so WoT auto-accepts inbound from that peer. */
+/** Paste/QR contact for the address book; does not auto-accept inbound DMs. */
 export async function addPastedContact(
   storage: Pick<typeof StorageService, 'upsertContact'>,
   ownerPubky: string,

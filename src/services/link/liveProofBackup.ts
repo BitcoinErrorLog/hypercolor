@@ -12,7 +12,6 @@ import {
   emptyParty,
   generatePartySecrets,
   requirePartyField,
-  requireLinkSession,
   requireText,
   resolveClock,
   signupParty,
@@ -31,7 +30,10 @@ const ATTACHMENT_KEY_MARKER = 'LIVEPROOF-ATTACHMENT-KEY';
 export type BackupLiveProofDeps = ProductLiveProofDeps & {
   backup?: Pick<typeof BackupService, 'exportBackup' | 'restoreBackup'>;
   keyStore?: RingKeyStoreApi &
-    Pick<typeof KeyStore, 'deleteLinkSession' | 'clearAttachmentSecretsForOwner' | 'getAttachmentSecret'>;
+    Pick<
+      typeof KeyStore,
+      'deleteLinkSession' | 'clearAttachmentSecretsForOwner' | 'getAttachmentSecret'
+    >;
 };
 
 /**
@@ -66,20 +68,9 @@ export async function runBackupLiveProof(
     }
 
     if (
-      !(await record('require-link-session', async () => {
-        const ring = requireLinkSession(keyStore);
-        partyA.pubky = ring.pubky;
-        partyA.sessionAlias = ring.sessionAlias;
-        keyStore.setPubky(ring.pubky);
-        return ring.pubky;
-      }))
-    ) {
-      return failed();
-    }
-
-    if (
       !(await record('validate-config', async () => {
         requireText(config.homeserverPubky, 'homeserverPubky');
+        requireText(config.signupTokenA, 'signupTokenA');
         requireText(config.signupTokenB, 'signupTokenB');
         return 'ok';
       }))
@@ -89,15 +80,20 @@ export async function runBackupLiveProof(
 
     if (
       !(await record('generate-identities', async () =>
-        generatePartySecrets([partyB], randomBytes, redactSecrets),
+        generatePartySecrets([partyA, partyB], randomBytes, redactSecrets),
       ))
     ) {
       return failed();
     }
 
+    if (!(await signupParty(record, native, config.homeserverPubky, partyA, config.signupTokenA))) {
+      return failed();
+    }
     if (!(await signupParty(record, native, config.homeserverPubky, partyB, config.signupTokenB))) {
       return failed();
     }
+    if (!(await adoptAndProvision(record, link, partyA))) return failed();
+    if (!(await adoptAndProvision(record, link, partyB))) return failed();
 
     const pubkyA = requirePartyField(partyA.pubky, 'A.pubky');
     const pubkyB = requirePartyField(partyB.pubky, 'B.pubky');

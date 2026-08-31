@@ -1,11 +1,12 @@
 import { runRingAuthLiveProof } from './liveProofAuth';
 import { runAttachmentLiveProof } from './liveProofAttachments';
-import { runBackupLiveProof } from './liveProofBackup';
+import { runBackupLiveProof, type BackupLiveProofDeps } from './liveProofBackup';
 import { runContactsLiveProof } from './liveProofContacts';
 import { runGroupLiveProof } from './liveProofGroups';
 import { runLinkLiveProof } from './liveProof';
 import { runPaymentHandoffLiveProof, type PaymentLiveProofDeps } from './liveProofPayments';
 import { runLinkServiceLiveProof } from './liveProofProduct';
+import { runTipListLiveProof, type TipListLiveProofDeps } from './liveProofTips';
 import type {
   AuthLiveProofDeps,
   LiveProofReport,
@@ -28,8 +29,13 @@ export { runContactsLiveProof } from './liveProofContacts';
 export { runGroupLiveProof } from './liveProofGroups';
 export { runPaymentHandoffLiveProof } from './liveProofPayments';
 export { runLinkServiceLiveProof } from './liveProofProduct';
+export { runTipListLiveProof } from './liveProofTips';
 
-export type NamedLiveProofDeps = ProductLiveProofDeps & PaymentLiveProofDeps & AuthLiveProofDeps;
+export type NamedLiveProofDeps = ProductLiveProofDeps &
+  PaymentLiveProofDeps &
+  AuthLiveProofDeps &
+  BackupLiveProofDeps &
+  TipListLiveProofDeps;
 
 /**
  * Dispatch named P0–P6 (and optional native diagnostic) rows. Each row is
@@ -81,6 +87,10 @@ export async function runNamedLiveProofs(
     }
     if (row === 'p6') {
       rows.push({ row, report: await runRingAuthLiveProof({}, deps) });
+      continue;
+    }
+    if (row === 'tips') {
+      rows.push({ row, report: await runTipListLiveProof(twoParty, deps) });
       continue;
     }
   }

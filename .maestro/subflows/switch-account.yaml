@@ -1,0 +1,26 @@
+# Sign in a slot saved by debug-signup. Requires SLOT=A|B.
+appId: ${APP_ID}
+---
+- openLink: hypercolor://e2e/switch?p=${SLOT}_${THEN_THREAD_SLOT}
+- runFlow:
+    when:
+      visible: Open
+    commands:
+      - tapOn: Open
+- runFlow:
+    when:
+      visible: OK
+    commands:
+      - tapOn: OK
+- extendedWaitUntil:
+    visible:
+      id: debugSignupContinue
+    timeout: 120000
+- copyTextFrom:
+    id: debugSignupPubky
+- evalScript: ${output.pubky = maestro.copiedText}
+- copyTextFrom:
+    id: debugSignupSecretValue
+- evalScript: ${output.secret = maestro.copiedText}
+- tapOn:
+    id: debugSignupContinue

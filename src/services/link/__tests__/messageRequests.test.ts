@@ -80,14 +80,24 @@ jest.mock('../../StorageService', () => ({
     getGroupChannel: jest.fn(),
     insertInboundPrivateCreate: jest.fn(),
     saveGroupMessage: jest.fn(),
-    markGroupEventSeen: jest.fn(),
     upsertMessageRequest: jest.fn(),
     listMessageRequests: jest.fn(),
     countPendingMessageRequests: jest.fn(),
     deleteLinkStreamItemsForPeer: jest.fn(),
     deleteLinkMessagesForPeer: jest.fn(),
     countLinkMessagesForPeer: jest.fn(),
+    settleExcessUnprocessedLinkStreamItems: jest.fn(),
+    deleteGroupDeferredForSender: jest.fn(),
+    deleteGroupSeenEventsForSender: jest.fn(),
     setContactRelationshipFlags: jest.fn(),
+  },
+}));
+
+jest.mock('../../homeserverOrigin', () => ({
+  resolveHomeserverOrigin: async () => 'https://homeserver.example',
+  parsePubkyOwner: (url: string) => {
+    const match = /^pubky:\/\/([^/]+)/.exec(url);
+    return match?.[1] ?? null;
   },
 }));
 
@@ -212,7 +222,13 @@ describe('LinkService message requests', () => {
     expect(mockedNative.initiateLink).not.toHaveBeenCalled();
   });
 
-  it('applies group membership while holding a stranger DM as a request', async () => {
+  // Previously asserted that a held stranger's membership `create` was
+  // applied. That was the bug: `channel_id` is sender-chosen, so the
+  // founder-bound check self-certifies and the create landed a named channel
+  // plus a roster containing the recipient with no acceptance. It is now
+  // deferred on the carrying stream item. Full coverage of the gate,
+  // including accept replay and decline, lives in groupAcceptGate.test.ts.
+  it('defers a stranger group membership create while holding the DM as a request', async () => {
     const channelId = `${PEER}:00000000-0000-4000-8000-00000000aaaa`;
     const packed = buildGroupMembershipEnvelope({
       channelId,
@@ -222,8 +238,15 @@ describe('LinkService message requests', () => {
       name: 'held-group',
       members: [OWNER, PEER],
     });
-    let held: Array<{ id: string; rawJson: string; kind: string | null; receivedAt: number; processed?: boolean }> =
-      [];
+    let held: Array<{
+      id: string;
+      ownerPubky: string;
+      peerPubky: string;
+      rawJson: string;
+      kind: string | null;
+      receivedAt: number;
+      processed: boolean;
+    }> = [];
     mockedStorage.saveLinkStreamItems.mockImplementation(async items => {
       held = items.map(item => ({ ...item, processed: false }));
     });
@@ -248,18 +271,27 @@ describe('LinkService message requests', () => {
     expect(mockedStorage.upsertMessageRequest).toHaveBeenCalledWith(
       expect.objectContaining({ status: 'pending' }),
     );
-    expect(mockedStorage.insertInboundPrivateCreate).toHaveBeenCalled();
+    expect(mockedStorage.insertInboundPrivateCreate).not.toHaveBeenCalled();
+    expect(mockedStorage.markGroupEventSeen).not.toHaveBeenCalled();
+    expect(mockedStorage.markLinkStreamItemProcessed).not.toHaveBeenCalled();
+    expect(held.filter(item => !item.processed)).toHaveLength(1);
     expect(mockedStorage.saveLinkMessage).not.toHaveBeenCalled();
   });
 
-  it('auto-accepts inbound from someone I already follow', async () => {
+  it('holds inbound from someone I already follow as a message request', async () => {
     mockedStorage.getContact.mockResolvedValue(followingContact());
 
     const received = await LinkService.syncInbox([PEER]);
 
     expect(received).toEqual([]);
-    expect(mockedStorage.upsertMessageRequest).not.toHaveBeenCalled();
-    expect(mockedNative.receivePrivateMessages).toHaveBeenCalled();
+    expect(mockedStorage.upsertMessageRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ownerPubky: OWNER,
+        peerPubky: PEER,
+        status: 'pending',
+      }),
+    );
+    expect(mockedStorage.saveLinkMessage).not.toHaveBeenCalled();
   });
 
   it('accepting a request promotes it and routes held stream items', async () => {
@@ -331,6 +363,8 @@ describe('LinkService message requests', () => {
     expect(mockedStorage.deleteLink).toHaveBeenCalledWith(OWNER, PEER);
     expect(mockedStorage.deleteLinkStreamItemsForPeer).toHaveBeenCalledWith(OWNER, PEER);
     expect(mockedStorage.deleteLinkMessagesForPeer).toHaveBeenCalledWith(OWNER, PEER);
+    expect(mockedStorage.deleteGroupDeferredForSender).toHaveBeenCalledWith(OWNER, PEER);
+    expect(mockedStorage.deleteGroupSeenEventsForSender).toHaveBeenCalledWith(OWNER, PEER);
     expect(mockedStorage.upsertMessageRequest).toHaveBeenCalledWith(
       expect.objectContaining({ status: 'declined' }),
     );
@@ -387,6 +421,21 @@ describe('LinkService message requests', () => {
     expect(mockedNative.receivePrivateMessages).not.toHaveBeenCalled();
     expect(mockedNative.probeInboundLink).not.toHaveBeenCalled();
     expect(mockedNative.clearLinkOutbox).toHaveBeenCalled();
+  });
+
+  it('refuses to accept a previously declined request', async () => {
+    mockedStorage.getMessageRequest.mockResolvedValue(pendingRequest('declined'));
+    mockedStorage.getLink.mockResolvedValue(null);
+
+    await expect(LinkService.acceptMessageRequest(PEER)).rejects.toThrow(
+      'Cannot accept a declined message request',
+    );
+
+    expect(mockedStorage.upsertMessageRequest).not.toHaveBeenCalled();
+    expect(mockedNative.receivePrivateMessages).not.toHaveBeenCalled();
+    expect(mockedNative.restoreLink).not.toHaveBeenCalled();
+    expect(mockedStorage.saveLinkMessage).not.toHaveBeenCalled();
+    expect(mockedStorage.saveLinkStreamItems).not.toHaveBeenCalled();
   });
 
   it('classifies a wiped established conversation as auto-accept, not a new request', async () => {

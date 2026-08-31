@@ -5,12 +5,23 @@ import {
   StyleSheet,
   AppState,
   Linking,
+  LogBox,
   type AppStateStatus,
 } from 'react-native';
+
+if (__DEV__) {
+  LogBox.ignoreAllLogs(true);
+}
 import { RootNavigator } from './src/navigation/RootNavigator';
+import { startE2eClipboardChannel } from './src/navigation/e2eClipboardChannel';
+import { handleE2eDeepLink } from './src/navigation/e2eDeepLinks';
 import { KeyStore } from './src/services/KeyStore';
 import { LinkService, startLinkRetryDrain } from './src/services/link/LinkService';
 import { hydratePersistedAuth } from './src/stores/hydrateAuthSession';
+
+if (__DEV__) {
+  startE2eClipboardChannel();
+}
 
 export default function App() {
   const [ready, setReady] = useState(false);
@@ -114,11 +125,26 @@ export default function App() {
       .catch(markReady)
       .finally(() => clearTimeout(readyTimer));
 
+    if (__DEV__) {
+      startE2eClipboardChannel();
+    }
+
     const sub = AppState.addEventListener('change', onAppState);
+    const linkingSub = __DEV__
+      ? Linking.addEventListener('url', ({ url }: { url: string }) => {
+          void handleE2eDeepLink(url);
+        })
+      : null;
+    if (__DEV__) {
+      void Linking.getInitialURL().then((url: string | null) => {
+        if (url) void handleE2eDeepLink(url);
+      });
+    }
     return () => {
       disposed = true;
       clearTimeout(readyTimer);
       sub.remove();
+      linkingSub?.remove();
       stopDrain?.();
     };
   }, []);

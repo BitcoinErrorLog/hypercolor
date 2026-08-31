@@ -1,5 +1,21 @@
 import React, { useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, Modal } from 'react-native';
+import { isPositiveBtcAmount, isValidPaymentReference } from '../types/payment';
+
+export function paymentComposeError(amount: string, reference: string): string | null {
+  const amountValue = amount.trim();
+  const referenceValue = reference.trim();
+  if (!isPositiveBtcAmount(amountValue)) {
+    return 'Enter a valid BTC amount';
+  }
+  if (referenceValue.length === 0) {
+    return 'Enter a payment reference';
+  }
+  if (!isValidPaymentReference(referenceValue)) {
+    return 'Payment reference is invalid';
+  }
+  return null;
+}
 
 export function PaymentComposeSheet({
   visible,
@@ -14,6 +30,28 @@ export function PaymentComposeSheet({
 }) {
   const [amount, setAmount] = useState('0.001');
   const [reference, setReference] = useState('');
+  const [error, setError] = useState<string | null>(null);
+
+  function handleAmountChange(value: string) {
+    setAmount(value);
+    setError(null);
+  }
+
+  function handleReferenceChange(value: string) {
+    setReference(value);
+    setError(null);
+  }
+
+  function handleSubmit() {
+    const amountValue = amount.trim();
+    const referenceValue = reference.trim();
+    const message = paymentComposeError(amountValue, referenceValue);
+    if (message) {
+      setError(message);
+      return;
+    }
+    onSubmit(amountValue, referenceValue);
+  }
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
@@ -26,7 +64,7 @@ export function PaymentComposeSheet({
             accessibilityLabel="Payment amount in BTC"
             style={styles.input}
             value={amount}
-            onChangeText={setAmount}
+            onChangeText={handleAmountChange}
             keyboardType="decimal-pad"
             placeholder="0.001"
             placeholderTextColor="#4b5563"
@@ -38,11 +76,16 @@ export function PaymentComposeSheet({
             accessibilityLabel="Payment reference"
             style={styles.input}
             value={reference}
-            onChangeText={setReference}
+            onChangeText={handleReferenceChange}
             placeholder="invoice-2026-0001"
             placeholderTextColor="#4b5563"
             autoCapitalize="none"
           />
+          {error ? (
+            <Text testID="paymentComposeError" style={styles.validation}>
+              {error}
+            </Text>
+          ) : null}
           <View style={styles.actions}>
             <TouchableOpacity
               testID="paymentComposeCancel"
@@ -57,7 +100,7 @@ export function PaymentComposeSheet({
               testID="paymentComposeSubmit"
               accessibilityLabel="Send request"
               style={[styles.primary, busy && styles.disabled]}
-              onPress={() => onSubmit(amount.trim(), reference.trim())}
+              onPress={handleSubmit}
               disabled={busy}
             >
               <Text style={styles.primaryText}>Send request</Text>
@@ -79,6 +122,7 @@ const styles = StyleSheet.create({
   sheet: { backgroundColor: '#111', borderRadius: 16, padding: 20, gap: 10 },
   title: { color: '#f9fafb', fontSize: 17, fontWeight: '700', marginBottom: 4 },
   label: { color: '#9ca3af', fontSize: 12, fontWeight: '600' },
+  validation: { color: '#f59e0b', fontSize: 13 },
   input: {
     backgroundColor: '#1a1a1a',
     borderRadius: 10,

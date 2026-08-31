@@ -1,6 +1,10 @@
 import { getHomeserver as rnGetHomeserver, resolveHttps } from '@synonymdev/react-native-pubky';
 import { KeyStore } from './KeyStore';
 
+/** Official Pubky staging homeserver (same pubkey as pubky-app / hypercolor-web). */
+export const STAGING_HOMESERVER_PUBKY = 'ufibwbmed6jeq9k4p583go95wofakh9fwpp4k734trq79pd9u1uy';
+export const STAGING_HOMESERVER_ORIGIN = 'https://homeserver.staging.pubky.app';
+
 /**
  * Owner pubky from a `pubky://{owner}/…` URL. Null when the URL is not a
  * pubky URI.
@@ -24,13 +28,20 @@ async function originFromHomeserverHint(hint: string): Promise<string | null> {
     return trimmed.replace(/\/+$/, '');
   }
   const resolved = await resolveHttps(trimmed);
-  if (!resolved.isOk() || !resolved.value?.https_records?.length) return null;
-  const rec = resolved.value.https_records[0];
-  if (!rec?.target) return null;
-  const host = rec.target.replace(/\.$/, '');
-  if (!host || host === '.') return null;
-  const port = rec.port && rec.port !== 443 ? `:${rec.port}` : '';
-  return `https://${host}${port}`;
+  if (resolved.isOk() && resolved.value?.https_records?.length) {
+    const rec = resolved.value.https_records[0];
+    if (rec?.target) {
+      const host = rec.target.replace(/\.$/, '');
+      if (host && host !== '.') {
+        const port = rec.port && rec.port !== 443 ? `:${rec.port}` : '';
+        return `https://${host}${port}`;
+      }
+    }
+  }
+  if (trimmed === STAGING_HOMESERVER_PUBKY) {
+    return STAGING_HOMESERVER_ORIGIN;
+  }
+  return null;
 }
 
 /**

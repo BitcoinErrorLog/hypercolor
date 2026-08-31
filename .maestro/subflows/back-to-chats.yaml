@@ -1,0 +1,9 @@
+# Leave ThreadScreen and wait for the Chats tab shell.
+appId: ${APP_ID}
+---
+- tapOn:
+    id: threadBack
+- extendedWaitUntil:
+    visible:
+      id: chatsScreen
+    timeout: 30000

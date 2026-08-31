@@ -1,0 +1,24 @@
+# Accept the first pending inbound message request via the product UI.
+appId: ${APP_ID}
+---
+- tapOn:
+    id: tabChats
+- extendedWaitUntil:
+    visible:
+      id: chatsScreen
+    timeout: 15000
+- extendedWaitUntil:
+    visible: Requests (1)
+    timeout: 180000
+- tapOn:
+    id: chatsRequests
+- extendedWaitUntil:
+    visible:
+      id: messageRequestAccept
+    timeout: 60000
+- tapOn:
+    id: messageRequestAccept
+- extendedWaitUntil:
+    visible:
+      id: threadScreen
+    timeout: 180000

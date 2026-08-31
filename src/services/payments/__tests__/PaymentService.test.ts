@@ -322,6 +322,26 @@ describe('PaymentService', () => {
     );
   });
 
+  it('rejects an empty payment reference before persisting or sending', async () => {
+    mockedUuid.mockReturnValue(EVENT_ID);
+    await expect(
+      PaymentService.requestPayment(PEER, { value: '0.001' }, ''),
+    ).rejects.toBeInstanceOf(PaymentError);
+    await expect(PaymentService.requestPayment(PEER, { value: '0.001' }, '')).rejects.toMatchObject(
+      {
+        code: 'validation',
+      },
+    );
+    await expect(PaymentService.requestPayment(PEER, { value: '0.001' }, '')).rejects.toThrow(
+      'payment_reference is invalid',
+    );
+    await expect(PaymentService.requestPayment(PEER, { value: '0.001' }, '   ')).rejects.toThrow(
+      'payment_reference is invalid',
+    );
+    expect(mockedStorage.persistPaymentCreateWithSendIntent).not.toHaveBeenCalled();
+    expect(mockedLink.attemptPersistedSend).not.toHaveBeenCalled();
+  });
+
   it('enforces the Encrypted Link byte budget on outbound requests', async () => {
     mockedUuid.mockReturnValueOnce(EVENT_ID).mockReturnValueOnce(REQUEST_ID);
     await expect(

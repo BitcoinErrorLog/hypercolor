@@ -14,10 +14,18 @@ export type AuthQrProps = {
   testID?: string;
 };
 
+function readByte(buf: Buffer, i: number): number {
+  const byte = buf[i];
+  if (byte === undefined) {
+    throw new Error(`buffer index ${i} is out of range`);
+  }
+  return byte;
+}
+
 function crc32(buf: Buffer): number {
   let c = 0xffffffff;
   for (let i = 0; i < buf.length; i++) {
-    c ^= buf[i];
+    c ^= readByte(buf, i);
     for (let k = 0; k < 8; k++) {
       c = (c >>> 1) ^ (0xedb88320 & -(c & 1));
     }
@@ -38,7 +46,7 @@ function adler32(buf: Buffer): number {
   let a = 1;
   let b = 0;
   for (let i = 0; i < buf.length; i++) {
-    a = (a + buf[i]) % 65521;
+    a = (a + readByte(buf, i)) % 65521;
     b = (b + a) % 65521;
   }
   return ((b << 16) | a) >>> 0;
@@ -50,7 +58,7 @@ function rgbaToPngBase64(width: number, height: number, rgba: Buffer): string {
   for (let y = 0; y < height; y++) {
     const dest = y * (width * 4 + 1);
     raw[dest] = 0;
-    rgba.copy(raw, dest + 1, y * width * 4, (y + 1) * width * 4);
+    raw.set(rgba.subarray(y * width * 4, (y + 1) * width * 4), dest + 1);
   }
 
   const stored: Buffer[] = [];
@@ -62,14 +70,14 @@ function rgbaToPngBase64(width: number, height: number, rgba: Buffer): string {
     block[0] = last ? 1 : 0;
     block.writeUInt16LE(chunk.length, 1);
     block.writeUInt16LE(chunk.length ^ 0xffff, 3);
-    chunk.copy(block, 5);
+    block.set(chunk, 5);
     stored.push(block);
   }
   const deflate = Buffer.concat(stored);
   const zlibBody = Buffer.alloc(2 + deflate.length + 4);
   zlibBody[0] = 0x78;
   zlibBody[1] = 0x01;
-  deflate.copy(zlibBody, 2);
+  zlibBody.set(deflate, 2);
   zlibBody.writeUInt32BE(adler32(raw), 2 + deflate.length);
 
   const ihdr = Buffer.alloc(13);

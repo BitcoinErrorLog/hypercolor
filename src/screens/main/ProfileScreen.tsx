@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useCallback, useState } from 'react';
 import {
   View,
   Text,
@@ -8,18 +8,26 @@ import {
   ScrollView,
   Alert,
 } from 'react-native';
-import { useNavigation } from '@react-navigation/native';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useAuthStore } from '../../stores/authStore';
 import { PubkyService } from '../../services/PubkyService';
 import type { RootStackParamList } from '../../types';
 import { DebugSignupPanel } from '../auth/DebugSignupPanel';
+import { getE2eIdentity } from '../../navigation/e2eSignupResult';
+import { switchE2eSavedSlotFromUi } from '../../navigation/e2eDeepLinks';
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
 
 export default function ProfileScreen() {
   const nav = useNavigation<Nav>();
   const { profile, pubky, clearSession } = useAuthStore();
+  const [, setE2eRefresh] = useState(0);
+  useFocusEffect(
+    useCallback(() => {
+      setE2eRefresh(tick => tick + 1);
+    }, []),
+  );
 
   async function handleSignOut() {
     Alert.alert(
@@ -78,7 +86,37 @@ export default function ProfileScreen() {
 
         <View style={styles.actions}>
           {__DEV__ ? (
-            <DebugSignupPanel title="Switch debug account" submitLabel="Switch debug account" />
+            <>
+              {getE2eIdentity('a') ? (
+                <TouchableOpacity
+                  testID="debugSwitchSlotA"
+                  accessibilityLabel="E2E switch to slot A"
+                  style={styles.e2eSwitch}
+                  onPress={() => {
+                    void switchE2eSavedSlotFromUi('a');
+                  }}
+                >
+                  <Text style={styles.e2eSwitchText}>E2E switch A</Text>
+                </TouchableOpacity>
+              ) : null}
+              {getE2eIdentity('b') ? (
+                <TouchableOpacity
+                  testID="debugSwitchSlotB"
+                  accessibilityLabel="E2E switch to slot B"
+                  style={styles.e2eSwitch}
+                  onPress={() => {
+                    void switchE2eSavedSlotFromUi('b');
+                  }}
+                >
+                  <Text style={styles.e2eSwitchText}>E2E switch B</Text>
+                </TouchableOpacity>
+              ) : null}
+              <DebugSignupPanel
+                title="Switch debug account"
+                submitLabel="Switch debug account"
+                e2eSlot="b"
+              />
+            </>
           ) : null}
           <TouchableOpacity
             testID="profileSignOut"
@@ -137,6 +175,14 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
   actions: { paddingHorizontal: 32, paddingBottom: 48, gap: 16 },
+  e2eSwitch: {
+    borderWidth: 1,
+    borderColor: '#374151',
+    borderRadius: 10,
+    paddingVertical: 10,
+    alignItems: 'center',
+  },
+  e2eSwitchText: { color: '#c4b5fd', fontSize: 14, fontWeight: '600' },
   dangerButton: {
     borderWidth: 1,
     borderColor: '#ef4444',

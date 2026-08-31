@@ -1,0 +1,16 @@
+# Send a starter DM on the open ThreadScreen to open the WoT request gate.
+appId: ${APP_ID}
+---
+- extendedWaitUntil:
+    visible:
+      id: threadComposer
+    timeout: 15000
+- tapOn:
+    id: threadComposer
+- inputText: ${STARTER_BODY}
+- hideKeyboard
+- tapOn:
+    id: threadSend
+- extendedWaitUntil:
+    visible: ${STARTER_BODY}
+    timeout: 180000

@@ -36,4 +36,13 @@ describe('homeserverOrigin', () => {
     });
     await expect(resolveHomeserverOrigin('owner')).resolves.toBe('https://hs.example');
   });
+
+  it('falls back to the official staging origin when pkarr HTTPS is missing', async () => {
+    mockGetHomeserver.mockResolvedValue({ isOk: () => false });
+    mockGetStoredHomeserver.mockReturnValue('ufibwbmed6jeq9k4p583go95wofakh9fwpp4k734trq79pd9u1uy');
+    mockResolveHttps.mockResolvedValue({ isOk: () => false });
+    await expect(resolveHomeserverOrigin('owner')).resolves.toBe(
+      'https://homeserver.staging.pubky.app',
+    );
+  });
 });

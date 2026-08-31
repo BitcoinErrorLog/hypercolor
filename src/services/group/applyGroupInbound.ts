@@ -17,8 +17,10 @@ import {
   type GroupEnvelope,
   type GroupMember,
   type GroupMessage,
+  type GroupPeerTrust,
 } from '../../types/group';
 import { notifyGroupEvent } from './groupEvents';
+import { isGroupInboundGated } from './groupInboundGate';
 
 /**
  * Applies one already-decoded group PAM. LinkService calls this after
@@ -26,6 +28,15 @@ import { notifyGroupEvent } from './groupEvents';
  *
  * Authorize first; persist to `group_messages` only if authorized.
  * Trust checks are documented on `src/types/group.ts`.
+ *
+ * `peerTrust` is mandatory so a future caller cannot reintroduce the
+ * pending-peer create bug by invoking this funnel with no accept-gate
+ * check. Pass `'accepted'` only when the recipient has said yes to this
+ * Encrypted-Link peer (or the caller is a test/live-proof that is
+ * deliberately exercising membership auth, not DM trust). When the value
+ * is `'gated'`, ops {@link isGroupInboundGated} reserves for an accepted
+ * peer are skipped here — fail-closed. LinkService still has to leave the
+ * carrying `link_stream_items` row unprocessed so accept can replay them.
  */
 export async function applyGroupInbound(input: {
   ownerPubky: PubkyKey;
@@ -33,8 +44,10 @@ export async function applyGroupInbound(input: {
   envelope: GroupEnvelope;
   rawJson: string;
   receivedAt: number;
+  peerTrust: GroupPeerTrust;
 }): Promise<void> {
-  const { ownerPubky, senderPubky, envelope, rawJson, receivedAt } = input;
+  const { ownerPubky, senderPubky, envelope, rawJson, receivedAt, peerTrust } = input;
+  if (await isGroupInboundGated({ ownerPubky, envelope, peerTrust })) return;
   const channelId = envelope.channel_id;
 
   if (await StorageService.hasGroupEvent(ownerPubky, channelId, senderPubky, envelope.event_id)) {

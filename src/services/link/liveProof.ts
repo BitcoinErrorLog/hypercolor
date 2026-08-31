@@ -289,7 +289,12 @@ export async function runLinkLiveProof(
           rawJson: raw,
           receivedAt: now(),
         });
-        await assertRequestStatus(pubkyB, pubkyA, requestOne.envelope.payment_request_id, 'pending');
+        await assertRequestStatus(
+          pubkyB,
+          pubkyA,
+          requestOne.envelope.payment_request_id,
+          'pending',
+        );
         if (applied.action !== 'applied') throw new Error(`B apply request: ${applied.action}`);
         return `pending ${requestOne.envelope.payment_request_id}`;
       }))
@@ -452,7 +457,12 @@ export async function runLinkLiveProof(
           rawJson: raw,
           receivedAt: now(),
         });
-        await assertRequestStatus(pubkyB, pubkyA, requestTwo.envelope.payment_request_id, 'pending');
+        await assertRequestStatus(
+          pubkyB,
+          pubkyA,
+          requestTwo.envelope.payment_request_id,
+          'pending',
+        );
         if (applied.action !== 'applied') throw new Error(`B apply request 2: ${applied.action}`);
         return 'pending';
       }))
@@ -727,4 +737,3 @@ async function receiveExpected(
     `did not receive ${CHAT_MESSAGE_KIND} ${eventId} within ${timeoutMs}ms; seen=[${seen.join(', ')}]`,
   );
 }
-

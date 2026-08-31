@@ -82,6 +82,7 @@ async function inbound(senderPubky: string, rawJson: string, receivedAt = NOW): 
     envelope,
     rawJson,
     receivedAt,
+    peerTrust: 'accepted',
   });
 }
 
@@ -531,5 +532,26 @@ describe('group inbound adversarial', () => {
     });
     expect(decodeGroupEnvelope(raw)).toBeNull();
     expect(await StorageService.hasGroupMessage(OWNER, channelId, PEER_A, eid(60))).toBe(false);
+  });
+
+  it('refuses a gated create even when applyGroupInbound is called directly', async () => {
+    const channelId = `${STRANGER}:00000000-0000-4000-8000-00000000aa99`;
+    const built = buildGroupMembershipEnvelope({
+      channelId,
+      eventId: eid(70),
+      sentAt: NOW,
+      op: 'create',
+      name: 'planted',
+      members: [OWNER, STRANGER],
+    });
+    await applyGroupInbound({
+      ownerPubky: OWNER,
+      senderPubky: STRANGER,
+      envelope: built.envelope,
+      rawJson: built.json,
+      receivedAt: NOW,
+      peerTrust: 'gated',
+    });
+    expect(await StorageService.getGroupChannel(OWNER, channelId)).toBeNull();
   });
 });

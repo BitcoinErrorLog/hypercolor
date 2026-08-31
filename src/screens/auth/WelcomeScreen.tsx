@@ -36,6 +36,7 @@ export default function WelcomeScreen() {
 
   return (
     <SafeAreaView style={styles.container} testID="welcomeScreen">
+      {__DEV__ ? <View testID="e2eClipboardChannel" /> : null}
       <ScrollView contentContainerStyle={styles.scroll}>
         <View style={styles.content}>
           <Text style={styles.logo}>hypercolor</Text>
@@ -62,7 +63,9 @@ export default function WelcomeScreen() {
             )}
           </TouchableOpacity>
 
-          {__DEV__ ? <DebugSignupPanel title="Debug signup" submitLabel="Debug signup" /> : null}
+          {__DEV__ ? (
+            <DebugSignupPanel title="Debug signup" submitLabel="Debug signup" e2eSlot="a" />
+          ) : null}
         </View>
       </ScrollView>
     </SafeAreaView>

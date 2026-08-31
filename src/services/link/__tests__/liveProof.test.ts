@@ -34,6 +34,8 @@ jest.mock('@op-engineering/op-sqlite', () => ({
 jest.mock('../../KeyStore', () => ({
   KeyStore: {
     getPubky: jest.fn(),
+    setHomeserver: jest.fn(),
+    getHomeserver: jest.fn(),
     deleteAttachmentSecrets: jest.fn().mockResolvedValue([]),
     clearAttachmentSecretsForOwner: jest.fn().mockResolvedValue([]),
     deleteAttachmentSecretByService: jest.fn().mockResolvedValue(true),

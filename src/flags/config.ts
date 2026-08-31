@@ -52,6 +52,36 @@ export const GROUP_DEFERRED_QUOTA_PER_SENDER = 32;
 export const GROUP_DEFERRED_TTL_MS = 48 * 60 * 60 * 1000;
 
 /**
+ * Max unprocessed *group-kind* `link_stream_items` kept per (owner, peer)
+ * while that peer sits behind the accept gate. Oldest group rows (arrival
+ * order) stay; overflow group rows are marked processed so they cannot
+ * retry or be replayed on accept.
+ *
+ * This budget counts only group wire kinds. Held 1:1 chat / attachment /
+ * payment / unknown rows use {@link LINK_HELD_NON_GROUP_CAP_PER_PEER}
+ * instead, so a DM flood cannot evict a later group invite (and a group
+ * fan-out cannot evict held 1:1 items).
+ *
+ * Sized at `PRIVATE_GROUP_MEMBER_CAP + 16` so a full 50-member create
+ * fan-out (create + overflow `add`s) plus a small content batch still
+ * replays on accept. Keep-oldest (not newest) so a create-then-content
+ * invite is not evicted by a subsequent flood of random `channel_id`s.
+ */
+export const LINK_HELD_UNPROCESSED_CAP_PER_PEER = PRIVATE_GROUP_MEMBER_CAP + 16;
+
+/**
+ * Max unprocessed *non-group* `link_stream_items` kept per (owner, peer)
+ * while that peer sits behind the accept gate (chat, attachment, payment,
+ * unknown). Independent of {@link LINK_HELD_UNPROCESSED_CAP_PER_PEER}.
+ *
+ * 64 is a flood/storage bound, not a product feature limit: a pending
+ * peer can leave a short 1:1 backlog, but cannot grow `link_stream_items`
+ * without bound. Oldest stay; overflow is marked processed and never
+ * applied on accept.
+ */
+export const LINK_HELD_NON_GROUP_CAP_PER_PEER = 64;
+
+/**
  * v1 ciphertext is read/written as a base64 string across the RN JSON bridge.
  * 8 MiB plaintext is a conservative cap (~10.7 MiB base64). Chunking and
  * large-media streaming are future work — do not raise this without a

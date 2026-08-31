@@ -33,6 +33,7 @@ import {
   isValidBolt11,
   isValidOnchainAddress,
   isValidPaymentEndpointIdentifier,
+  isValidPaymentReference,
   normalizeAmountValue,
   satsToBtcDecimal,
 } from '../payment';
@@ -320,6 +321,38 @@ describe('S3 payload validators', () => {
     expect(isValidOnchainAddress(MAINNET_P2PKH)).toBe(true);
     expect(isValidOnchainAddress('file:///etc/passwd')).toBe(false);
     expect(isValidOnchainAddress(MAINNET_P2WPKH.toUpperCase())).toBe(false);
+  });
+});
+
+describe('payment reference validation', () => {
+  it('rejects empty, whitespace-only, control, and over-long references', () => {
+    expect(isValidPaymentReference('invoice-2026-0001')).toBe(true);
+    expect(isValidPaymentReference('')).toBe(false);
+    expect(isValidPaymentReference('\n')).toBe(false);
+    expect(isValidPaymentReference('invoice\u0007ref')).toBe(false);
+    expect(isValidPaymentReference('r'.repeat(256))).toBe(true);
+    expect(isValidPaymentReference('r'.repeat(257))).toBe(false);
+  });
+
+  it('refuses to build a payment_request with an empty reference', () => {
+    expect(() =>
+      buildPaymentRequestEnvelope({
+        eventId: EVENT_ID,
+        paymentRequestId: REQUEST_ID,
+        amountValue: '0.001',
+        paymentReference: '',
+        endpointIds: [ENDPOINT_LIGHTNING_BOLT11],
+      }),
+    ).toThrow(PaymentError);
+    expect(() =>
+      buildPaymentRequestEnvelope({
+        eventId: EVENT_ID,
+        paymentRequestId: REQUEST_ID,
+        amountValue: '0.001',
+        paymentReference: '',
+        endpointIds: [ENDPOINT_LIGHTNING_BOLT11],
+      }),
+    ).toThrow('payment_reference is invalid');
   });
 });
 

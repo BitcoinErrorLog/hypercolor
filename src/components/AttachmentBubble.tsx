@@ -89,6 +89,14 @@ export function AttachmentBubble({
     );
   }
 
+  if (record.deliveryState === 'failed') {
+    return (
+      <View style={styles.card}>
+        <Text style={[styles.meta, styles.error, { color: textColor }]}>Failed to send</Text>
+      </View>
+    );
+  }
+
   if (record.deliveryState === 'sending' || record.resolveState === 'uploading') {
     return (
       <View style={styles.card}>

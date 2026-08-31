@@ -3,6 +3,10 @@ import { View, ActivityIndicator, StyleSheet, Alert, Linking } from 'react-nativ
 import { NavigationContainer, type LinkingOptions } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../types';
+import { E2eSignupHud } from './E2eSignupHud';
+import { navigationRef } from './navigationRef';
+import { startE2eClipboardChannel } from './e2eClipboardChannel';
+import { handleE2eDeepLink, isE2eDeepLinkUrl, linkingUrlForReactNavigation } from './e2eDeepLinks';
 import { AuthStack } from './AuthStack';
 import { MainTabs } from './MainTabs';
 import { useAuthStore } from '../stores/authStore';
@@ -21,9 +25,8 @@ const EnableMessagingScreen = React.lazy(() => import('../screens/main/EnableMes
 
 /**
  * Deep link config for React Navigation.
- * The `hypercolor://ring-callback` URL is handled by the Linking event listener
- * below rather than mapped to a screen, because it triggers an async auth flow
- * and then conditionally navigates based on success/failure.
+ * `hypercolor://ring-callback` and __DEV__ `hypercolor://e2e/*` are handled in
+ * `subscribe` / `getInitialURL` rather than mapped to a screen.
  */
 const linking: LinkingOptions<RootStackParamList> = {
   prefixes: ['hypercolor://'],
@@ -36,6 +39,23 @@ const linking: LinkingOptions<RootStackParamList> = {
         },
       },
     },
+  },
+  getInitialURL: async () => {
+    const url = await Linking.getInitialURL();
+    if (url && __DEV__ && isE2eDeepLinkUrl(url)) {
+      void handleE2eDeepLink(url);
+    }
+    return linkingUrlForReactNavigation(url);
+  },
+  subscribe(listener) {
+    const sub = Linking.addEventListener('url', ({ url }: { url: string }) => {
+      if (__DEV__ && isE2eDeepLinkUrl(url)) {
+        void handleE2eDeepLink(url);
+        return;
+      }
+      listener(url);
+    });
+    return () => sub.remove();
   },
 };
 
@@ -52,6 +72,7 @@ export function RootNavigator() {
 
   const handleDeepLink = useCallback(
     async (url: string) => {
+      if (url.startsWith('hypercolor://e2e/')) return;
       if (url.startsWith('hypercolor://join-public')) {
         if (!parsePublicChannelRef(url)) return;
         if (!isAuthenticated) {
@@ -84,6 +105,9 @@ export function RootNavigator() {
   );
 
   useEffect(() => {
+    if (__DEV__) {
+      startE2eClipboardChannel();
+    }
     // Handle deep link if app was opened via one
     Linking.getInitialURL().then((url: string | null) => {
       if (url) handleDeepLink(url);
@@ -98,53 +122,57 @@ export function RootNavigator() {
   }, [handleDeepLink]);
 
   return (
-    <NavigationContainer linking={linking} fallback={<LoadingFallback />}>
-      <Suspense fallback={<LoadingFallback />}>
-        <Stack.Navigator screenOptions={{ headerShown: false }}>
-          {isAuthenticated ? (
-            <>
-              <Stack.Screen name="Main" component={MainTabs} />
-              <Stack.Screen
-                name="Thread"
-                component={ThreadScreen}
-                options={{ animation: 'slide_from_right', headerShown: false }}
-              />
-              <Stack.Screen
-                name="ChannelScreen"
-                component={ChannelScreen}
-                options={{ animation: 'slide_from_right', headerShown: false }}
-              />
-              <Stack.Screen
-                name="ContactSearch"
-                component={ContactSearchScreen}
-                options={{ animation: 'slide_from_bottom', headerShown: false }}
-              />
-              <Stack.Screen
-                name="MessageRequests"
-                component={MessageRequestsScreen}
-                options={{ animation: 'slide_from_right', headerShown: false }}
-              />
-              <Stack.Screen
-                name="Settings"
-                component={SettingsScreen}
-                options={{ animation: 'slide_from_bottom', headerShown: false }}
-              />
-              <Stack.Screen
-                name="EnableMessaging"
-                component={EnableMessagingScreen}
-                options={{ animation: 'slide_from_right', headerShown: false }}
-              />
-            </>
-          ) : (
-            <Stack.Screen name="Auth" component={AuthStack} />
-          )}
-        </Stack.Navigator>
-      </Suspense>
+    <NavigationContainer ref={navigationRef} linking={linking} fallback={<LoadingFallback />}>
+      <View style={styles.root}>
+        <Suspense fallback={<LoadingFallback />}>
+          <Stack.Navigator screenOptions={{ headerShown: false }}>
+            {isAuthenticated ? (
+              <>
+                <Stack.Screen name="Main" component={MainTabs} />
+                <Stack.Screen
+                  name="Thread"
+                  component={ThreadScreen}
+                  options={{ animation: 'slide_from_right', headerShown: false }}
+                />
+                <Stack.Screen
+                  name="ChannelScreen"
+                  component={ChannelScreen}
+                  options={{ animation: 'slide_from_right', headerShown: false }}
+                />
+                <Stack.Screen
+                  name="ContactSearch"
+                  component={ContactSearchScreen}
+                  options={{ animation: 'slide_from_bottom', headerShown: false }}
+                />
+                <Stack.Screen
+                  name="MessageRequests"
+                  component={MessageRequestsScreen}
+                  options={{ animation: 'slide_from_right', headerShown: false }}
+                />
+                <Stack.Screen
+                  name="Settings"
+                  component={SettingsScreen}
+                  options={{ animation: 'slide_from_bottom', headerShown: false }}
+                />
+                <Stack.Screen
+                  name="EnableMessaging"
+                  component={EnableMessagingScreen}
+                  options={{ animation: 'slide_from_right', headerShown: false }}
+                />
+              </>
+            ) : (
+              <Stack.Screen name="Auth" component={AuthStack} />
+            )}
+          </Stack.Navigator>
+        </Suspense>
+        {__DEV__ ? <E2eSignupHud /> : null}
+      </View>
     </NavigationContainer>
   );
 }
 
 const styles = StyleSheet.create({
+  root: { flex: 1 },
   loading: {
     flex: 1,
     backgroundColor: '#0a0a0a',

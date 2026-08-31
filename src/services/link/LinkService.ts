@@ -3,6 +3,7 @@ import {
   PaykitLinkNative,
   createLinkNativeError,
   isLinkNativeError,
+  toLinkNativeError,
   type LinkNativeError,
   type LinkProbeResult,
   type ReceiverMarker,
@@ -25,6 +26,7 @@ import {
   type LinkRecord,
   type LinkRole,
   type LinkStatus,
+  type LinkStreamItem,
   type LinkStreamItemInput,
 } from '../../types/link';
 import type { DeliveryQueueItem, PubkyKey } from '../../types';
@@ -33,8 +35,10 @@ import {
   isGroupWireKind,
   LINK_GROUP_FANOUT_PAYLOAD_TYPE,
   peekEnvelopeKind,
+  type GroupPeerTrust,
 } from '../../types/group';
 import { applyGroupInbound } from '../group/applyGroupInbound';
+import { isGroupInboundGated } from '../group/groupInboundGate';
 import { classifyInboundPeer, wotInputFromContact } from './wotGate';
 import {
   attachmentKeyRef,
@@ -281,9 +285,8 @@ export const LinkService = {
     if (!PaykitLinkNative.isAvailable()) {
       throw createLinkNativeError('unavailable', 'PaykitLinkModule native module is not available');
     }
-    const { flowId, authorizationUrl } = await PaykitLinkNative.startAuthFlow(
-      RING_GRANT_CAPABILITIES,
-    );
+    const { flowId, authorizationUrl } =
+      await PaykitLinkNative.startAuthFlow(RING_GRANT_CAPABILITIES);
     let cancelled = false;
     return {
       authorizationUrl,
@@ -584,7 +587,7 @@ export const LinkService = {
           payload.kind,
           payload.eventId,
         );
-        if (!row || row.deliveryState !== 'sending') continue;
+        if (!row || !isRetryableDeliveryState(row.deliveryState)) continue;
       }
       await deliverQueuedPayload(item, payload);
     }
@@ -631,9 +634,10 @@ export const LinkService = {
    * Tests and callers that already have a list can still pass it explicitly.
    *
    * Newly discovered inbound links (`probe` → pending/established with no
-   * prior row) go through the WoT gate: mutual / following / manual-add /
-   * or a prior routed conversation auto-accept; everyone else is a pending
-   * MESSAGE REQUEST and is not returned to the main inbox until accepted.
+   * prior row) go through the WoT gate: only a prior routed conversation
+   * (`hasPriorRoutedConversation`) auto-accepts for compatibility. Follow,
+   * mutual follow, and manual add do not skip the queue — everyone else
+   * lands as a pending MESSAGE REQUEST until explicitly accepted.
    */
   async syncInbox(peers?: PubkyKey[]): Promise<LinkMessage[]> {
     const ownerPubky = requireOwner();
@@ -684,11 +688,20 @@ export const LinkService = {
   /**
    * Promotes a pending message request to a normal conversation and routes
    * any stream items that were held while it was gated.
+   *
+   * Decline is terminal. The requests UI only lists `pending` rows, inbound
+   * from a declined peer is rejected without creating a new request, and
+   * this method refuses to reverse a decline. Nothing from before the
+   * decline can replay: held items, deferred rows, and seen markers were
+   * deleted at decline time.
    */
   async acceptMessageRequest(peerPubky: PubkyKey): Promise<LinkMessage[]> {
     return withQueue(peerPubky, async () => {
       const ownerPubky = requireOwner();
       const existing = await StorageService.getMessageRequest(ownerPubky, peerPubky);
+      if (existing?.status === 'declined') {
+        throw new Error('Cannot accept a declined message request');
+      }
       const ts = Date.now();
       await StorageService.upsertMessageRequest({
         ownerPubky,
@@ -703,7 +716,12 @@ export const LinkService = {
 
   /**
    * Declines a message request: close the link, clear the outbox, drop
-   * held stream/message rows, and persist `declined`.
+   * held stream/message rows, drop that sender's `group_deferred_events`
+   * and `group_seen_events`, and persist `declined`.
+   *
+   * Already-persisted `group_messages` in shared channels stay: decline is
+   * a 1:1 inbox action (see `docs/DECISIONS.md`). A stranger-exploit create
+   * never applied, so that shape still leaves no group rows.
    */
   async declineMessageRequest(peerPubky: PubkyKey): Promise<void> {
     return withQueue(peerPubky, async () => {
@@ -712,6 +730,8 @@ export const LinkService = {
       if (stored) await wipeLinkState(stored);
       await StorageService.deleteLinkStreamItemsForPeer(ownerPubky, peerPubky);
       await StorageService.deleteLinkMessagesForPeer(ownerPubky, peerPubky);
+      await StorageService.deleteGroupDeferredForSender(ownerPubky, peerPubky);
+      await StorageService.deleteGroupSeenEventsForSender(ownerPubky, peerPubky);
       const existing = await StorageService.getMessageRequest(ownerPubky, peerPubky);
       const ts = Date.now();
       await StorageService.upsertMessageRequest({
@@ -1377,6 +1397,11 @@ async function collectInboxCandidates(ownerPubky: PubkyKey): Promise<PubkyKey[]>
   return out;
 }
 
+/**
+ * Persists a held peer's inbound PAMs without routing them. Only reached
+ * while the peer sits behind the accept gate, hence the hard-coded
+ * `'gated'` trust handed to {@link routeHeldGroupInbound}.
+ */
 async function persistInboundWithoutRouting(
   ownerPubky: PubkyKey,
   peerPubky: PubkyKey,
@@ -1390,16 +1415,31 @@ async function persistInboundWithoutRouting(
     await StorageService.saveLinkStreamItems(streamItems);
   }
   await StorageService.updateLinkSnapshot(ownerPubky, peerPubky, snapshot, 'established');
+  const dropped = await StorageService.settleExcessUnprocessedLinkStreamItems(
+    ownerPubky,
+    peerPubky,
+  );
+  if (dropped > 0) {
+    console.warn(
+      `[LinkService] Settled ${dropped} excess held stream item(s) for ${peerPubky} over the per-peer unprocessed cap`,
+    );
+  }
   // Group fan-out is not a DM inbox item. WoT holds chat messages as a
-  // request; membership still applies on an established Encrypted Link.
-  await routeHeldGroupInbound(ownerPubky, peerPubky);
+  // request; group ops that cannot touch the channel list or the roster
+  // still apply on an established Encrypted Link.
+  await routeHeldGroupInbound(ownerPubky, peerPubky, 'gated');
 }
 
 /**
  * Applies group PAMs that arrived while a message request is pending.
- * Chat / attachment / payment items stay unprocessed until accept.
+ * Chat / attachment / payment items stay unprocessed until accept, and so do
+ * the group ops {@link isGroupInboundGated} reserves for an accepted peer.
  */
-async function routeHeldGroupInbound(ownerPubky: PubkyKey, peerPubky: PubkyKey): Promise<void> {
+async function routeHeldGroupInbound(
+  ownerPubky: PubkyKey,
+  peerPubky: PubkyKey,
+  peerTrust: GroupPeerTrust,
+): Promise<void> {
   const items = await StorageService.getUnprocessedLinkStreamItems(ownerPubky, peerPubky);
   for (const item of items) {
     if (shouldDropOversizedKnownInbound(item.rawJson, item.kind)) {
@@ -1421,18 +1461,49 @@ async function routeHeldGroupInbound(ownerPubky: PubkyKey, peerPubky: PubkyKey):
     }
     const peeked = peekEnvelopeKind(item.rawJson);
     if (peeked === null || !isGroupWireKind(peeked)) continue;
-    const groupEnvelope = decodeGroupEnvelope(item.rawJson);
-    if (groupEnvelope) {
-      await applyGroupInbound({
-        ownerPubky,
-        senderPubky: peerPubky,
-        envelope: groupEnvelope,
-        rawJson: item.rawJson,
-        receivedAt: item.receivedAt,
-      });
-    }
+    const outcome = await routeGroupStreamItem({
+      ownerPubky,
+      peerPubky,
+      item,
+      peerTrust,
+    });
+    if (outcome === 'deferred') continue;
     await StorageService.markLinkStreamItemProcessed(item.id);
   }
+}
+
+/**
+ * Settles one group `link_stream_items` row, or reports `'deferred'` when the
+ * accept gate reserves that op for an accepted peer. A malformed known group
+ * kind settles too, so it cannot wedged-retry (M1 rule).
+ *
+ * A deferred row is left unprocessed on purpose:
+ * {@link LinkService.acceptMessageRequest} replays it through
+ * {@link routeUnprocessedStreamItems}, and
+ * {@link LinkService.declineMessageRequest} deletes the held stream items
+ * plus that sender's `group_deferred_events` and `group_seen_events`.
+ * Already-persisted `group_messages` in shared channels stay — decline is
+ * a 1:1 inbox action, not a group-history wipe.
+ */
+async function routeGroupStreamItem(input: {
+  ownerPubky: PubkyKey;
+  peerPubky: PubkyKey;
+  item: LinkStreamItem;
+  peerTrust: GroupPeerTrust;
+}): Promise<'settled' | 'deferred'> {
+  const { ownerPubky, peerPubky, item, peerTrust } = input;
+  const envelope = decodeGroupEnvelope(item.rawJson);
+  if (!envelope) return 'settled';
+  if (await isGroupInboundGated({ ownerPubky, envelope, peerTrust })) return 'deferred';
+  await applyGroupInbound({
+    ownerPubky,
+    senderPubky: peerPubky,
+    envelope,
+    rawJson: item.rawJson,
+    receivedAt: item.receivedAt,
+    peerTrust,
+  });
+  return 'settled';
 }
 
 async function holdAsMessageRequest(ownerPubky: PubkyKey, peerPubky: PubkyKey): Promise<void> {
@@ -1505,16 +1576,16 @@ async function syncPeerLocked(peerPubky: PubkyKey): Promise<LinkMessage[]> {
   try {
     const outcome = await ensureLinkLocked(peerPubky, false, false);
     const priorMessageCount = await StorageService.countLinkMessagesForPeer(ownerPubky, peerPubky);
-    const hasEstablishedConversation = priorMessageCount > 0;
+    const hasPriorRoutedConversation = priorMessageCount > 0;
     const isNewInbound =
       prior === null &&
-      !hasEstablishedConversation &&
+      !hasPriorRoutedConversation &&
       (outcome === 'ready' || outcome === 'handshaking-responder');
 
     if (isNewInbound && existingRequest?.status !== 'accepted') {
       const contact = await StorageService.getContact(peerPubky, ownerPubky);
       const decision = classifyInboundPeer(
-        wotInputFromContact(contact, hasEstablishedConversation),
+        wotInputFromContact(contact, hasPriorRoutedConversation),
       );
       if (decision === 'request') {
         await holdAsMessageRequest(ownerPubky, peerPubky);
@@ -1532,9 +1603,16 @@ async function syncPeerLocked(peerPubky: PubkyKey): Promise<LinkMessage[]> {
       return [];
     }
 
-    if (outcome !== 'ready') return routeUnprocessedStreamItems(ownerPubky, peerPubky);
+    // Past the two gated early-returns above, this peer is accepted or was
+    // never gated. `pending` + `!isNewInbound` returned already, and an
+    // `isNewInbound` peer always classifies as `request`: the only
+    // auto-accept path needs prior routed messages, which `isNewInbound`
+    // excludes. So group ops may apply in full from here on.
+    const peerTrust: GroupPeerTrust = 'accepted';
 
-    const swept = await routeUnprocessedStreamItems(ownerPubky, peerPubky);
+    if (outcome !== 'ready') return routeUnprocessedStreamItems(ownerPubky, peerPubky, peerTrust);
+
+    const swept = await routeUnprocessedStreamItems(ownerPubky, peerPubky, peerTrust);
     const handle = requireEstablishedHandle(ownerPubky, peerPubky);
     const { messages, snapshot } = await PaykitLinkNative.receivePrivateMessages(handle);
 
@@ -1545,7 +1623,7 @@ async function syncPeerLocked(peerPubky: PubkyKey): Promise<LinkMessage[]> {
     if (streamItems.length > 0) {
       await StorageService.saveLinkStreamItems(streamItems);
     }
-    const routed = await routeUnprocessedStreamItems(ownerPubky, peerPubky);
+    const routed = await routeUnprocessedStreamItems(ownerPubky, peerPubky, peerTrust);
     await StorageService.updateLinkSnapshot(ownerPubky, peerPubky, snapshot, 'established');
     return [...swept, ...routed];
   } catch (err) {
@@ -1560,6 +1638,7 @@ async function syncPeerLocked(peerPubky: PubkyKey): Promise<LinkMessage[]> {
 async function routeUnprocessedStreamItems(
   ownerPubky: PubkyKey,
   peerPubky: PubkyKey,
+  peerTrust: GroupPeerTrust,
 ): Promise<LinkMessage[]> {
   const items = await StorageService.getUnprocessedLinkStreamItems(ownerPubky, peerPubky);
   const received: LinkMessage[] = [];
@@ -1607,17 +1686,15 @@ async function routeUnprocessedStreamItems(
       continue;
     }
     if (peeked !== null && isGroupWireKind(peeked)) {
-      const groupEnvelope = decodeGroupEnvelope(item.rawJson);
-      if (groupEnvelope) {
-        await applyGroupInbound({
-          ownerPubky,
-          senderPubky: peerPubky,
-          envelope: groupEnvelope,
-          rawJson: item.rawJson,
-          receivedAt: item.receivedAt,
-        });
+      const outcome = await routeGroupStreamItem({
+        ownerPubky,
+        peerPubky,
+        item,
+        peerTrust,
+      });
+      if (outcome === 'settled') {
+        await StorageService.markLinkStreamItemProcessed(item.id);
       }
-      await StorageService.markLinkStreamItemProcessed(item.id);
       continue;
     }
     const envelope = decodeLinkEnvelope(item.rawJson);
@@ -1669,7 +1746,11 @@ async function deliverQueuedPayload(
         payload.kind,
         payload.eventId,
       );
-      if (!row || row.deliveryState !== 'sending') {
+      if (!row) {
+        await RetryQueue.recordSuccess(item.id);
+        return;
+      }
+      if (!isRetryableDeliveryState(row.deliveryState)) {
         await RetryQueue.recordSuccess(item.id);
         return;
       }
@@ -1764,6 +1845,39 @@ async function deliverQueuedPayload(
 
 function isTransientLinkError(err: unknown): boolean {
   return isLinkNativeError(err) && (err.code === 'unavailable' || err.code === 'network');
+}
+
+function isRetryableDeliveryState(state: LinkMessage['deliveryState']): boolean {
+  return state === 'sending' || state === 'failed';
+}
+
+async function markImmediateSendFailed(input: {
+  ownerPubky: PubkyKey;
+  peerPubky: PubkyKey;
+  senderPubky: PubkyKey;
+  kind: string;
+  eventId: string;
+}): Promise<void> {
+  await StorageService.updateLinkMessageDeliveryState(
+    input.ownerPubky,
+    input.senderPubky,
+    input.kind,
+    input.eventId,
+    'failed',
+  );
+  if (input.kind === CHAT_ATTACHMENT_KIND) {
+    await StorageService.updateAttachmentDelivery(
+      input.ownerPubky,
+      input.senderPubky,
+      input.eventId,
+      'failed',
+    );
+  }
+}
+
+function toSendError(err: unknown): Error {
+  const native = toLinkNativeError(err);
+  return new Error(native.message);
 }
 
 async function markFailed(payload: AnyLinkRetryPayload): Promise<void> {
@@ -1923,7 +2037,7 @@ async function reconcilePaymentPendingSends(): Promise<void> {
       await StorageService.clearPaymentPendingEvent(ownerPubky, eventId);
       continue;
     }
-    if (message.deliveryState !== 'sending') continue;
+    if (!isRetryableDeliveryState(message.deliveryState)) continue;
     if (await StorageService.hasQueueItemForMessage(eventId)) continue;
     const ts = Date.now();
     await StorageService.enqueue({
@@ -2025,7 +2139,14 @@ async function dispatchPreparedDm(input: {
     return { ...message, deliveryState: 'sent' };
   } catch (err) {
     console.warn(`[LinkService] Send failed for ${input.peerPubky}:`, errorMessage(err));
-    return message;
+    await markImmediateSendFailed({
+      ownerPubky: input.ownerPubky,
+      peerPubky: input.peerPubky,
+      senderPubky: input.ownerPubky,
+      kind: input.kind,
+      eventId: input.eventId,
+    });
+    throw toSendError(err);
   }
 }
 
@@ -2085,10 +2206,7 @@ function requireSessionAlias(): string {
   if (session) return session.alias;
   const stored = KeyStore.getLinkSession();
   if (stored) return stored;
-  throw createLinkNativeError(
-    'auth',
-    'Enable encrypted messaging to write to your homeserver.',
-  );
+  throw createLinkNativeError('auth', 'Enable encrypted messaging to write to your homeserver.');
 }
 
 function requireEstablishedHandle(ownerPubky: PubkyKey, peerPubky: PubkyKey): string {

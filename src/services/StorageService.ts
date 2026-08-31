@@ -28,8 +28,13 @@ import type {
   GroupMemberStatus,
   GroupMessage,
 } from '../types/group';
-import { peekEnvelopeKind } from '../types/group';
-import { GROUP_DEFERRED_QUOTA_PER_SENDER, GROUP_DEFERRED_TTL_MS } from '../flags/config';
+import { isGroupWireKind, peekEnvelopeKind } from '../types/group';
+import {
+  GROUP_DEFERRED_QUOTA_PER_SENDER,
+  GROUP_DEFERRED_TTL_MS,
+  LINK_HELD_NON_GROUP_CAP_PER_PEER,
+  LINK_HELD_UNPROCESSED_CAP_PER_PEER,
+} from '../flags/config';
 import type { AttachmentRecord, AttachmentResolveState } from '../types/attachment';
 import {
   CHAT_ATTACHMENT_KIND,
@@ -775,6 +780,48 @@ export const StorageService = {
   async markLinkStreamItemProcessed(id: string): Promise<void> {
     const db = await getDb();
     db.executeSync('UPDATE link_stream_items SET processed = 1 WHERE id = ?', [id]);
+  },
+
+  /**
+   * Bounds unprocessed stream items for one peer as two independent
+   * keep-oldest budgets: group wire kinds
+   * ({@link LINK_HELD_UNPROCESSED_CAP_PER_PEER}) and everything else
+   * ({@link LINK_HELD_NON_GROUP_CAP_PER_PEER}). Overflow is marked
+   * processed so it cannot retry or replay on accept. Classification uses
+   * `peekEnvelopeKind(rawJson) ?? stored kind` so a sender-claimed column
+   * cannot move rows across the two budgets.
+   * Returns how many rows were settled.
+   */
+  async settleExcessUnprocessedLinkStreamItems(
+    ownerPubky: PubkyKey,
+    peerPubky: PubkyKey,
+    keepOldestGroup = LINK_HELD_UNPROCESSED_CAP_PER_PEER,
+    keepOldestOther = LINK_HELD_NON_GROUP_CAP_PER_PEER,
+  ): Promise<number> {
+    const db = await getDb();
+    const result = db.executeSync(
+      `SELECT id, kind, raw_json FROM link_stream_items
+       WHERE owner_pubky = ? AND peer_pubky = ? AND processed = 0
+       ORDER BY received_at ASC, rowid ASC`,
+      [ownerPubky, peerPubky],
+    );
+    const groupIds: string[] = [];
+    const otherIds: string[] = [];
+    for (const row of result.rows ?? []) {
+      const id = String(row.id);
+      const storedKind = typeof row.kind === 'string' ? row.kind : null;
+      const rawJson = typeof row.raw_json === 'string' ? row.raw_json : '';
+      if (heldStreamItemIsGroup(storedKind, rawJson)) groupIds.push(id);
+      else otherIds.push(id);
+    }
+    const excess = [...groupIds.slice(keepOldestGroup), ...otherIds.slice(keepOldestOther)];
+    if (excess.length === 0) return 0;
+    transact(db, () => {
+      for (const id of excess) {
+        db.executeSync('UPDATE link_stream_items SET processed = 1 WHERE id = ?', [id]);
+      }
+    });
+    return excess.length;
   },
 
   // ── Link read cursors (Paykit Encrypted Links) ────────────────────────────
@@ -1635,6 +1682,32 @@ export const StorageService = {
     );
   },
 
+  /**
+   * Drop every deferred reaction/edit/delete from this sender across all
+   * channels. Used on message-request decline so a later matching target
+   * cannot promote declined-peer content into `group_messages`.
+   */
+  async deleteGroupDeferredForSender(ownerPubky: PubkyKey, senderPubky: PubkyKey): Promise<void> {
+    const db = await getDb();
+    db.executeSync(`DELETE FROM group_deferred_events WHERE owner_pubky = ? AND sender_pubky = ?`, [
+      ownerPubky,
+      senderPubky,
+    ]);
+  },
+
+  /**
+   * Drop this sender's `group_seen_events` markers. Used on decline so a
+   * declined peer cannot leave burned dedup holes in shared channels.
+   * Does not touch already-persisted `group_messages`.
+   */
+  async deleteGroupSeenEventsForSender(ownerPubky: PubkyKey, senderPubky: PubkyKey): Promise<void> {
+    const db = await getDb();
+    db.executeSync(`DELETE FROM group_seen_events WHERE owner_pubky = ? AND sender_pubky = ?`, [
+      ownerPubky,
+      senderPubky,
+    ]);
+  },
+
   async listGroupMessages(
     ownerPubky: PubkyKey,
     channelId: string,
@@ -2346,6 +2419,11 @@ function conversationPreview(kind: string, body: string): string {
   if (kind === CHAT_ATTACHMENT_KIND) return 'Attachment';
   if (isPaykitPaymentKind(kind)) return 'Payment';
   return body;
+}
+
+function heldStreamItemIsGroup(storedKind: string | null, rawJson: string): boolean {
+  const peeked = peekEnvelopeKind(rawJson) ?? storedKind;
+  return peeked !== null && isGroupWireKind(peeked);
 }
 
 function persistRawJson(kind: string | null | undefined, rawJson: string): string {

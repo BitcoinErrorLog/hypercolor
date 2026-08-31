@@ -13,6 +13,8 @@ import { PaykitLinkNative } from '../../services/link/PaykitLinkNative';
 import { useAuthStore } from '../../stores/authStore';
 import type { PubkyKey } from '../../types';
 import { defaultRandomBytes, identitySecretHex } from '../../services/link/liveProofShared';
+import { STAGING_HOMESERVER_PUBKY } from '../../services/homeserverOrigin';
+import { saveE2eIdentity } from '../../navigation/e2eSignupResult';
 import { completeDebugSignup, type DebugSignupResult } from './debugSignupController';
 
 function errorMessage(err: unknown): string {
@@ -20,9 +22,17 @@ function errorMessage(err: unknown): string {
   return String(err);
 }
 
-export function DebugSignupPanel({ title, submitLabel }: { title: string; submitLabel: string }) {
+export function DebugSignupPanel({
+  title,
+  submitLabel,
+  e2eSlot,
+}: {
+  title: string;
+  submitLabel: string;
+  e2eSlot?: string;
+}) {
   const setAuthenticated = useAuthStore(s => s.setAuthenticated);
-  const [homeserverPubky, setHomeserverPubky] = useState('');
+  const [homeserverPubky, setHomeserverPubky] = useState(STAGING_HOMESERVER_PUBKY);
   const [signupToken, setSignupToken] = useState('');
   const [identitySecret, setIdentitySecret] = useState('');
   const [busy, setBusy] = useState(false);
@@ -52,6 +62,13 @@ export function DebugSignupPanel({ title, submitLabel }: { title: string; submit
       );
       setIdentitySecret(next.secretHex);
       setResult(next);
+      if (__DEV__ && e2eSlot) {
+        saveE2eIdentity(e2eSlot, {
+          pubky: next.pubky,
+          secretHex: next.secretHex,
+          homeserverPubky: next.homeserverPubky,
+        });
+      }
     } catch (err) {
       setError(errorMessage(err));
     } finally {
