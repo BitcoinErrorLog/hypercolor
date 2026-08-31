@@ -157,6 +157,26 @@ export async function runAttachmentLiveProof(
       return failed();
     }
 
+    if (
+      !(await record('accept-request-b', async () => {
+        await switchToParty(link, partyB);
+        const pending = await storage.getMessageRequest(pubkyB, pubkyA);
+        if (pending?.status !== 'pending') {
+          throw new Error(
+            `B expected a pending message request from A, got ${pending?.status ?? 'none'}`,
+          );
+        }
+        await link.acceptMessageRequest(pubkyA);
+        const accepted = await storage.getMessageRequest(pubkyB, pubkyA);
+        if (accepted?.status !== 'accepted') {
+          throw new Error(`B accept did not promote the request (${accepted?.status ?? 'none'})`);
+        }
+        return `accepted ${pubkyA}`;
+      }))
+    ) {
+      return failed();
+    }
+
     const fixtureUri = await writeFixture(FIXTURE_B64, 'liveproof.txt');
     let sentEventId = '';
     let sentLocation = '';

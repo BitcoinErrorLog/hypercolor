@@ -339,6 +339,57 @@ function createProductLink(): LiveProofLinkApi & {
       }
       return delivered;
     },
+    acceptMessageRequest: async peer => {
+      const ts = Date.now();
+      const existing = await StorageService.getMessageRequest(owner, peer);
+      await StorageService.upsertMessageRequest({
+        ownerPubky: owner,
+        peerPubky: peer,
+        createdAt: existing?.createdAt ?? ts,
+        updatedAt: ts,
+        status: 'accepted',
+      });
+      const queued = inbox.get(key(owner, peer)) ?? [];
+      await StorageService.upsertLink({
+        ownerPubky: owner,
+        peerPubky: peer,
+        role: 'responder',
+        status: 'established',
+        snapshot: 'snap',
+        remoteNoisePublicKey: 'noise',
+        localReceiverPath: LINK_RECEIVER_PATH,
+        remoteReceiverPath: LINK_RECEIVER_PATH,
+        consecutiveFailures: 0,
+      });
+      inbox.set(key(owner, peer), []);
+      const delivered: Array<{ eventId: string; body: string }> = [];
+      for (const item of queued) {
+        const already = await StorageService.hasLinkMessage(
+          owner,
+          item.sender,
+          CHAT_MESSAGE_KIND,
+          item.eventId,
+        );
+        if (already) continue;
+        await StorageService.saveLinkMessage({
+          ownerPubky: owner,
+          eventId: item.eventId,
+          conversationId: `dm:${peer}`,
+          peerPubky: peer,
+          senderPubky: item.sender,
+          direction: 'received',
+          kind: CHAT_MESSAGE_KIND,
+          rawJson: '{}',
+          body: item.body,
+          sentAt: Date.now(),
+          receivedAt: Date.now(),
+          deliveryState: 'delivered',
+        });
+        delivered.push({ eventId: item.eventId, body: item.body });
+      }
+      await applyQueuedGroups(owner, peer);
+      return delivered;
+    },
     sendPreparedMessage: async input => {
       return { eventId: input.eventId, body: input.body, deliveryState: 'sent' };
     },
@@ -371,6 +422,7 @@ describe('product live-proof step machines', () => {
     expect(report.steps.map(step => step.step)).toEqual(
       expect.arrayContaining([
         'add-contact-ab-paste',
+        'accept-request-b',
         'send-dm-a',
         'sync-inbox-b',
         'persist-inbound-b',
@@ -387,7 +439,7 @@ describe('product live-proof step machines', () => {
     expect(logged.some(line => line.includes('01'.repeat(32)))).toBe(false);
   });
 
-  it('P1 pastes B, auto-accepts B, holds C, and keeps a follower bit closed', async () => {
+  it('P1 pastes B, holds B as request, holds C, and keeps a follower bit closed', async () => {
     const link = createProductLink();
     const contacts = {
       addManualContact: jest.fn(async (owner: string, raw: string) => {
@@ -442,7 +494,7 @@ describe('product live-proof step machines', () => {
     expect(report.steps.map(step => step.step)).toEqual(
       expect.arrayContaining([
         'add-contact-b-paste',
-        'inbound-b-auto-accept',
+        'inbound-b-request',
         'inbound-c-request',
         'unilateral-follower-closed',
       ]),

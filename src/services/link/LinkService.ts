@@ -631,9 +631,10 @@ export const LinkService = {
    * Tests and callers that already have a list can still pass it explicitly.
    *
    * Newly discovered inbound links (`probe` → pending/established with no
-   * prior row) go through the WoT gate: mutual / following / manual-add /
-   * or a prior routed conversation auto-accept; everyone else is a pending
-   * MESSAGE REQUEST and is not returned to the main inbox until accepted.
+   * prior row) go through the WoT gate: only a prior routed conversation
+   * (`hasPriorRoutedConversation`) auto-accepts for compatibility. Follow,
+   * mutual follow, and manual add do not skip the queue — everyone else
+   * lands as a pending MESSAGE REQUEST until explicitly accepted.
    */
   async syncInbox(peers?: PubkyKey[]): Promise<LinkMessage[]> {
     const ownerPubky = requireOwner();
@@ -1505,16 +1506,16 @@ async function syncPeerLocked(peerPubky: PubkyKey): Promise<LinkMessage[]> {
   try {
     const outcome = await ensureLinkLocked(peerPubky, false, false);
     const priorMessageCount = await StorageService.countLinkMessagesForPeer(ownerPubky, peerPubky);
-    const hasEstablishedConversation = priorMessageCount > 0;
+    const hasPriorRoutedConversation = priorMessageCount > 0;
     const isNewInbound =
       prior === null &&
-      !hasEstablishedConversation &&
+      !hasPriorRoutedConversation &&
       (outcome === 'ready' || outcome === 'handshaking-responder');
 
     if (isNewInbound && existingRequest?.status !== 'accepted') {
       const contact = await StorageService.getContact(peerPubky, ownerPubky);
       const decision = classifyInboundPeer(
-        wotInputFromContact(contact, hasEstablishedConversation),
+        wotInputFromContact(contact, hasPriorRoutedConversation),
       );
       if (decision === 'request') {
         await holdAsMessageRequest(ownerPubky, peerPubky);

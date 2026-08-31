@@ -266,14 +266,20 @@ describe('LinkService message requests', () => {
     expect(mockedStorage.saveLinkMessage).not.toHaveBeenCalled();
   });
 
-  it('auto-accepts inbound from someone I already follow', async () => {
+  it('holds inbound from someone I already follow as a message request', async () => {
     mockedStorage.getContact.mockResolvedValue(followingContact());
 
     const received = await LinkService.syncInbox([PEER]);
 
     expect(received).toEqual([]);
-    expect(mockedStorage.upsertMessageRequest).not.toHaveBeenCalled();
-    expect(mockedNative.receivePrivateMessages).toHaveBeenCalled();
+    expect(mockedStorage.upsertMessageRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ownerPubky: OWNER,
+        peerPubky: PEER,
+        status: 'pending',
+      }),
+    );
+    expect(mockedStorage.saveLinkMessage).not.toHaveBeenCalled();
   });
 
   it('accepting a request promotes it and routes held stream items', async () => {

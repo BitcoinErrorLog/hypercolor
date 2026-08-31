@@ -7,7 +7,6 @@ import {
   createLiveProofRecorder,
   defaultLinkApi,
   emptyParty,
-  establishProductLink,
   generatePartySecrets,
   pollUntil,
   requirePartyField,
@@ -28,16 +27,15 @@ export type ContactsLiveProofDeps = ProductLiveProofDeps & {
 };
 
 /**
- * P1 contacts + WoT: A pastes B; inbound from B auto-accepts; inbound from C
- * lands in message requests. A unilateral follower bit does not open the gate.
- * Nexus import is skipped (and recorded) when unreachable.
+ * P1 contacts + WoT: A pastes B; inbound from B lands in message requests;
+ * inbound from C lands in message requests. A unilateral follower bit does not
+ * open the gate. Nexus import is skipped (and recorded) when unreachable.
  */
 export async function runContactsLiveProof(
   config: ThreePartyLiveProofConfig,
   deps: ContactsLiveProofDeps = {},
 ): Promise<LiveProofReport> {
-  const { native, now, sleep, randomBytes, handshakeTimeoutMs, receiveTimeoutMs, pollIntervalMs } =
-    resolveClock(deps);
+  const { native, now, sleep, randomBytes, receiveTimeoutMs, pollIntervalMs } = resolveClock(deps);
   const link = deps.link ?? defaultLinkApi();
   const contacts = deps.contacts ?? ContactsService;
   const storage = StorageService;
@@ -129,24 +127,7 @@ export async function runContactsLiveProof(
     }
 
     if (
-      !(await record('establish-ab', async () =>
-        establishProductLink(
-          link,
-          storage,
-          partyA,
-          partyB,
-          now,
-          sleep,
-          handshakeTimeoutMs,
-          pollIntervalMs,
-        ),
-      ))
-    ) {
-      return failed();
-    }
-
-    if (
-      !(await record('inbound-b-auto-accept', async () => {
+      !(await record('inbound-b-request', async () => {
         await switchToParty(link, partyB);
         const sent = await link.sendDm(pubkyA, 'wot-from-b');
         await switchToParty(link, partyA);
@@ -155,17 +136,22 @@ export async function runContactsLiveProof(
           sleep,
           receiveTimeoutMs,
           pollIntervalMs,
-          () => link.syncInbox([pubkyB]),
-          messages => messages.some(message => message.eventId === sent.eventId),
-          'A syncInbox auto-accept from B',
+          async () => {
+            await link.syncInbox([pubkyB]);
+            return storage.getMessageRequest(pubkyA, pubkyB);
+          },
+          row => row?.status === 'pending',
+          'A message request from B',
         );
         const request = await storage.getMessageRequest(pubkyA, pubkyB);
-        if (request?.status === 'pending') {
-          throw new Error('inbound from added/followed B was held as a message request');
+        if (request?.status !== 'pending') {
+          throw new Error('inbound from pasted/followed B did not land in message requests');
         }
         const routed = await storage.countLinkMessagesForPeer(pubkyA, pubkyB);
-        if (routed < 1) throw new Error('auto-accepted inbound from B was not routed');
-        return `auto-accept ${sent.eventId}`;
+        if (routed > 0) {
+          throw new Error('inbound from B was routed into the main inbox before accept');
+        }
+        return `pending ${sent.eventId}`;
       }))
     ) {
       return failed();

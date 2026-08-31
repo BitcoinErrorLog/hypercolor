@@ -59,6 +59,7 @@ export type LiveProofLinkApi = {
     body: string,
   ) => Promise<{ eventId: string; body: string; deliveryState: string }>;
   syncInbox: (peers?: string[]) => Promise<Array<{ eventId: string; body: string }>>;
+  acceptMessageRequest: (peerPubky: string) => Promise<Array<{ eventId: string; body: string }>>;
   sendPreparedMessage: (input: {
     peerPubky: string;
     kind: string;
@@ -301,6 +302,7 @@ export function defaultLinkApi(): LiveProofLinkApi {
     ensureLinkWith: peer => LinkService.ensureLinkWith(peer),
     sendDm: (peer, body) => LinkService.sendDm(peer, body),
     syncInbox: peers => LinkService.syncInbox(peers),
+    acceptMessageRequest: peer => LinkService.acceptMessageRequest(peer),
     sendPreparedMessage: input => LinkService.sendPreparedMessage(input),
   };
 }
@@ -531,7 +533,7 @@ export async function cleanupProductParties(
   });
 }
 
-/** Paste/QR contact so WoT auto-accepts inbound from that peer. */
+/** Paste/QR contact for the address book; does not auto-accept inbound DMs. */
 export async function addPastedContact(
   storage: Pick<typeof StorageService, 'upsertContact'>,
   ownerPubky: string,
