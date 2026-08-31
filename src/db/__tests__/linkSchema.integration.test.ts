@@ -56,6 +56,7 @@ import {
   SCHEMA_V10_STATEMENTS,
   SCHEMA_V11_STATEMENTS,
   SCHEMA_V12_STATEMENTS,
+  SCHEMA_V13_STATEMENTS,
 } from '../schema';
 import { StorageService } from '../../services/StorageService';
 import { KeyStore } from '../../services/KeyStore';
@@ -124,7 +125,7 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
 
     await runMigrations(db);
 
-    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(13);
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(14);
     expect(db.executeSync('SELECT * FROM link_receivers').rows).toEqual([]);
     expect(
       db.executeSync(
@@ -359,7 +360,7 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
     setDbForTests(db);
     await runMigrations(db);
 
-    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(13);
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(14);
     const cols = db.executeSync('PRAGMA table_info(contacts)').rows ?? [];
     const names = cols.map(row => row.name);
     expect(names).toEqual(
@@ -606,7 +607,7 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
 
     await runMigrations(db);
 
-    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(13);
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(14);
     for (const name of ['threads', 'messages', 'channels', 'channel_members', 'cursor_state']) {
       expect(
         db.executeSync("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", [name])
@@ -633,7 +634,7 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
     setDbForTests(db);
     await runMigrations(db);
 
-    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(13);
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(14);
     for (const name of [
       'group_channels',
       'group_members',
@@ -786,7 +787,7 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
 
     await runMigrations(db);
 
-    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(13);
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(14);
     const row = db.executeSync('SELECT * FROM group_messages').rows?.[0];
     expect(row).toEqual(
       expect.objectContaining({
@@ -812,7 +813,7 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
     setDbForTests(db);
     await runMigrations(db);
 
-    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(13);
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(14);
     expect(
       db.executeSync("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'attachments'")
         .rows,
@@ -954,7 +955,7 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
     setDbForTests(db);
     await runMigrations(db);
 
-    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(13);
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(14);
     const paymentCols = (db.executeSync('PRAGMA table_info(payment_requests)').rows ?? []).map(
       col => col.name,
     );
@@ -1057,6 +1058,191 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
   });
 });
 
+describe('link schema v14 — bounded handshake stepping (real SQL)', () => {
+  afterEach(() => {
+    setDbForTests(null);
+  });
+
+  async function seedLink(
+    peerPubky: string,
+    status: 'handshaking' | 'established' = 'handshaking',
+  ): Promise<void> {
+    await StorageService.upsertLink({
+      ownerPubky: OWNER,
+      peerPubky,
+      role: 'responder',
+      status,
+      snapshot: `cipher-${peerPubky.slice(0, 4)}`,
+      remoteNoisePublicKey: 'noise',
+      localReceiverPath: 'hypercolor/wallet',
+      remoteReceiverPath: 'hypercolor/wallet',
+      consecutiveFailures: 0,
+    });
+  }
+
+  it('backfills existing link rows as immediately due with a zeroed advance counter', async () => {
+    const db = openMemoryDb();
+    applyThroughV13(db);
+    db.executeSync(
+      `INSERT INTO links
+        (owner_pubky, peer_pubky, role, status, snapshot, remote_noise_public_key,
+         local_receiver_path, remote_receiver_path, consecutive_failures,
+         created_at, updated_at)
+       VALUES (?, ?, 'responder', 'handshaking', 'cipher', 'noise',
+               'hypercolor/wallet', 'hypercolor/wallet', 0, 1, 1)`,
+      [OWNER, PEER],
+    );
+
+    await runMigrations(db);
+
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(14);
+    expect(db.executeSync('SELECT * FROM links').rows?.[0]).toEqual(
+      expect.objectContaining({ pending_advances: 0, next_advance_at: 0 }),
+    );
+  });
+
+  it('returns only handshaking links whose backoff is due, oldest first and bounded', async () => {
+    const db = openMemoryDb();
+    setDbForTests(db);
+    await runMigrations(db);
+    const soon = 'c'.repeat(52);
+    const later = 'd'.repeat(52);
+    const notDue = 'e'.repeat(52);
+
+    await StorageService.upsertLink({
+      ownerPubky: OWNER,
+      peerPubky: PEER,
+      role: 'responder',
+      status: 'established',
+      snapshot: 'est',
+      remoteNoisePublicKey: 'noise',
+      localReceiverPath: 'hypercolor/wallet',
+      remoteReceiverPath: 'hypercolor/wallet',
+      consecutiveFailures: 0,
+    });
+    for (const peer of [soon, later, notDue]) {
+      await StorageService.upsertLink({
+        ownerPubky: OWNER,
+        peerPubky: peer,
+        role: 'responder',
+        status: 'handshaking',
+        snapshot: 'hs',
+        remoteNoisePublicKey: 'noise',
+        localReceiverPath: 'hypercolor/wallet',
+        remoteReceiverPath: 'hypercolor/wallet',
+        consecutiveFailures: 0,
+      });
+    }
+    // Another owner's handshake must never appear in this account's batch.
+    await StorageService.upsertLink({
+      ownerPubky: OTHER,
+      peerPubky: PEER,
+      role: 'responder',
+      status: 'handshaking',
+      snapshot: 'hs',
+      remoteNoisePublicKey: 'noise',
+      localReceiverPath: 'hypercolor/wallet',
+      remoteReceiverPath: 'hypercolor/wallet',
+      consecutiveFailures: 0,
+    });
+
+    await StorageService.recordPendingHandshakeAdvance({
+      ownerPubky: OWNER,
+      peerPubky: soon,
+      snapshot: 'hs-2',
+      pendingAdvances: 1,
+      nextAdvanceAt: 1,
+    });
+    await StorageService.recordPendingHandshakeAdvance({
+      ownerPubky: OWNER,
+      peerPubky: later,
+      snapshot: 'hs-2',
+      pendingAdvances: 1,
+      nextAdvanceAt: 2,
+    });
+    await StorageService.recordPendingHandshakeAdvance({
+      ownerPubky: OWNER,
+      peerPubky: notDue,
+      snapshot: 'hs-2',
+      pendingAdvances: 1,
+      nextAdvanceAt: Date.now() + 60 * 60 * 1000,
+    });
+
+    const due = await StorageService.getDueHandshakingLinks(OWNER);
+    expect(due.map(link => link.peerPubky)).toEqual([soon, later]);
+    expect(due[0]!.pendingAdvances).toBe(1);
+
+    const capped = await StorageService.getDueHandshakingLinks(OWNER, 1);
+    expect(capped.map(link => link.peerPubky)).toEqual([soon]);
+  });
+
+  it('keeps the advance schedule across a re-adopted handshake and clears it on established', async () => {
+    const db = openMemoryDb();
+    setDbForTests(db);
+    await runMigrations(db);
+    await seedLink(PEER);
+
+    await StorageService.recordPendingHandshakeAdvance({
+      ownerPubky: OWNER,
+      peerPubky: PEER,
+      snapshot: 'hs-2',
+      pendingAdvances: 4,
+      nextAdvanceAt: 987,
+    });
+
+    // Re-adopting the same inbound handshake must not hand the peer a fresh
+    // budget of timer work.
+    await seedLink(PEER);
+    expect(await StorageService.getLink(OWNER, PEER)).toEqual(
+      expect.objectContaining({ pendingAdvances: 4, nextAdvanceAt: 987 }),
+    );
+
+    await seedLink(PEER, 'established');
+    expect(await StorageService.getLink(OWNER, PEER)).toEqual(
+      expect.objectContaining({ pendingAdvances: 0, nextAdvanceAt: 0 }),
+    );
+  });
+
+  it('clears the advance schedule when updateLinkSnapshot records real progress', async () => {
+    const db = openMemoryDb();
+    setDbForTests(db);
+    await runMigrations(db);
+    await seedLink(PEER);
+    await StorageService.recordPendingHandshakeAdvance({
+      ownerPubky: OWNER,
+      peerPubky: PEER,
+      snapshot: 'hs-2',
+      pendingAdvances: 3,
+      nextAdvanceAt: 555,
+    });
+
+    await StorageService.updateLinkSnapshot(OWNER, PEER, 'est-1', 'established');
+
+    expect(await StorageService.getLink(OWNER, PEER)).toEqual(
+      expect.objectContaining({ status: 'established', pendingAdvances: 0, nextAdvanceAt: 0 }),
+    );
+  });
+
+  it('reports whether a specific queue item is still outstanding', async () => {
+    const db = openMemoryDb();
+    setDbForTests(db);
+    await runMigrations(db);
+    await StorageService.enqueue({
+      id: 'q-race',
+      messageId: EVENT,
+      recipientPubky: PEER,
+      payload: '{"type":"link.chat.message"}',
+      attempts: 0,
+      nextRetryAt: 1,
+      createdAt: 1,
+    });
+
+    expect(await StorageService.hasQueueItem('q-race')).toBe(true);
+    await StorageService.removeFromQueue('q-race');
+    expect(await StorageService.hasQueueItem('q-race')).toBe(false);
+  });
+});
+
 function applyThroughV5(db: ReturnType<typeof openMemoryDb>): void {
   for (const statement of [
     ...SCHEMA_V1_STATEMENTS,
@@ -1090,4 +1276,12 @@ function applyThroughV12(db: ReturnType<typeof openMemoryDb>): void {
     db.executeSync(statement);
   }
   db.executeSync('PRAGMA user_version = 12');
+}
+
+function applyThroughV13(db: ReturnType<typeof openMemoryDb>): void {
+  applyThroughV12(db);
+  for (const statement of SCHEMA_V13_STATEMENTS) {
+    db.executeSync(statement);
+  }
+  db.executeSync('PRAGMA user_version = 13');
 }

@@ -388,6 +388,17 @@ export const StorageService = {
     return (result.rows ?? []).map(rowToQueueItem);
   },
 
+  /**
+   * True while this exact queue item is still outstanding. A drain re-checks
+   * it inside the per-peer lock so two overlapping drains holding the same
+   * `dequeue` snapshot cannot both send the item's `rawJson`.
+   */
+  async hasQueueItem(id: string): Promise<boolean> {
+    const db = await getDb();
+    const result = db.executeSync('SELECT 1 FROM delivery_queue WHERE id = ? LIMIT 1', [id]);
+    return (result.rows?.length ?? 0) > 0;
+  },
+
   async removeFromQueue(id: string): Promise<void> {
     const db = await getDb();
     db.executeSync('DELETE FROM delivery_queue WHERE id = ?', [id]);
@@ -437,11 +448,16 @@ export const StorageService = {
   async upsertLink(link: LinkRecordInput): Promise<void> {
     const db = await getDb();
     db.executeSync(
+      // The advance schedule is deliberately absent from the conflict update:
+      // re-adopting an inbound handshake must not reset its own backoff, or a
+      // peer who keeps rewriting Noise message 1 gets unbounded timer work.
+      // Reaching `established` is the one transition that clears it.
       `INSERT INTO links
         (owner_pubky, peer_pubky, role, status, snapshot,
          remote_noise_public_key, local_receiver_path, remote_receiver_path,
-         consecutive_failures, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         consecutive_failures, pending_advances, next_advance_at,
+         created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?)
        ON CONFLICT(owner_pubky, peer_pubky) DO UPDATE SET
          role                    = excluded.role,
          status                  = excluded.status,
@@ -450,6 +466,10 @@ export const StorageService = {
          local_receiver_path     = excluded.local_receiver_path,
          remote_receiver_path    = excluded.remote_receiver_path,
          consecutive_failures    = excluded.consecutive_failures,
+         pending_advances        = CASE WHEN excluded.status = 'established'
+                                       THEN 0 ELSE links.pending_advances END,
+         next_advance_at         = CASE WHEN excluded.status = 'established'
+                                       THEN 0 ELSE links.next_advance_at END,
          updated_at              = excluded.updated_at`,
       [
         link.ownerPubky,
@@ -487,6 +507,23 @@ export const StorageService = {
     return (result.rows ?? []).map(rowToLink);
   },
 
+  /**
+   * Handshaking links the periodic stepper is allowed to advance right now,
+   * oldest schedule first. Bounded like {@link dequeue} so one tick cannot
+   * fan out across every stale handshake on the device.
+   */
+  async getDueHandshakingLinks(ownerPubky: PubkyKey, limit = 10): Promise<LinkRecord[]> {
+    const db = await getDb();
+    const result = db.executeSync(
+      `SELECT * FROM links
+        WHERE owner_pubky = ? AND status = 'handshaking' AND next_advance_at <= ?
+        ORDER BY next_advance_at ASC, updated_at ASC
+        LIMIT ?`,
+      [ownerPubky, now(), limit],
+    );
+    return (result.rows ?? []).map(rowToLink);
+  },
+
   async updateLinkSnapshot(
     ownerPubky: PubkyKey,
     peerPubky: PubkyKey,
@@ -496,9 +533,41 @@ export const StorageService = {
     const db = await getDb();
     db.executeSync(
       `UPDATE links
-       SET snapshot = ?, status = ?, consecutive_failures = 0, updated_at = ?
+       SET snapshot = ?, status = ?, consecutive_failures = 0,
+           pending_advances = 0, next_advance_at = 0, updated_at = ?
        WHERE owner_pubky = ? AND peer_pubky = ?`,
       [snapshot, status, now(), ownerPubky, peerPubky],
+    );
+  },
+
+  /**
+   * Persists the snapshot from a handshake advance that returned `pending`
+   * and moves that link's timer schedule out. Distinct from
+   * {@link updateLinkSnapshot}, which treats the new snapshot as progress and
+   * clears the schedule — a `pending` advance is exactly the case that must
+   * NOT look like progress.
+   */
+  async recordPendingHandshakeAdvance(input: {
+    ownerPubky: PubkyKey;
+    peerPubky: PubkyKey;
+    snapshot: string;
+    pendingAdvances: number;
+    nextAdvanceAt: number;
+  }): Promise<void> {
+    const db = await getDb();
+    db.executeSync(
+      `UPDATE links
+       SET snapshot = ?, status = 'handshaking', consecutive_failures = 0,
+           pending_advances = ?, next_advance_at = ?, updated_at = ?
+       WHERE owner_pubky = ? AND peer_pubky = ?`,
+      [
+        input.snapshot,
+        input.pendingAdvances,
+        input.nextAdvanceAt,
+        now(),
+        input.ownerPubky,
+        input.peerPubky,
+      ],
     );
   },
 
@@ -2187,6 +2256,8 @@ function rowToLink(row: any): LinkRecord {
     localReceiverPath: row.local_receiver_path,
     remoteReceiverPath: row.remote_receiver_path,
     consecutiveFailures: row.consecutive_failures,
+    pendingAdvances: row.pending_advances,
+    nextAdvanceAt: row.next_advance_at,
     updatedAt: row.updated_at,
   };
 }

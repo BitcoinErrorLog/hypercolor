@@ -375,10 +375,30 @@ export interface LinkRecord {
   localReceiverPath: string;
   remoteReceiverPath: string;
   consecutiveFailures: number;
+  /**
+   * Handshake advances that returned `pending` (Noise XX not complete yet).
+   * A native advance is not an error, so it never touches
+   * `consecutiveFailures`; this counter is what bounds a handshake that the
+   * counterparty never answers. Reset when the link reaches `established`.
+   */
+  pendingAdvances: number;
+  /**
+   * Earliest Unix-ms at which the periodic tick may step this handshake
+   * again, on the same exponential schedule as the delivery retry queue.
+   * `0` means due now. User-driven paths (send, thread focus, inbox sync)
+   * ignore it — only the unattended timer is throttled.
+   */
+  nextAdvanceAt: number;
   updatedAt: number;
 }
 
-export type LinkRecordInput = Omit<LinkRecord, 'updatedAt'>;
+/**
+ * Writable link columns. The advance schedule is owned by the handshake
+ * stepper (see {@link LinkRecord.pendingAdvances}), not by callers that
+ * upsert link state, so a re-adopted inbound handshake cannot reset its own
+ * backoff.
+ */
+export type LinkRecordInput = Omit<LinkRecord, 'updatedAt' | 'pendingAdvances' | 'nextAdvanceAt'>;
 
 /**
  * Device-local message history (plaintext bodies — never log them). Dedup

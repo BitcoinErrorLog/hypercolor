@@ -26,6 +26,15 @@ function nextRetryMs(attempts: number): number {
 
 export const RetryQueue = {
   /**
+   * The backoff schedule above, as a timestamp, for callers that schedule
+   * their own periodic work against the same curve instead of standing up a
+   * second cadence. Used by the Encrypted-Link handshake stepper.
+   */
+  nextAttemptAt(attempts: number): number {
+    return nextRetryMs(attempts);
+  },
+
+  /**
    * Adds a delivery item to the persistent queue.
    */
   async enqueue(

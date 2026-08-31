@@ -1,4 +1,26 @@
 /**
+ * Schema v14 — bound the periodic handshake stepper.
+ *
+ * `advancePendingLinks` steps every `handshaking` link on the foreground
+ * tick. A `pending` advance is not an error, so `consecutive_failures` never
+ * increments and nothing ever aged the row out: any peer who writes Noise
+ * message 1 and never answers message 3 (including a mere follower picked up
+ * by `syncInbox` candidate probing) cost a `restoreHandshake` plus an
+ * `advanceHandshake` with homeserver IO on every tick, forever.
+ *
+ * `pending_advances` counts advances that returned `pending`;
+ * `next_advance_at` is the earliest Unix-ms the timer may step the row again
+ * (`0` = due now, which is also the correct value for every pre-existing
+ * row). Both are reset when the link reaches `established`.
+ */
+export const SCHEMA_V14_STATEMENTS: readonly string[] = [
+  `ALTER TABLE links ADD COLUMN pending_advances INTEGER NOT NULL DEFAULT 0`,
+  `ALTER TABLE links ADD COLUMN next_advance_at INTEGER NOT NULL DEFAULT 0`,
+  `CREATE INDEX IF NOT EXISTS idx_links_handshake_due
+    ON links(owner_pubky, status, next_advance_at)`,
+];
+
+/**
  * Schema v13 — retire research-era DM/channel tables; keep the live
  * Encrypted-Link retry queue (`delivery_queue`). Add author scoping on
  * group-message replies (`reply_to_author_pubky`).
