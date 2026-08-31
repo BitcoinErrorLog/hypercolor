@@ -143,3 +143,37 @@ mechanism) and were previously unbounded.
 per peer and marks the rest processed. Oldest-first preserves a
 create-then-content invite under a later flood. Newest-first would evict
 the create and break accept replay of a legitimate batch.
+
+## Kimi B1 re-audit close-out (6761c11, verdict SHIP)
+
+The durable `link_handshake_budgets` fix closed blocking finding B1
+(budget reset via link-row deletion). Three non-blocking observations
+are waived here in writing:
+
+**Established-cycle semantics (observation).** A peer who honestly
+completes a full Noise XX handshake each cycle can alternate
+complete -> malformed message -> wipe -> re-adopt with zero budget
+accumulation. Waived: identical to v14 semantics, each cycle costs the
+attacker a real completed handshake, and defender work is paced by the
+defender's own timers. B1's attack (farming free wipes without ever
+completing) is closed.
+
+**v14 -> v15 amnesty (observation).** Peers with accumulated v14
+charges get one fresh 10-step allowance because the old columns are
+dropped without carrying values over. Waived: bounded, happens exactly
+once, cannot be repeated (the columns no longer exist and the table is
+never auto-seeded), and pre-release there are no hostile peers with
+accumulated budgets.
+
+**Policy comment overstatement (nit).** The comment near the `user`
+intent gate says the clear happens "before anything else"; the
+live-handle dispatch actually precedes it. Unreachable as a bug today
+(an exhausting charge always wipes the live handle in the same queued
+call). Left as-is to avoid churn on an audited SHA; correct the comment
+on the next substantive edit of that region.
+
+**Accept-does-not-clear (nuance, kept by design).** Tapping Accept on
+an exhausted peer's request routes through the background sync path and
+does not clear exhaustion; the user must also send something. Kept:
+accepting reveals intent to read, sending reveals intent to engage, and
+only the latter should refund an abuse budget.
