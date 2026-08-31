@@ -60,6 +60,7 @@ import {
 import { StorageService } from '../../services/StorageService';
 import { KeyStore } from '../../services/KeyStore';
 import { CHAT_MESSAGE_KIND } from '../../types/link';
+import { GROUP_MEMBERSHIP_KIND } from '../../types/group';
 import { EMPTY_PAYMENT_RECORD_EXTRAS } from '../../types/payment';
 import { openMemoryDb } from './betterSqliteAdapter';
 
@@ -567,7 +568,7 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
       },
     ]);
 
-    const settled = await StorageService.settleExcessUnprocessedLinkStreamItems(OWNER, PEER, 2);
+    const settled = await StorageService.settleExcessUnprocessedLinkStreamItems(OWNER, PEER, 2, 2);
     expect(settled).toBe(1);
     expect(
       (await StorageService.getUnprocessedLinkStreamItems(OWNER, PEER)).map(item => item.id),
@@ -575,7 +576,101 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
     expect(
       (await StorageService.getUnprocessedLinkStreamItems(OWNER, OTHER)).map(item => item.id),
     ).toEqual(['other-peer']);
-    expect(await StorageService.settleExcessUnprocessedLinkStreamItems(OWNER, PEER, 2)).toBe(0);
+    expect(await StorageService.settleExcessUnprocessedLinkStreamItems(OWNER, PEER, 2, 2)).toBe(0);
+  });
+
+  it('settles group and non-group unprocessed items on independent budgets', async () => {
+    const db = openMemoryDb();
+    setDbForTests(db);
+    await runMigrations(db);
+
+    await StorageService.saveLinkStreamItems([
+      {
+        id: 'chat-1',
+        ownerPubky: OWNER,
+        peerPubky: PEER,
+        kind: CHAT_MESSAGE_KIND,
+        rawJson: '{"n":1}',
+        receivedAt: 10,
+      },
+      {
+        id: 'chat-2',
+        ownerPubky: OWNER,
+        peerPubky: PEER,
+        kind: CHAT_MESSAGE_KIND,
+        rawJson: '{"n":2}',
+        receivedAt: 20,
+      },
+      {
+        id: 'chat-3',
+        ownerPubky: OWNER,
+        peerPubky: PEER,
+        kind: CHAT_MESSAGE_KIND,
+        rawJson: '{"n":3}',
+        receivedAt: 30,
+      },
+      {
+        id: 'group-invite',
+        ownerPubky: OWNER,
+        peerPubky: PEER,
+        kind: GROUP_MEMBERSHIP_KIND,
+        rawJson: '{"op":"create"}',
+        receivedAt: 40,
+      },
+    ]);
+
+    const settled = await StorageService.settleExcessUnprocessedLinkStreamItems(OWNER, PEER, 2, 2);
+    expect(settled).toBe(1);
+    expect(
+      (await StorageService.getUnprocessedLinkStreamItems(OWNER, PEER)).map(item => item.id),
+    ).toEqual(['chat-1', 'chat-2', 'group-invite']);
+  });
+
+  it('partitions settle budgets by peeked envelope kind, not the stored kind column', async () => {
+    const db = openMemoryDb();
+    setDbForTests(db);
+    await runMigrations(db);
+
+    await StorageService.saveLinkStreamItems([
+      {
+        id: 'mislabeled-chat-1',
+        ownerPubky: OWNER,
+        peerPubky: PEER,
+        kind: GROUP_MEMBERSHIP_KIND,
+        rawJson: JSON.stringify({ kind: CHAT_MESSAGE_KIND, n: 1 }),
+        receivedAt: 10,
+      },
+      {
+        id: 'mislabeled-chat-2',
+        ownerPubky: OWNER,
+        peerPubky: PEER,
+        kind: GROUP_MEMBERSHIP_KIND,
+        rawJson: JSON.stringify({ kind: CHAT_MESSAGE_KIND, n: 2 }),
+        receivedAt: 20,
+      },
+      {
+        id: 'mislabeled-chat-3',
+        ownerPubky: OWNER,
+        peerPubky: PEER,
+        kind: GROUP_MEMBERSHIP_KIND,
+        rawJson: JSON.stringify({ kind: CHAT_MESSAGE_KIND, n: 3 }),
+        receivedAt: 30,
+      },
+      {
+        id: 'mislabeled-invite',
+        ownerPubky: OWNER,
+        peerPubky: PEER,
+        kind: CHAT_MESSAGE_KIND,
+        rawJson: JSON.stringify({ kind: GROUP_MEMBERSHIP_KIND, op: 'create' }),
+        receivedAt: 40,
+      },
+    ]);
+
+    const settled = await StorageService.settleExcessUnprocessedLinkStreamItems(OWNER, PEER, 2, 2);
+    expect(settled).toBe(1);
+    expect(
+      (await StorageService.getUnprocessedLinkStreamItems(OWNER, PEER)).map(item => item.id),
+    ).toEqual(['mislabeled-chat-1', 'mislabeled-chat-2', 'mislabeled-invite']);
   });
 
   it('deletes one sender deferred events and seen markers without touching group_messages', async () => {

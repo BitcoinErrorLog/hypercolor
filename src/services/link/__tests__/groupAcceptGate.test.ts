@@ -5,24 +5,32 @@ import { KeyStore } from '../../KeyStore';
 import { RetryQueue } from '../../RetryQueue';
 import { subscribeGroupEvents } from '../../group/groupEvents';
 import {
+  CHAT_MESSAGE_KIND,
   LINK_RECEIVER_PATH,
+  buildChatMessageEnvelope,
   type LinkMessage,
   type LinkReceiver,
   type LinkRecord,
   type LinkStreamItem,
 } from '../../../types/link';
 import {
+  GROUP_MEMBERSHIP_KIND,
   GROUP_REACTION_KIND,
   buildGroupMembershipEnvelope,
   buildGroupMessageEnvelope,
   buildGroupReactionEnvelope,
+  isGroupWireKind,
+  peekEnvelopeKind,
   type GroupChannel,
   type GroupDeferredEvent,
   type GroupMember,
   type GroupMessage,
 } from '../../../types/group';
 import type { MessageRequest } from '../../../types';
-import { LINK_HELD_UNPROCESSED_CAP_PER_PEER } from '../../../flags/config';
+import {
+  LINK_HELD_NON_GROUP_CAP_PER_PEER,
+  LINK_HELD_UNPROCESSED_CAP_PER_PEER,
+} from '../../../flags/config';
 
 /**
  * Regression suite for the group accept gate.
@@ -307,12 +315,23 @@ function wireInMemoryStorage(): void {
     if (item) item.processed = true;
   });
   mockedStorage.settleExcessUnprocessedLinkStreamItems.mockImplementation(
-    async (_owner, peerPubky, keepOldest = LINK_HELD_UNPROCESSED_CAP_PER_PEER) => {
+    async (
+      _owner,
+      peerPubky,
+      keepOldestGroup = LINK_HELD_UNPROCESSED_CAP_PER_PEER,
+      keepOldestOther = LINK_HELD_NON_GROUP_CAP_PER_PEER,
+    ) => {
       const unprocessed = db.streamItems.filter(
         item => item.peerPubky === peerPubky && !item.processed,
       );
-      if (unprocessed.length <= keepOldest) return 0;
-      const excess = unprocessed.slice(keepOldest);
+      const group: LinkStreamItem[] = [];
+      const other: LinkStreamItem[] = [];
+      for (const item of unprocessed) {
+        const kind = peekEnvelopeKind(item.rawJson) ?? item.kind;
+        if (kind !== null && isGroupWireKind(kind)) group.push(item);
+        else other.push(item);
+      }
+      const excess = [...group.slice(keepOldestGroup), ...other.slice(keepOldestOther)];
       for (const item of excess) item.processed = true;
       return excess.length;
     },
@@ -490,13 +509,13 @@ describe('group accept gate', () => {
     jest.restoreAllMocks();
   });
 
-  function deliverOnce(rawJsonBatch: string[]): void {
+  function deliverOnce(rawJsonBatch: string[], claimedKind?: string): void {
     mockedNative.receivePrivateMessages.mockReset();
     mockedNative.receivePrivateMessages
       .mockResolvedValueOnce({
         messages: rawJsonBatch.map(rawJson => ({
           version: 1,
-          kind: JSON.parse(rawJson).kind as string,
+          kind: claimedKind ?? (JSON.parse(rawJson).kind as string),
           rawJson,
         })),
         snapshot: 'est-in',
@@ -699,6 +718,7 @@ describe('group accept gate', () => {
         }).json,
       );
     }
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
     deliverOnce(flood);
     await LinkService.syncInbox([PEER]);
 
@@ -707,6 +727,14 @@ describe('group accept gate', () => {
     expect(unprocessed[0]?.rawJson).toContain('held-group');
     expect(unprocessed[1]?.rawJson).toContain('hello group');
     expect(db.channels.size).toBe(0);
+    expect(
+      warn.mock.calls.some(
+        args =>
+          typeof args[0] === 'string' &&
+          args[0].includes('excess held stream item') &&
+          args[0].includes(PEER),
+      ),
+    ).toBe(true);
 
     await LinkService.acceptMessageRequest(PEER);
 
@@ -714,5 +742,73 @@ describe('group accept gate', () => {
     expect(db.groupMessages.some(row => row.body === 'hello group')).toBe(true);
     // Cap kept 66 rows: the original create+message plus 64 flood creates.
     expect(db.channels.size).toBe(LINK_HELD_UNPROCESSED_CAP_PER_PEER - 1);
+  });
+
+  it('does not let a held 1:1 flood evict a later group invite', async () => {
+    const dms: string[] = [];
+    for (let i = 0; i < LINK_HELD_NON_GROUP_CAP_PER_PEER + 5; i += 1) {
+      const eventId = `00000000-0000-4000-8000-${(0xdddd + i).toString(16).padStart(12, '0')}`;
+      dms.push(
+        buildChatMessageEnvelope({
+          eventId,
+          sentAt: NOW + i,
+          body: `dm-${i}`,
+        }).json,
+      );
+    }
+    jest.spyOn(console, 'warn').mockImplementation(() => {});
+    deliverOnce(dms);
+    await LinkService.syncInbox([PEER]);
+
+    deliverOnce([membershipCreateJson('held-group')]);
+    await LinkService.syncInbox([PEER]);
+
+    const unprocessed = db.streamItems.filter(item => !item.processed);
+    const heldDms = unprocessed.filter(item => item.kind === CHAT_MESSAGE_KIND);
+    const heldGroup = unprocessed.filter(item => item.kind !== null && isGroupWireKind(item.kind));
+    expect(heldDms).toHaveLength(LINK_HELD_NON_GROUP_CAP_PER_PEER);
+    expect(heldDms[0]?.rawJson).toContain('dm-0');
+    expect(heldGroup).toHaveLength(1);
+    expect(heldGroup[0]?.rawJson).toContain('held-group');
+    expect(db.channels.size).toBe(0);
+
+    await LinkService.acceptMessageRequest(PEER);
+
+    expect(db.channels.get(CHANNEL_ID)?.name).toBe('held-group');
+    expect(db.linkMessages.filter(row => row.body.startsWith('dm-'))).toHaveLength(
+      LINK_HELD_NON_GROUP_CAP_PER_PEER,
+    );
+    expect(db.linkMessages.some(row => row.body === 'dm-0')).toBe(true);
+    expect(
+      db.linkMessages.some(row => row.body === `dm-${LINK_HELD_NON_GROUP_CAP_PER_PEER + 4}`),
+    ).toBe(false);
+  });
+
+  it('does not let a mislabeled 1:1 flood consume the group-replay budget', async () => {
+    const decoys: string[] = [];
+    for (let i = 0; i < LINK_HELD_UNPROCESSED_CAP_PER_PEER + 5; i += 1) {
+      const eventId = `00000000-0000-4000-8000-${(0xeeee + i).toString(16).padStart(12, '0')}`;
+      decoys.push(
+        buildChatMessageEnvelope({
+          eventId,
+          sentAt: NOW + i,
+          body: `decoy-${i}`,
+        }).json,
+      );
+    }
+    jest.spyOn(console, 'warn').mockImplementation(() => {});
+    deliverOnce(decoys, GROUP_MEMBERSHIP_KIND);
+    await LinkService.syncInbox([PEER]);
+
+    deliverOnce([membershipCreateJson('held-group')]);
+    await LinkService.syncInbox([PEER]);
+
+    const unprocessed = db.streamItems.filter(item => !item.processed);
+    expect(unprocessed.some(item => item.rawJson.includes('held-group'))).toBe(true);
+    expect(db.channels.size).toBe(0);
+
+    await LinkService.acceptMessageRequest(PEER);
+
+    expect(db.channels.get(CHANNEL_ID)?.name).toBe('held-group');
   });
 });

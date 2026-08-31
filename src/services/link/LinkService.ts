@@ -688,11 +688,20 @@ export const LinkService = {
   /**
    * Promotes a pending message request to a normal conversation and routes
    * any stream items that were held while it was gated.
+   *
+   * Decline is terminal. The requests UI only lists `pending` rows, inbound
+   * from a declined peer is rejected without creating a new request, and
+   * this method refuses to reverse a decline. Nothing from before the
+   * decline can replay: held items, deferred rows, and seen markers were
+   * deleted at decline time.
    */
   async acceptMessageRequest(peerPubky: PubkyKey): Promise<LinkMessage[]> {
     return withQueue(peerPubky, async () => {
       const ownerPubky = requireOwner();
       const existing = await StorageService.getMessageRequest(ownerPubky, peerPubky);
+      if (existing?.status === 'declined') {
+        throw new Error('Cannot accept a declined message request');
+      }
       const ts = Date.now();
       await StorageService.upsertMessageRequest({
         ownerPubky,
@@ -1406,7 +1415,15 @@ async function persistInboundWithoutRouting(
     await StorageService.saveLinkStreamItems(streamItems);
   }
   await StorageService.updateLinkSnapshot(ownerPubky, peerPubky, snapshot, 'established');
-  await StorageService.settleExcessUnprocessedLinkStreamItems(ownerPubky, peerPubky);
+  const dropped = await StorageService.settleExcessUnprocessedLinkStreamItems(
+    ownerPubky,
+    peerPubky,
+  );
+  if (dropped > 0) {
+    console.warn(
+      `[LinkService] Settled ${dropped} excess held stream item(s) for ${peerPubky} over the per-peer unprocessed cap`,
+    );
+  }
   // Group fan-out is not a DM inbox item. WoT holds chat messages as a
   // request; group ops that cannot touch the channel list or the roster
   // still apply on an established Encrypted Link.

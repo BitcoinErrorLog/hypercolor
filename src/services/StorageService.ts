@@ -28,10 +28,11 @@ import type {
   GroupMemberStatus,
   GroupMessage,
 } from '../types/group';
-import { peekEnvelopeKind } from '../types/group';
+import { isGroupWireKind, peekEnvelopeKind } from '../types/group';
 import {
   GROUP_DEFERRED_QUOTA_PER_SENDER,
   GROUP_DEFERRED_TTL_MS,
+  LINK_HELD_NON_GROUP_CAP_PER_PEER,
   LINK_HELD_UNPROCESSED_CAP_PER_PEER,
 } from '../flags/config';
 import type { AttachmentRecord, AttachmentResolveState } from '../types/attachment';
@@ -782,26 +783,39 @@ export const StorageService = {
   },
 
   /**
-   * Bounds unprocessed stream items for one peer. Keeps the oldest
-   * {@link LINK_HELD_UNPROCESSED_CAP_PER_PEER} rows (arrival order) and
-   * marks the rest processed so they cannot retry or replay on accept.
+   * Bounds unprocessed stream items for one peer as two independent
+   * keep-oldest budgets: group wire kinds
+   * ({@link LINK_HELD_UNPROCESSED_CAP_PER_PEER}) and everything else
+   * ({@link LINK_HELD_NON_GROUP_CAP_PER_PEER}). Overflow is marked
+   * processed so it cannot retry or replay on accept. Classification uses
+   * `peekEnvelopeKind(rawJson) ?? stored kind` so a sender-claimed column
+   * cannot move rows across the two budgets.
    * Returns how many rows were settled.
    */
   async settleExcessUnprocessedLinkStreamItems(
     ownerPubky: PubkyKey,
     peerPubky: PubkyKey,
-    keepOldest = LINK_HELD_UNPROCESSED_CAP_PER_PEER,
+    keepOldestGroup = LINK_HELD_UNPROCESSED_CAP_PER_PEER,
+    keepOldestOther = LINK_HELD_NON_GROUP_CAP_PER_PEER,
   ): Promise<number> {
     const db = await getDb();
     const result = db.executeSync(
-      `SELECT id FROM link_stream_items
+      `SELECT id, kind, raw_json FROM link_stream_items
        WHERE owner_pubky = ? AND peer_pubky = ? AND processed = 0
        ORDER BY received_at ASC, rowid ASC`,
       [ownerPubky, peerPubky],
     );
-    const ids = (result.rows ?? []).map(row => String(row.id));
-    if (ids.length <= keepOldest) return 0;
-    const excess = ids.slice(keepOldest);
+    const groupIds: string[] = [];
+    const otherIds: string[] = [];
+    for (const row of result.rows ?? []) {
+      const id = String(row.id);
+      const storedKind = typeof row.kind === 'string' ? row.kind : null;
+      const rawJson = typeof row.raw_json === 'string' ? row.raw_json : '';
+      if (heldStreamItemIsGroup(storedKind, rawJson)) groupIds.push(id);
+      else otherIds.push(id);
+    }
+    const excess = [...groupIds.slice(keepOldestGroup), ...otherIds.slice(keepOldestOther)];
+    if (excess.length === 0) return 0;
     transact(db, () => {
       for (const id of excess) {
         db.executeSync('UPDATE link_stream_items SET processed = 1 WHERE id = ?', [id]);
@@ -2405,6 +2419,11 @@ function conversationPreview(kind: string, body: string): string {
   if (kind === CHAT_ATTACHMENT_KIND) return 'Attachment';
   if (isPaykitPaymentKind(kind)) return 'Payment';
   return body;
+}
+
+function heldStreamItemIsGroup(storedKind: string | null, rawJson: string): boolean {
+  const peeked = peekEnvelopeKind(rawJson) ?? storedKind;
+  return peeked !== null && isGroupWireKind(peeked);
 }
 
 function persistRawJson(kind: string | null | undefined, rawJson: string): string {

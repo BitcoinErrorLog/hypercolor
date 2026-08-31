@@ -423,6 +423,21 @@ describe('LinkService message requests', () => {
     expect(mockedNative.clearLinkOutbox).toHaveBeenCalled();
   });
 
+  it('refuses to accept a previously declined request', async () => {
+    mockedStorage.getMessageRequest.mockResolvedValue(pendingRequest('declined'));
+    mockedStorage.getLink.mockResolvedValue(null);
+
+    await expect(LinkService.acceptMessageRequest(PEER)).rejects.toThrow(
+      'Cannot accept a declined message request',
+    );
+
+    expect(mockedStorage.upsertMessageRequest).not.toHaveBeenCalled();
+    expect(mockedNative.receivePrivateMessages).not.toHaveBeenCalled();
+    expect(mockedNative.restoreLink).not.toHaveBeenCalled();
+    expect(mockedStorage.saveLinkMessage).not.toHaveBeenCalled();
+    expect(mockedStorage.saveLinkStreamItems).not.toHaveBeenCalled();
+  });
+
   it('classifies a wiped established conversation as auto-accept, not a new request', async () => {
     mockedStorage.getLink.mockResolvedValue(null);
     mockedStorage.getMessageRequest.mockResolvedValue(null);
