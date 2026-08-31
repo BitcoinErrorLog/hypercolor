@@ -3,7 +3,9 @@ import {
   HANDSHAKE_ADVANCE_BATCH_LIMIT,
   HANDSHAKE_FAILURE_LIMIT,
   HANDSHAKE_PENDING_ADVANCE_LIMIT,
+  LINK_RETRY_DRAIN_INTERVAL_MS,
   LINK_RETRY_PAYLOAD_TYPE,
+  LINK_RETRY_TICK_PHASE_TIMEOUT_MS,
   LinkService,
   linkQueueEntryCountForTests,
   startLinkRetryDrain,
@@ -288,6 +290,30 @@ function givenResponderHandshake(seededBudget: HandshakeBudget | null = null): {
   mockedNative.restoreHandshake.mockResolvedValue({ linkId: 'hs-b', status: 'pending' });
   mockedNative.restoreLink.mockResolvedValue({ linkId: 'link-b' });
   return { link: () => link, budget: () => budget };
+}
+
+/** One queued DM to PEER, the shape that makes a retry drain step the handshake. */
+function givenQueuedDm(): void {
+  mockedStorage.getLinkMessage.mockResolvedValue(sendingRow());
+  mockedRetryQueue.getDue.mockResolvedValue([
+    {
+      id: QUEUE_ID,
+      messageId: EVENT_ID,
+      recipientPubky: PEER,
+      payload: JSON.stringify({
+        type: LINK_RETRY_PAYLOAD_TYPE,
+        ownerPubky: OWNER,
+        peerPubky: PEER,
+        senderPubky: OWNER,
+        kind: CHAT_MESSAGE_KIND,
+        eventId: EVENT_ID,
+        rawJson: wireMessage(EVENT_ID),
+      }),
+      attempts: 0,
+      nextRetryAt: NOW,
+      createdAt: NOW,
+    },
+  ]);
 }
 
 /** Runs one periodic tick at the earliest moment the durable schedule allows. */
@@ -633,9 +659,10 @@ describe('LinkService', () => {
         'hs-2',
         'handshaking',
       );
-      expect(mockedStorage.upsertHandshakeBudget).toHaveBeenCalledWith(
-        expect.objectContaining({ ownerPubky: OWNER, peerPubky: PEER, pendingAdvances: 1 }),
-      );
+      // A deliberate user action is attended work and costs nothing: see the
+      // charge policy on `chargeHandshakeBudget`.
+      expect(mockedStorage.upsertHandshakeBudget).not.toHaveBeenCalled();
+      expect(mockedStorage.clearHandshakeBudget).toHaveBeenCalledWith(OWNER, PEER);
     });
 
     it('completes a stored initiator handshake to ready and caches the handle', async () => {
@@ -1909,6 +1936,62 @@ describe('LinkService', () => {
       }
     });
 
+    /**
+     * The tick guards on a module-level flag, so an awaited call that never
+     * settles — the platform hazard this codebase already documents for the
+     * keystore — used to latch the flag for the lifetime of the process. A new
+     * interval could not clear it, so the app kept its timers and did no link
+     * work at all. Overlap is still prevented, but by refusing to start a
+     * second copy of a wedged phase rather than by never finishing the tick.
+     */
+    it('releases a latched tick when a handshake advance never settles', async () => {
+      jest.useFakeTimers({ doNotFake: ['Date'] });
+      const flush = async (): Promise<void> => {
+        for (let turn = 0; turn < 50; turn += 1) await Promise.resolve();
+      };
+      givenResponderHandshake();
+      givenQueuedDm();
+      const wedge: { release: (() => void) | null } = { release: null };
+      mockedNative.advanceHandshake.mockImplementation(
+        () =>
+          new Promise(resolve => {
+            wedge.release = () => resolve({ status: 'pending', snapshot: 'b-wedged' });
+          }),
+      );
+
+      const stop = startLinkRetryDrain(30_000);
+      try {
+        jest.advanceTimersByTime(30_000);
+        await flush();
+        expect(mockedNative.advanceHandshake).toHaveBeenCalledTimes(1);
+        expect(mockedRetryQueue.getDue).not.toHaveBeenCalled();
+
+        // The advance is wedged for good. Once the phase budget elapses the
+        // tick must move on and deliver what is already queued.
+        jest.advanceTimersByTime(LINK_RETRY_TICK_PHASE_TIMEOUT_MS);
+        await flush();
+        expect(mockedRetryQueue.getDue).toHaveBeenCalled();
+
+        // Further ticks fire and are refused per phase, never doubled up.
+        jest.advanceTimersByTime(60_000 + LINK_RETRY_TICK_PHASE_TIMEOUT_MS);
+        await flush();
+        expect(mockedNative.advanceHandshake).toHaveBeenCalledTimes(1);
+
+        // And the moment the wedge clears, the tick picks the work back up —
+        // the flag was released, not merely bypassed once.
+        wedge.release?.();
+        await flush();
+        jest.advanceTimersByTime(30_000);
+        await flush();
+        expect(mockedNative.advanceHandshake).toHaveBeenCalledTimes(2);
+      } finally {
+        wedge.release?.();
+        await flush();
+        stop();
+        jest.useRealTimers();
+      }
+    });
+
     it('does not charge a handshake failure when the transport restore fails after establishing', async () => {
       const state = givenResponderHandshake();
       mockedNative.advanceHandshake.mockResolvedValue({ status: 'established', snapshot: 'b-est' });
@@ -2018,6 +2101,26 @@ describe('LinkService', () => {
       expect(mockedNative.initiateLink).not.toHaveBeenCalled();
     });
 
+    it('charges every wipe even inside one backoff window', async () => {
+      const state = givenResponderHandshake();
+      mockedNative.advanceHandshake.mockRejectedValue({ code: 'protocol', message: 'bad msg3' });
+      givenHostileInboundMessage1();
+      jest.spyOn(Date, 'now').mockReturnValue(NOW);
+
+      // A malformed message 3 forces a wipe on demand, and re-adoption runs off
+      // inbound probing, which honours no schedule — so the attacker sets this
+      // cadence, not the backoff curve. Throttling this charge the way a
+      // `pending` advance is throttled would hand the farm straight back.
+      for (let cycle = 0; cycle < HANDSHAKE_PENDING_ADVANCE_LIMIT; cycle += 1) {
+        await LinkService.syncInbox([PEER]);
+      }
+
+      expect(state.budget()!.pendingAdvances).toBeGreaterThanOrEqual(
+        HANDSHAKE_PENDING_ADVANCE_LIMIT,
+      );
+      expect(state.budget()!.exhaustedAt).not.toBeNull();
+    });
+
     it('refuses an exhausted peer on the sync path before any homeserver IO', async () => {
       givenResponderHandshake(
         storedBudget({ pendingAdvances: HANDSHAKE_PENDING_ADVANCE_LIMIT, exhaustedAt: NOW }),
@@ -2068,8 +2171,8 @@ describe('LinkService', () => {
 
       expect(mockedStorage.clearHandshakeBudget).toHaveBeenCalledWith(OWNER, PEER);
       expect(mockedNative.advanceHandshake).toHaveBeenCalledWith('hs-b');
-      expect(state.budget()!.pendingAdvances).toBe(1);
-      expect(state.budget()!.exhaustedAt).toBeNull();
+      // A full allowance, not a nearly-spent one: the user's own step is free.
+      expect(state.budget()).toBeNull();
     });
 
     it('does not let a background replay of a queued send clear the budget', async () => {
@@ -2119,6 +2222,119 @@ describe('LinkService', () => {
 
       expect(state.link()!.status).toBe('established');
       expect(state.budget()).toBeNull();
+    });
+  });
+
+  /**
+   * The budget exists to bound work caused by a peer who never completes. A
+   * handshake that is converging normally finishes in seconds to minutes, so it
+   * must barely touch the budget — the first shipped policy charged on every
+   * `pending` advance from every caller, which on device consumed 5/10 during a
+   * PASSING convergence and exhausted a legitimate responder outright.
+   */
+  describe('handshake charge policy — legitimate convergence stays cheap', () => {
+    it('charges at most once per backoff window however many callers step it', async () => {
+      const state = givenResponderHandshake();
+      givenQueuedDm();
+      mockedNative.advanceHandshake.mockResolvedValue({ status: 'pending', snapshot: 'b-msg2b' });
+
+      // One 30s window, three callers: the timer, a queued-delivery retry, and
+      // an inbox sync. All three legitimately step Noise XX.
+      await LinkService.advancePendingLinks();
+      await LinkService.drainRetries();
+      await LinkService.syncInbox([PEER]);
+
+      expect(mockedNative.advanceHandshake.mock.calls.length).toBeGreaterThan(1);
+      expect(state.budget()!.pendingAdvances).toBe(1);
+    });
+
+    it('keeps a legitimate multi-tick convergence far from exhaustion', async () => {
+      const state = givenResponderHandshake();
+      givenQueuedDm();
+      mockedNative.advanceHandshake.mockResolvedValue({ status: 'pending', snapshot: 'b-msg2b' });
+
+      // Two minutes of ordinary convergence: the tick every 30s, a queued
+      // delivery retry alongside it, and a thread open in the middle.
+      for (let elapsed = 0; elapsed <= 120_000; elapsed += 30_000) {
+        jest.spyOn(Date, 'now').mockReturnValue(NOW + elapsed);
+        await LinkService.advancePendingLinks();
+        await LinkService.drainRetries();
+        await LinkService.ensureLinkWith(PEER);
+      }
+
+      // Four elapsed windows at most, and the row is still alive and unabandoned.
+      expect(state.budget()?.pendingAdvances ?? 0).toBeLessThanOrEqual(4);
+      expect(state.budget()?.exhaustedAt ?? null).toBeNull();
+      expect(state.link()).not.toBeNull();
+      expect(mockedStorage.updateLinkMessageDeliveryState).not.toHaveBeenCalledWith(
+        OWNER,
+        OWNER,
+        CHAT_MESSAGE_KIND,
+        EVENT_ID,
+        'failed',
+      );
+    });
+
+    it('never charges a deliberate user action', async () => {
+      const state = givenResponderHandshake();
+      mockedNative.advanceHandshake.mockResolvedValue({ status: 'pending', snapshot: 'b-msg2b' });
+
+      await LinkService.ensureLinkWith(PEER);
+      await LinkService.ensureLinkWith(PEER);
+
+      expect(mockedNative.advanceHandshake).toHaveBeenCalledTimes(2);
+      expect(state.budget()).toBeNull();
+    });
+
+    it('keeps the timer due within one interval after a burst of user activity', async () => {
+      const state = givenResponderHandshake();
+      givenQueuedDm();
+      mockedNative.advanceHandshake.mockResolvedValue({ status: 'pending', snapshot: 'b-msg2b' });
+
+      // Six non-timer steps inside one window. Charging each one pushed the
+      // durable schedule onto the 16-minute rung, which is what silenced the
+      // tick on device for 250s+ while an explicit sync converged in 3s.
+      for (let attempt = 0; attempt < 6; attempt += 1) {
+        await LinkService.drainRetries();
+        await LinkService.ensureLinkWith(PEER);
+      }
+
+      const dueIn = (state.budget()?.nextAdvanceAt ?? NOW) - NOW;
+      expect(dueIn).toBeLessThanOrEqual(LINK_RETRY_DRAIN_INTERVAL_MS);
+
+      // ...so the very next tick still sees the link.
+      jest.spyOn(Date, 'now').mockReturnValue(NOW + LINK_RETRY_DRAIN_INTERVAL_MS);
+      mockedNative.advanceHandshake.mockClear();
+      await LinkService.advancePendingLinks();
+      expect(mockedNative.advanceHandshake).toHaveBeenCalled();
+    });
+
+    it('clears the budget on a user send even while the handshake handle is live', async () => {
+      const state = givenResponderHandshake();
+      mockedNative.advanceHandshake.mockResolvedValue({ status: 'pending', snapshot: 'b-msg2b' });
+
+      // Put a live handshaking handle in memory the way a prior tick does.
+      await LinkService.advancePendingLinks();
+      expect(state.budget()!.pendingAdvances).toBe(1);
+
+      // Now exhaust it, as an over-charged legitimate peer was on device.
+      await StorageService.upsertHandshakeBudget({
+        ownerPubky: OWNER,
+        peerPubky: PEER,
+        pendingAdvances: HANDSHAKE_PENDING_ADVANCE_LIMIT,
+        nextAdvanceAt: NOW + 30 * 60 * 1000,
+        exhaustedAt: NOW,
+      });
+      mockedStorage.clearHandshakeBudget.mockClear();
+
+      // The documented recovery has to work through the live-handle path too.
+      await expect(LinkService.sendDm(PEER, 'hello')).resolves.toEqual(
+        expect.objectContaining({ deliveryState: 'sending' }),
+      );
+
+      expect(mockedStorage.clearHandshakeBudget).toHaveBeenCalledWith(OWNER, PEER);
+      expect(state.budget()).toBeNull();
+      expect(state.link()).not.toBeNull();
     });
   });
 

@@ -111,6 +111,16 @@ export const HANDSHAKE_PENDING_ADVANCE_LIMIT = 10;
 
 export const LINK_RETRY_DRAIN_INTERVAL_MS = 30_000;
 
+/**
+ * How long one tick phase may hold the tick before it is released and the next
+ * phase runs anyway. Shorter than the interval so a wedged phase costs at most
+ * one skipped round rather than the rest of the session: an awaited native call
+ * that never settles — the hazard already documented for the keystore in
+ * `App.tsx` — otherwise latches the tick's in-flight flag for the lifetime of
+ * the process, and no fresh interval can clear a module-level flag.
+ */
+export const LINK_RETRY_TICK_PHASE_TIMEOUT_MS = 20_000;
+
 export type LinkEnableFlow = {
   authorizationUrl: string;
   awaitEnabled: () => Promise<{ pubky: string; receiverPath: string; noisePublicKey: string }>;
@@ -862,31 +872,76 @@ export function startLinkRetryDrain(intervalMs = LINK_RETRY_DRAIN_INTERVAL_MS): 
 }
 
 /**
- * One foreground tick: step live handshakes first, then deliver whatever the
- * transition to `ready` unblocked. Ordering matters — draining first would
+ * The two phases of a tick, in order. Handshakes advance first, then delivery
+ * takes whatever the transition to `ready` unblocked — draining first would
  * defer every queued send for another interval.
  *
- * Skipped while the previous tick is still settling. A step slower than the
- * interval would otherwise let tick N+1 chain behind tick N and accumulate
- * work without bound under sustained slowness; a dropped tick costs at most
- * one interval of latency because the next one repeats the same work.
+ * Each phase remembers its own outstanding run, which is what makes overlap
+ * impossible without making the tick block on it: a phase whose previous run
+ * has not settled is skipped rather than started twice.
+ */
+const tickPhases: { label: string; run: () => Promise<void>; inFlight: Promise<void> | null }[] = [
+  { label: 'Handshake advance', run: () => LinkService.advancePendingLinks(), inFlight: null },
+  { label: 'Retry drain', run: () => LinkService.drainRetries(), inFlight: null },
+];
+
+/**
+ * One foreground tick.
+ *
+ * Structurally unlatchable. Every awaited phase runs under
+ * {@link LINK_RETRY_TICK_PHASE_TIMEOUT_MS}, so a native call that never settles
+ * or rejects — the hazard `App.tsx` already documents for the keystore — cannot
+ * hold `tickInFlight` past one round. A module-level flag held by a wedged await
+ * silences the tick for the lifetime of the process, and restarting the interval
+ * from {@link startLinkRetryDrain} cannot clear it, which is how a device kept
+ * live timers while doing no link work at all for minutes.
+ *
+ * Releasing the tick does not let two ticks run the same work: the abandoned
+ * phase keeps its slot until it settles, per-peer `withQueue` serialization
+ * still orders every handshake step, and `drainRetries` self-serializes.
  */
 async function linkRetryTick(): Promise<void> {
   if (tickInFlight) return;
   tickInFlight = true;
   try {
-    try {
-      await LinkService.advancePendingLinks();
-    } catch (err) {
-      console.warn('[LinkService] Handshake advance tick failed:', errorMessage(err));
-    }
-    try {
-      await LinkService.drainRetries();
-    } catch (err) {
-      console.warn('[LinkService] Retry drain tick failed:', errorMessage(err));
+    for (const phase of tickPhases) {
+      await runTickPhase(phase);
     }
   } finally {
     tickInFlight = false;
+  }
+}
+
+async function runTickPhase(phase: (typeof tickPhases)[number]): Promise<void> {
+  if (phase.inFlight) {
+    console.warn(`[LinkService] ${phase.label} tick skipped: previous run has not settled`);
+    return;
+  }
+  const started = phase.run().catch(err => {
+    console.warn(`[LinkService] ${phase.label} tick failed:`, errorMessage(err));
+  });
+  phase.inFlight = started;
+  void started.then(() => {
+    if (phase.inFlight === started) phase.inFlight = null;
+  });
+  await settleWithin(started, LINK_RETRY_TICK_PHASE_TIMEOUT_MS, phase.label);
+}
+
+/** Waits for `work`, giving up on WAITING (never on the work) after `budgetMs`. */
+async function settleWithin(work: Promise<void>, budgetMs: number, label: string): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expiry = new Promise<'expired'>(resolve => {
+    timer = setTimeout(() => resolve('expired'), budgetMs);
+  });
+  try {
+    const outcome = await Promise.race([work.then(() => 'settled' as const), expiry]);
+    if (outcome === 'expired') {
+      console.warn(
+        `[LinkService] ${label} tick exceeded ${budgetMs}ms; releasing the tick while it finishes`,
+      );
+    }
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -1011,12 +1066,13 @@ function isUnusableReceiverAliasError(err: unknown): boolean {
 /**
  * Handshake abuse budget recovery policy, in one place so it cannot drift:
  *
- * A `user` intent clears the budget before anything else happens, so a peer is
- * never permanently denied — one deliberate send or thread open restores a full
- * allowance. Every other intent is refused outright once the budget is
- * exhausted, BEFORE the marker fetch and inbound probe, so an exhausted peer
- * costs zero homeserver IO and cannot be re-adopted by timer or sync activity
- * however many times it rewrites Noise message 1.
+ * A `user` intent clears the budget before any handshake work is dispatched, so
+ * a peer is never permanently denied — one deliberate send or thread open
+ * restores a full allowance, whether or not a handshake handle is already live.
+ * Every other intent is refused outright once the budget is exhausted, BEFORE
+ * the marker fetch and inbound probe, so an exhausted peer costs zero homeserver
+ * IO and cannot be re-adopted by timer or sync activity however many times it
+ * rewrites Noise message 1.
  *
  * The gate deliberately sits after the established branches: an exhausted
  * budget must never interfere with a link that actually completed.
@@ -1040,6 +1096,15 @@ async function ensureLinkLocked(
   const key = linkKey(ownerPubky, peerPubky);
   const live = liveHandles.get(key);
   if (live?.status === 'established') return 'ready';
+
+  // Above the live-handle dispatch on purpose. A handshake in progress keeps a
+  // handle in memory for as long as the app stays foregrounded, and clearing
+  // below that branch made the documented recovery unreachable in exactly the
+  // case that needs it: the peer whose budget the handshake itself ran down.
+  if (intent === 'user') {
+    await StorageService.clearHandshakeBudget(ownerPubky, peerPubky);
+  }
+
   if (live?.status === 'handshaking') {
     return advanceLiveHandshake(
       activeSession,
@@ -1057,9 +1122,7 @@ async function ensureLinkLocked(
     return restoreEstablished(activeSession, receiver, stored, intent, alreadyRecovered);
   }
 
-  if (intent === 'user') {
-    await StorageService.clearHandshakeBudget(ownerPubky, peerPubky);
-  } else if (await isHandshakeBudgetExhausted(ownerPubky, peerPubky)) {
+  if (intent !== 'user' && (await isHandshakeBudgetExhausted(ownerPubky, peerPubky))) {
     return 'idle';
   }
 
@@ -1237,9 +1300,13 @@ async function advanceLiveHandshake(
 
     // `pending` is a real Noise XX step, not a failure — but it is also the
     // shape of a peer that answered once and went silent, so it has to cost
-    // something. Charge the durable budget BEFORE persisting the snapshot: a
-    // crash between the two loses a handshake step, never a charge.
-    const budget = await chargeHandshakeBudget(ownerPubky, peerPubky);
+    // something. What it costs is decided in one place: see the charge policy on
+    // `chargeHandshakeBudget`. Charged BEFORE persisting the snapshot: a crash
+    // between the two loses a handshake step, never a charge.
+    const budget = await chargeHandshakeBudget(ownerPubky, peerPubky, {
+      reason: 'pending-advance',
+      intent,
+    });
     await StorageService.updateLinkSnapshot(ownerPubky, peerPubky, result.snapshot, 'handshaking');
 
     if (budget.exhausted) {
@@ -1300,6 +1367,16 @@ function fallbackLinkRecord(
 }
 
 /**
+ * Why a handshake step is being charged. The whole charge policy lives in
+ * {@link chargeHandshakeBudget} so the two call sites cannot drift apart.
+ */
+type HandshakeCharge =
+  /** An advance that returned `pending`: throttled, see below. */
+  | { reason: 'pending-advance'; intent: LinkIntent }
+  /** A wipe of a still-unestablished handshake: never throttled, see below. */
+  | { reason: 'unestablished-wipe' };
+
+/**
  * Charges one unproductive handshake step against this peer and returns the
  * resulting budget.
  *
@@ -1310,13 +1387,43 @@ function fallbackLinkRecord(
  * message 1 → pending → malformed message 3 → wipe → re-adoption for a fresh
  * budget every 30–60s. Safe to read-modify-write: all link work for a peer runs
  * inside `withQueue(peer)`.
+ *
+ * Charge policy — the budget bounds UNATTENDED, REPEATED work, because that is
+ * the only cost a peer who never completes can impose:
+ *
+ * - A `pending` advance charges at most once per backoff window. Charging
+ *   closes the window, so the first step in a window costs one unit and every
+ *   later step by any caller in that window is free. Without this the cost
+ *   scaled with how many callers happened to step the handshake — the tick, a
+ *   queued-delivery retry, a thread open and an inbox sync all land inside the
+ *   same 30s window — so a handshake converging normally consumed half the
+ *   allowance, and one with a queued send ran itself to exhaustion. The rate a
+ *   hostile peer can farm is unchanged: the tick only steps links whose window
+ *   has elapsed, so it still costs exactly one unit per due step, ten steps
+ *   across roughly two hours.
+ * - A `user` intent never charges. It has already cleared the budget by the
+ *   time it gets here (see {@link ensureLinkLocked}), and a deliberate action
+ *   is attended by definition.
+ * - A wipe of a still-unestablished handshake always charges, window or not.
+ *   That one is peer-triggerable on demand — a malformed message 3 forces it —
+ *   so throttling it would hand back the free re-adoption cycle the durable
+ *   budget exists to close.
  */
 async function chargeHandshakeBudget(
   ownerPubky: PubkyKey,
   peerPubky: PubkyKey,
+  charge: HandshakeCharge,
 ): Promise<{ advances: number; exhausted: boolean }> {
   const current = await StorageService.getHandshakeBudget(ownerPubky, peerPubky);
-  const advances = (current?.pendingAdvances ?? 0) + 1;
+  const held = {
+    advances: current?.pendingAdvances ?? 0,
+    exhausted: current ? current.exhaustedAt !== null : false,
+  };
+  if (charge.reason === 'pending-advance') {
+    if (charge.intent === 'user') return held;
+    if (current && current.nextAdvanceAt > Date.now()) return held;
+  }
+  const advances = held.advances + 1;
   const exhausted = advances >= HANDSHAKE_PENDING_ADVANCE_LIMIT;
   await StorageService.upsertHandshakeBudget({
     ownerPubky,
@@ -1640,7 +1747,9 @@ async function recoverWedgedLink(
   }
 
   if (stored.status !== 'established') {
-    const budget = await chargeHandshakeBudget(stored.ownerPubky, stored.peerPubky);
+    const budget = await chargeHandshakeBudget(stored.ownerPubky, stored.peerPubky, {
+      reason: 'unestablished-wipe',
+    });
     if (budget.exhausted) return abandonUnestablishedLink(stored);
   }
 
