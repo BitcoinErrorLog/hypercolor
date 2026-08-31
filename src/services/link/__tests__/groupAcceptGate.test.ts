@@ -143,6 +143,10 @@ jest.mock('../../StorageService', () => ({
     deleteGroupSeenEventsForSender: jest.fn(),
     applyGroupMessageEdit: jest.fn(),
     tombstoneGroupMessage: jest.fn(),
+    getHandshakeBudget: jest.fn(),
+    upsertHandshakeBudget: jest.fn(),
+    clearHandshakeBudget: jest.fn(),
+    hasQueueItem: jest.fn(),
   },
 }));
 
@@ -275,6 +279,10 @@ function wireInMemoryStorage(): void {
   mockedStorage.getLinkReceiver.mockResolvedValue(receiverRow);
   mockedStorage.clearAccountData.mockResolvedValue(undefined);
   mockedStorage.listDeliveryQueue.mockResolvedValue([]);
+  mockedStorage.getHandshakeBudget.mockResolvedValue(null);
+  mockedStorage.upsertHandshakeBudget.mockResolvedValue(undefined);
+  mockedStorage.clearHandshakeBudget.mockResolvedValue(undefined);
+  mockedStorage.hasQueueItem.mockResolvedValue(false);
 
   mockedStorage.upsertLink.mockImplementation(async record => {
     db.links.set(record.peerPubky, { ...record, updatedAt: NOW });
