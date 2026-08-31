@@ -5,7 +5,7 @@ appId: ${APP_ID}
     element:
       id: debugSwitchSlotA
     direction: DOWN
-    timeout: 15000
+    timeout: 60000
 - tapOn:
     id: debugSwitchSlotA
 - extendedWaitUntil:

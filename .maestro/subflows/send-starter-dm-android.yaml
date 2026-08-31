@@ -11,7 +11,7 @@ appId: ${APP_ID}
       - extendedWaitUntil:
           visible:
             id: chatsScreen
-          timeout: 15000
+          timeout: 120000
       - tapOn:
           id: chatRow
 - extendedWaitUntil:

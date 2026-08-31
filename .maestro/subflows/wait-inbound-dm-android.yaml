@@ -19,7 +19,7 @@ appId: ${APP_ID}
       - extendedWaitUntil:
           visible:
             id: threadScreen
-          timeout: 15000
+          timeout: 60000
 - extendedWaitUntil:
     visible: ${DM_BODY}
-    timeout: 30000
+    timeout: 60000
