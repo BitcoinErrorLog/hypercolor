@@ -2,6 +2,7 @@ import {
   formatPaymentDisplayText,
   formatTipIdentifierDisplay,
   payloadPreview,
+  stripBidiAndC1,
 } from '../displaySanitize';
 
 describe('formatPaymentDisplayText', () => {
@@ -29,5 +30,12 @@ describe('formatPaymentDisplayText', () => {
       '\u2068btc-lightning-bolt11\u2069',
     );
     expect(payloadPreview(`lnbc${'1'.repeat(80)}`)).toHaveLength(37);
+  });
+});
+
+describe('stripBidiAndC1', () => {
+  it('strips zero-width characters and the tag block', () => {
+    expect(stripBidiAndC1('ab\u200Bcd\u200Cef\u200Dgh\uFEFFij')).toBe('abcdefghij');
+    expect(stripBidiAndC1(`ab${String.fromCodePoint(0xe0061)}cd`)).toBe('abcd');
   });
 });

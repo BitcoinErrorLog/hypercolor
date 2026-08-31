@@ -1,5 +1,7 @@
 import { DEFAULT_NEXUS_BASE_URL } from '../flags/config';
+import { NEXUS_FETCH_INIT, parseNexusJson, readNexusResponseText } from '../lib/nexus-http';
 import type { PubkyKey } from '../types';
+import { parsePubky } from '../utils/pubkyId';
 
 /**
  * Nexus is a PUBLIC social-graph aggregator. Use it only for followers /
@@ -81,7 +83,7 @@ export function createNexusClient(options: NexusClientOptions = {}): NexusClient
     const url = `${currentBaseUrl()}${path}`;
     let response: Response;
     try {
-      response = await fetchFn(url);
+      response = await fetchFn(url, NEXUS_FETCH_INIT);
     } catch (err) {
       return {
         ok: false,
@@ -94,8 +96,8 @@ export function createNexusClient(options: NexusClientOptions = {}): NexusClient
     if (!response.ok) {
       let detail = response.statusText;
       try {
-        const text = await response.text();
-        if (text) detail = text.slice(0, 240);
+        const capped = await readNexusResponseText(response, 1024);
+        if (capped.ok && capped.text) detail = capped.text.slice(0, 240);
       } catch {
         // status text is enough
       }
@@ -107,17 +109,25 @@ export function createNexusClient(options: NexusClientOptions = {}): NexusClient
       };
     }
 
-    let body: unknown;
-    try {
-      body = await response.json();
-    } catch (err) {
+    const capped = await readNexusResponseText(response);
+    if (!capped.ok) {
       return {
         ok: false,
         kind: 'decode',
         status: response.status,
-        message: err instanceof Error ? err.message : 'Nexus response was not JSON',
+        message: `Nexus ${path} returned a body larger than the allowed limit`,
       };
     }
+    const parsed = parseNexusJson(capped.text);
+    if (!parsed.ok) {
+      return {
+        ok: false,
+        kind: 'decode',
+        status: response.status,
+        message: 'Nexus response was not JSON',
+      };
+    }
+    const body = parsed.value;
 
     const value = parse(body);
     if (value === null) {
@@ -162,7 +172,9 @@ function parsePubkyList(body: unknown): PubkyKey[] | null {
   const out: PubkyKey[] = [];
   for (const item of body) {
     if (typeof item !== 'string' || item.length === 0) return null;
-    out.push(item);
+    const pubky = parsePubky(item);
+    if (!pubky) return null;
+    out.push(pubky);
   }
   return out;
 }

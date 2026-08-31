@@ -16,9 +16,12 @@ export const TIP_IDENTIFIER_DISPLAY_MAX_CHARS = 48;
 function isStrippedDisplayCodePoint(code: number): boolean {
   if (code < 0x20) return true;
   if (code >= 0x7f && code <= 0x9f) return true;
+  if (code === 0x200b || code === 0x200c || code === 0x200d) return true;
   if (code === 0x200e || code === 0x200f) return true;
+  if (code === 0xfeff) return true;
   if (code >= 0x202a && code <= 0x202e) return true;
   if (code >= 0x2066 && code <= 0x2069) return true;
+  if (code >= 0xe0000 && code <= 0xe007f) return true;
   return false;
 }
 
