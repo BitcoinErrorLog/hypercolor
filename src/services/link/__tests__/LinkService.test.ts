@@ -5,6 +5,7 @@ import {
   HANDSHAKE_PENDING_ADVANCE_LIMIT,
   LINK_RETRY_DRAIN_INTERVAL_MS,
   LINK_RETRY_PAYLOAD_TYPE,
+  LINK_RETRY_TICK_PHASE_TIMEOUT_MS,
   LinkService,
   linkQueueEntryCountForTests,
   startLinkRetryDrain,
@@ -1930,6 +1931,62 @@ describe('LinkService', () => {
         await flush();
         expect(mockedStorage.getDueHandshakingLinks).toHaveBeenCalledTimes(2);
       } finally {
+        stop();
+        jest.useRealTimers();
+      }
+    });
+
+    /**
+     * The tick guards on a module-level flag, so an awaited call that never
+     * settles — the platform hazard this codebase already documents for the
+     * keystore — used to latch the flag for the lifetime of the process. A new
+     * interval could not clear it, so the app kept its timers and did no link
+     * work at all. Overlap is still prevented, but by refusing to start a
+     * second copy of a wedged phase rather than by never finishing the tick.
+     */
+    it('releases a latched tick when a handshake advance never settles', async () => {
+      jest.useFakeTimers({ doNotFake: ['Date'] });
+      const flush = async (): Promise<void> => {
+        for (let turn = 0; turn < 50; turn += 1) await Promise.resolve();
+      };
+      givenResponderHandshake();
+      givenQueuedDm();
+      const wedge: { release: (() => void) | null } = { release: null };
+      mockedNative.advanceHandshake.mockImplementation(
+        () =>
+          new Promise(resolve => {
+            wedge.release = () => resolve({ status: 'pending', snapshot: 'b-wedged' });
+          }),
+      );
+
+      const stop = startLinkRetryDrain(30_000);
+      try {
+        jest.advanceTimersByTime(30_000);
+        await flush();
+        expect(mockedNative.advanceHandshake).toHaveBeenCalledTimes(1);
+        expect(mockedRetryQueue.getDue).not.toHaveBeenCalled();
+
+        // The advance is wedged for good. Once the phase budget elapses the
+        // tick must move on and deliver what is already queued.
+        jest.advanceTimersByTime(LINK_RETRY_TICK_PHASE_TIMEOUT_MS);
+        await flush();
+        expect(mockedRetryQueue.getDue).toHaveBeenCalled();
+
+        // Further ticks fire and are refused per phase, never doubled up.
+        jest.advanceTimersByTime(60_000 + LINK_RETRY_TICK_PHASE_TIMEOUT_MS);
+        await flush();
+        expect(mockedNative.advanceHandshake).toHaveBeenCalledTimes(1);
+
+        // And the moment the wedge clears, the tick picks the work back up —
+        // the flag was released, not merely bypassed once.
+        wedge.release?.();
+        await flush();
+        jest.advanceTimersByTime(30_000);
+        await flush();
+        expect(mockedNative.advanceHandshake).toHaveBeenCalledTimes(2);
+      } finally {
+        wedge.release?.();
+        await flush();
         stop();
         jest.useRealTimers();
       }

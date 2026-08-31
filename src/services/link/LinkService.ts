@@ -111,6 +111,16 @@ export const HANDSHAKE_PENDING_ADVANCE_LIMIT = 10;
 
 export const LINK_RETRY_DRAIN_INTERVAL_MS = 30_000;
 
+/**
+ * How long one tick phase may hold the tick before it is released and the next
+ * phase runs anyway. Shorter than the interval so a wedged phase costs at most
+ * one skipped round rather than the rest of the session: an awaited native call
+ * that never settles — the hazard already documented for the keystore in
+ * `App.tsx` — otherwise latches the tick's in-flight flag for the lifetime of
+ * the process, and no fresh interval can clear a module-level flag.
+ */
+export const LINK_RETRY_TICK_PHASE_TIMEOUT_MS = 20_000;
+
 export type LinkEnableFlow = {
   authorizationUrl: string;
   awaitEnabled: () => Promise<{ pubky: string; receiverPath: string; noisePublicKey: string }>;
@@ -862,31 +872,76 @@ export function startLinkRetryDrain(intervalMs = LINK_RETRY_DRAIN_INTERVAL_MS): 
 }
 
 /**
- * One foreground tick: step live handshakes first, then deliver whatever the
- * transition to `ready` unblocked. Ordering matters — draining first would
+ * The two phases of a tick, in order. Handshakes advance first, then delivery
+ * takes whatever the transition to `ready` unblocked — draining first would
  * defer every queued send for another interval.
  *
- * Skipped while the previous tick is still settling. A step slower than the
- * interval would otherwise let tick N+1 chain behind tick N and accumulate
- * work without bound under sustained slowness; a dropped tick costs at most
- * one interval of latency because the next one repeats the same work.
+ * Each phase remembers its own outstanding run, which is what makes overlap
+ * impossible without making the tick block on it: a phase whose previous run
+ * has not settled is skipped rather than started twice.
+ */
+const tickPhases: { label: string; run: () => Promise<void>; inFlight: Promise<void> | null }[] = [
+  { label: 'Handshake advance', run: () => LinkService.advancePendingLinks(), inFlight: null },
+  { label: 'Retry drain', run: () => LinkService.drainRetries(), inFlight: null },
+];
+
+/**
+ * One foreground tick.
+ *
+ * Structurally unlatchable. Every awaited phase runs under
+ * {@link LINK_RETRY_TICK_PHASE_TIMEOUT_MS}, so a native call that never settles
+ * or rejects — the hazard `App.tsx` already documents for the keystore — cannot
+ * hold `tickInFlight` past one round. A module-level flag held by a wedged await
+ * silences the tick for the lifetime of the process, and restarting the interval
+ * from {@link startLinkRetryDrain} cannot clear it, which is how a device kept
+ * live timers while doing no link work at all for minutes.
+ *
+ * Releasing the tick does not let two ticks run the same work: the abandoned
+ * phase keeps its slot until it settles, per-peer `withQueue` serialization
+ * still orders every handshake step, and `drainRetries` self-serializes.
  */
 async function linkRetryTick(): Promise<void> {
   if (tickInFlight) return;
   tickInFlight = true;
   try {
-    try {
-      await LinkService.advancePendingLinks();
-    } catch (err) {
-      console.warn('[LinkService] Handshake advance tick failed:', errorMessage(err));
-    }
-    try {
-      await LinkService.drainRetries();
-    } catch (err) {
-      console.warn('[LinkService] Retry drain tick failed:', errorMessage(err));
+    for (const phase of tickPhases) {
+      await runTickPhase(phase);
     }
   } finally {
     tickInFlight = false;
+  }
+}
+
+async function runTickPhase(phase: (typeof tickPhases)[number]): Promise<void> {
+  if (phase.inFlight) {
+    console.warn(`[LinkService] ${phase.label} tick skipped: previous run has not settled`);
+    return;
+  }
+  const started = phase.run().catch(err => {
+    console.warn(`[LinkService] ${phase.label} tick failed:`, errorMessage(err));
+  });
+  phase.inFlight = started;
+  void started.then(() => {
+    if (phase.inFlight === started) phase.inFlight = null;
+  });
+  await settleWithin(started, LINK_RETRY_TICK_PHASE_TIMEOUT_MS, phase.label);
+}
+
+/** Waits for `work`, giving up on WAITING (never on the work) after `budgetMs`. */
+async function settleWithin(work: Promise<void>, budgetMs: number, label: string): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expiry = new Promise<'expired'>(resolve => {
+    timer = setTimeout(() => resolve('expired'), budgetMs);
+  });
+  try {
+    const outcome = await Promise.race([work.then(() => 'settled' as const), expiry]);
+    if (outcome === 'expired') {
+      console.warn(
+        `[LinkService] ${label} tick exceeded ${budgetMs}ms; releasing the tick while it finishes`,
+      );
+    }
+  } finally {
+    clearTimeout(timer);
   }
 }
 
