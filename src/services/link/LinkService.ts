@@ -1104,7 +1104,11 @@ async function restoreAndAdvanceHandshake(
       role: stored.role,
     });
     if (restored.status === 'established') {
-      return completeEstablished(
+      // Awaited inside the try on purpose: a bare `return` of the promise
+      // would settle outside this frame and skip the catch below, so a failed
+      // transport restore would escape `ensureLinkLocked` as a raw native
+      // error instead of being classified.
+      return await completeEstablished(
         activeSession,
         receiver,
         stored.ownerPubky,
@@ -1148,7 +1152,10 @@ async function advanceLiveHandshake(
       const remoteKey = stored?.remoteNoisePublicKey ?? '';
       const localPath = coerceReceiverPath(stored?.localReceiverPath ?? receiver.receiverPath);
       const remotePath = coerceReceiverPath(stored?.remoteReceiverPath ?? LINK_RECEIVER_PATH);
-      return completeEstablished(
+      // Awaited inside the try: see `restoreAndAdvanceHandshake`. Without it
+      // the catch below never sees a failed `restoreLink`, which is the one
+      // case where the row read above is already stale.
+      return await completeEstablished(
         activeSession,
         receiver,
         ownerPubky,

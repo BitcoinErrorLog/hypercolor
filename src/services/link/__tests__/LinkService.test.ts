@@ -1916,6 +1916,28 @@ describe('LinkService', () => {
       }
     });
 
+    it('does not charge a handshake failure when the transport restore fails after establishing', async () => {
+      const state = givenStoredResponderHandshake();
+      mockedNative.advanceHandshake.mockResolvedValue({ status: 'established', snapshot: 'b-est' });
+      mockedNative.restoreLink.mockRejectedValueOnce({ code: 'network', message: 'timeout' });
+
+      await LinkService.advancePendingLinks();
+
+      // The row really is established; the stale pre-advance read must not be
+      // what the failure is charged against.
+      expect(state.row()).toEqual(expect.objectContaining({ status: 'established' }));
+      expect(mockedStorage.incrementLinkConsecutiveFailures).not.toHaveBeenCalled();
+      expect(mockedStorage.deleteLink).not.toHaveBeenCalled();
+
+      // The closed handshake handle is gone, so the next attempt restores the
+      // established link instead of stepping a dead linkId.
+      mockedNative.restoreLink.mockResolvedValue({ linkId: 'link-b' });
+      mockedNative.advanceHandshake.mockClear();
+
+      await expect(LinkService.ensureLinkWith(PEER)).resolves.toBe('ready');
+      expect(mockedNative.advanceHandshake).not.toHaveBeenCalled();
+    });
+
     it('does not send the same queued payload twice across overlapping drains', async () => {
       givenEstablishedLink();
       const outstanding = new Set([queuedItem.id]);
