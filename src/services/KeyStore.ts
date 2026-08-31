@@ -293,6 +293,17 @@ export interface AttachmentSecretRef {
 }
 
 const ATTACHMENT_INDEX_PREFIX = 'attachment_key_services:';
+/** DEBUG-only MMKV slot when unsigned iOS sim keychain returns -34018. */
+const DEBUG_ATTACHMENT_PREFIX = 'debug.attachment:';
+
+function isUnsignedSimKeychainError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return /entitlement isn't present|errSecMissingEntitlement|-34018/i.test(message);
+}
+
+function debugAttachmentStoreKey(service: string): string {
+  return `${DEBUG_ATTACHMENT_PREFIX}${service}`;
+}
 
 export function attachmentKeyService(
   ownerPubky: string,
@@ -348,10 +359,16 @@ export async function setAttachmentSecret(
   material: AttachmentSecretMaterial,
 ): Promise<void> {
   const service = attachmentKeyService(ownerPubky, senderPubky, eventId);
-  await Keychain.setGenericPassword(KEYCHAIN_USERNAME, JSON.stringify(material), {
-    service,
-    accessible: Keychain.ACCESSIBLE.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
-  });
+  const payload = JSON.stringify(material);
+  try {
+    await Keychain.setGenericPassword(KEYCHAIN_USERNAME, payload, {
+      service,
+      accessible: Keychain.ACCESSIBLE.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
+    });
+  } catch (err) {
+    if (!__DEV__ || !isUnsignedSimKeychainError(err)) throw err;
+    store().set(debugAttachmentStoreKey(service), payload);
+  }
   rememberAttachmentService(ownerPubky, service);
 }
 
@@ -360,15 +377,22 @@ export async function getAttachmentSecret(
   senderPubky: string,
   eventId: string,
 ): Promise<AttachmentSecretMaterial | null> {
+  const service = attachmentKeyService(ownerPubky, senderPubky, eventId);
   try {
-    const result = await Keychain.getGenericPassword({
-      service: attachmentKeyService(ownerPubky, senderPubky, eventId),
-    });
-    if (result === false) return null;
-    return JSON.parse(result.password) as AttachmentSecretMaterial;
+    const result = await Keychain.getGenericPassword({ service });
+    if (result !== false) {
+      return JSON.parse(result.password) as AttachmentSecretMaterial;
+    }
   } catch {
-    return null;
+    // Unsigned-sim keychain miss — try the DEBUG fallback below.
   }
+  if (__DEV__) {
+    const raw = store().getString(debugAttachmentStoreKey(service));
+    if (raw) {
+      return JSON.parse(raw) as AttachmentSecretMaterial;
+    }
+  }
+  return null;
 }
 
 export async function deleteAttachmentSecretByService(
@@ -377,11 +401,14 @@ export async function deleteAttachmentSecretByService(
 ): Promise<boolean> {
   try {
     await Keychain.resetGenericPassword({ service });
-    forgetAttachmentService(ownerPubky, service);
-    return true;
   } catch {
-    return false;
+    if (!__DEV__) return false;
   }
+  if (__DEV__) {
+    store().remove(debugAttachmentStoreKey(service));
+  }
+  forgetAttachmentService(ownerPubky, service);
+  return true;
 }
 
 export async function deleteAttachmentSecret(

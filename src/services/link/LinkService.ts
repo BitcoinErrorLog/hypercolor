@@ -281,9 +281,8 @@ export const LinkService = {
     if (!PaykitLinkNative.isAvailable()) {
       throw createLinkNativeError('unavailable', 'PaykitLinkModule native module is not available');
     }
-    const { flowId, authorizationUrl } = await PaykitLinkNative.startAuthFlow(
-      RING_GRANT_CAPABILITIES,
-    );
+    const { flowId, authorizationUrl } =
+      await PaykitLinkNative.startAuthFlow(RING_GRANT_CAPABILITIES);
     let cancelled = false;
     return {
       authorizationUrl,
@@ -2085,10 +2084,7 @@ function requireSessionAlias(): string {
   if (session) return session.alias;
   const stored = KeyStore.getLinkSession();
   if (stored) return stored;
-  throw createLinkNativeError(
-    'auth',
-    'Enable encrypted messaging to write to your homeserver.',
-  );
+  throw createLinkNativeError('auth', 'Enable encrypted messaging to write to your homeserver.');
 }
 
 function requireEstablishedHandle(ownerPubky: PubkyKey, peerPubky: PubkyKey): string {

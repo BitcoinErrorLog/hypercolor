@@ -136,6 +136,40 @@ describe('KeyStore session and Ring pending', () => {
     await expect(isAppCertValid()).resolves.toBe(true);
   });
 
+  it('falls back to MMKV for attachment secrets when unsigned-sim keychain rejects', async () => {
+    mockKeychainStore.set(MMKV_KEY_SERVICE, 'ab'.repeat(32));
+    const { initKeyStore, setAttachmentSecret, getAttachmentSecret } = await freshKeyStore();
+    await initKeyStore();
+    const Keychain = jest.requireMock('react-native-keychain') as {
+      setGenericPassword: jest.Mock;
+    };
+    Keychain.setGenericPassword.mockImplementation(
+      async (_username: string, _password: string, options: { service: string }) => {
+        if (options.service.startsWith('hypercolor-attachment-key')) {
+          throw new Error("Internal error when a required entitlement isn't present.");
+        }
+        mockKeychainStore.set(options.service, _password);
+        return { service: options.service };
+      },
+    );
+    await setAttachmentSecret('owner', 'sender', 'event-1', {
+      key: 'attach-key',
+      nonce: 'attach-nonce',
+      algorithm: 'XChaCha20Poly1305',
+    });
+    await expect(getAttachmentSecret('owner', 'sender', 'event-1')).resolves.toEqual({
+      key: 'attach-key',
+      nonce: 'attach-nonce',
+      algorithm: 'XChaCha20Poly1305',
+    });
+    Keychain.setGenericPassword.mockImplementation(
+      async (_username: string, password: string, options: { service: string }) => {
+        mockKeychainStore.set(options.service, password);
+        return { service: options.service };
+      },
+    );
+  });
+
   it('reports a persisted Welcome session from AppKey + pubky', async () => {
     const { initKeyStore, setAppKeypair, setPubky, hasPersistedSession } = await freshKeyStore();
     await initKeyStore();

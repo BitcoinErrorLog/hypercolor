@@ -1,0 +1,34 @@
+# Android: type into the product Debug signup panel. Maestro openLink
+# VIEW intents are not delivered reliably on this emulator (singleTask).
+appId: ${APP_ID}
+---
+# The debug panel sits below the fold on a medium phone.
+- scrollUntilVisible:
+    element:
+      id: debugSignupToken
+    direction: DOWN
+    timeout: 15000
+- tapOn:
+    id: debugSignupToken
+- eraseText: 40
+- inputText: ${SIGNUP_TOKEN}
+- hideKeyboard
+- scrollUntilVisible:
+    element:
+      id: debugSignupSubmit
+    direction: DOWN
+    timeout: 10000
+- tapOn:
+    id: debugSignupSubmit
+- extendedWaitUntil:
+    visible:
+      id: debugSignupContinue
+    timeout: 120000
+- copyTextFrom:
+    id: debugSignupPubky
+- evalScript: ${output.pubky = maestro.copiedText}
+- copyTextFrom:
+    id: debugSignupSecretValue
+- evalScript: ${output.secret = maestro.copiedText}
+- tapOn:
+    id: debugSignupContinue

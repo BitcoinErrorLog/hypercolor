@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # Mint staging tokens (never echoed) and send hypercolor://e2e/liveproof
-# through the iOS Simulator Documents sidecar. Usage:
-#   e2e-run-liveproof-ios.sh <udid> <rows>
+# through the Android files sidecar. Usage:
+#   e2e-run-liveproof-android.sh <serial> <rows>
 # rows example: p0  or  p0,p2,p3,p5,tips
 set -euo pipefail
-UDID="${1:?udid}"
+SERIAL="${1:?serial}"
 ROWS="${2:-p0}"
-BUNDLE="${3:-org.name.hypercolor}"
+APP="${3:-com.hypercolor}"
 HS="${HOMESERVER_PUBKY:-ufibwbmed6jeq9k4p583go95wofakh9fwpp4k734trq79pd9u1uy}"
 GEN="${GENERATE_SCRIPT:-/Users/johncarvalho/.cursor/skills/pubky-staging-invite/scripts/generate.sh}"
 need=2
@@ -24,5 +24,5 @@ if [ "$need" -ge 3 ]; then
   URL="${URL}&tokenC=${TOKENS[2]}"
 fi
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-"$ROOT/scripts/e2e-ios-cmd.sh" "$UDID" "$BUNDLE" "$URL"
+"$ROOT/scripts/e2e-android-cmd.sh" "$SERIAL" "$APP" "$URL"
 echo "liveproof_sent rows=${ROWS} tokens=${need}"

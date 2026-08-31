@@ -1,7 +1,7 @@
 # Sign in a slot saved by debug-signup. Requires SLOT=A|B.
 appId: ${APP_ID}
 ---
-- openLink: hypercolor://e2e/switch?slot=${SLOT}&thenThreadSlot=${THEN_THREAD_SLOT}
+- openLink: hypercolor://e2e/switch?p=${SLOT}_${THEN_THREAD_SLOT}
 - runFlow:
     when:
       visible: Open

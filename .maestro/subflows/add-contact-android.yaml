@@ -1,0 +1,31 @@
+# Add PEER_PUBKY via the product Find Contact screen, then open Chat.
+appId: ${APP_ID}
+---
+- tapOn:
+    id: tabChats
+- extendedWaitUntil:
+    visible:
+      id: chatsScreen
+    timeout: 15000
+- tapOn:
+    id: chatsNew
+- extendedWaitUntil:
+    visible:
+      id: contactSearchInput
+    timeout: 15000
+- tapOn:
+    id: contactSearchInput
+- eraseText: 80
+- inputText: ${PEER_PUBKY}
+- hideKeyboard
+- tapOn:
+    id: contactSearchAdd
+- runFlow:
+    when:
+      visible: Chat
+    commands:
+      - tapOn: Chat
+- extendedWaitUntil:
+    visible:
+      id: threadScreen
+    timeout: 180000

@@ -3,10 +3,7 @@ import { runMigrations } from '../../../db/migrations';
 import { openMemoryDb } from '../../../db/__tests__/betterSqliteAdapter';
 import { ATTACHMENT_MAX_BYTES } from '../../../flags/config';
 import { CHAT_MESSAGE_KIND, LINK_RECEIVER_PATH } from '../../../types/link';
-import {
-  buildGroupMembershipEnvelope,
-  decodeGroupEnvelope,
-} from '../../../types/group';
+import { buildGroupMembershipEnvelope, decodeGroupEnvelope } from '../../../types/group';
 import { StorageService } from '../../StorageService';
 import { applyGroupInbound } from '../../group/applyGroupInbound';
 import { classifyInboundPeer, wotInputFromContact } from '../wotGate';
@@ -19,6 +16,7 @@ import {
   runNamedLiveProofs,
   runPaymentHandoffLiveProof,
   runRingAuthLiveProof,
+  runTipListLiveProof,
 } from '../liveProofRun';
 import type { LiveProofLinkApi, ProductLiveProofDeps } from '../liveProofShared';
 import type { PaykitLinkNativeApi } from '../PaykitLinkNative';
@@ -67,6 +65,8 @@ jest.mock('../../KeyStore', () => ({
   KeyStore: {
     getPubky: jest.fn(),
     setPubky: jest.fn(),
+    getHomeserver: jest.fn(),
+    setHomeserver: jest.fn(),
     getLinkSession: jest.fn(),
     setLinkSession: jest.fn(),
     deleteLinkSession: jest.fn(),
@@ -106,6 +106,7 @@ jest.mock('../PaykitLinkNative', () => ({
   PaykitLinkNative: {
     isAvailable: jest.fn(),
     signupWithSecret: jest.fn(),
+    signinWithSecret: jest.fn(),
     startAuthFlow: jest.fn(),
     awaitAuthApproval: jest.fn(),
     generateReceiverKey: jest.fn(),
@@ -435,7 +436,9 @@ describe('product live-proof step machines', () => {
       ...clockDeps(),
     });
     expect(report.ok).toBe(true);
-    expect(report.steps.find(step => step.step === 'nexus-import')?.detail).toContain('skipped nexus');
+    expect(report.steps.find(step => step.step === 'nexus-import')?.detail).toContain(
+      'skipped nexus',
+    );
     expect(report.steps.map(step => step.step)).toEqual(
       expect.arrayContaining([
         'add-contact-b-paste',
@@ -695,7 +698,9 @@ describe('product live-proof step machines', () => {
     expect(report.ok).toBe(true);
     expect(report.steps.map(step => step.step)).toEqual(
       expect.arrayContaining([
-        'require-link-session',
+        'signup-a',
+        'signup-b',
+        'add-contact-ab-paste',
         'send-attachment-a',
         'resolve-attachment-b',
         'attachment-invariants',
@@ -703,7 +708,8 @@ describe('product live-proof step machines', () => {
         'over-limit-rejected',
       ]),
     );
-    expect(report.steps.some(step => step.step === 'signup-a')).toBe(false);
+    expect(report.steps.some(step => step.step === 'require-link-session')).toBe(false);
+    expect(mockedNative.signupWithSecret).toHaveBeenCalledTimes(2);
     expect(ATTACHMENT_MAX_BYTES).toBe(8 * 1024 * 1024);
   });
 
@@ -794,7 +800,8 @@ describe('product live-proof step machines', () => {
     expect(report.ok).toBe(true);
     expect(report.steps.map(step => step.step)).toEqual(
       expect.arrayContaining([
-        'require-link-session',
+        'signup-a',
+        'signup-b',
         'export-backup',
         'wipe-local',
         'restore-backup',
@@ -802,49 +809,86 @@ describe('product live-proof step machines', () => {
         'assert-not-restored',
       ]),
     );
+    expect(report.steps.some(step => step.step === 'require-link-session')).toBe(false);
+    expect(mockedNative.signupWithSecret).toHaveBeenCalledTimes(2);
     const logged = jest.mocked(console.log).mock.calls.map(args => args.join(' '));
     expect(logged.some(line => line.includes('RECOVERYCODE1234'))).toBe(false);
     expect(report.steps.some(step => step.detail.includes('RECOVERYCODE1234'))).toBe(false);
   });
 
-  it('P3 fails fast at require-link-session without signup', async () => {
-    mockedKeyStore.getLinkSession.mockReturnValue(null);
+  it('P3 fails fast at validate-config without tokens and does not signup', async () => {
     const link = createProductLink();
-    const report = await runAttachmentLiveProof(TWO, {
-      native: mockedNative as unknown as PaykitLinkNativeApi,
-      link,
-      ...clockDeps(),
-    });
+    const report = await runAttachmentLiveProof(
+      { homeserverPubky: HS, signupTokenA: '', signupTokenB: '' },
+      {
+        native: mockedNative as unknown as PaykitLinkNativeApi,
+        link,
+        ...clockDeps(),
+      },
+    );
     expect(report.ok).toBe(false);
-    const gate = report.steps.find(step => step.step === 'require-link-session');
-    expect(gate?.ok).toBe(false);
-    expect(gate?.detail).toMatch(/Enable Messaging/);
-    expect(gate?.detail).toMatch(/startAuthFlow/);
-    expect(gate?.detail).toMatch(/session/i);
-    expect(gate?.detail).not.toMatch(/AppCert/);
+    expect(report.steps.find(step => step.step === 'validate-config')?.ok).toBe(false);
     expect(report.steps.some(step => step.step === 'signup-a')).toBe(false);
     expect(report.steps.some(step => step.step === 'signup-b')).toBe(false);
     expect(mockedNative.signupWithSecret).not.toHaveBeenCalled();
   });
 
-  it('P5 fails fast at require-link-session without signup', async () => {
-    mockedKeyStore.getLinkSession.mockReturnValue(null);
+  it('P5 fails fast at validate-config without tokens and does not signup', async () => {
     const link = createProductLink();
-    const report = await runBackupLiveProof(TWO, {
-      native: mockedNative as unknown as PaykitLinkNativeApi,
-      link,
-      ...clockDeps(),
-    });
+    const report = await runBackupLiveProof(
+      { homeserverPubky: HS, signupTokenA: '', signupTokenB: '' },
+      {
+        native: mockedNative as unknown as PaykitLinkNativeApi,
+        link,
+        ...clockDeps(),
+      },
+    );
     expect(report.ok).toBe(false);
-    const gate = report.steps.find(step => step.step === 'require-link-session');
-    expect(gate?.ok).toBe(false);
-    expect(gate?.detail).toMatch(/Enable Messaging/);
-    expect(gate?.detail).toMatch(/startAuthFlow/);
-    expect(gate?.detail).toMatch(/session/i);
-    expect(gate?.detail).not.toMatch(/AppCert/);
+    expect(report.steps.find(step => step.step === 'validate-config')?.ok).toBe(false);
     expect(report.steps.some(step => step.step === 'signup-a')).toBe(false);
     expect(report.steps.some(step => step.step === 'signup-b')).toBe(false);
     expect(mockedNative.signupWithSecret).not.toHaveBeenCalled();
+  });
+
+  it('tips publishes endpoints on A and resolves the same payloads on B', async () => {
+    const link = createProductLink();
+    const payments = {
+      setMyTipEndpoints: jest.fn(
+        async (endpoints: readonly { identifier: string; payload: string }[]) => {
+          const owner = mockedKeyStore.getPubky() ?? PUBKY_A;
+          await StorageService.replaceTipEndpoints(owner, owner, endpoints, Date.now());
+          return StorageService.listTipEndpoints(owner, owner);
+        },
+      ),
+      sendTipList: jest.fn(async (peer: string) => {
+        const owner = mockedKeyStore.getPubky() ?? PUBKY_A;
+        const mine = await StorageService.listTipEndpoints(owner, owner);
+        await StorageService.replaceTipEndpoints(peer, owner, mine, Date.now());
+      }),
+      getPeerTipEndpoints: jest.fn(async (peer: string) => {
+        const owner = mockedKeyStore.getPubky() ?? PUBKY_B;
+        return StorageService.listTipEndpoints(owner, peer);
+      }),
+    };
+    const report = await runTipListLiveProof(TWO, {
+      native: mockedNative as unknown as PaykitLinkNativeApi,
+      link,
+      payments,
+      ...clockDeps(),
+    });
+    expect(report.ok).toBe(true);
+    expect(report.steps.map(step => step.step)).toEqual(
+      expect.arrayContaining([
+        'signup-a',
+        'signup-b',
+        'set-tip-endpoints-a',
+        'send-tip-list-a',
+        'resolve-tip-list-b',
+      ]),
+    );
+    expect(payments.setMyTipEndpoints).toHaveBeenCalled();
+    expect(payments.sendTipList).toHaveBeenCalledWith(PUBKY_B);
+    expect(payments.getPeerTipEndpoints).toHaveBeenCalledWith(PUBKY_A);
   });
 
   it('P6 opens pubkyauth as-is, awaits approval, and does not call signupWithSecret', async () => {

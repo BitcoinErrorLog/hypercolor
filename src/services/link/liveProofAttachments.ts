@@ -23,11 +23,11 @@ import {
   createLiveProofRecorder,
   defaultLinkApi,
   emptyParty,
+  errorMessage,
   establishProductLink,
   generatePartySecrets,
   pollUntil,
   requirePartyField,
-  requireLinkSession,
   requireText,
   resolveClock,
   signupParty,
@@ -35,7 +35,6 @@ import {
   type LiveProofConfig,
   type LiveProofReport,
   type ProductLiveProofDeps,
-  type RingKeyStoreApi,
 } from './liveProofShared';
 
 export type AttachmentLiveProofDeps = ProductLiveProofDeps & {
@@ -43,7 +42,6 @@ export type AttachmentLiveProofDeps = ProductLiveProofDeps & {
   writeFixtureFile?: (standardB64: string, fileName: string) => Promise<string>;
   readCacheFile?: (uri: string) => Promise<string>;
   getHomeserverBlob?: (url: string) => Promise<string | null>;
-  keyStore?: RingKeyStoreApi;
 };
 
 const FIXTURE_BODY = 'liveproof-attachment-v1';
@@ -65,7 +63,6 @@ export async function runAttachmentLiveProof(
   const writeFixture = deps.writeFixtureFile ?? defaultWriteFixture;
   const readCache = deps.readCacheFile ?? defaultReadCache;
   const getBlob = deps.getHomeserverBlob ?? ((url: string) => PubkyService.get(url));
-  const keyStore = deps.keyStore ?? KeyStore;
   const partyA = emptyParty('A');
   const partyB = emptyParty('B');
   const redactSecrets = [config.signupTokenA, config.signupTokenB];
@@ -84,19 +81,9 @@ export async function runAttachmentLiveProof(
     }
 
     if (
-      !(await record('require-link-session', async () => {
-        const ring = requireLinkSession(keyStore);
-        partyA.pubky = ring.pubky;
-        partyA.sessionAlias = ring.sessionAlias;
-        return ring.pubky;
-      }))
-    ) {
-      return failed();
-    }
-
-    if (
       !(await record('validate-config', async () => {
         requireText(config.homeserverPubky, 'homeserverPubky');
+        requireText(config.signupTokenA, 'signupTokenA');
         requireText(config.signupTokenB, 'signupTokenB');
         return 'ok';
       }))
@@ -106,12 +93,15 @@ export async function runAttachmentLiveProof(
 
     if (
       !(await record('generate-identities', async () =>
-        generatePartySecrets([partyB], randomBytes, redactSecrets),
+        generatePartySecrets([partyA, partyB], randomBytes, redactSecrets),
       ))
     ) {
       return failed();
     }
 
+    if (!(await signupParty(record, native, config.homeserverPubky, partyA, config.signupTokenA))) {
+      return failed();
+    }
     if (!(await signupParty(record, native, config.homeserverPubky, partyB, config.signupTokenB))) {
       return failed();
     }
@@ -120,6 +110,35 @@ export async function runAttachmentLiveProof(
 
     const pubkyA = requirePartyField(partyA.pubky, 'A.pubky');
     const pubkyB = requirePartyField(partyB.pubky, 'B.pubky');
+
+    if (
+      !(await record('add-contact-ab-paste', async () => {
+        const ts = now();
+        await storage.upsertContact({
+          pubky: pubkyB,
+          ownerPubky: pubkyA,
+          trustScore: 0,
+          isFollowing: false,
+          isFollower: false,
+          isMutual: false,
+          addedManually: true,
+          firstSeenAt: ts,
+        });
+        await storage.upsertContact({
+          pubky: pubkyA,
+          ownerPubky: pubkyB,
+          trustScore: 0,
+          isFollowing: false,
+          isFollower: false,
+          isMutual: false,
+          addedManually: true,
+          firstSeenAt: ts,
+        });
+        return 'A↔B addedManually';
+      }))
+    ) {
+      return failed();
+    }
 
     if (
       !(await record('establish-ab', async () =>
@@ -158,6 +177,9 @@ export async function runAttachmentLiveProof(
         if (!isAttachmentLocationBoundToSender(sent.location, pubkyA)) {
           throw new Error('attachment location is not bound to A');
         }
+        if (sent.deliveryState !== 'sent' && sent.deliveryState !== 'delivered') {
+          throw new Error(`attachment PAM was not sent (${sent.deliveryState})`);
+        }
         return sent.eventId;
       }))
     ) {
@@ -167,18 +189,25 @@ export async function runAttachmentLiveProof(
     if (
       !(await record('resolve-attachment-b', async () => {
         await switchToParty(link, partyB);
-        await pollUntil(
-          now,
-          sleep,
-          receiveTimeoutMs,
-          pollIntervalMs,
-          async () => {
-            await link.syncInbox([pubkyA]);
-            return storage.getAttachment(pubkyB, pubkyA, sentEventId);
-          },
-          row => row !== null,
-          'B attachment metadata',
-        );
+        try {
+          await pollUntil(
+            now,
+            sleep,
+            receiveTimeoutMs,
+            pollIntervalMs,
+            async () => {
+              await link.syncInbox([pubkyA]);
+              return storage.getAttachment(pubkyB, pubkyA, sentEventId);
+            },
+            row => row !== null,
+            'B attachment metadata',
+          );
+        } catch (err) {
+          const request = await storage.getMessageRequest(pubkyB, pubkyA);
+          const unprocessed = await storage.getUnprocessedLinkStreamItems(pubkyB, pubkyA);
+          const hint = `request=${request?.status ?? 'none'} unprocessed=${unprocessed.length}`;
+          throw new Error(`${errorMessage(err)}; ${hint}`);
+        }
         const path = await attachments.resolveAttachment(pubkyB, pubkyA, sentEventId);
         const got = await readCache(path);
         const gotText = Buffer.from(got, 'base64').toString('utf8');
@@ -210,7 +239,11 @@ export async function runAttachmentLiveProof(
         const access = messages.find(
           message => message.kind === CHAT_ATTACHMENT_KIND && message.eventId === sentEventId,
         );
-        if (access && access.rawJson.includes('"key"') && !access.rawJson.includes(ATTACHMENT_KEY_PLACEHOLDER)) {
+        if (
+          access &&
+          access.rawJson.includes('"key"') &&
+          !access.rawJson.includes(ATTACHMENT_KEY_PLACEHOLDER)
+        ) {
           if (!/"key"\s*:\s*"__keystore__"/.test(access.rawJson)) {
             throw new Error('content key leaked into SQLite raw_json');
           }

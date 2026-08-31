@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
-import { getE2eSignupHud, setE2eSignupHud, subscribeE2eSignupHud } from './e2eSignupResult';
+import { Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { applyE2eSignupContinue, getE2eSignupHud, subscribeE2eSignupHud } from './e2eSignupResult';
 
 /** DEV-only Maestro hooks after a deep-link / file-channel debug signup. */
 export function E2eSignupHud() {
@@ -9,6 +9,19 @@ export function E2eSignupHud() {
   useEffect(() => subscribeE2eSignupHud(setState), []);
 
   if (!__DEV__ || !state) return null;
+
+  if (state.error) {
+    return (
+      <View style={styles.wrap} testID="debugSignupErrorHud" pointerEvents="none">
+        <View style={styles.card}>
+          <Text style={styles.errorTitle}>Debug signup failed</Text>
+          <Text testID="debugSignupError" style={styles.errorBody} numberOfLines={4}>
+            {state.pubky}
+          </Text>
+        </View>
+      </View>
+    );
+  }
 
   return (
     <View style={styles.wrap} testID="debugSignupResultHud" pointerEvents="box-none">
@@ -36,7 +49,7 @@ export function E2eSignupHud() {
           testID="debugSignupContinue"
           accessibilityLabel="Continue after debug signup"
           style={styles.button}
-          onPress={() => setE2eSignupHud(null)}
+          onPress={() => applyE2eSignupContinue(state)}
         >
           <Text style={styles.buttonText}>Continue</Text>
         </TouchableOpacity>
@@ -52,6 +65,7 @@ const styles = StyleSheet.create({
     right: 0,
     bottom: 88,
     zIndex: 50,
+    elevation: Platform.OS === 'android' ? 24 : 0,
   },
   card: {
     margin: 16,
@@ -61,6 +75,7 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: '#374151',
     gap: 8,
+    elevation: Platform.OS === 'android' ? 24 : 0,
   },
   status: { color: '#86efac', fontSize: 14, fontWeight: '600' },
   mono: { color: '#c4b5fd', fontSize: 12, fontFamily: 'monospace' },
@@ -71,4 +86,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   buttonText: { color: '#fff', fontSize: 15, fontWeight: '600' },
+  errorTitle: { color: '#fca5a5', fontSize: 14, fontWeight: '600' },
+  errorBody: { color: '#fca5a5', fontSize: 12 },
 });

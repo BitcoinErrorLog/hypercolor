@@ -1,7 +1,5 @@
 import { v4 as uuidv4 } from 'uuid';
 import {
-  GROUP_MEMBERSHIP_KIND,
-  GROUP_MESSAGE_KIND,
   buildGroupMembershipEnvelope,
   buildGroupMessageEnvelope,
   buildPrivateChannelId,
@@ -338,11 +336,11 @@ export async function runGroupLiveProof(
         });
         const after = await storage.getGroupMessage(pubkyA, channelId, pubkyA, groupEventId);
         if (!before || !after || after.body !== before.body) {
-          throw new Error('reused event_id from C mutated A\'s group message');
+          throw new Error("reused event_id from C mutated A's group message");
         }
         const cCopy = await storage.getGroupMessage(pubkyA, channelId, pubkyC, groupEventId);
         if (cCopy) {
-          throw new Error('reused event_id from C was persisted as C\'s message');
+          throw new Error("reused event_id from C was persisted as C's message");
         }
         return 'forged channel_id and reused event_id rejected';
       }))

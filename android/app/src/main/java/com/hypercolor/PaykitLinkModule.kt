@@ -31,7 +31,6 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.nio.charset.StandardCharsets
 import java.security.KeyStore
-import java.security.SecureRandom
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import javax.crypto.Cipher
@@ -700,9 +699,12 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
         val owner = session.pubky()
         val path = ownerStoragePath(url, owner)
         val originClean = origin.trim().trimEnd('/')
-        val conn = (URL("$originClean$path").openConnection() as HttpURLConnection).apply {
+        val exported = session.exportSession()
+        val cookie = homeserverSessionCookie(exported, owner)
+        val target = URL("$originClean$path?pubky-host=$owner")
+        val conn = (target.openConnection() as HttpURLConnection).apply {
             requestMethod = method
-            setRequestProperty("Cookie", "$owner=${sessionCookieValue(session.exportSession())}")
+            setRequestProperty("Cookie", "$owner=$cookie")
             setRequestProperty("pubky-host", owner)
             setRequestProperty("Content-Type", "text/plain; charset=utf-8")
             connectTimeout = 30_000
@@ -716,6 +718,12 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
                 conn.outputStream.use { it.write(content.toByteArray(StandardCharsets.UTF_8)) }
             }
             val code = conn.responseCode
+            if (BuildConfig.DEBUG) {
+                Log.d(
+                    PAYKIT_LINK_LOG_TAG,
+                    "writePublic method=$method status=$code exportLen=${exported.length} cookieLen=${cookie.length} pathLen=${path.length}",
+                )
+            }
             if (code == 401 || code == 403) {
                 throw PaykitLinkBridgeError("auth", staticMessage("auth"))
             }
@@ -752,7 +760,23 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
         return path
     }
 
-    private fun sessionCookieValue(exported: String): String = exported
+    /**
+     * Paykit `exportSession()` is pubky-sdk `export_secret()`:
+     * `<pubkey>:<cookie_secret>`. The homeserver cookie value is only the
+     * secret (26-char Crockford). Sending the whole token 401s.
+     */
+    private fun homeserverSessionCookie(exported: String, owner: String): String {
+        val trimmed = exported.trim()
+        val sep = trimmed.indexOf(':')
+        if (sep > 0) {
+            val pubky = trimmed.substring(0, sep)
+            val secret = trimmed.substring(sep + 1)
+            if (pubky == owner && secret.isNotEmpty()) {
+                return secret
+            }
+        }
+        return trimmed
+    }
 
     private fun requireText(value: String?, name: String): String {
         val trimmed = value?.trim().orEmpty()
@@ -799,19 +823,10 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
         val paykit = error as? PaykitException
         if (paykit != null) {
             val code = ffiCode(paykit) ?: "protocol"
-            val context = when (paykit) {
-                is PaykitException.Storage -> paykit.context
-                is PaykitException.Identity -> paykit.context
-                is PaykitException.Transport -> paykit.context
-                is PaykitException.NotFound -> paykit.context
-                is PaykitException.Protocol -> paykit.context
-                is PaykitException.Policy -> paykit.context
-                is PaykitException.PaymentAdapter -> paykit.context
-                is PaykitException.RecoveryRequired -> paykit.context
-                else -> error.message.orEmpty()
-            }
             val coarse = mapFfiCode(code)
-            Log.d(PAYKIT_LINK_LOG_TAG, "Paykit FFI error code=$code mapped=$coarse context=$context")
+            if (BuildConfig.DEBUG) {
+                Log.d(PAYKIT_LINK_LOG_TAG, "Paykit FFI error code=$code mapped=$coarse")
+            }
             return PaykitLinkBridgeError(coarse, staticMessage(coarse))
         }
         Log.d(PAYKIT_LINK_LOG_TAG, "unmapped native error type=${error.javaClass.name}")
@@ -884,7 +899,6 @@ private data class LinkHandle(
 
 private class PaykitLinkStore(context: Context) {
     private val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-    private val random = SecureRandom()
 
     fun putString(key: String, value: String) {
         prefs.edit().putString(key, wrap(value.toByteArray(StandardCharsets.UTF_8), key.toByteArray(StandardCharsets.UTF_8))).apply()
@@ -954,11 +968,16 @@ private class PaykitLinkStore(context: Context) {
     private fun unwrap(blob: String, aad: ByteArray): ByteArray = open(blob, aad)
 
     private fun seal(plaintext: ByteArray, aad: ByteArray): String {
-        val iv = ByteArray(IV_SIZE)
-        random.nextBytes(iv)
+        // AndroidKeyStore AES-GCM keys require randomized encryption (default).
+        // Passing a caller-generated IV throws InvalidAlgorithmParameterException
+        // on API 36+; the Keystore supplies cipher.iv after init.
         val cipher = Cipher.getInstance(TRANSFORMATION)
-        cipher.init(Cipher.ENCRYPT_MODE, masterKey(), GCMParameterSpec(TAG_BITS, iv))
+        cipher.init(Cipher.ENCRYPT_MODE, masterKey())
         cipher.updateAAD(aad)
+        val iv = cipher.iv
+        if (iv == null || iv.size != IV_SIZE) {
+            throw PaykitLinkBridgeError("protocol", "keystore IV invalid")
+        }
         val sealed = cipher.doFinal(plaintext)
         val out = ByteArray(iv.size + sealed.size)
         System.arraycopy(iv, 0, out, 0, iv.size)

@@ -39,12 +39,73 @@ export function takeE2eClipboardReply(): string {
 
 let lastE2ePeer: PubkyKey | null = null;
 
+export function isE2eDeepLinkUrl(url: string): boolean {
+  return url.toLowerCase().startsWith('hypercolor://e2e/');
+}
+
+/**
+ * React Navigation must not consume `hypercolor://e2e/*`. On Android a VIEW
+ * intent is treated as the linking initial URL; forwarding it keeps or
+ * resets the Auth/Welcome stack after `setAuthenticated`.
+ */
+export function linkingUrlForReactNavigation(url: string | null): string | null {
+  if (!url) return null;
+  return isE2eDeepLinkUrl(url) ? null : url;
+}
+
+function expandPackedE2eParams(path: string, params: URLSearchParams): void {
+  const packed = params.get('p');
+  if (packed === null || packed.length === 0) return;
+  // `|` is a shell pipe on Android `am start -d`. `~` can be dropped by
+  // some VIEW parsers. `_` is safe for homeserver, invite tokens, slots,
+  // and `0.001` amounts. Accept all three.
+  const parts = packed.split(/[|~_]/);
+  const setIfEmpty = (key: string, value: string | undefined) => {
+    if (value === undefined) return;
+    if ((params.get(key) ?? '').length > 0) return;
+    params.set(key, value);
+  };
+  if (path === 'e2e/debug-signup') {
+    setIfEmpty('homeserver', parts[0]);
+    setIfEmpty('token', parts[1]);
+    setIfEmpty('slot', parts[2]);
+    return;
+  }
+  if (path === 'e2e/switch') {
+    setIfEmpty('slot', parts[0]);
+    setIfEmpty('thenThreadSlot', parts[1]);
+    return;
+  }
+  if (path === 'e2e/add-contact') {
+    setIfEmpty('slot', parts[0]);
+    setIfEmpty('body', parts[1]);
+    setIfEmpty('amount', parts[2]);
+  }
+}
+
 function parseE2eUrl(url: string): { path: string; params: URLSearchParams } {
   const withoutScheme = url.replace(/^hypercolor:\/\//i, '');
   const q = withoutScheme.indexOf('?');
   const path = (q === -1 ? withoutScheme : withoutScheme.slice(0, q)).replace(/\/+$/, '');
   const query = q === -1 ? '' : withoutScheme.slice(q + 1);
-  return { path, params: new URLSearchParams(query) };
+  const params = new URLSearchParams(query);
+  expandPackedE2eParams(path, params);
+  return { path, params };
+}
+
+/** Lengths only — never token, secret, or pubky values. */
+export function e2eParamDigest(url: string): string {
+  try {
+    const { path, params } = parseE2eUrl(url);
+    return [
+      `path=${path}`,
+      `hs=${(params.get('homeserver') ?? '').length}`,
+      `token=${(params.get('token') ?? '').length}`,
+      `slot=${(params.get('slot') ?? '').length}`,
+    ].join(' ');
+  } catch {
+    return '';
+  }
 }
 
 function requirePeer(params: URLSearchParams): PubkyKey {
@@ -177,7 +238,7 @@ let inflightE2e: { url: string; promise: Promise<boolean> } | null = null;
 
 export async function handleE2eDeepLink(url: string): Promise<boolean> {
   if (!__DEV__) return false;
-  if (!url.toLowerCase().startsWith('hypercolor://e2e/')) return false;
+  if (!isE2eDeepLinkUrl(url)) return false;
   if (inflightE2e && inflightE2e.url === url) return inflightE2e.promise;
   const last = recentE2eUrls.get(url) ?? 0;
   if (Date.now() - last < E2E_URL_DEBOUNCE_MS) return true;
@@ -286,7 +347,11 @@ async function handleE2eDeepLinkOnce(url: string): Promise<boolean> {
           homeserverPubky: result.homeserverPubky,
         });
       }
-      setE2eSignupHud({ pubky: result.pubky, secretHex: result.secretHex });
+      setE2eSignupHud({
+        pubky: result.pubky,
+        secretHex: result.secretHex,
+        homeserverPubky: result.homeserverPubky,
+      });
       writeE2eReply(result.pubky);
       return true;
     }
@@ -315,7 +380,11 @@ async function handleE2eDeepLinkOnce(url: string): Promise<boolean> {
       if (thenSlot.length > 0 && thenSlot !== 'undefined' && !thenSlot.startsWith('${')) {
         await syncPeerIntoThread(requirePeerOrSlot(new URLSearchParams(`slot=${thenSlot}`)));
       }
-      setE2eSignupHud({ pubky: result.pubky, secretHex: result.secretHex });
+      setE2eSignupHud({
+        pubky: result.pubky,
+        secretHex: result.secretHex,
+        homeserverPubky: result.homeserverPubky,
+      });
       writeE2eReply(result.pubky);
       return true;
     }
@@ -348,6 +417,7 @@ async function handleE2eDeepLinkOnce(url: string): Promise<boolean> {
             step: step.step,
             ok: step.ok,
             elapsedMs: step.elapsedMs,
+            detail: step.detail,
           })),
         })),
       };
@@ -378,8 +448,15 @@ async function handleE2eDeepLinkOnce(url: string): Promise<boolean> {
     throw new Error(`e2e deep link: unknown path ${path}`);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    setE2eSignupHud({ pubky: `error:${message}`, secretHex: 'error' });
-    writeE2eReply(`error:${message}`);
+    const digest = e2eParamDigest(url);
+    const labeled = digest.length > 0 ? `${message} (${digest})` : message;
+    setE2eSignupHud({
+      pubky: `error:${labeled}`,
+      secretHex: 'error',
+      homeserverPubky: '',
+      error: true,
+    });
+    writeE2eReply(`error:${labeled}`);
     return true;
   }
 }

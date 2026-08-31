@@ -259,7 +259,8 @@ export interface PaykitLinkNativeApi {
    * Owner homeserver PUT using the Paykit ChatSession for `sessionAlias`
    * (same session as Encrypted Links / `publishReceiverMarker`).
    * `homeserverOrigin` is the resolved HTTPS origin (no secret). Native
-   * authenticates with `ChatSession.exportSession()` as the cookie bearer.
+   * sends the homeserver cookie secret extracted from
+   * `ChatSession.exportSession()` (`<pubkey>:<cookie_secret>`).
    */
   putPublic(
     sessionAlias: string,

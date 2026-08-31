@@ -100,9 +100,24 @@ describe('debugSignupController', () => {
     expect(result.pubky).toBe(PUBKY);
   });
 
-  it('does not fall back to sign-in when signup fails without a provided secret', async () => {
+  it('falls back to sign-in when signup fails for a generated secret', async () => {
+    const deps = makeDeps({
+      signupWithSecret: jest.fn().mockRejectedValue(new Error('signup_failed')),
+    });
+    const result = await completeDebugSignup(deps, {
+      homeserverPubky: HOMESERVER,
+      signupToken: 'token-a',
+      identitySecret: '',
+    });
+
+    expect(deps.signinWithSecret).toHaveBeenCalledWith(SECRET);
+    expect(result.pubky).toBe(PUBKY);
+  });
+
+  it('surfaces the signup error when generated-secret sign-in also fails', async () => {
     const deps = makeDeps({
       signupWithSecret: jest.fn().mockRejectedValue(new Error('bad token')),
+      signinWithSecret: jest.fn().mockRejectedValue(new Error('unknown identity')),
     });
     await expect(
       completeDebugSignup(deps, {
@@ -111,7 +126,7 @@ describe('debugSignupController', () => {
         identitySecret: '',
       }),
     ).rejects.toThrow('bad token');
-    expect(deps.signinWithSecret).not.toHaveBeenCalled();
+    expect(deps.signinWithSecret).toHaveBeenCalledWith(SECRET);
   });
 
   it('rejects a missing homeserver public key', async () => {

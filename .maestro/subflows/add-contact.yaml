@@ -2,7 +2,7 @@
 # deep link so iOS does not have to deliver a second openLink (it often drops it).
 appId: ${APP_ID}
 ---
-- openLink: hypercolor://e2e/add-contact?slot=${SLOT}&body=${DM_BODY}&amount=${PAYMENT_AMOUNT}
+- openLink: hypercolor://e2e/add-contact?p=${SLOT}_${DM_BODY}_${PAYMENT_AMOUNT}
 - runFlow:
     when:
       visible: Open

@@ -1,27 +1,70 @@
 # APP_ID from env. iOS default org.name.hypercolor (.maestro/config.yaml) so
 # `maestro test` works on the iOS sim without extra env. Android: com.hypercolor.
+# iOS 18 cannot type RN TextInputs — keep hypercolor://e2e/* there.
+# Android Maestro openLink VIEW is not delivered on this singleTask activity,
+# so Android uses the product Debug signup panel and Find Contact screen.
 appId: ${APP_ID}
 name: P7 product screens
 ---
 - launchApp:
     clearState: true
-- extendedWaitUntil:
-    visible:
-      id: welcomeScreen
-    timeout: 60000
+# iOS: welcomeScreen testID is visible.
+# Android: Maestro clearState+launch can leave the launcher in front
+# (2026-08-31_131744). A second launch without clear brings the activity
+# up. Then wait on the Connect button text — Maestro 2.9 treats the
+# full-screen welcomeScreen ViewGroup as not visible even when
+# resource-id welcomeScreen is in the hierarchy (2026-08-31_131201).
+- runFlow:
+    when:
+      platform: iOS
+    commands:
+      - extendedWaitUntil:
+          visible:
+            id: welcomeScreen
+          timeout: 60000
+- runFlow:
+    when:
+      platform: Android
+    commands:
+      - launchApp:
+          clearState: false
+      - extendedWaitUntil:
+          visible: Connect with pubky-ring
+          timeout: 120000
 
 # Party A: debug signup + enable messaging (receiver marker, no Ring).
 - runFlow:
+    when:
+      platform: iOS
     file: subflows/debug-signup.yaml
+    env:
+      SIGNUP_TOKEN: ${SIGNUP_TOKEN_A}
+      SLOT: A
+- runFlow:
+    when:
+      platform: Android
+    file: subflows/debug-signup-android.yaml
     env:
       SIGNUP_TOKEN: ${SIGNUP_TOKEN_A}
       SLOT: A
 - evalScript: ${output.secretA = output.secret}
 - evalScript: ${output.pubkyA = output.pubky}
-- extendedWaitUntil:
-    visible:
-      id: chatsScreen
-    timeout: 30000
+- runFlow:
+    when:
+      platform: iOS
+    commands:
+      - extendedWaitUntil:
+          visible:
+            id: chatsScreen
+          timeout: 30000
+- runFlow:
+    when:
+      platform: Android
+    commands:
+      - extendedWaitUntil:
+          visible:
+            id: chatsNew
+          timeout: 60000
 - runFlow:
     file: subflows/enable-messaging.yaml
 
@@ -29,7 +72,16 @@ name: P7 product screens
 - tapOn:
     id: tabProfile
 - runFlow:
+    when:
+      platform: iOS
     file: subflows/debug-signup.yaml
+    env:
+      SIGNUP_TOKEN: ${SIGNUP_TOKEN_B}
+      SLOT: B
+- runFlow:
+    when:
+      platform: Android
+    file: subflows/debug-signup-android.yaml
     env:
       SIGNUP_TOKEN: ${SIGNUP_TOKEN_B}
       SLOT: B
@@ -42,15 +94,31 @@ name: P7 product screens
 - tapOn:
     id: tabProfile
 - runFlow:
+    when:
+      platform: iOS
     file: subflows/switch-account.yaml
     env:
       SLOT: A
 - runFlow:
+    when:
+      platform: Android
+    file: subflows/switch-account-android.yaml
+    env:
+      SECRET: ${output.secretA}
+- runFlow:
+    when:
+      platform: iOS
     file: subflows/add-contact.yaml
     env:
       SLOT: B
       DM_BODY: ""
       PAYMENT_AMOUNT: ""
+- runFlow:
+    when:
+      platform: Android
+    file: subflows/add-contact-android.yaml
+    env:
+      PEER_PUBKY: ${output.pubkyB}
 - tapOn:
     id: threadBack
 
@@ -58,19 +126,41 @@ name: P7 product screens
 - tapOn:
     id: tabProfile
 - runFlow:
+    when:
+      platform: iOS
     file: subflows/switch-account.yaml
     env:
       SLOT: B
 - runFlow:
+    when:
+      platform: Android
+    file: subflows/switch-account-android.yaml
+    env:
+      SECRET: ${output.secretB}
+- runFlow:
+    when:
+      platform: iOS
     file: subflows/add-contact.yaml
     env:
       SLOT: A
       DM_BODY: ${DM_BODY}
       PAYMENT_AMOUNT: ${PAYMENT_AMOUNT}
 - runFlow:
+    when:
+      platform: iOS
     file: subflows/send-dm-and-payment.yaml
     env:
       SLOT: A
+- runFlow:
+    when:
+      platform: Android
+    file: subflows/add-contact-android.yaml
+    env:
+      PEER_PUBKY: ${output.pubkyA}
+- runFlow:
+    when:
+      platform: Android
+    file: subflows/send-dm-and-payment-android.yaml
 
 # A receives the DM and the payment-request bubble on the real thread.
 - tapOn:
@@ -78,10 +168,30 @@ name: P7 product screens
 - tapOn:
     id: tabProfile
 - runFlow:
+    when:
+      platform: iOS
     file: subflows/switch-account.yaml
     env:
       SLOT: A
       THEN_THREAD_SLOT: B
+- runFlow:
+    when:
+      platform: Android
+    file: subflows/switch-account-android.yaml
+    env:
+      SECRET: ${output.secretA}
+- runFlow:
+    when:
+      platform: Android
+    commands:
+      - tapOn:
+          id: tabChats
+      - extendedWaitUntil:
+          visible:
+            id: chatRow
+          timeout: 180000
+      - tapOn:
+          id: chatRow
 - extendedWaitUntil:
     visible:
       id: threadScreen

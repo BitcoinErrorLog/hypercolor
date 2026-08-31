@@ -803,14 +803,15 @@ class PaykitLinkModule: NSObject {
         while originClean.hasSuffix("/") {
             originClean.removeLast()
         }
-        guard let httpURL = URL(string: originClean + path) else {
+        let exported = session.exportSession()
+        let cookie = Self.homeserverSessionCookie(exported, owner: owner)
+        guard let httpURL = URL(string: originClean + path + "?pubky-host=" + owner) else {
             throw PaykitLinkBridgeError(code: "validation", message: "invalid homeserver origin")
         }
         var request = URLRequest(url: httpURL)
         request.httpMethod = method
         request.httpShouldHandleCookies = false
-        let bearer = Self.sessionCookieValue(session.exportSession())
-        request.setValue("\(owner)=\(bearer)", forHTTPHeaderField: "Cookie")
+        request.setValue("\(owner)=\(cookie)", forHTTPHeaderField: "Cookie")
         request.setValue(owner, forHTTPHeaderField: "pubky-host")
         request.setValue("text/plain; charset=utf-8", forHTTPHeaderField: "Content-Type")
         if let content {
@@ -821,10 +822,20 @@ class PaykitLinkModule: NSObject {
         config.timeoutIntervalForRequest = 30
         config.timeoutIntervalForResource = 30
         do {
-            let (_, response) = try await URLSession(configuration: config).data(for: request)
+            // Fail closed on redirects so the session cookie is not forwarded
+            // cross-origin (Android already sets instanceFollowRedirects=false).
+            let session = URLSession(
+                configuration: config,
+                delegate: RejectHttpRedirects(),
+                delegateQueue: nil
+            )
+            let (_, response) = try await session.data(for: request)
             guard let http = response as? HTTPURLResponse else {
                 throw PaykitLinkBridgeError(code: "network", message: "network error")
             }
+            paykitLinkLog.debug(
+                "writePublic method=\(method, privacy: .public) status=\(http.statusCode, privacy: .public) exportLen=\(exported.count, privacy: .public) cookieLen=\(cookie.count, privacy: .public) pathLen=\(path.count, privacy: .public)"
+            )
             if http.statusCode == 401 || http.statusCode == 403 {
                 throw PaykitLinkBridgeError(code: "auth", message: "authentication failed")
             }
@@ -858,8 +869,19 @@ class PaykitLinkModule: NSObject {
         return path
     }
 
-    private static func sessionCookieValue(_ exported: String) -> String {
-        exported
+    /// Paykit `exportSession()` is pubky-sdk `export_secret()`:
+    /// `<pubkey>:<cookie_secret>`. The homeserver cookie value is only the
+    /// secret. Sending the whole token 401s.
+    private static func homeserverSessionCookie(_ exported: String, owner: String) -> String {
+        let trimmed = exported.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let sep = trimmed.firstIndex(of: ":") {
+            let pubky = String(trimmed[..<sep])
+            let secret = String(trimmed[trimmed.index(after: sep)...])
+            if pubky == owner && !secret.isEmpty {
+                return secret
+            }
+        }
+        return trimmed
     }
 
     private static func requireText(_ value: String?, name: String) throws -> String {
@@ -1008,10 +1030,32 @@ struct SnapshotContext {
     }
 }
 
+private final class RejectHttpRedirects: NSObject, URLSessionTaskDelegate {
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest,
+        completionHandler: @escaping (URLRequest?) -> Void
+    ) {
+        completionHandler(nil)
+    }
+}
+
 enum PaykitLinkStore {
     static let service = "hypercolor.paykitlink"
     static let snapshotAccount = "snapshot-key"
     static let attachmentServicePrefix = "hypercolor-attachment-key"
+
+    /// Simulator unsigned / entitlement-mismatch reads return -34018
+    /// (`errSecMissingEntitlement`) instead of not-found. Treat as absent so
+    /// persistSession can add a new item instead of failing signup.
+    private static func isAbsent(_ status: OSStatus) -> Bool {
+        status == errSecItemNotFound
+            || status == errSecInteractionNotAllowed
+            || status == errSecNotAvailable
+            || status == errSecMissingEntitlement
+    }
 
     static func receiverAccount(_ alias: String) -> String { "receiver.\(alias)" }
     static func sessionAccount(_ alias: String) -> String { "session.\(alias)" }
@@ -1026,16 +1070,26 @@ enum PaykitLinkStore {
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
         ]
-        if try get(account) != nil {
+        let existing: Data?
+        do {
+            existing = try getKeychain(account)
+        } catch {
+            existing = nil
+        }
+        if existing != nil {
             let updated: [String: Any] = [kSecValueData as String: value]
             let status = SecItemUpdate(identity as CFDictionary, updated as CFDictionary)
-            if status != errSecSuccess {
-                throw PaykitLinkBridgeError(
-                    code: "protocol",
-                    message: "keychain update failed (\(status))",
-                )
+            if status == errSecSuccess { return }
+            #if DEBUG
+            if status == errSecMissingEntitlement {
+                try writeFallback(value, account: account)
+                return
             }
-            return
+            #endif
+            throw PaykitLinkBridgeError(
+                code: "protocol",
+                message: "keychain update failed (\(status))",
+            )
         }
         var add = identity
         add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
@@ -1044,20 +1098,40 @@ enum PaykitLinkStore {
         if status == errSecDuplicateItem {
             let updated: [String: Any] = [kSecValueData as String: value]
             let retry = SecItemUpdate(identity as CFDictionary, updated as CFDictionary)
-            if retry != errSecSuccess {
-                throw PaykitLinkBridgeError(
-                    code: "protocol",
-                    message: "keychain update failed (\(retry))",
-                )
+            if retry == errSecSuccess { return }
+            #if DEBUG
+            if retry == errSecMissingEntitlement {
+                try writeFallback(value, account: account)
+                return
             }
+            #endif
+            throw PaykitLinkBridgeError(
+                code: "protocol",
+                message: "keychain update failed (\(retry))",
+            )
+        }
+        if status == errSecSuccess { return }
+        #if DEBUG
+        if status == errSecMissingEntitlement {
+            try writeFallback(value, account: account)
             return
         }
-        if status != errSecSuccess {
-            throw PaykitLinkBridgeError(code: "protocol", message: "keychain write failed (\(status))")
-        }
+        #endif
+        throw PaykitLinkBridgeError(code: "protocol", message: "keychain write failed (\(status))")
     }
 
     static func get(_ account: String) throws -> Data? {
+        if let data = try getKeychain(account) {
+            return data
+        }
+        #if DEBUG
+        return readFallback(account)
+        #else
+        return nil
+        #endif
+    }
+
+    private static func getKeychain(_ account: String) throws -> Data? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -1067,10 +1141,7 @@ enum PaykitLinkStore {
         ]
         var result: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
-        if status == errSecItemNotFound
-            || status == errSecInteractionNotAllowed
-            || status == errSecNotAvailable
-        {
+        if isAbsent(status) {
             return nil
         }
         if status != errSecSuccess {
@@ -1091,17 +1162,23 @@ enum PaykitLinkStore {
             kSecAttrAccount as String: account,
         ]
         let status = SecItemDelete(query as CFDictionary)
-        if status != errSecSuccess && status != errSecItemNotFound {
+        if status != errSecSuccess && !isAbsent(status) {
             throw PaykitLinkBridgeError(
                 code: "protocol",
                 message: "keychain delete failed (\(status))",
             )
         }
+        #if DEBUG
+        try deleteFallback(account: account)
+        #endif
     }
 
     static func deleteAll() throws {
         try deleteAllAccounts(forService: service)
         try deleteServices(prefix: attachmentServicePrefix)
+        #if DEBUG
+        try wipeFallback()
+        #endif
     }
 
     private static func deleteAllAccounts(forService target: String) throws {
@@ -1113,7 +1190,7 @@ enum PaykitLinkStore {
         ]
         var result: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
-        if status == errSecItemNotFound {
+        if isAbsent(status) {
             return
         }
         if status != errSecSuccess {
@@ -1130,7 +1207,7 @@ enum PaykitLinkStore {
             kSecAttrService as String: target,
         ]
         let wipeStatus = SecItemDelete(wipe as CFDictionary)
-        if wipeStatus != errSecSuccess && wipeStatus != errSecItemNotFound {
+        if wipeStatus != errSecSuccess && !isAbsent(wipeStatus) {
             throw PaykitLinkBridgeError(
                 code: "protocol",
                 message: "keychain delete failed (\(wipeStatus))",
@@ -1170,6 +1247,52 @@ enum PaykitLinkStore {
             }
         }
     }
+
+    #if DEBUG
+    /// Unsigned simulator builds (`CODE_SIGNING_ALLOWED=NO`) reject SecItem
+    /// writes with -34018. Keep DEBUG session material in the app sandbox so
+    /// signup/backup proofs can run; release still requires the keychain.
+    private static func fallbackDir() throws -> URL {
+        let base = try FileManager.default.url(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask,
+            appropriateFor: nil,
+            create: true
+        )
+        let dir = base.appendingPathComponent("hypercolor-paykitlink", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+
+    private static func fallbackURL(account: String) throws -> URL {
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: ".-_"))
+        let safe = String(account.unicodeScalars.map { allowed.contains($0) ? Character($0) : "_" })
+        return try fallbackDir().appendingPathComponent(safe)
+    }
+
+    private static func writeFallback(_ value: Data, account: String) throws {
+        try value.write(to: fallbackURL(account: account), options: .atomic)
+    }
+
+    private static func readFallback(_ account: String) -> Data? {
+        guard let url = try? fallbackURL(account: account) else { return nil }
+        return try? Data(contentsOf: url)
+    }
+
+    private static func deleteFallback(account: String) throws {
+        let url = try fallbackURL(account: account)
+        if FileManager.default.fileExists(atPath: url.path) {
+            try FileManager.default.removeItem(at: url)
+        }
+    }
+
+    private static func wipeFallback() throws {
+        let dir = try fallbackDir()
+        if FileManager.default.fileExists(atPath: dir.path) {
+            try FileManager.default.removeItem(at: dir)
+        }
+    }
+    #endif
 
     static func snapshotKey() throws -> SymmetricKey {
         if let existing = try get(snapshotAccount), existing.count == 32 {

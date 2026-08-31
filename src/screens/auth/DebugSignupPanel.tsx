@@ -13,6 +13,7 @@ import { PaykitLinkNative } from '../../services/link/PaykitLinkNative';
 import { useAuthStore } from '../../stores/authStore';
 import type { PubkyKey } from '../../types';
 import { defaultRandomBytes, identitySecretHex } from '../../services/link/liveProofShared';
+import { STAGING_HOMESERVER_PUBKY } from '../../services/homeserverOrigin';
 import { completeDebugSignup, type DebugSignupResult } from './debugSignupController';
 
 function errorMessage(err: unknown): string {
@@ -22,7 +23,7 @@ function errorMessage(err: unknown): string {
 
 export function DebugSignupPanel({ title, submitLabel }: { title: string; submitLabel: string }) {
   const setAuthenticated = useAuthStore(s => s.setAuthenticated);
-  const [homeserverPubky, setHomeserverPubky] = useState('');
+  const [homeserverPubky, setHomeserverPubky] = useState(STAGING_HOMESERVER_PUBKY);
   const [signupToken, setSignupToken] = useState('');
   const [identitySecret, setIdentitySecret] = useState('');
   const [busy, setBusy] = useState(false);

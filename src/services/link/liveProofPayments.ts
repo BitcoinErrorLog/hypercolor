@@ -107,7 +107,7 @@ export async function runPaymentHandoffLiveProof(
     if (!(await adoptAndProvision(record, link, partyA))) return failed();
     if (!(await adoptAndProvision(record, link, partyB))) return failed();
 
-    const pubkyA = requirePartyField(partyA.pubky, 'A.pubky');
+    requirePartyField(partyA.pubky, 'A.pubky');
     const pubkyB = requirePartyField(partyB.pubky, 'B.pubky');
 
     if (

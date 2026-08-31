@@ -1631,5 +1631,4 @@ describe('LinkService', () => {
       expect(mockedNative.putPublic).not.toHaveBeenCalled();
     });
   });
-
 });

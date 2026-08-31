@@ -1,13 +1,7 @@
 import React from 'react';
 import { TouchableOpacity, Text, StyleSheet } from 'react-native';
 
-export function EnableMessagingCta({
-  onPress,
-  testID,
-}: {
-  onPress: () => void;
-  testID: string;
-}) {
+export function EnableMessagingCta({ onPress, testID }: { onPress: () => void; testID: string }) {
   return (
     <TouchableOpacity
       testID={testID}

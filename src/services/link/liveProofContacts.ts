@@ -21,7 +21,10 @@ import {
 } from './liveProofShared';
 
 export type ContactsLiveProofDeps = ProductLiveProofDeps & {
-  contacts?: Pick<typeof ContactsService, 'addManualContact' | 'syncRelationships' | 'importFollows'>;
+  contacts?: Pick<
+    typeof ContactsService,
+    'addManualContact' | 'syncRelationships' | 'importFollows'
+  >;
 };
 
 /**

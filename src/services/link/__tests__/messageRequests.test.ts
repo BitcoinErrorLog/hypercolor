@@ -236,7 +236,7 @@ describe('LinkService message requests', () => {
       rawJson: string;
       kind: string | null;
       receivedAt: number;
-      processed?: boolean;
+      processed: boolean;
     }> = [];
     mockedStorage.saveLinkStreamItems.mockImplementation(async items => {
       held = items.map(item => ({ ...item, processed: false }));

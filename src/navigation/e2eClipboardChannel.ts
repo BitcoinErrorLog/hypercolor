@@ -101,8 +101,19 @@ async function tick(): Promise<void> {
 export function startE2eClipboardChannel(): void {
   if (!__DEV__ || started) return;
   started = true;
-  void writeDone(`${E2E_CLIPBOARD_DONE}:channel-up`);
-  void tick();
+  void (async () => {
+    const pending = await readHostCommand();
+    // Fast Refresh / remount must not wipe an inbound command or a liveproof reply.
+    if (!commandUrl(pending)) {
+      const raw = pending.trim();
+      const keepReply =
+        raw.startsWith(E2E_CLIPBOARD_DONE) && !raw.startsWith(`${E2E_CLIPBOARD_DONE}:channel-up`);
+      if (!keepReply) {
+        await writeDone(`${E2E_CLIPBOARD_DONE}:channel-up`);
+      }
+    }
+    await tick();
+  })();
   timer = setInterval(() => {
     void tick();
   }, POLL_MS);

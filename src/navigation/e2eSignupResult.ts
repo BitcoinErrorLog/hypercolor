@@ -1,6 +1,12 @@
+import { KeyStore } from '../services/KeyStore';
+import { useAuthStore } from '../stores/authStore';
+import type { PubkyKey } from '../types';
+
 export type E2eSignupHudState = {
   pubky: string;
   secretHex: string;
+  homeserverPubky: string;
+  error?: boolean;
 };
 
 export type E2eSavedIdentity = {
@@ -40,4 +46,22 @@ export function subscribeE2eSignupHud(
   return () => {
     listeners.delete(listener);
   };
+}
+
+/**
+ * Continue after a successful debug signup. Re-applies auth so Android
+ * Intent / React Navigation linking cannot leave Welcome on screen after
+ * the HUD is dismissed.
+ */
+export function applyE2eSignupContinue(state: E2eSignupHudState | null): boolean {
+  setE2eSignupHud(null);
+  if (!state || state.error) return false;
+  const homeserver = state.homeserverPubky.trim();
+  const pubky = state.pubky.trim();
+  if (homeserver.length === 0 || pubky.length === 0 || pubky.startsWith('error:')) {
+    return false;
+  }
+  KeyStore.setHomeserver(homeserver);
+  useAuthStore.getState().setAuthenticated(pubky as PubkyKey, homeserver);
+  return true;
 }

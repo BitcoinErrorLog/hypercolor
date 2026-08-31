@@ -62,7 +62,6 @@ export async function completeDebugSignup(
   }
   const signupToken = input.signupToken.trim();
   const secretHex = resolveDebugIdentitySecret(input.identitySecret, deps.generateSecret);
-  const providedSecret = normalizeIdentitySecret(input.identitySecret).length > 0;
 
   let pubky: string;
   if (signupToken.length > 0) {
@@ -71,9 +70,14 @@ export async function completeDebugSignup(
       await deps.adoptHarnessSession(created.sessionAlias, created.pubky);
       pubky = created.pubky;
     } catch (err) {
-      if (!providedSecret) throw err;
-      const restored = await deps.signinWithSecret(secretHex);
-      pubky = restored.pubky;
+      // Signup can create the user then still throw (pkarr timeout mapped as
+      // signup_failed). The identity secret we just used can sign in.
+      try {
+        const restored = await deps.signinWithSecret(secretHex);
+        pubky = restored.pubky;
+      } catch {
+        throw err;
+      }
     }
   } else {
     const restored = await deps.signinWithSecret(secretHex);

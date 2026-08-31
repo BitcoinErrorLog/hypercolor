@@ -1,7 +1,8 @@
 # Fresh staging signup. Requires HOMESERVER_PUBKY, SIGNUP_TOKEN, SLOT.
 appId: ${APP_ID}
 ---
-- openLink: hypercolor://e2e/debug-signup?homeserver=${HOMESERVER_PUBKY}&token=${SIGNUP_TOKEN}&slot=${SLOT}
+# Single `p` query so Android `am start -d` does not truncate at `&`.
+- openLink: hypercolor://e2e/debug-signup?p=${HOMESERVER_PUBKY}_${SIGNUP_TOKEN}_${SLOT}
 - runFlow:
     when:
       visible: Open
