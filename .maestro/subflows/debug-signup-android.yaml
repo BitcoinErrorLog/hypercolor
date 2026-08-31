@@ -10,7 +10,6 @@ appId: ${APP_ID}
     timeout: 15000
 - tapOn:
     id: debugSignupToken
-- eraseText: 40
 - inputText: ${SIGNUP_TOKEN}
 - hideKeyboard
 - scrollUntilVisible:
@@ -21,8 +20,12 @@ appId: ${APP_ID}
 - tapOn:
     id: debugSignupSubmit
 - extendedWaitUntil:
-    visible:
+    visible: Encrypted messaging enabled
+    timeout: 180000
+- scrollUntilVisible:
+    element:
       id: debugSignupContinue
+    direction: DOWN
     timeout: 120000
 - copyTextFrom:
     id: debugSignupPubky

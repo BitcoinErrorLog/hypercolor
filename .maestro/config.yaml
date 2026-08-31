@@ -5,6 +5,7 @@ name: Hypercolor P7
 env:
   APP_ID: org.name.hypercolor
   DM_BODY: maestro-p7-dm
+  STARTER_BODY: p7-handshake
   PAYMENT_AMOUNT: '0.001'
   HOMESERVER_PUBKY: ''
   SIGNUP_TOKEN_A: ''

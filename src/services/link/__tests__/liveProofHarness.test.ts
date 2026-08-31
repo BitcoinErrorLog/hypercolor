@@ -933,6 +933,7 @@ describe('product live-proof step machines', () => {
       expect.arrayContaining([
         'signup-a',
         'signup-b',
+        'accept-request-b',
         'set-tip-endpoints-a',
         'send-tip-list-a',
         'resolve-tip-list-b',

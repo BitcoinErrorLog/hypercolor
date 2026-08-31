@@ -25,7 +25,7 @@ appId: ${APP_ID}
     element:
       id: settingsEnableMessaging
     direction: DOWN
-    timeout: 15000
+    timeout: 30000
 - tapOn:
     id: settingsEnableMessaging
 - extendedWaitUntil:

@@ -63,7 +63,9 @@ export default function WelcomeScreen() {
             )}
           </TouchableOpacity>
 
-          {__DEV__ ? <DebugSignupPanel title="Debug signup" submitLabel="Debug signup" /> : null}
+          {__DEV__ ? (
+            <DebugSignupPanel title="Debug signup" submitLabel="Debug signup" e2eSlot="a" />
+          ) : null}
         </View>
       </ScrollView>
     </SafeAreaView>

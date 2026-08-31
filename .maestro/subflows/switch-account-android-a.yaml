@@ -1,0 +1,16 @@
+# Switch to saved e2e slot A via the Profile debug button, then Continue.
+appId: ${APP_ID}
+---
+- scrollUntilVisible:
+    element:
+      id: debugSwitchSlotA
+    direction: DOWN
+    timeout: 15000
+- tapOn:
+    id: debugSwitchSlotA
+- extendedWaitUntil:
+    visible:
+      id: debugSignupContinue
+    timeout: 120000
+- tapOn:
+    id: debugSignupContinue

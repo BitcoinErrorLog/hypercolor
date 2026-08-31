@@ -15,7 +15,6 @@ appId: ${APP_ID}
     timeout: 15000
 - tapOn:
     id: contactSearchInput
-- eraseText: 80
 - inputText: ${PEER_PUBKY}
 - hideKeyboard
 - tapOn:

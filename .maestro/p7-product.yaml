@@ -90,7 +90,7 @@ name: P7 product screens
 - runFlow:
     file: subflows/enable-messaging.yaml
 
-# A adds B so B's inbound DM auto-accepts on the product WoT gate.
+# A adds B and sends a starter DM so B gets a pending message request.
 - tapOn:
     id: tabProfile
 - runFlow:
@@ -102,9 +102,7 @@ name: P7 product screens
 - runFlow:
     when:
       platform: Android
-    file: subflows/switch-account-android.yaml
-    env:
-      SECRET: ${output.secretA}
+    file: subflows/switch-account-android-a.yaml
 - runFlow:
     when:
       platform: iOS
@@ -119,10 +117,12 @@ name: P7 product screens
     file: subflows/add-contact-android.yaml
     env:
       PEER_PUBKY: ${output.pubkyB}
-- tapOn:
-    id: threadBack
+- runFlow:
+    file: subflows/send-starter-dm.yaml
+- runFlow:
+    file: subflows/back-to-chats.yaml
 
-# B sends a DM and a payment request on ThreadScreen.
+# B accepts A's request on the product Message requests screen.
 - tapOn:
     id: tabProfile
 - runFlow:
@@ -134,17 +134,28 @@ name: P7 product screens
 - runFlow:
     when:
       platform: Android
-    file: subflows/switch-account-android.yaml
-    env:
-      SECRET: ${output.secretB}
+    file: subflows/switch-account-android-b.yaml
+# B adds A so inbox sync includes A (Links cannot probe unknown peers).
 - runFlow:
     when:
       platform: iOS
     file: subflows/add-contact.yaml
     env:
       SLOT: A
-      DM_BODY: ${DM_BODY}
-      PAYMENT_AMOUNT: ${PAYMENT_AMOUNT}
+      DM_BODY: ""
+      PAYMENT_AMOUNT: ""
+- runFlow:
+    when:
+      platform: Android
+    file: subflows/add-contact-android.yaml
+    env:
+      PEER_PUBKY: ${output.pubkyA}
+- runFlow:
+    file: subflows/back-to-chats.yaml
+- runFlow:
+    file: subflows/accept-message-request.yaml
+
+# B sends a DM and a payment request on ThreadScreen.
 - runFlow:
     when:
       platform: iOS
@@ -154,17 +165,11 @@ name: P7 product screens
 - runFlow:
     when:
       platform: Android
-    file: subflows/add-contact-android.yaml
-    env:
-      PEER_PUBKY: ${output.pubkyA}
-- runFlow:
-    when:
-      platform: Android
     file: subflows/send-dm-and-payment-android.yaml
 
 # A receives the DM and the payment-request bubble on the real thread.
-- tapOn:
-    id: threadBack
+- runFlow:
+    file: subflows/back-to-chats.yaml
 - tapOn:
     id: tabProfile
 - runFlow:
@@ -177,9 +182,7 @@ name: P7 product screens
 - runFlow:
     when:
       platform: Android
-    file: subflows/switch-account-android.yaml
-    env:
-      SECRET: ${output.secretA}
+    file: subflows/switch-account-android-a.yaml
 - runFlow:
     when:
       platform: Android

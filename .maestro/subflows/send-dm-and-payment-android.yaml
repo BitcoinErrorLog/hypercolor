@@ -8,6 +8,7 @@ appId: ${APP_ID}
 - tapOn:
     id: threadComposer
 - inputText: ${DM_BODY}
+- hideKeyboard
 - tapOn:
     id: threadSend
 - extendedWaitUntil:
@@ -20,7 +21,9 @@ appId: ${APP_ID}
       id: paymentComposeSheet
     timeout: 15000
 - tapOn:
-    id: paymentComposeSubmit
+    id: paymentComposeReference
+- inputText: p7-maestro-ref
+- tapOn: Send request
 - extendedWaitUntil:
     visible:
       id: paymentRequestBubble

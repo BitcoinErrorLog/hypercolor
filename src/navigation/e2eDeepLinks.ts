@@ -1,4 +1,4 @@
-import { Clipboard, Linking } from 'react-native';
+import { Clipboard, Linking, Platform } from 'react-native';
 import { completeDebugSignup } from '../screens/auth/debugSignupController';
 import { ContactsService } from '../services/ContactsService';
 import { KeyStore } from '../services/KeyStore';
@@ -12,7 +12,7 @@ import {
   parseNamedLiveProofRows,
   redactLiveProofForLog,
 } from '../services/link/liveProofShared';
-import { runNamedLiveProofs } from '../services/link/liveProofRun';
+import { runNamedLiveProofs, type NamedLiveProofDeps } from '../services/link/liveProofRun';
 import { StorageService } from '../services/StorageService';
 import { useAuthStore } from '../stores/authStore';
 import { buildDmConversationId, threadRouteParams } from '../types/link';
@@ -22,6 +22,29 @@ import { getE2eIdentity, saveE2eIdentity, setE2eSignupHud } from './e2eSignupRes
 import { navigateRoot, navigationRef } from './navigationRef';
 
 const E2E_CLIPBOARD_DONE = 'HC_E2E_DONE';
+
+/** Android emulators have no lightning:/bitcoin: handler; record in-process instead. */
+function liveProofRunnerDeps(): Pick<
+  NamedLiveProofDeps,
+  'openWalletUri' | 'canOpenWalletUri' | 'handoffRecorder' | 'openAuthUrl'
+> {
+  if (Platform.OS === 'android') {
+    const handoffRecorder = { opened: [] as string[] };
+    return {
+      handoffRecorder,
+      canOpenWalletUri: async uri => uri.startsWith('lightning:') || uri.startsWith('bitcoin:'),
+      openWalletUri: async uri => {
+        handoffRecorder.opened.push(uri);
+      },
+      openAuthUrl: url => Linking.openURL(url),
+    };
+  }
+  return {
+    openWalletUri: uri => Linking.openURL(uri),
+    canOpenWalletUri: uri => Linking.canOpenURL(uri),
+    openAuthUrl: url => Linking.openURL(url),
+  };
+}
 
 let lastE2eReply = '';
 
@@ -236,6 +259,47 @@ const recentE2eUrls = new Map<string, number>();
 const E2E_URL_DEBOUNCE_MS = 15_000;
 let inflightE2e: { url: string; promise: Promise<boolean> } | null = null;
 
+async function switchE2eSavedSlot(slot: string, thenThreadSlot = ''): Promise<void> {
+  const saved = getE2eIdentity(slot);
+  if (!saved) throw new Error(`e2e switch: no saved identity for slot ${slot || '(empty)'}`);
+  const result = await completeDebugSignup(
+    {
+      signupWithSecret: (secret, homeserver, token) =>
+        PaykitLinkNative.signupWithSecret(secret, homeserver, token),
+      signinWithSecret: secret => LinkService.signinWithSecret(secret),
+      adoptHarnessSession: (alias, pubky) => LinkService.adoptHarnessSession(alias, pubky),
+      provisionHarnessReceiver: () => LinkService.provisionHarnessReceiver(),
+      generateSecret: () => identitySecretHex(defaultRandomBytes),
+    },
+    {
+      homeserverPubky: saved.homeserverPubky,
+      signupToken: '',
+      identitySecret: saved.secretHex,
+    },
+  );
+  KeyStore.setHomeserver(result.homeserverPubky);
+  useAuthStore.getState().setAuthenticated(result.pubky as PubkyKey, result.homeserverPubky);
+  try {
+    await LinkService.syncInbox();
+  } catch {
+    // Inbox can lag immediately after a debug account switch.
+  }
+  const thenSlot = thenThreadSlot.trim();
+  if (thenSlot.length > 0 && thenSlot !== 'undefined' && !thenSlot.startsWith('${')) {
+    await syncPeerIntoThread(requirePeerOrSlot(new URLSearchParams(`slot=${thenSlot}`)));
+  }
+  setE2eSignupHud({
+    pubky: result.pubky,
+    secretHex: result.secretHex,
+    homeserverPubky: result.homeserverPubky,
+  });
+}
+
+/** __DEV__ Maestro hook: same path as hypercolor://e2e/switch without openLink. */
+export async function switchE2eSavedSlotFromUi(slot: string, thenThreadSlot = ''): Promise<void> {
+  await switchE2eSavedSlot(slot, thenThreadSlot);
+}
+
 export async function handleE2eDeepLink(url: string): Promise<boolean> {
   if (!__DEV__) return false;
   if (!isE2eDeepLinkUrl(url)) return false;
@@ -357,35 +421,8 @@ async function handleE2eDeepLinkOnce(url: string): Promise<boolean> {
     }
     if (path === 'e2e/switch') {
       const slot = (params.get('slot') ?? '').trim();
-      const saved = getE2eIdentity(slot);
-      if (!saved) throw new Error(`e2e switch: no saved identity for slot ${slot || '(empty)'}`);
-      const result = await completeDebugSignup(
-        {
-          signupWithSecret: (secret, homeserver, token) =>
-            PaykitLinkNative.signupWithSecret(secret, homeserver, token),
-          signinWithSecret: secret => LinkService.signinWithSecret(secret),
-          adoptHarnessSession: (alias, pubky) => LinkService.adoptHarnessSession(alias, pubky),
-          provisionHarnessReceiver: () => LinkService.provisionHarnessReceiver(),
-          generateSecret: () => identitySecretHex(defaultRandomBytes),
-        },
-        {
-          homeserverPubky: saved.homeserverPubky,
-          signupToken: '',
-          identitySecret: saved.secretHex,
-        },
-      );
-      KeyStore.setHomeserver(result.homeserverPubky);
-      useAuthStore.getState().setAuthenticated(result.pubky as PubkyKey, result.homeserverPubky);
-      const thenSlot = (params.get('thenThreadSlot') ?? '').trim();
-      if (thenSlot.length > 0 && thenSlot !== 'undefined' && !thenSlot.startsWith('${')) {
-        await syncPeerIntoThread(requirePeerOrSlot(new URLSearchParams(`slot=${thenSlot}`)));
-      }
-      setE2eSignupHud({
-        pubky: result.pubky,
-        secretHex: result.secretHex,
-        homeserverPubky: result.homeserverPubky,
-      });
-      writeE2eReply(result.pubky);
+      await switchE2eSavedSlot(slot, params.get('thenThreadSlot') ?? '');
+      writeE2eReply(getE2eIdentity(slot)?.pubky ?? '');
       return true;
     }
     if (path === 'e2e/liveproof') {
@@ -402,11 +439,7 @@ async function handleE2eDeepLinkOnce(url: string): Promise<boolean> {
           ...(signupTokenC.length > 0 ? { signupTokenC } : {}),
           rows,
         },
-        {
-          openWalletUri: uri => Linking.openURL(uri),
-          canOpenWalletUri: uri => Linking.canOpenURL(uri),
-          openAuthUrl: url => Linking.openURL(url),
-        },
+        liveProofRunnerDeps(),
       );
       const summary = {
         ok: result.ok,
