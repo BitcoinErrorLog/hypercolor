@@ -13,10 +13,7 @@ import org.junit.Test
 
 class AuthKeepaliveCoordinatorTest {
     @Test
-    fun maxLifetimeMatchesThreeRelayHoldsPlusMargin() {
-        assertEquals(10 * 60 * 1000L, AUTH_KEEPALIVE_RELAY_HOLD_MS)
-        assertEquals(3, AUTH_KEEPALIVE_MAX_POLL_FAILURES)
-        assertEquals(5 * 60 * 1000L, AUTH_KEEPALIVE_SCHEDULE_MARGIN_MS)
+    fun maxLifetimeIsExplicitProductAuthorizationCeiling() {
         assertEquals(35 * 60 * 1000L, AUTH_KEEPALIVE_MAX_MS)
     }
 
@@ -190,7 +187,8 @@ class AuthKeepaliveCoordinatorTest {
     fun serviceDisappearedReconcilesWithoutStopAndNextAttemptStarts() {
         val env = Env()
         env.coordinator.ensureStarted("flow-a")
-        env.coordinator.handleServiceDisappeared()
+        val first = env.coordinator.serviceInstanceToken()
+        env.coordinator.handleServiceDisappeared(first)
         assertEquals(listOf("start"), env.ops.events)
         assertNull(env.coordinator.owner())
         assertEquals(AuthKeepaliveOwner.Phase.Idle, env.coordinator.phase())
@@ -201,12 +199,56 @@ class AuthKeepaliveCoordinatorTest {
     }
 
     @Test
-    fun staleServiceGoneCannotClearNewerGeneration() {
+    fun taskRemovedThenNewStartIgnoresOldDestroy() {
         val env = Env()
         env.coordinator.ensureStarted("flow-a")
-        env.coordinator.release("flow-a")
+        val oldToken = env.coordinator.serviceInstanceToken()
+        env.coordinator.handleServiceDisappeared(oldToken)
         env.coordinator.ensureStarted("flow-b")
-        env.coordinator.handleServiceDisappeared()
+        val newToken = env.coordinator.serviceInstanceToken()
+        env.coordinator.handleServiceDisappeared(oldToken)
+        assertTrue(newToken != oldToken)
+        assertEquals("flow-b", env.coordinator.owner())
+        assertEquals(AuthKeepaliveOwner.Phase.Confirmed, env.coordinator.phase())
+        assertEquals(listOf("start", "start"), env.ops.events)
+    }
+
+    @Test
+    fun newInstanceDestroyClearsCurrentOwner() {
+        val env = Env()
+        env.coordinator.ensureStarted("flow-a")
+        env.coordinator.handleServiceDisappeared(env.coordinator.serviceInstanceToken())
+        env.coordinator.ensureStarted("flow-b")
+        val newToken = env.coordinator.serviceInstanceToken()
+        env.coordinator.handleServiceDisappeared(newToken)
+        assertNull(env.coordinator.owner())
+        assertEquals(AuthKeepaliveOwner.Phase.Idle, env.coordinator.phase())
+        assertEquals(listOf("start", "start"), env.ops.events)
+    }
+
+    @Test
+    fun duplicateDisappearCallbacksAreIdempotent() {
+        val env = Env()
+        env.coordinator.ensureStarted("flow-a")
+        val token = env.coordinator.serviceInstanceToken()
+        env.coordinator.handleServiceDisappeared(token)
+        env.coordinator.handleServiceDisappeared(token)
+        assertNull(env.coordinator.owner())
+        assertEquals(listOf("start"), env.ops.events)
+        env.coordinator.ensureStarted("flow-b")
+        assertEquals(listOf("start", "start"), env.ops.events)
+        assertEquals("flow-b", env.coordinator.owner())
+    }
+
+    @Test
+    fun explicitStopThenStaleDestroyCannotClearNewerOwner() {
+        val env = Env()
+        env.coordinator.ensureStarted("flow-a")
+        val oldToken = env.coordinator.serviceInstanceToken()
+        env.coordinator.release("flow-a")
+        env.coordinator.handleServiceDisappeared(oldToken)
+        env.coordinator.ensureStarted("flow-b")
+        env.coordinator.handleServiceDisappeared(oldToken)
         assertEquals("flow-b", env.coordinator.owner())
         assertEquals(AuthKeepaliveOwner.Phase.Confirmed, env.coordinator.phase())
         assertEquals(listOf("start", "stop", "start"), env.ops.events)

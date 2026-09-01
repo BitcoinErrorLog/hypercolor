@@ -17,6 +17,8 @@ import android.os.IBinder
  * before Ring is launched; stopped when that auth attempt settles.
  */
 class PaykitAuthKeepaliveService : Service() {
+    private var instanceToken: Long = 0L
+
     override fun onCreate() {
         super.onCreate()
         ensureChannel()
@@ -24,6 +26,10 @@ class PaykitAuthKeepaliveService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        val token = intent?.getLongExtra(EXTRA_INSTANCE_TOKEN, 0L) ?: 0L
+        if (token != 0L) {
+            instanceToken = token
+        }
         ensureChannel()
         enterForeground()
         return START_NOT_STICKY
@@ -32,20 +38,20 @@ class PaykitAuthKeepaliveService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onTaskRemoved(rootIntent: Intent?) {
-        serviceDisappearedListener?.invoke()
+        notifyDisappeared()
         super.onTaskRemoved(rootIntent)
     }
 
     override fun onDestroy() {
-        serviceDisappearedListener?.invoke()
+        notifyDisappeared()
         super.onDestroy()
     }
 
     /**
      * Android 15+ `dataSync` FGS timeout. The product ceiling is the
-     * pinned Pubky poll window (3 × 10-minute relay holds + margin);
-     * this callback is the system backstop so a missed client stop
-     * cannot leave the 6-hour shade notification.
+     * explicit 35-minute authorization cap; this callback is the system
+     * backstop so a missed client stop cannot leave the 6-hour shade
+     * notification.
      *
      * API 35 calls `onTimeout(startId, fgsType)`, whose default
      * implementation delegates here. Override both so a timeout on
@@ -62,6 +68,12 @@ class PaykitAuthKeepaliveService : Service() {
     private fun handleSystemTimeout(startId: Int) {
         systemTimeoutListener?.invoke()
         stopSelf(startId)
+    }
+
+    private fun notifyDisappeared() {
+        val token = instanceToken
+        if (token == 0L) return
+        serviceDisappearedListener?.invoke(token)
     }
 
     private fun ensureChannel() {
@@ -122,11 +134,14 @@ class PaykitAuthKeepaliveService : Service() {
         internal var systemTimeoutListener: (() -> Unit)? = null
 
         @Volatile
-        internal var serviceDisappearedListener: (() -> Unit)? = null
+        internal var serviceDisappearedListener: ((Long) -> Unit)? = null
 
-        fun start(context: Context) {
+        private const val EXTRA_INSTANCE_TOKEN = "keepalive_instance_token"
+
+        fun start(context: Context, instanceToken: Long) {
             val app = context.applicationContext
             val intent = Intent(app, PaykitAuthKeepaliveService::class.java)
+            intent.putExtra(EXTRA_INSTANCE_TOKEN, instanceToken)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 app.startForegroundService(intent)
             } else {

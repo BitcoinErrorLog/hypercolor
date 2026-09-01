@@ -57,8 +57,11 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
     private val handles = ConcurrentHashMap<String, LinkHandle>()
     private val keepalive = AuthKeepaliveCoordinator(
         ops = object : AuthKeepaliveOps {
-            override fun start() {
-                PaykitAuthKeepaliveService.start(reactApplicationContext.applicationContext)
+            override fun start(instanceToken: Long) {
+                PaykitAuthKeepaliveService.start(
+                    reactApplicationContext.applicationContext,
+                    instanceToken,
+                )
             }
 
             override fun stop() {

@@ -7,32 +7,31 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
 /**
- * Pinned Paykit AAR (`BitcoinErrorLog/paykit-rs-official`) vendors Pubky
- * auth polling at:
- * `vendor/pubky/src/actors/auth/http_relay_link_channel.rs`
- * and `vendor/pubky/src/actors/auth/auth_subscription.rs`.
+ * Explicit product authorization ceiling for the Ring-auth foreground
+ * keepalive. It is not derived from a multiple of relay hold times.
  *
- * `AuthSubscription` calls `encrypted_channel.poll(client, None)`. That
- * `poll` has no overall deadline: `PollError::Timeout` retries without
- * bound, and `PollError::Failure` retries until `MAX_FAILURES = 3`.
- * Each HTTP-relay unused-request hold is 10 minutes
- * (`DEFAULT_REQUEST_TIMEOUT` in pubky-core `http-relay/src/http_relay.rs`).
+ * Production default (pinned Paykit AAR / `paykit-rs-official` vendor):
+ * - `AuthSubscriptionBuilder::new` uses `DEFAULT_HTTP_RELAY_INBOX`;
+ *   `AuthSubscriptionBuilder::start` selects the inbox channel unless
+ *   the relay path ends with `/link` (`auth_subscription.rs`).
+ * - `AuthSubscription::poll_for_token` calls
+ *   `EncryptedAuthChannel.poll(client, None)`.
+ * - Inbox `HttpRelayInboxChannel::poll_once` treats a server 408 as
+ *   `PollError::Timeout` after a ~25s GET hold
+ *   (`http_relay_inbox_channel.rs`).
+ * - `HttpRelayInboxChannel::poll` retries those healthy timeout cycles
+ *   with no overall deadline (`timeout = None`) and aborts only after
+ *   `MAX_FAILURES = 3` consecutive hard transport failures.
  *
- * Three consecutive failed holds can therefore keep a legitimate wait
- * near 30 minutes. This ceiling is 30 minutes plus a 5-minute
- * scheduling/network margin, still far below the Android 15+ 6-hour
- * `dataSync` foreground-service limit.
+ * 35 minutes is therefore a product cap: enough wall time for a human
+ * to approve in Ring, far below the Android 15+ 6-hour `dataSync` FGS
+ * limit.
  */
-internal const val AUTH_KEEPALIVE_RELAY_HOLD_MS = 10 * 60 * 1000L
-internal const val AUTH_KEEPALIVE_MAX_POLL_FAILURES = 3
-internal const val AUTH_KEEPALIVE_SCHEDULE_MARGIN_MS = 5 * 60 * 1000L
-internal const val AUTH_KEEPALIVE_MAX_MS =
-    AUTH_KEEPALIVE_RELAY_HOLD_MS * AUTH_KEEPALIVE_MAX_POLL_FAILURES +
-        AUTH_KEEPALIVE_SCHEDULE_MARGIN_MS
+internal const val AUTH_KEEPALIVE_MAX_MS = 35 * 60 * 1000L
 internal const val AUTH_KEEPALIVE_DISPATCH_TIMEOUT_MS = 5_000L
 
 internal interface AuthKeepaliveOps {
-    fun start()
+    fun start(instanceToken: Long)
     fun stop()
 }
 
@@ -130,16 +129,22 @@ internal class AuthKeepaliveCoordinator(
     private var lifetimeEpoch: Long = 0L
 
     @Volatile
-    private var expectedStopGeneration: Long? = null
+    private var nextServiceToken: Long = 0L
 
     @Volatile
-    private var staleDestroyGeneration: Long? = null
+    private var currentServiceToken: Long = 0L
+
+    @Volatile
+    private var startingServiceToken: Long = 0L
 
     fun owner(): String? = owner.owner()
 
     fun phase(): AuthKeepaliveOwner.Phase = owner.phase()
 
     fun lifetimeEpoch(): Long = lifetimeEpoch
+
+    fun serviceInstanceToken(): Long =
+        if (currentServiceToken != 0L) currentServiceToken else startingServiceToken
 
     fun ensureStarted(attemptId: String) {
         runSerialized {
@@ -166,14 +171,14 @@ internal class AuthKeepaliveCoordinator(
     }
 
     /**
-     * Task-removed / [android.app.Service.onDestroy] reconciliation.
-     * Clears confirmed ownership without calling [AuthKeepaliveOps.stop],
-     * so a disappearing service cannot recurse into stop/onDestroy or
-     * reap a newer generation.
+     * Task-removed / [android.app.Service.onDestroy] reconciliation for
+     * one service instance. [instanceToken] must match the token issued
+     * at that instance's start. A stale or duplicate callback is ignored
+     * and never calls [AuthKeepaliveOps.stop].
      */
-    fun handleServiceDisappeared() {
+    fun handleServiceDisappeared(instanceToken: Long) {
         runSerialized {
-            markServiceGoneLocked()
+            markServiceGoneLocked(instanceToken)
         }
     }
 
@@ -181,8 +186,8 @@ internal class AuthKeepaliveCoordinator(
         PaykitAuthKeepaliveService.systemTimeoutListener = {
             handleSystemTimeout()
         }
-        PaykitAuthKeepaliveService.serviceDisappearedListener = {
-            handleServiceDisappeared()
+        PaykitAuthKeepaliveService.serviceDisappearedListener = { token ->
+            handleServiceDisappeared(token)
         }
     }
 
@@ -202,16 +207,22 @@ internal class AuthKeepaliveCoordinator(
             AuthKeepaliveOwner.ClaimKind.AwaitUnconfirmed ->
                 error("auth keepalive start is still unconfirmed")
             AuthKeepaliveOwner.ClaimKind.Start -> {
+                startingServiceToken = nextServiceToken + 1L
+                nextServiceToken = startingServiceToken
+                val instanceToken = startingServiceToken
                 try {
-                    ops.start()
+                    ops.start(instanceToken)
                     if (!owner.confirmStart(attemptId, claim.generation)) {
-                        requestStopLocked(claim.generation)
+                        requestStopLocked()
                         error("auth keepalive start was orphaned")
                     }
-                    staleDestroyGeneration = expectedStopGeneration
-                    expectedStopGeneration = null
+                    currentServiceToken = instanceToken
+                    startingServiceToken = 0L
                     armLifetimeLocked()
                 } catch (error: Throwable) {
+                    if (startingServiceToken == instanceToken) {
+                        startingServiceToken = 0L
+                    }
                     owner.failStart(attemptId, claim.generation)
                     throw error
                 }
@@ -220,41 +231,41 @@ internal class AuthKeepaliveCoordinator(
     }
 
     private fun releaseLocked(attemptId: String) {
-        val generation = owner.generation()
         val shouldStop = owner.release(attemptId)
         if (shouldStop) {
             cancelLifetimeLocked()
-            requestStopLocked(generation)
+            requestStopLocked()
         }
     }
 
     private fun releaseAllLocked() {
-        val generation = owner.generation()
         val shouldStop = owner.releaseAll()
         cancelLifetimeLocked()
         if (shouldStop) {
-            requestStopLocked(generation)
+            requestStopLocked()
         }
     }
 
-    private fun markServiceGoneLocked() {
-        val generation = owner.generation()
-        val stale = staleDestroyGeneration
-        if (stale != null && generation != stale) {
-            staleDestroyGeneration = null
+    private fun markServiceGoneLocked(instanceToken: Long) {
+        if (instanceToken == 0L) return
+        if (instanceToken != currentServiceToken && instanceToken != startingServiceToken) {
             return
         }
-        if (owner.phase() == AuthKeepaliveOwner.Phase.Idle && owner.owner() == null) {
+        val alreadyIdle = owner.phase() == AuthKeepaliveOwner.Phase.Idle && owner.owner() == null
+        if (instanceToken == currentServiceToken) {
+            currentServiceToken = 0L
+        }
+        if (instanceToken == startingServiceToken) {
+            startingServiceToken = 0L
+        }
+        if (alreadyIdle) {
             return
         }
         cancelLifetimeLocked()
         owner.releaseAll()
-        expectedStopGeneration = null
-        staleDestroyGeneration = null
     }
 
-    private fun requestStopLocked(generation: Long) {
-        expectedStopGeneration = generation
+    private fun requestStopLocked() {
         ops.stop()
     }
 

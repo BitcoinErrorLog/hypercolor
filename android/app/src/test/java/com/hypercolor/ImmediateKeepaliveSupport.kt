@@ -31,7 +31,7 @@ internal class RecordingOps(
 ) : AuthKeepaliveOps {
     val events = mutableListOf<String>()
 
-    override fun start() {
+    override fun start(instanceToken: Long) {
         events.add("start")
         onStart()
     }
