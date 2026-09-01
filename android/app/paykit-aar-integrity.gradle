@@ -1,0 +1,313 @@
+// Reviewed trust root for the vendored Paykit Android AAR.
+// Changing libs/paykit-release.aar and its provenance JSON together is not sufficient.
+ext.PAYKIT_AAR_PINNED_ARTIFACT = "paykit-release.aar"
+ext.PAYKIT_AAR_PINNED_SHA256 = "d1e63d0b02ed8bc89c6dca91df29bfd0b8f49d08e5c19814bb257874c1c06ef8"
+ext.PAYKIT_AAR_PINNED_COMMIT = "9b7de03df3843e536d676423f4398d05e4974cc8"
+ext.PAYKIT_AAR_PINNED_REPOSITORY = "BitcoinErrorLog/paykit-rs-official"
+ext.PAYKIT_AAR_PINNED_BRANCH = "feat/chat-ffi"
+
+def PAYKIT_AAR_ALLOWED_ROOT_KEYS = ["artifact", "sha256", "source"] as Set
+def PAYKIT_AAR_ALLOWED_SOURCE_KEYS = ["repository", "commit", "branch"] as Set
+def PAYKIT_AAR_SHA256_PATTERN = ~/[0-9a-f]{64}/
+def PAYKIT_AAR_COMMIT_PATTERN = ~/[0-9a-f]{40}/
+
+def requireNonEmptyString = { Object value, String field ->
+    if (!(value instanceof CharSequence)) {
+        throw new GradleException("Paykit AAR provenance ${field} must be a string")
+    }
+    def text = value.toString()
+    if (text.isEmpty()) {
+        throw new GradleException("Paykit AAR provenance ${field} must be a non-empty string")
+    }
+    return text
+}
+
+def canonicalizeRepository = { String raw ->
+    def normalized = raw.trim()
+    normalized = normalized.replaceFirst(/^https?:\/\/github\.com\//, "")
+    if (normalized.endsWith(".git")) {
+        normalized = normalized.substring(0, normalized.length() - 4)
+    }
+    return normalized
+}
+
+ext.verifyPaykitAarIntegrity = { File aarFile, File provenanceFile ->
+    if (aarFile == null || !aarFile.isFile()) {
+        throw new GradleException("Paykit AAR missing: ${aarFile}")
+    }
+    if (provenanceFile == null || !provenanceFile.isFile()) {
+        throw new GradleException("Paykit AAR provenance missing: ${provenanceFile}")
+    }
+
+    def parsed
+    try {
+        parsed = new groovy.json.JsonSlurper().parse(provenanceFile)
+    } catch (Exception error) {
+        throw new GradleException("Paykit AAR provenance is malformed JSON")
+    }
+    if (!(parsed instanceof Map)) {
+        throw new GradleException("Paykit AAR provenance must be a JSON object")
+    }
+
+    def unknownRoot = parsed.keySet().findAll { !(it.toString() in PAYKIT_AAR_ALLOWED_ROOT_KEYS) }
+    if (!unknownRoot.isEmpty()) {
+        throw new GradleException("Paykit AAR provenance has unknown keys: ${unknownRoot.sort().join(', ')}")
+    }
+    ["artifact", "sha256", "source"].each { key ->
+        if (!parsed.containsKey(key)) {
+            throw new GradleException("Paykit AAR provenance is missing ${key}")
+        }
+    }
+
+    def artifact = requireNonEmptyString(parsed.artifact, "artifact")
+    def provenanceSha = requireNonEmptyString(parsed.sha256, "sha256")
+    if (!(provenanceSha ==~ PAYKIT_AAR_SHA256_PATTERN)) {
+        throw new GradleException("Paykit AAR provenance sha256 must be 64 lowercase hex characters")
+    }
+
+    if (!(parsed.source instanceof Map)) {
+        throw new GradleException("Paykit AAR provenance source must be an object")
+    }
+    def source = parsed.source
+    def unknownSource = source.keySet().findAll { !(it.toString() in PAYKIT_AAR_ALLOWED_SOURCE_KEYS) }
+    if (!unknownSource.isEmpty()) {
+        throw new GradleException("Paykit AAR provenance source has unknown keys: ${unknownSource.sort().join(', ')}")
+    }
+    ["repository", "commit"].each { key ->
+        if (!source.containsKey(key)) {
+            throw new GradleException("Paykit AAR provenance is missing source.${key}")
+        }
+    }
+
+    def repository = canonicalizeRepository(requireNonEmptyString(source.repository, "source.repository"))
+    def commit = requireNonEmptyString(source.commit, "source.commit")
+    if (!(commit ==~ PAYKIT_AAR_COMMIT_PATTERN)) {
+        throw new GradleException("Paykit AAR provenance source.commit must be 40 lowercase hex characters")
+    }
+    if (source.containsKey("branch")) {
+        def branch = requireNonEmptyString(source.branch, "source.branch")
+        if (branch != PAYKIT_AAR_PINNED_BRANCH) {
+            throw new GradleException("Paykit AAR provenance source.branch does not match the pinned branch")
+        }
+    }
+
+    def digest = java.security.MessageDigest.getInstance("SHA-256").digest(aarFile.bytes)
+    def actualSha = java.util.HexFormat.of().formatHex(digest)
+
+    if (actualSha != PAYKIT_AAR_PINNED_SHA256) {
+        throw new GradleException("Paykit AAR SHA-256 does not match the pinned hash")
+    }
+    if (provenanceSha != PAYKIT_AAR_PINNED_SHA256) {
+        throw new GradleException("Paykit AAR provenance sha256 does not match the pinned hash")
+    }
+    if (commit != PAYKIT_AAR_PINNED_COMMIT) {
+        throw new GradleException("Paykit AAR provenance source.commit does not match the pinned commit")
+    }
+    if (repository != PAYKIT_AAR_PINNED_REPOSITORY) {
+        throw new GradleException("Paykit AAR provenance source.repository does not match the pinned repository")
+    }
+    if (artifact != PAYKIT_AAR_PINNED_ARTIFACT) {
+        throw new GradleException("Paykit AAR provenance artifact does not match the pinned artifact")
+    }
+}
+
+def paykitAar = file("libs/paykit-release.aar")
+def paykitProvenance = file("libs/paykit-release.aar.provenance.json")
+def verifyPaykitAar = tasks.register("verifyPaykitAar") {
+    inputs.file(paykitAar)
+    inputs.file(paykitProvenance)
+    doLast {
+        project.verifyPaykitAarIntegrity(paykitAar, paykitProvenance)
+    }
+}
+
+tasks.named("preBuild").configure { dependsOn(verifyPaykitAar) }
+
+tasks.matching { it.name ==~ /^(assemble|bundle|compile|lint).*/ }.configureEach {
+    dependsOn(verifyPaykitAar)
+}
+
+def androidComponentsExt = extensions.findByName("androidComponents")
+if (androidComponentsExt != null) {
+    androidComponents.onVariants(androidComponents.selector().all()) { variant ->
+        def cap = variant.name.capitalize()
+        [
+            "pre${cap}Build",
+            "assemble${cap}",
+            "bundle${cap}",
+            "compile${cap}Kotlin",
+            "compile${cap}JavaWithJavac",
+            "lint${cap}",
+            "lintVital${cap}",
+        ].each { taskName ->
+            tasks.matching { it.name == taskName }.configureEach {
+                dependsOn(verifyPaykitAar)
+            }
+        }
+    }
+}
+
+def writeJson = { File dest, Map body ->
+    dest.parentFile.mkdirs()
+    dest.write(groovy.json.JsonOutput.prettyPrint(groovy.json.JsonOutput.toJson(body)) + "\n", "UTF-8")
+}
+
+def expectFailure = { String label, Closure body, String mustContain ->
+    try {
+        body()
+        throw new GradleException("Paykit AAR proof ${label} expected failure")
+    } catch (GradleException error) {
+        if (error.message == "Paykit AAR proof ${label} expected failure") {
+            throw error
+        }
+        if (mustContain && !error.message.contains(mustContain)) {
+            throw new GradleException("Paykit AAR proof ${label} failed with unexpected message")
+        }
+    }
+}
+
+def taskDependsOnVerify = { Task task ->
+    def seen = [] as Set
+    def walk
+    walk = { Task current ->
+        if (!seen.add(current.path)) {
+            return false
+        }
+        if (current.name == "verifyPaykitAar") {
+            return true
+        }
+        return current.taskDependencies.getDependencies(current).any { walk(it) }
+    }
+    return walk(task)
+}
+
+tasks.register("verifyPaykitAarProof") {
+    dependsOn(verifyPaykitAar)
+    doLast {
+        project.verifyPaykitAarIntegrity(paykitAar, paykitProvenance)
+
+        def fixtureRoot = file("${buildDir}/paykit-aar-proof")
+        fixtureRoot.deleteDir()
+        fixtureRoot.mkdirs()
+
+        def validProvenance = [
+            artifact: PAYKIT_AAR_PINNED_ARTIFACT,
+            sha256  : PAYKIT_AAR_PINNED_SHA256,
+            source  : [
+                repository: PAYKIT_AAR_PINNED_REPOSITORY,
+                commit    : PAYKIT_AAR_PINNED_COMMIT,
+                branch    : PAYKIT_AAR_PINNED_BRANCH,
+            ],
+        ]
+
+        expectFailure("missing-provenance", {
+            project.verifyPaykitAarIntegrity(paykitAar, file("${fixtureRoot}/missing.json"))
+        }, "provenance missing")
+
+        def malformed = file("${fixtureRoot}/malformed.json")
+        malformed.write("{not-json\n", "UTF-8")
+        expectFailure("malformed-json", {
+            project.verifyPaykitAarIntegrity(paykitAar, malformed)
+        }, "malformed JSON")
+
+        def uppercaseHash = file("${fixtureRoot}/uppercase-hash.json")
+        writeJson(uppercaseHash, validProvenance + [sha256: PAYKIT_AAR_PINNED_SHA256.toUpperCase()])
+        expectFailure("uppercase-hash", {
+            project.verifyPaykitAarIntegrity(paykitAar, uppercaseHash)
+        }, "64 lowercase hex")
+
+        def shortCommit = file("${fixtureRoot}/short-commit.json")
+        writeJson(shortCommit, [
+            artifact: PAYKIT_AAR_PINNED_ARTIFACT,
+            sha256  : PAYKIT_AAR_PINNED_SHA256,
+            source  : [
+                repository: PAYKIT_AAR_PINNED_REPOSITORY,
+                commit    : PAYKIT_AAR_PINNED_COMMIT.substring(0, 7),
+            ],
+        ])
+        expectFailure("short-commit", {
+            project.verifyPaykitAarIntegrity(paykitAar, shortCommit)
+        }, "40 lowercase hex")
+
+        def dummyAar = file("${fixtureRoot}/dummy.aar")
+        dummyAar.write("paykit-aar-proof-dummy\n", "UTF-8")
+        def dummySha = java.util.HexFormat.of().formatHex(
+            java.security.MessageDigest.getInstance("SHA-256").digest(dummyAar.bytes)
+        )
+        def swapped = file("${fixtureRoot}/swapped.json")
+        writeJson(swapped, [
+            artifact: PAYKIT_AAR_PINNED_ARTIFACT,
+            sha256  : dummySha,
+            source  : [
+                repository: PAYKIT_AAR_PINNED_REPOSITORY,
+                commit    : PAYKIT_AAR_PINNED_COMMIT,
+                branch    : PAYKIT_AAR_PINNED_BRANCH,
+            ],
+        ])
+        expectFailure("aar-json-same-unpinned-hash", {
+            project.verifyPaykitAarIntegrity(dummyAar, swapped)
+        }, "pinned hash")
+
+        def wrongCommit = file("${fixtureRoot}/wrong-commit.json")
+        writeJson(wrongCommit, [
+            artifact: PAYKIT_AAR_PINNED_ARTIFACT,
+            sha256  : PAYKIT_AAR_PINNED_SHA256,
+            source  : [
+                repository: PAYKIT_AAR_PINNED_REPOSITORY,
+                commit    : "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            ],
+        ])
+        expectFailure("wrong-commit", {
+            project.verifyPaykitAarIntegrity(paykitAar, wrongCommit)
+        }, "pinned commit")
+
+        def wrongRepo = file("${fixtureRoot}/wrong-repo.json")
+        writeJson(wrongRepo, [
+            artifact: PAYKIT_AAR_PINNED_ARTIFACT,
+            sha256  : PAYKIT_AAR_PINNED_SHA256,
+            source  : [
+                repository: "example/not-paykit",
+                commit    : PAYKIT_AAR_PINNED_COMMIT,
+            ],
+        ])
+        expectFailure("wrong-repo", {
+            project.verifyPaykitAarIntegrity(paykitAar, wrongRepo)
+        }, "pinned repository")
+
+        def wrongArtifact = file("${fixtureRoot}/wrong-artifact.json")
+        writeJson(wrongArtifact, [
+            artifact: "other-release.aar",
+            sha256  : PAYKIT_AAR_PINNED_SHA256,
+            source  : [
+                repository: PAYKIT_AAR_PINNED_REPOSITORY,
+                commit    : PAYKIT_AAR_PINNED_COMMIT,
+            ],
+        ])
+        expectFailure("wrong-artifact", {
+            project.verifyPaykitAarIntegrity(paykitAar, wrongArtifact)
+        }, "pinned artifact")
+
+        def unknownKey = file("${fixtureRoot}/unknown-key.json")
+        writeJson(unknownKey, validProvenance + [url: "https://example.invalid"])
+        expectFailure("unknown-key", {
+            project.verifyPaykitAarIntegrity(paykitAar, unknownKey)
+        }, "unknown keys")
+
+        [
+            "preBuild",
+            "preDebugBuild",
+            "preReleaseBuild",
+            "assemble",
+            "assembleDebug",
+            "assembleRelease",
+            "bundleRelease",
+            "compileReleaseKotlin",
+            "lintVitalRelease",
+        ].each { taskName ->
+            def task = tasks.named(taskName).get()
+            if (!taskDependsOnVerify(task)) {
+                throw new GradleException("Paykit AAR proof task graph missing verifyPaykitAar before ${taskName}")
+            }
+        }
+    }
+}

@@ -188,32 +188,4 @@ dependencies {
     implementation("org.slf4j:slf4j-api:1.7.36")
 }
 
-def paykitAar = file("libs/paykit-release.aar")
-def paykitProvenance = file("libs/paykit-release.aar.provenance.json")
-
-tasks.register("verifyPaykitAar") {
-    inputs.file(paykitAar)
-    inputs.file(paykitProvenance)
-    doLast {
-        if (!paykitAar.isFile()) {
-            throw new GradleException("Paykit AAR missing: ${paykitAar}")
-        }
-        if (!paykitProvenance.isFile()) {
-            throw new GradleException("Paykit AAR provenance missing: ${paykitProvenance}")
-        }
-        def provenance = new groovy.json.JsonSlurper().parse(paykitProvenance)
-        def expected = provenance.sha256 as String
-        if (!expected) {
-            throw new GradleException("Paykit AAR provenance is missing sha256")
-        }
-        def digest = java.security.MessageDigest.getInstance("SHA-256").digest(paykitAar.bytes)
-        def actual = java.util.HexFormat.of().formatHex(digest)
-        if (actual != expected) {
-            throw new GradleException("Paykit AAR SHA-256 mismatch: expected ${expected}, got ${actual}")
-        }
-    }
-}
-
-afterEvaluate {
-    tasks.named("preBuild").configure { dependsOn("verifyPaykitAar") }
-}
+apply from: "paykit-aar-integrity.gradle"
