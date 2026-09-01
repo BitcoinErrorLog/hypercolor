@@ -19,7 +19,7 @@
       "infoPlist": {
         "NSPhotoLibraryUsageDescription": "Hypercolor needs access to your photo library to send encrypted attachments.",
         "NSCameraUsageDescription": "Hypercolor needs camera access to send encrypted photo attachments.",
-        "LSApplicationQueriesSchemes": ["lightning", "bitcoin", "pubkyring"]
+        "LSApplicationQueriesSchemes": ["lightning", "bitcoin", "pubkyring", "pubkyauth"]
       }
     },
     "android": {

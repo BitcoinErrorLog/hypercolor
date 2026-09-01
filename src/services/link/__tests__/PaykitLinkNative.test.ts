@@ -33,6 +33,12 @@ describe('PaykitLinkNative contract', () => {
     expect(signup).toMatch(/unavailable/);
   });
 
+  it('canonicalizes startAuthFlow capabilities before the native invoke', () => {
+    expect(SOURCE).toContain("import { formatAuthFlowCapabilities } from '../../types/link'");
+    expect(SOURCE).toMatch(/startAuthFlow\([\s\S]*formatAuthFlowCapabilities\(capabilities\)/);
+    expect(SOURCE).not.toMatch(/invoke\('startAuthFlow', capabilities,/);
+  });
+
   it('types clearAllNativeSecrets on the native API', () => {
     expect(SOURCE).toContain('clearAllNativeSecrets(): Promise<void>');
     const api: Pick<

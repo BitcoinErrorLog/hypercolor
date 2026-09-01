@@ -126,7 +126,9 @@ export default function EnableMessagingScreen() {
             <Text
               style={styles.authUrl}
               selectable
-              onPress={() => Linking.openURL(state.authorizationUrl as string)}
+              onPress={() => {
+                void controllerRef.current?.openRing();
+              }}
             >
               {state.authorizationUrl}
             </Text>

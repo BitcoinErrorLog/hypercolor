@@ -44,6 +44,13 @@ export type EnableMessagingController = {
   cancel: () => void;
 };
 
+/** Paykit emits this exact scheme. Only these URLs may be handed to the OS. */
+export const PUBKYAUTH_URL_PREFIX = 'pubkyauth://';
+
+export function isAutoOpenableAuthUrl(url: string): boolean {
+  return url.startsWith(PUBKYAUTH_URL_PREFIX);
+}
+
 function errorMessage(err: unknown): string {
   if (err instanceof Error) return err.message;
   if (typeof err === 'object' && err !== null && 'message' in err) {
@@ -80,6 +87,20 @@ export function createEnableMessagingController(
         message: null,
         copied: false,
       });
+      // Only pubkyauth:// may hit the OS. https:/intent: URLs carry a client
+      // secret and would leak it to a browser or another app. Non-matching
+      // schemes stay authorizing so QR + copy still work.
+      if (isAutoOpenableAuthUrl(flow.authorizationUrl)) {
+        try {
+          await deps.openUrl(flow.authorizationUrl);
+        } catch {
+          // Keep authorizing; the user can tap Open Pubky Ring or scan the QR.
+        }
+      }
+      if (cancelled) {
+        flow.cancel();
+        return;
+      }
       const enabled = await flow.awaitEnabled();
       if (cancelled) return;
       emit({
@@ -147,6 +168,9 @@ export function createEnableMessagingController(
       const url = state.authorizationUrl;
       if (!url) {
         throw new Error('No authorization URL to open');
+      }
+      if (!isAutoOpenableAuthUrl(url)) {
+        return;
       }
       await deps.openUrl(url);
     },

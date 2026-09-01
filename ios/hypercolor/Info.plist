@@ -69,6 +69,7 @@
 	<key>LSApplicationQueriesSchemes</key>
 	<array>
 		<string>pubkyring</string>
+		<string>pubkyauth</string>
 		<string>lightning</string>
 		<string>bitcoin</string>
 	</array>

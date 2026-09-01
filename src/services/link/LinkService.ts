@@ -14,6 +14,7 @@ import { parsePubkyOwner, resolveHomeserverOrigin } from '../homeserverOrigin';
 import { RetryQueue } from '../RetryQueue';
 import {
   RING_GRANT_CAPABILITIES,
+  formatAuthFlowCapabilities,
   LINK_RECEIVER_PATH,
   assertValidReceiverPath,
   buildChatMessageEnvelope,
@@ -343,7 +344,7 @@ export const LinkService = {
       throw createLinkNativeError('unavailable', 'PaykitLinkModule native module is not available');
     }
     const { flowId, authorizationUrl } =
-      await PaykitLinkNative.startAuthFlow(RING_GRANT_CAPABILITIES);
+      await PaykitLinkNative.startAuthFlow(formatAuthFlowCapabilities(RING_GRANT_CAPABILITIES));
     let cancelled = false;
     return {
       authorizationUrl,

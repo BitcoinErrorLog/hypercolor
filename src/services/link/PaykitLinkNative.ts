@@ -1,4 +1,5 @@
 import { NativeModules } from 'react-native';
+import { formatAuthFlowCapabilities } from '../../types/link';
 
 /**
  * PaykitLinkNative — typed JS bridge to the PaykitLinkModule native
@@ -321,7 +322,13 @@ export const PaykitLinkNative: PaykitLinkNativeApi = {
   },
 
   startAuthFlow(capabilities: string, relayUrl?: string): Promise<AuthFlowStart> {
-    return invoke('startAuthFlow', capabilities, relayUrl ?? null);
+    let canonical: string;
+    try {
+      canonical = formatAuthFlowCapabilities(capabilities);
+    } catch {
+      return Promise.reject(createLinkNativeError('validation', COARSE_NATIVE_MESSAGES.validation));
+    }
+    return invoke('startAuthFlow', canonical, relayUrl ?? null);
   },
 
   awaitAuthApproval(flowId: string): Promise<AuthSessionResult> {
