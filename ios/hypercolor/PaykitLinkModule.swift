@@ -951,8 +951,12 @@ class PaykitLinkModule: NSObject {
             ffiCode = code
         }
         let coarse = mapFfiCode(ffiCode)
-        // Release must keep the FFI code; do not log context (auth URLs carry a client secret).
-        paykitLinkLog.error("Paykit FFI error code=\(ffiCode, privacy: .public) mapped=\(coarse, privacy: .public)")
+        // Never log raw FFI text — codes can carry an auth URL/client secret.
+        if isLoggableFfiCode(ffiCode) {
+            paykitLinkLog.error("Paykit FFI error code=\(ffiCode, privacy: .public) mapped=\(coarse, privacy: .public)")
+        } else {
+            paykitLinkLog.error("Paykit FFI error codeLen=\(ffiCode.count, privacy: .public) mapped=\(coarse, privacy: .public)")
+        }
         return PaykitLinkBridgeError(code: coarse, message: staticMessage(coarse))
     }
 
@@ -969,6 +973,12 @@ class PaykitLinkModule: NSObject {
             }
         }
         return parts.joined(separator: ",")
+    }
+
+    private static func isLoggableFfiCode(_ code: String) -> Bool {
+        if code.isEmpty || code.count > 64 { return false }
+        let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyz_")
+        return code.unicodeScalars.allSatisfy { allowed.contains($0) }
     }
 
     private static func mapFfiCode(_ code: String) -> String {

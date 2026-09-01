@@ -1,5 +1,6 @@
 import {
   createEnableMessagingController,
+  isAutoOpenableAuthUrl,
   type EnableMessagingDeps,
 } from '../enableMessagingController';
 import type { LinkEnableFlow } from '../../../services/link/LinkService';
@@ -195,6 +196,63 @@ describe('enableMessagingController', () => {
     expect(flow.cancel).toHaveBeenCalled();
   });
 
+  it('does not auto-open https authorization URLs and stays authorizing', async () => {
+    const pending = deferred<{ pubky: string; receiverPath: string; noisePublicKey: string }>();
+    const httpsUrl = 'https://evil.example/auth?secret=leak';
+    const flow = authFlow({
+      authorizationUrl: httpsUrl,
+      awaitEnabled: jest.fn(() => pending.promise),
+    });
+    const deps = makeDeps({ enable: jest.fn().mockResolvedValue(flow) });
+    const controller = createEnableMessagingController(deps);
+    const started = controller.start();
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(controller.getState().phase).toBe('authorizing');
+    expect(controller.getState().authorizationUrl).toBe(httpsUrl);
+    expect(deps.openUrl).not.toHaveBeenCalled();
+
+    await controller.openRing();
+    expect(deps.openUrl).not.toHaveBeenCalled();
+
+    pending.resolve({
+      pubky: 'z'.repeat(52),
+      receiverPath: 'hypercolor/wallet',
+      noisePublicKey: 'noise-pk',
+    });
+    await started;
+    expect(controller.getState().phase).toBe('success');
+  });
+
+  it('does not auto-open intent or mixed-case schemes', async () => {
+    for (const authorizationUrl of [
+      'intent://scan/#Intent;scheme=https;end',
+      'Pubkyauth://grant',
+      'PUBKYAUTH://grant',
+      'pubkyauth:/grant',
+    ]) {
+      const pending = deferred<{ pubky: string; receiverPath: string; noisePublicKey: string }>();
+      const flow = authFlow({
+        authorizationUrl,
+        awaitEnabled: jest.fn(() => pending.promise),
+      });
+      const deps = makeDeps({ enable: jest.fn().mockResolvedValue(flow) });
+      const controller = createEnableMessagingController(deps);
+      const started = controller.start();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(controller.getState().phase).toBe('authorizing');
+      expect(deps.openUrl).not.toHaveBeenCalled();
+      controller.cancel();
+      pending.reject(new Error('cancelled'));
+      await started.catch(() => undefined);
+    }
+  });
+
   it('beginAuth can re-run after an already-enabled status', async () => {
     const flow = authFlow();
     const deps = makeDeps({
@@ -207,5 +265,17 @@ describe('enableMessagingController', () => {
 
     expect(deps.enable).toHaveBeenCalledTimes(1);
     expect(controller.getState().phase).toBe('success');
+  });
+});
+
+describe('isAutoOpenableAuthUrl', () => {
+  it('accepts only the case-sensitive pubkyauth:// prefix', () => {
+    expect(isAutoOpenableAuthUrl('pubkyauth://grant')).toBe(true);
+    expect(isAutoOpenableAuthUrl('pubkyauth:///?caps=/pub/paykit/:rw&secret=abc')).toBe(true);
+    expect(isAutoOpenableAuthUrl('https://relay.example/auth?secret=abc')).toBe(false);
+    expect(isAutoOpenableAuthUrl('intent://scan/#Intent;scheme=https;end')).toBe(false);
+    expect(isAutoOpenableAuthUrl('Pubkyauth://grant')).toBe(false);
+    expect(isAutoOpenableAuthUrl('pubkyauth:/grant')).toBe(false);
+    expect(isAutoOpenableAuthUrl(' pubkyauth://grant')).toBe(false);
   });
 });

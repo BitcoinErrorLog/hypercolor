@@ -827,9 +827,12 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
         if (paykit != null) {
             val code = ffiCode(paykit) ?: "protocol"
             val coarse = mapFfiCode(code)
-            // Release must keep the FFI code; do not log exception text
-            // (auth URLs carry a client secret).
-            Log.e(PAYKIT_LINK_LOG_TAG, "Paykit FFI error code=$code mapped=$coarse")
+            // Never log raw FFI text — codes can carry an auth URL/client secret.
+            if (isLoggableFfiCode(code)) {
+                Log.e(PAYKIT_LINK_LOG_TAG, "Paykit FFI error code=$code mapped=$coarse")
+            } else {
+                Log.e(PAYKIT_LINK_LOG_TAG, "Paykit FFI error codeLen=${code.length} mapped=$coarse")
+            }
             return PaykitLinkBridgeError(coarse, staticMessage(coarse))
         }
         Log.e(PAYKIT_LINK_LOG_TAG, "unmapped native error type=${error.javaClass.name}")
@@ -853,6 +856,11 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
         return parts.joinToString(",")
     }
 
+    private fun isLoggableFfiCode(code: String): Boolean {
+        if (code.isEmpty() || code.length > FFI_CODE_LOG_MAX) return false
+        return code.all { it in 'a'..'z' || it == '_' }
+    }
+
     private fun mapFfiCode(code: String): String = when (code) {
         "transport_error", "send_failed", "receive_failed", "auth_flow_failed" -> "network"
         "signin_failed", "signup_failed", "session_restore_failed", "capabilities_missing" -> "auth"
@@ -872,6 +880,7 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
 }
 
 private const val PAYKIT_LINK_LOG_TAG = "PaykitLink"
+private const val FFI_CODE_LOG_MAX = 64
 
 private data class PaykitLinkBridgeError(
     val code: String,
