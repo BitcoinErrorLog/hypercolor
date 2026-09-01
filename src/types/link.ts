@@ -126,6 +126,17 @@ export interface DecodedLinkEnvelope {
  */
 export const LINK_MESSAGE_MAX_BYTES = 1000;
 
+/**
+ * ECMAScript Date range ceiling (+8.64e15). Values above this make
+ * `new Date(n).toISOString()` throw RangeError. The bound also sits below
+ * 2^53, so every accepted integer is a safe integer (no precision loss).
+ */
+export const LINK_SENT_AT_UNIX_MS_MAX = 8_640_000_000_000_000;
+
+function isLinkSentAtUnixMs(value: number): boolean {
+  return Number.isInteger(value) && value > 0 && value <= LINK_SENT_AT_UNIX_MS_MAX;
+}
+
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
@@ -146,7 +157,7 @@ export function buildChatMessageEnvelope(input: {
   if (!UUID_PATTERN.test(input.eventId)) {
     throw new Error(`chat.message.v0 event_id must be a UUID, got "${input.eventId}"`);
   }
-  if (!Number.isInteger(input.sentAt) || input.sentAt <= 0) {
+  if (!isLinkSentAtUnixMs(input.sentAt)) {
     throw new Error('chat.message.v0 sent_at must be a positive Unix-millisecond integer');
   }
   const body = input.body.trim();
@@ -177,12 +188,12 @@ export function buildChatMessageEnvelope(input: {
 const ISO_DATETIME_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
 
 export function parseLinkSentAt(value: unknown): number | null {
-  if (typeof value === 'number' && Number.isInteger(value) && value > 0) {
+  if (typeof value === 'number' && isLinkSentAtUnixMs(value)) {
     return value;
   }
   if (typeof value === 'string' && ISO_DATETIME_PATTERN.test(value)) {
     const ms = Date.parse(value);
-    if (!Number.isNaN(ms) && ms > 0) return ms;
+    if (isLinkSentAtUnixMs(ms)) return ms;
   }
   return null;
 }
