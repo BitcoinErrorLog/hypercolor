@@ -1,3 +1,4 @@
+import { hex, utils } from '@scure/base';
 import type { PubkyKey } from '../types';
 
 /**
@@ -11,6 +12,13 @@ export const PUBKY_ZBASE32_ALPHABET = 'ybndrfg8ejkmcpqxot1uwisza345h769';
 export const PUBKY_ID_LENGTH = 52;
 
 const Z_BASE32_CHAR = new Set(PUBKY_ZBASE32_ALPHABET.split(''));
+
+/** Pkarr/pubky z-base-32 coder (32-byte keys → 52 chars). Reuses `@scure/base`. */
+const pubkyZ32 = utils.chain(
+  utils.radix2(5),
+  utils.alphabet(PUBKY_ZBASE32_ALPHABET),
+  utils.join(''),
+);
 
 const PUBKY_URI_PREFIX = 'pubky://';
 
@@ -46,4 +54,26 @@ export function isValidPubky(value: string): value is PubkyKey {
 export function parsePubky(value: string): PubkyKey | null {
   const key = normalizePubkyInput(value);
   return isValidPubky(key) ? key : null;
+}
+
+/**
+ * Decode a z-base-32 pubky to the 64-char lowercase hex Ed25519 public key
+ * that native SB2 (`ownerPeeridHex`) expects. Throws a clean error for
+ * malformed input — never pass z32 into a hex parser.
+ */
+export function pubkyZ32ToHex(value: string): string {
+  const key = parsePubky(value);
+  if (!key) {
+    throw new Error('Invalid pubky — expected a 52-character z-base-32 identifier.');
+  }
+  let bytes: Uint8Array;
+  try {
+    bytes = pubkyZ32.decode(key);
+  } catch {
+    throw new Error('Invalid pubky — z-base-32 decode failed.');
+  }
+  if (bytes.length !== 32) {
+    throw new Error('Invalid pubky — z-base-32 did not decode to a 32-byte key.');
+  }
+  return hex.encode(bytes);
 }
