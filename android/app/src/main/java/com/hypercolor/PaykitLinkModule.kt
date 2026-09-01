@@ -78,7 +78,11 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
     }
 
     override fun invalidate() {
-        keepalive.releaseAll()
+        try {
+            keepalive.releaseAll()
+        } catch (error: Throwable) {
+            Log.e(PAYKIT_LINK_LOG_TAG, "auth keepalive release failed type=${error.javaClass.name}")
+        }
         keepalive.detach()
         job.cancel()
         super.invalidate()
@@ -674,7 +678,12 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
     }
 
     private fun releaseAuthKeepalive(attemptId: String) {
-        keepalive.release(attemptId)
+        try {
+            keepalive.release(attemptId)
+        } catch (error: Throwable) {
+            Log.e(PAYKIT_LINK_LOG_TAG, "auth keepalive release failed type=${error.javaClass.name}")
+            throw PaykitLinkBridgeError("unavailable", staticMessage("unavailable"))
+        }
     }
 
     private fun launch(promise: Promise, block: suspend () -> Unit) {

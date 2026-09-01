@@ -1,14 +1,23 @@
 package com.hypercolor
 
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Test
 
 class AuthKeepaliveCoordinatorTest {
     @Test
-    fun maxLifetimeMatchesHttpRelayUnusedRequestTimeout() {
-        assertEquals(10 * 60 * 1000L, AUTH_KEEPALIVE_MAX_MS)
+    fun maxLifetimeMatchesThreeRelayHoldsPlusMargin() {
+        assertEquals(10 * 60 * 1000L, AUTH_KEEPALIVE_RELAY_HOLD_MS)
+        assertEquals(3, AUTH_KEEPALIVE_MAX_POLL_FAILURES)
+        assertEquals(5 * 60 * 1000L, AUTH_KEEPALIVE_SCHEDULE_MARGIN_MS)
+        assertEquals(35 * 60 * 1000L, AUTH_KEEPALIVE_MAX_MS)
     }
 
     @Test
@@ -41,11 +50,10 @@ class AuthKeepaliveCoordinatorTest {
         val ops = RecordingOps {
             owner.claim("flow-b")
         }
-        val scheduler = ImmediateKeepaliveScheduler()
         val coordinator = AuthKeepaliveCoordinator(
             ops = ops,
             handler = ImmediateKeepaliveHandler(),
-            scheduler = scheduler,
+            scheduler = ImmediateKeepaliveScheduler(),
             owner = owner,
         )
         coordinator.ensureStarted("flow-a")
@@ -79,7 +87,7 @@ class AuthKeepaliveCoordinatorTest {
         )
         try {
             coordinator.ensureStarted("flow-a")
-            org.junit.Assert.fail("expected start failure")
+            fail("expected start failure")
         } catch (_: AuthKeepaliveStartFailed) {
         }
         assertEquals("flow-b", coordinator.owner())
@@ -110,8 +118,8 @@ class AuthKeepaliveCoordinatorTest {
         val scheduler = ImmediateKeepaliveScheduler()
         val env = Env(scheduler = scheduler, maxLifetimeMs = 10L)
         env.coordinator.ensureStarted("flow-a")
-        val generation = env.owner.generation()
-        scheduler.fire(generation)
+        val epoch = env.coordinator.lifetimeEpoch()
+        scheduler.fire(epoch)
         assertEquals(listOf("start", "stop"), env.ops.events)
         assertNull(env.coordinator.owner())
         assertEquals(AuthKeepaliveOwner.Phase.Idle, env.coordinator.phase())
@@ -122,10 +130,51 @@ class AuthKeepaliveCoordinatorTest {
         val scheduler = ImmediateKeepaliveScheduler()
         val env = Env(scheduler = scheduler, maxLifetimeMs = 10L)
         env.coordinator.ensureStarted("flow-a")
-        val generation = env.owner.generation()
+        val epoch = env.coordinator.lifetimeEpoch()
         env.coordinator.release("flow-a")
-        scheduler.fire(generation)
+        scheduler.fire(epoch)
         assertEquals(listOf("start", "stop"), env.ops.events)
+    }
+
+    @Test
+    fun rearmOnEnsureResetsLifetimeWithoutSecondStart() {
+        val scheduler = ImmediateKeepaliveScheduler()
+        val env = Env(scheduler = scheduler, maxLifetimeMs = 10L)
+        env.coordinator.ensureStarted("flow-a")
+        val firstEpoch = env.coordinator.lifetimeEpoch()
+        env.coordinator.ensureStarted("flow-a")
+        val secondEpoch = env.coordinator.lifetimeEpoch()
+        assertTrue(secondEpoch > firstEpoch)
+        assertEquals(setOf(secondEpoch), scheduler.pendingKeys())
+        assertEquals(listOf("start"), env.ops.events)
+        assertEquals(AuthKeepaliveOwner.Phase.Confirmed, env.coordinator.phase())
+    }
+
+    @Test
+    fun oldLifetimeCallbackCannotReapRearmedAttempt() {
+        val scheduler = ImmediateKeepaliveScheduler()
+        val env = Env(scheduler = scheduler, maxLifetimeMs = 10L)
+        env.coordinator.ensureStarted("flow-a")
+        val firstEpoch = env.coordinator.lifetimeEpoch()
+        env.coordinator.ensureStarted("flow-a")
+        scheduler.fire(firstEpoch)
+        assertEquals(listOf("start"), env.ops.events)
+        assertEquals("flow-a", env.coordinator.owner())
+        assertEquals(AuthKeepaliveOwner.Phase.Confirmed, env.coordinator.phase())
+        scheduler.fire(env.coordinator.lifetimeEpoch())
+        assertEquals(listOf("start", "stop"), env.ops.events)
+        assertNull(env.coordinator.owner())
+    }
+
+    @Test
+    fun expiryAfterRearmStopsCurrentAttempt() {
+        val scheduler = ImmediateKeepaliveScheduler()
+        val env = Env(scheduler = scheduler, maxLifetimeMs = 10L)
+        env.coordinator.ensureStarted("flow-a")
+        env.coordinator.ensureStarted("flow-a")
+        scheduler.fire(env.coordinator.lifetimeEpoch())
+        assertEquals(listOf("start", "stop"), env.ops.events)
+        assertNull(env.coordinator.owner())
     }
 
     @Test
@@ -138,15 +187,39 @@ class AuthKeepaliveCoordinatorTest {
     }
 
     @Test
+    fun serviceDisappearedReconcilesWithoutStopAndNextAttemptStarts() {
+        val env = Env()
+        env.coordinator.ensureStarted("flow-a")
+        env.coordinator.handleServiceDisappeared()
+        assertEquals(listOf("start"), env.ops.events)
+        assertNull(env.coordinator.owner())
+        assertEquals(AuthKeepaliveOwner.Phase.Idle, env.coordinator.phase())
+        env.coordinator.ensureStarted("flow-b")
+        assertEquals(listOf("start", "start"), env.ops.events)
+        assertEquals("flow-b", env.coordinator.owner())
+        assertEquals(AuthKeepaliveOwner.Phase.Confirmed, env.coordinator.phase())
+    }
+
+    @Test
+    fun staleServiceGoneCannotClearNewerGeneration() {
+        val env = Env()
+        env.coordinator.ensureStarted("flow-a")
+        env.coordinator.release("flow-a")
+        env.coordinator.ensureStarted("flow-b")
+        env.coordinator.handleServiceDisappeared()
+        assertEquals("flow-b", env.coordinator.owner())
+        assertEquals(AuthKeepaliveOwner.Phase.Confirmed, env.coordinator.phase())
+        assertEquals(listOf("start", "stop", "start"), env.ops.events)
+    }
+
+    @Test
     fun serializedHandlerRunsStartBeforeQueuedStaleStop() {
         val handler = QueuedKeepaliveHandler()
         val ops = RecordingOps()
-        val owner = AuthKeepaliveOwner()
         val coordinator = AuthKeepaliveCoordinator(
             ops = ops,
             handler = handler,
             scheduler = ImmediateKeepaliveScheduler(),
-            owner = owner,
         )
         handler.runInline {
             coordinator.ensureStarted("flow-a")
@@ -161,22 +234,61 @@ class AuthKeepaliveCoordinatorTest {
         assertEquals(listOf("start", "stop"), ops.events)
     }
 
-    private class AuthKeepaliveStartFailed : RuntimeException()
-
-    private class RecordingOps(
-        private val onStart: () -> Unit = {},
-    ) : AuthKeepaliveOps {
-        val events = mutableListOf<String>()
-
-        override fun start() {
-            events.add("start")
-            onStart()
+    @Test
+    fun stalledHandlerTimeoutDoesNotRunLateStart() {
+        val handler = StallingKeepaliveHandler()
+        val ops = RecordingOps()
+        val coordinator = AuthKeepaliveCoordinator(
+            ops = ops,
+            handler = handler,
+            scheduler = ImmediateKeepaliveScheduler(),
+            dispatchTimeoutMs = 20L,
+        )
+        try {
+            coordinator.ensureStarted("flow-a")
+            fail("expected dispatch timeout")
+        } catch (_: AuthKeepaliveDispatchTimeout) {
         }
+        assertEquals(1, handler.queuedCount())
+        assertEquals(emptyList<String>(), ops.events)
+        handler.runAll()
+        assertEquals(emptyList<String>(), ops.events)
+        assertNull(coordinator.owner())
+        assertEquals(AuthKeepaliveOwner.Phase.Idle, coordinator.phase())
+    }
 
-        override fun stop() {
-            events.add("stop")
+    @Test
+    fun crossThreadEnsureSerializesOnWorker() {
+        val worker = AtomicReference<Thread>()
+        val ready = CountDownLatch(1)
+        val executor = Executors.newSingleThreadExecutor { runnable ->
+            Thread {
+                worker.set(Thread.currentThread())
+                ready.countDown()
+                runnable.run()
+            }
+        }
+        try {
+            executor.execute { }
+            assertTrue(ready.await(2, TimeUnit.SECONDS))
+            val handler = ExecutorKeepaliveHandler(executor, worker.get())
+            val ops = RecordingOps()
+            val coordinator = AuthKeepaliveCoordinator(
+                ops = ops,
+                handler = handler,
+                scheduler = ImmediateKeepaliveScheduler(),
+            )
+            coordinator.ensureStarted("flow-a")
+            assertEquals(listOf("start"), ops.events)
+            assertEquals("flow-a", coordinator.owner())
+            coordinator.release("flow-a")
+            assertEquals(listOf("start", "stop"), ops.events)
+        } finally {
+            executor.shutdownNow()
         }
     }
+
+    private class AuthKeepaliveStartFailed : RuntimeException()
 
     private class QueuedKeepaliveHandler : AuthKeepaliveHandler {
         private val queue = ArrayDeque<() -> Unit>()

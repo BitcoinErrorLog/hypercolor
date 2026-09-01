@@ -31,11 +31,21 @@ class PaykitAuthKeepaliveService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        serviceDisappearedListener?.invoke()
+        super.onTaskRemoved(rootIntent)
+    }
+
+    override fun onDestroy() {
+        serviceDisappearedListener?.invoke()
+        super.onDestroy()
+    }
+
     /**
      * Android 15+ `dataSync` FGS timeout. The product ceiling is the
-     * pubky-core HTTP relay unused-request timeout (10 minutes); this
-     * callback is the system backstop so a missed client stop cannot
-     * leave the 6-hour shade notification.
+     * pinned Pubky poll window (3 × 10-minute relay holds + margin);
+     * this callback is the system backstop so a missed client stop
+     * cannot leave the 6-hour shade notification.
      *
      * API 35 calls `onTimeout(startId, fgsType)`, whose default
      * implementation delegates here. Override both so a timeout on
@@ -110,6 +120,9 @@ class PaykitAuthKeepaliveService : Service() {
 
         @Volatile
         internal var systemTimeoutListener: (() -> Unit)? = null
+
+        @Volatile
+        internal var serviceDisappearedListener: (() -> Unit)? = null
 
         fun start(context: Context) {
             val app = context.applicationContext

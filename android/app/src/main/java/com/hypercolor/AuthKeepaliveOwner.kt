@@ -30,8 +30,11 @@ internal class AuthKeepaliveOwner {
         AdoptedConfirmed,
 
         /**
-         * A start is in flight (this attempt or another). Wait for that
-         * generation to settle, then [claim] again. Do not start again.
+         * A start is in flight (this attempt or another). The owner
+         * surface exposes this so tests can drive confirm/fail; the
+         * production coordinator is serialized and fail-closes if it
+         * ever observes this kind instead of treating the service as
+         * running.
          */
         AwaitUnconfirmed,
     }
