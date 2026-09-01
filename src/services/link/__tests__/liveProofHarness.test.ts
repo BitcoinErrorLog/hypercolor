@@ -557,7 +557,15 @@ describe('product live-proof step machines', () => {
         const eventId =
           body === 'liveproof-group-body'
             ? '00000000-0000-4000-8000-00000000bbbb'
-            : '00000000-0000-4000-8000-00000000cccc';
+            : body === 'liveproof-group-body-b'
+              ? '00000000-0000-4000-8000-00000000bb01'
+              : '00000000-0000-4000-8000-00000000cccc';
+        const senderPubky =
+          body === 'liveproof-after-remove'
+            ? PUBKY_C
+            : body === 'liveproof-group-body-b'
+              ? PUBKY_B
+              : PUBKY_A;
         if (body === 'liveproof-group-body') {
           for (const owner of [PUBKY_A, PUBKY_B, PUBKY_C]) {
             await StorageService.upsertGroupChannel({
@@ -591,11 +599,33 @@ describe('product live-proof step machines', () => {
             });
           }
         }
+        if (body === 'liveproof-group-body-b') {
+          for (const owner of [PUBKY_A, PUBKY_B]) {
+            await StorageService.saveGroupMessage({
+              ownerPubky: owner,
+              channelId: id,
+              eventId,
+              senderPubky: PUBKY_B,
+              kind: 'chat.group.message.v0',
+              body,
+              rawJson: '{}',
+              sentAt: Date.now(),
+              receivedAt: owner === PUBKY_B ? null : Date.now(),
+              deliveryState: 'sent' as const,
+              replyToEventId: null,
+              replyToAuthorPubky: null,
+              targetEventId: null,
+              targetAuthorPubky: null,
+              editedAt: null,
+              deleted: false,
+            });
+          }
+        }
         return {
-          ownerPubky: PUBKY_A,
+          ownerPubky: senderPubky,
           channelId: id,
           eventId,
-          senderPubky: body === 'liveproof-after-remove' ? PUBKY_C : PUBKY_A,
+          senderPubky,
           kind: 'chat.group.message.v0',
           body,
           rawJson: '{}',
@@ -634,9 +664,13 @@ describe('product live-proof step machines', () => {
     expect(report.steps.map(step => step.step)).toEqual(
       expect.arrayContaining([
         'add-contacts-paste',
+        'accept-request-b',
+        'accept-request-c',
+        'accept-request-c-from-b',
         'create-channel-a',
         'membership-fanout',
         'group-message-a',
+        'group-message-b',
         'remove-c',
         'removed-c-message-rejected',
         'forged-channel-and-event-rejected',

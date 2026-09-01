@@ -14,6 +14,7 @@ import {
   createLiveProofRecorder,
   defaultLinkApi,
   emptyParty,
+  errorMessage,
   establishProductLink,
   generatePartySecrets,
   pollUntil,
@@ -22,8 +23,10 @@ import {
   resolveClock,
   signupParty,
   switchToParty,
+  type LiveProofLinkApi,
   type LiveProofReport,
   type ProductLiveProofDeps,
+  type ProofParty,
   type ThreePartyLiveProofConfig,
 } from './liveProofShared';
 
@@ -167,6 +170,29 @@ export async function runGroupLiveProof(
       return failed();
     }
 
+    // A initiates AB/AC, B initiates BC — responders hold the pending request.
+    if (
+      !(await record('accept-request-b', async () =>
+        acceptPendingRequest(link, storage, partyB, pubkyA, 'A'),
+      ))
+    ) {
+      return failed();
+    }
+    if (
+      !(await record('accept-request-c', async () =>
+        acceptPendingRequest(link, storage, partyC, pubkyA, 'A'),
+      ))
+    ) {
+      return failed();
+    }
+    if (
+      !(await record('accept-request-c-from-b', async () =>
+        acceptPendingRequest(link, storage, partyC, pubkyB, 'B'),
+      ))
+    ) {
+      return failed();
+    }
+
     if (
       !(await record('create-channel-a', async () => {
         await switchToParty(link, partyA);
@@ -183,31 +209,49 @@ export async function runGroupLiveProof(
     if (
       !(await record('membership-fanout', async () => {
         await switchToParty(link, partyB);
-        await pollUntil(
-          now,
-          sleep,
-          receiveTimeoutMs,
-          pollIntervalMs,
-          async () => {
-            await link.syncInbox([pubkyA]);
-            return storage.getGroupChannel(pubkyB, channelId);
-          },
-          channel => channel !== null,
-          'B membership',
-        );
+        try {
+          await pollUntil(
+            now,
+            sleep,
+            receiveTimeoutMs,
+            pollIntervalMs,
+            async () => {
+              await link.syncInbox([pubkyA]);
+              return storage.getGroupChannel(pubkyB, channelId);
+            },
+            channel => channel !== null,
+            'B membership',
+          );
+        } catch (err) {
+          const request = await storage.getMessageRequest(pubkyB, pubkyA);
+          const unprocessed = await storage.getUnprocessedLinkStreamItems(pubkyB, pubkyA);
+          const channel = await storage.getGroupChannel(pubkyB, channelId);
+          throw new Error(
+            `${errorMessage(err)}; request=${request?.status ?? 'none'} unprocessed=${unprocessed.length} channel=${channel ? 'yes' : 'no'}`,
+          );
+        }
         await switchToParty(link, partyC);
-        await pollUntil(
-          now,
-          sleep,
-          receiveTimeoutMs,
-          pollIntervalMs,
-          async () => {
-            await link.syncInbox([pubkyA]);
-            return storage.getGroupChannel(pubkyC, channelId);
-          },
-          channel => channel !== null,
-          'C membership',
-        );
+        try {
+          await pollUntil(
+            now,
+            sleep,
+            receiveTimeoutMs,
+            pollIntervalMs,
+            async () => {
+              await link.syncInbox([pubkyA]);
+              return storage.getGroupChannel(pubkyC, channelId);
+            },
+            channel => channel !== null,
+            'C membership',
+          );
+        } catch (err) {
+          const request = await storage.getMessageRequest(pubkyC, pubkyA);
+          const unprocessed = await storage.getUnprocessedLinkStreamItems(pubkyC, pubkyA);
+          const channel = await storage.getGroupChannel(pubkyC, channelId);
+          throw new Error(
+            `${errorMessage(err)}; request=${request?.status ?? 'none'} unprocessed=${unprocessed.length} channel=${channel ? 'yes' : 'no'}`,
+          );
+        }
         const bMember = await storage.getGroupMember(pubkyB, channelId, pubkyB);
         const cMember = await storage.getGroupMember(pubkyC, channelId, pubkyC);
         if (bMember?.status !== 'active' || cMember?.status !== 'active') {
@@ -249,6 +293,29 @@ export async function runGroupLiveProof(
           },
           row => row?.body === 'liveproof-group-body',
           'C group message',
+        );
+        return sent.eventId;
+      }))
+    ) {
+      return failed();
+    }
+
+    if (
+      !(await record('group-message-b', async () => {
+        await switchToParty(link, partyB);
+        const sent = await groups.sendGroupMessage(channelId, 'liveproof-group-body-b');
+        await switchToParty(link, partyA);
+        await pollUntil(
+          now,
+          sleep,
+          receiveTimeoutMs,
+          pollIntervalMs,
+          async () => {
+            await link.syncInbox([pubkyB]);
+            return storage.getGroupMessage(pubkyA, channelId, pubkyB, sent.eventId);
+          },
+          row => row?.body === 'liveproof-group-body-b',
+          'A group message from B',
         );
         return sent.eventId;
       }))
@@ -354,4 +421,29 @@ export async function runGroupLiveProof(
   }
 
   return report();
+}
+
+async function acceptPendingRequest(
+  link: LiveProofLinkApi,
+  storage: Pick<typeof StorageService, 'getMessageRequest'>,
+  owner: ProofParty,
+  peerPubky: string,
+  peerLabel: string,
+): Promise<string> {
+  await switchToParty(link, owner);
+  const ownerPubky = requirePartyField(owner.pubky, `${owner.label}.pubky`);
+  const pending = await storage.getMessageRequest(ownerPubky, peerPubky);
+  if (pending?.status !== 'pending') {
+    throw new Error(
+      `${owner.label} expected a pending message request from ${peerLabel}, got ${pending?.status ?? 'none'}`,
+    );
+  }
+  await link.acceptMessageRequest(peerPubky);
+  const accepted = await storage.getMessageRequest(ownerPubky, peerPubky);
+  if (accepted?.status !== 'accepted') {
+    throw new Error(
+      `${owner.label} accept did not promote the request (${accepted?.status ?? 'none'})`,
+    );
+  }
+  return `accepted ${peerPubky}`;
 }
