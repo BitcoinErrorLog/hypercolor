@@ -114,6 +114,59 @@ describe('group wire contracts', () => {
     expect(decodeGroupEnvelope(membership.json)).toEqual(membership.envelope);
   });
 
+  it('rejects a group message sent_at outside the Date range', () => {
+    expect(() =>
+      buildGroupMessageEnvelope({
+        channelId: CHANNEL,
+        eventId: EVENT,
+        sentAt: 1e30,
+        body: 'hello',
+      }),
+    ).toThrow('sent_at');
+  });
+
+  it('rejects reaction, edit, delete, and membership sent_at outside the Date range', () => {
+    expect(() =>
+      buildGroupReactionEnvelope({
+        channelId: CHANNEL,
+        eventId: EVENT,
+        targetEventId: TARGET,
+        targetAuthorPubky: HOST,
+        emoji: '👍',
+        sentAt: 1e30,
+      }),
+    ).toThrow('sent_at');
+    expect(() =>
+      buildGroupEditEnvelope({
+        channelId: CHANNEL,
+        eventId: EVENT,
+        targetEventId: TARGET,
+        targetAuthorPubky: HOST,
+        body: 'fixed',
+        sentAt: 1e30,
+      }),
+    ).toThrow('sent_at');
+    expect(() =>
+      buildGroupDeleteEnvelope({
+        channelId: CHANNEL,
+        eventId: EVENT,
+        targetEventId: TARGET,
+        targetAuthorPubky: HOST,
+        sentAt: 1e30,
+      }),
+    ).toThrow('sent_at');
+    expect(() =>
+      buildGroupMembershipEnvelope({
+        channelId: CHANNEL,
+        eventId: EVENT,
+        sentAt: 1e30,
+        op: 'create',
+        name: 'Crew',
+        members: [HOST],
+      }),
+    ).toThrow('sent_at');
+  });
+
   it('rejects malformed known group kinds and peeks unknown kinds', () => {
     expect(decodeGroupEnvelope('{"kind":"chat.group.message.v0"}')).toBeNull();
     expect(

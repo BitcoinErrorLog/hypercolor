@@ -133,7 +133,7 @@ export const LINK_MESSAGE_MAX_BYTES = 1000;
  */
 export const LINK_SENT_AT_UNIX_MS_MAX = 8_640_000_000_000_000;
 
-function isLinkSentAtUnixMs(value: number): boolean {
+export function isLinkSentAtUnixMs(value: number): boolean {
   return Number.isInteger(value) && value > 0 && value <= LINK_SENT_AT_UNIX_MS_MAX;
 }
 
