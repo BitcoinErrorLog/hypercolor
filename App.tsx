@@ -15,6 +15,7 @@ if (__DEV__) {
 import { RootNavigator } from './src/navigation/RootNavigator';
 import { startE2eClipboardChannel } from './src/navigation/e2eClipboardChannel';
 import { handleE2eDeepLink } from './src/navigation/e2eDeepLinks';
+import { loadMainTabIconFont } from './src/navigation/tabBarIcons';
 import { KeyStore } from './src/services/KeyStore';
 import { LinkService, startLinkRetryDrain } from './src/services/link/LinkService';
 import { hydratePersistedAuth } from './src/stores/hydrateAuthSession';
@@ -106,9 +107,15 @@ export default function App() {
     const markReady = () => {
       if (!disposed) setReady(true);
     };
+    const iconFontReady = loadMainTabIconFont().catch(err => {
+      console.warn('[App] tab icon font failed to load:', err);
+    });
+    const afterIconFont = (next: () => void) => {
+      void iconFontReady.finally(next);
+    };
     // Keychain / keystore2 can hang forever on some emulators (never
     // resolve or reject). Fail-open to Welcome; do not invent a crypto path.
-    const readyTimer = setTimeout(markReady, 4000);
+    const readyTimer = setTimeout(() => afterIconFont(markReady), 4000);
     KeyStore.initKeyStore()
       .then(async () => {
         if (disposed) return;
@@ -120,9 +127,9 @@ export default function App() {
         if (disposed) return;
         void recoverAndDrain();
         stopDrain = startLinkRetryDrain();
-        markReady();
+        afterIconFont(markReady);
       })
-      .catch(markReady)
+      .catch(() => afterIconFont(markReady))
       .finally(() => clearTimeout(readyTimer));
 
     if (__DEV__) {

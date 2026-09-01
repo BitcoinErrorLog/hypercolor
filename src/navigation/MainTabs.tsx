@@ -1,6 +1,7 @@
 import React from 'react';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import type { MainTabParamList } from '../types';
+import { MainTabBarIcon, type MainTabName } from './tabBarIcons';
 
 const Tab = createBottomTabNavigator<MainTabParamList>();
 
@@ -9,10 +10,14 @@ const ChannelsScreen = React.lazy(() => import('../screens/main/ChannelsScreen')
 const ContactsScreen = React.lazy(() => import('../screens/main/ContactsScreen'));
 const ProfileScreen = React.lazy(() => import('../screens/main/ProfileScreen'));
 
+function isMainTabName(name: string): name is MainTabName {
+  return name === 'Chats' || name === 'Channels' || name === 'Contacts' || name === 'Profile';
+}
+
 export function MainTabs() {
   return (
     <Tab.Navigator
-      screenOptions={{
+      screenOptions={({ route }) => ({
         headerShown: false,
         tabBarStyle: {
           backgroundColor: '#0a0a0a',
@@ -20,7 +25,11 @@ export function MainTabs() {
         },
         tabBarActiveTintColor: '#7c3aed',
         tabBarInactiveTintColor: '#6b7280',
-      }}
+        tabBarIcon: ({ focused, color, size }) =>
+          isMainTabName(route.name) ? (
+            <MainTabBarIcon routeName={route.name} focused={focused} color={color} size={size} />
+          ) : null,
+      })}
     >
       <Tab.Screen
         name="Chats"

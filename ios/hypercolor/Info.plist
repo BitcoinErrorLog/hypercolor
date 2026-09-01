@@ -37,6 +37,10 @@
 	<true/>
 	<key>UILaunchStoryboardName</key>
 	<string>SplashScreen</string>
+	<key>UIAppFonts</key>
+	<array>
+		<string>Ionicons.ttf</string>
+	</array>
 	<key>UIRequiredDeviceCapabilities</key>
 	<array>
 		<string>arm64</string>
