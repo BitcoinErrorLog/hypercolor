@@ -1,6 +1,7 @@
 import { Linking } from 'react-native';
 import { get as rnGet } from '@synonymdev/react-native-pubky';
 import { x25519GenerateKeypair, sb2VerifySignature, sb2Decrypt } from '../utils/PubkyNoiseModule';
+import { parsePubky, pubkyZ32ToHex } from '../utils/pubkyId';
 import { RING_GRANT_CAPABILITIES } from '../types/link';
 import { KeyStore, type AppCert } from './KeyStore';
 
@@ -102,17 +103,26 @@ export interface DelegationResult {
  */
 export async function handleRingCallback(url: string): Promise<DelegationResult> {
   const parsed = new URL(url);
-  const pubky = parsed.searchParams.get('pubky');
+  const pubkyParam = parsed.searchParams.get('pubky');
   const requestId = parsed.searchParams.get('request_id');
   const mode = parsed.searchParams.get('mode');
   const homeserver = parsed.searchParams.get('homeserver');
 
-  if (!pubky || !requestId || !homeserver) {
+  if (!pubkyParam || !requestId || !homeserver) {
     throw new Error(`Invalid callback URL — missing required params. Got: ${url}`);
   }
   if (mode !== 'secure_handoff') {
     throw new Error(`Unsupported handoff mode: ${mode}`);
   }
+
+  // Ring puts z-base-32 in `pubky` (and `homeserver`). Homeserver stays z32 —
+  // KeyStore / pkarr `resolveHttps` consume z32, not hex. SB2 native hex-parses
+  // `ownerPeeridHex`, so convert the owner pubky once here.
+  const pubky = parsePubky(pubkyParam);
+  if (!pubky) {
+    throw new Error('Invalid callback URL — pubky is not a 52-character z-base-32 key.');
+  }
+  const ownerPeeridHex = pubkyZ32ToHex(pubky);
 
   const ephemeralSkHex = await resolvePendingEphemeralSk();
 
@@ -132,18 +142,22 @@ export async function handleRingCallback(url: string): Promise<DelegationResult>
   const envelopeBase64 = handoffJson.sb2;
 
   // ── Verify + decrypt ──
-  // `pubky` is the hex-encoded Ed25519 public key of the handoff owner.
   // The canonical storage path matches what pubky-ring used when encrypting.
   const storagePath = `/pub/paykit.app/v0/handoff/${requestId}`;
 
-  const isValid = await sb2VerifySignature(envelopeBase64, pubky, storagePath);
+  const isValid = await sb2VerifySignature(envelopeBase64, ownerPeeridHex, storagePath);
   if (!isValid) {
     throw new Error('Handoff SB2 signature verification failed — possible tampering.');
   }
 
   // Decrypt using our ephemeral X25519 secret key (this is the `recipientInboxSkHex`).
   // pubky-ring encrypted to our ephemeralPk, so we decrypt with ephemeralSkHex.
-  const decryptResult = await sb2Decrypt(envelopeBase64, ephemeralSkHex, pubky, storagePath);
+  const decryptResult = await sb2Decrypt(
+    envelopeBase64,
+    ephemeralSkHex,
+    ownerPeeridHex,
+    storagePath,
+  );
   const payloadJson = Buffer.from(decryptResult.plaintext, 'hex').toString('utf8');
   const payload = JSON.parse(payloadJson) as HandoffPayload;
 
