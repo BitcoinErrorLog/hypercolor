@@ -25,6 +25,7 @@
 		CD048A06693A70EC420D2D18 /* ExpoModulesProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4CB466623720FE17F69E268 /* ExpoModulesProvider.swift */; };
 		DDF22DD3AF2EC3A58C60861D /* paykit.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4E99088B43A9934B8B14D28F /* paykit.swift */; };
 		F11748422D0307B40044C1D9 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = F11748412D0307B40044C1D9 /* AppDelegate.swift */; };
+		D4A91B7E6C2F4A18B5E903C1 /* Ionicons.ttf in Resources */ = {isa = PBXBuildFile; fileRef = E5B02C8F7D3A5B29C6F014D2 /* Ionicons.ttf */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -65,6 +66,7 @@
 		ED297162215061F000B7C4FE /* JavaScriptCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = JavaScriptCore.framework; path = System/Library/Frameworks/JavaScriptCore.framework; sourceTree = SDKROOT; };
 		F11748412D0307B40044C1D9 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AppDelegate.swift; path = hypercolor/AppDelegate.swift; sourceTree = "<group>"; };
 		F11748442D0722820044C1D9 /* hypercolor-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; name = "hypercolor-Bridging-Header.h"; path = "hypercolor/hypercolor-Bridging-Header.h"; sourceTree = "<group>"; };
+		E5B02C8F7D3A5B29C6F014D2 /* Ionicons.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; name = Ionicons.ttf; path = hypercolor/Fonts/Ionicons.ttf; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -89,6 +91,7 @@
 				BB2F792B24A3F905000567C9 /* Supporting */,
 				13B07FB51A68108700A75B9A /* Images.xcassets */,
 				13B07FB61A68108700A75B9A /* Info.plist */,
+				E5B02C8F7D3A5B29C6F014D2 /* Ionicons.ttf */,
 				AA286B85B6C04FC6940260E9 /* SplashScreen.storyboard */,
 				CFF77F8E08C889AA71322283 /* PrivacyInfo.xcprivacy */,
 			);
@@ -244,6 +247,7 @@
 				13B07FBF1A68108700A75B9A /* Images.xcassets in Resources */,
 				3E461D99554A48A4959DE609 /* SplashScreen.storyboard in Resources */,
 				3B2ED56DF8E7E1E12301DB08 /* PrivacyInfo.xcprivacy in Resources */,
+				D4A91B7E6C2F4A18B5E903C1 /* Ionicons.ttf in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
