@@ -24,7 +24,7 @@ export async function runRingAuthLiveProof(
   const keyStore = deps.keyStore ?? KeyStore;
   const { record, failed, report } = createLiveProofRecorder(now, []);
 
-  let flow: LinkEnableFlow | null = null;
+  const auth: { flow: LinkEnableFlow | null } = { flow: null };
   let authorizationUrl = '';
 
   try {
@@ -41,8 +41,8 @@ export async function runRingAuthLiveProof(
 
     if (
       !(await record('start-auth-flow', async () => {
-        flow = await enable();
-        authorizationUrl = flow.authorizationUrl;
+        auth.flow = await enable();
+        authorizationUrl = auth.flow.authorizationUrl;
         if (!authorizationUrl.startsWith('pubkyauth:')) {
           throw new Error('authorization URL is not a pubkyauth: URL');
         }
@@ -68,8 +68,8 @@ export async function runRingAuthLiveProof(
 
     if (
       !(await record('await-auth-approval', async () => {
-        if (!flow) throw new Error('auth flow is missing');
-        const enabled = await flow.awaitEnabled();
+        if (!auth.flow) throw new Error('auth flow is missing');
+        const enabled = await auth.flow.awaitEnabled();
         return enabled.pubky;
       }))
     ) {
@@ -97,6 +97,7 @@ export async function runRingAuthLiveProof(
       return failed();
     }
   } finally {
+    auth.flow?.cancel();
     await record('preserve-ring-session', async () => {
       return 'session kept for owner writes; AppCert kept for UKD/identity';
     });

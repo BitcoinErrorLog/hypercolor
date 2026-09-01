@@ -186,6 +186,8 @@ dependencies {
     implementation("org.jetbrains.kotlinx:atomicfu:0.23.1")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.0")
     implementation("org.slf4j:slf4j-api:1.7.36")
+
+    testImplementation("junit:junit:4.13.2")
 }
 
 apply from: "paykit-aar-integrity.gradle"

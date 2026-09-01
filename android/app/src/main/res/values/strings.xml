@@ -1,3 +1,5 @@
 <resources>
     <string name="app_name">hypercolor</string>
+    <string name="paykit_auth_keepalive_channel">Pubky Ring</string>
+    <string name="paykit_auth_keepalive_text">Connecting to Pubky Ring</string>
 </resources>

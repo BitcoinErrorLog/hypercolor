@@ -112,6 +112,17 @@ class PaykitLinkModule: NSObject {
         }
     }
 
+    @objc func stopAuthKeepalive(
+        _ flowId: String,
+        resolver resolve: @escaping RCTPromiseResolveBlock,
+        rejecter reject: @escaping RCTPromiseRejectBlock
+    ) {
+        runAsync(resolve, reject) {
+            _ = try Self.requireText(flowId, name: "flowId")
+            return NSNull()
+        }
+    }
+
     @objc func signinWithSecret(
         _ identitySecretHex: String,
         resolver resolve: @escaping RCTPromiseResolveBlock,

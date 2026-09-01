@@ -44,6 +44,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import org.json.JSONObject
 
 class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaModule(reactContext) {
@@ -55,6 +56,7 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
     private val sessions = ConcurrentHashMap<String, ChatSession>()
     private val flows = ConcurrentHashMap<String, ChatAuthFlow>()
     private val handles = ConcurrentHashMap<String, LinkHandle>()
+    private val keepaliveOwner = AuthKeepaliveOwner()
 
     override fun getName(): String = "PaykitLinkModule"
 
@@ -64,6 +66,7 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
     }
 
     override fun invalidate() {
+        releaseAllAuthKeepalive()
         job.cancel()
         super.invalidate()
     }
@@ -98,6 +101,12 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
             )
             val flowId = UUID.randomUUID().toString()
             flows[flowId] = flow
+            try {
+                startAuthKeepalive(flowId)
+            } catch (error: Throwable) {
+                flows.remove(flowId)
+                throw if (error is PaykitLinkBridgeError) error else mapError(error)
+            }
             resolveMap(promise) {
                 putString("flowId", flowId)
                 putString("authorizationUrl", flow.authorizationUrl())
@@ -111,7 +120,20 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
             val id = requireText(flowId, "flowId")
             val flow = flows.remove(id)
                 ?: throw PaykitLinkBridgeError("validation", "unknown auth flow")
-            persistSession(flow.awaitApproval(), promise)
+            try {
+                startAuthKeepalive(id)
+                persistSession(flow.awaitApproval(), promise)
+            } finally {
+                releaseAuthKeepalive(id)
+            }
+        }
+    }
+
+    @ReactMethod
+    fun stopAuthKeepalive(flowId: String, promise: Promise) {
+        launch(promise) {
+            releaseAuthKeepalive(requireText(flowId, "flowId"))
+            promise.resolve(null)
         }
     }
 
@@ -176,6 +198,7 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
             sessions.clear()
             flows.clear()
             handles.clear()
+            releaseAllAuthKeepalive()
             clientMutex.withLock { client = null }
             store.clearAll()
             promise.resolve(null)
@@ -623,6 +646,33 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
                 ),
             )
         }
+    }
+
+    private suspend fun startAuthKeepalive(attemptId: String) {
+        when (keepaliveOwner.claim(attemptId)) {
+            AuthKeepaliveOwner.ClaimResult.AlreadyRunning -> return
+            AuthKeepaliveOwner.ClaimResult.Adopted -> return
+            AuthKeepaliveOwner.ClaimResult.Start -> Unit
+        }
+        try {
+            withContext(Dispatchers.Main.immediate) {
+                PaykitAuthKeepaliveService.start(reactApplicationContext.applicationContext)
+            }
+        } catch (error: Throwable) {
+            keepaliveOwner.release(attemptId)
+            Log.e(PAYKIT_LINK_LOG_TAG, "auth keepalive start failed type=${error.javaClass.name}")
+            throw PaykitLinkBridgeError("unavailable", staticMessage("unavailable"))
+        }
+    }
+
+    private fun releaseAuthKeepalive(attemptId: String) {
+        if (!keepaliveOwner.release(attemptId)) return
+        PaykitAuthKeepaliveService.stop(reactApplicationContext.applicationContext)
+    }
+
+    private fun releaseAllAuthKeepalive() {
+        if (!keepaliveOwner.releaseAll()) return
+        PaykitAuthKeepaliveService.stop(reactApplicationContext.applicationContext)
     }
 
     private fun launch(promise: Promise, block: suspend () -> Unit) {

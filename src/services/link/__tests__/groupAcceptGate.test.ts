@@ -52,6 +52,7 @@ jest.mock('../PaykitLinkNative', () => ({
     getReceiverPublicKey: jest.fn(),
     startAuthFlow: jest.fn(),
     awaitAuthApproval: jest.fn(),
+    stopAuthKeepalive: jest.fn(),
     signinWithSecret: jest.fn(),
     signupWithSecret: jest.fn(),
     restoreSession: jest.fn(),

@@ -43,14 +43,23 @@ describe('PaykitLinkNative contract', () => {
     expect(SOURCE).toContain('clearAllNativeSecrets(): Promise<void>');
     const api: Pick<
       PaykitLinkNativeApi,
-      'signinWithSecret' | 'signupWithSecret' | 'clearAllNativeSecrets'
+      'signinWithSecret' | 'signupWithSecret' | 'clearAllNativeSecrets' | 'stopAuthKeepalive'
     > = {
       signinWithSecret: async () => ({ sessionAlias: 'a', pubky: 'b' }),
       signupWithSecret: async () => ({ sessionAlias: 'a', pubky: 'b' }),
       clearAllNativeSecrets: async () => undefined,
+      stopAuthKeepalive: async () => undefined,
     };
     expect(typeof api.signinWithSecret).toBe('function');
     expect(typeof api.signupWithSecret).toBe('function');
     expect(typeof api.clearAllNativeSecrets).toBe('function');
+    expect(typeof api.stopAuthKeepalive).toBe('function');
+  });
+
+  it('treats a missing stopAuthKeepalive native method as a no-op', () => {
+    expect(SOURCE).toContain('stopAuthKeepalive(flowId: string): Promise<void>');
+    expect(SOURCE).toMatch(
+      /typeof PaykitLinkModule\.stopAuthKeepalive !== 'function'[\s\S]*return Promise\.resolve\(\)/,
+    );
   });
 });

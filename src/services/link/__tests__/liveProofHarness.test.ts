@@ -109,6 +109,7 @@ jest.mock('../PaykitLinkNative', () => ({
     signinWithSecret: jest.fn(),
     startAuthFlow: jest.fn(),
     awaitAuthApproval: jest.fn(),
+    stopAuthKeepalive: jest.fn(),
     generateReceiverKey: jest.fn(),
     publishReceiverMarker: jest.fn(),
     getReceiverMarker: jest.fn(),
@@ -1014,6 +1015,30 @@ describe('product live-proof step machines', () => {
         'preserve-ring-session',
       ]),
     );
+  });
+
+  it('P6 cancels the enable flow when opening the auth URL fails', async () => {
+    const cancel = jest.fn();
+    const awaitEnabled = jest.fn();
+    const enable = jest.fn(async () => ({
+      authorizationUrl: 'pubkyauth://grant',
+      cancel,
+      awaitEnabled,
+    }));
+    const report = await runRingAuthLiveProof(
+      {},
+      {
+        native: mockedNative as unknown as PaykitLinkNativeApi,
+        enable,
+        openAuthUrl: async () => {
+          throw new Error('ring missing');
+        },
+        ...clockDeps(),
+      },
+    );
+    expect(report.ok).toBe(false);
+    expect(cancel).toHaveBeenCalled();
+    expect(awaitEnabled).not.toHaveBeenCalled();
   });
 
   it('runNamedLiveProofs dispatches p0 without running native sendPrivateMessageJson', async () => {

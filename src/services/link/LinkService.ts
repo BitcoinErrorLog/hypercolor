@@ -338,33 +338,48 @@ export const LinkService = {
    * Ring-based enable: one startAuthFlow with
    * `/pub/paykit/:rw,/pub/hypercolor.app/v1/:rw`. The caller presents
    * `authorizationUrl` (QR / open Ring), then `awaitEnabled`.
+   * Android starts a foreground keepalive in `startAuthFlow` (before Ring
+   * is launched) and stops it from `awaitEnabled` finally / `cancel`.
    */
   async enable(): Promise<LinkEnableFlow> {
     if (!PaykitLinkNative.isAvailable()) {
       throw createLinkNativeError('unavailable', 'PaykitLinkModule native module is not available');
     }
-    const { flowId, authorizationUrl } =
-      await PaykitLinkNative.startAuthFlow(formatAuthFlowCapabilities(RING_GRANT_CAPABILITIES));
+    const { flowId, authorizationUrl } = await PaykitLinkNative.startAuthFlow(
+      formatAuthFlowCapabilities(RING_GRANT_CAPABILITIES),
+    );
     let cancelled = false;
+    const stopKeepalive = async () => {
+      try {
+        await PaykitLinkNative.stopAuthKeepalive(flowId);
+      } catch {
+        // Keepalive stop must not mask auth success, cancellation, or failure.
+      }
+    };
     return {
       authorizationUrl,
       cancel: () => {
         cancelled = true;
+        void stopKeepalive();
       },
       awaitEnabled: async () => {
-        const { sessionAlias, pubky } = await PaykitLinkNative.awaitAuthApproval(flowId);
-        if (cancelled) {
-          try {
-            await PaykitLinkNative.signOutSession(sessionAlias);
-          } catch {
-            // Detached flow: drop the unused session.
+        try {
+          const { sessionAlias, pubky } = await PaykitLinkNative.awaitAuthApproval(flowId);
+          if (cancelled) {
+            try {
+              await PaykitLinkNative.signOutSession(sessionAlias);
+            } catch {
+              // Detached flow: drop the unused session.
+            }
+            throw new Error('LinkService.enable: the messaging enable flow was cancelled');
           }
-          throw new Error('LinkService.enable: the messaging enable flow was cancelled');
+          KeyStore.setPubky(pubky);
+          KeyStore.setLinkSession(sessionAlias);
+          session = { alias: sessionAlias, pubky };
+          return provisionReceiver(sessionAlias, pubky);
+        } finally {
+          await stopKeepalive();
         }
-        KeyStore.setPubky(pubky);
-        KeyStore.setLinkSession(sessionAlias);
-        session = { alias: sessionAlias, pubky };
-        return provisionReceiver(sessionAlias, pubky);
       },
     };
   },

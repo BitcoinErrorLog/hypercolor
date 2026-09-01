@@ -47,6 +47,7 @@ jest.mock('../PaykitLinkNative', () => ({
     getReceiverPublicKey: jest.fn(),
     startAuthFlow: jest.fn(),
     awaitAuthApproval: jest.fn(),
+    stopAuthKeepalive: jest.fn(),
     signinWithSecret: jest.fn(),
     signupWithSecret: jest.fn(),
     restoreSession: jest.fn(),
@@ -375,6 +376,7 @@ describe('LinkService', () => {
     mockedNative.signinWithSecret.mockResolvedValue({ sessionAlias: SESSION_ALIAS, pubky: OWNER });
     mockedNative.signOutSession.mockResolvedValue(undefined);
     mockedNative.clearAllNativeSecrets.mockResolvedValue(undefined);
+    mockedNative.stopAuthKeepalive.mockResolvedValue(undefined);
     mockedNative.closeLink.mockResolvedValue(undefined);
     mockedNative.probeInboundLink.mockResolvedValue({ result: 'none' });
     mockedNative.getReceiverMarker.mockResolvedValue({
@@ -593,6 +595,110 @@ describe('LinkService', () => {
         receiverPath: LINK_RECEIVER_PATH,
         noisePublicKey: 'noise-healed',
       });
+    });
+
+    it('stops auth keepalive in finally after awaitEnabled succeeds', async () => {
+      mockedNative.startAuthFlow.mockResolvedValue({
+        flowId: 'flow-1',
+        authorizationUrl: 'pubkyauth://grant',
+      });
+      mockedNative.awaitAuthApproval.mockResolvedValue({
+        sessionAlias: SESSION_ALIAS,
+        pubky: OWNER,
+      });
+      mockedNative.getReceiverPublicKey.mockResolvedValue('existing-noise');
+
+      const flow = await LinkService.enable();
+      await flow.awaitEnabled();
+
+      expect(mockedNative.stopAuthKeepalive).toHaveBeenCalledWith('flow-1');
+      const awaitOrder = mockedNative.awaitAuthApproval.mock.invocationCallOrder[0]!;
+      const stopOrder = mockedNative.stopAuthKeepalive.mock.invocationCallOrder[0]!;
+      expect(awaitOrder).toBeLessThan(stopOrder);
+    });
+
+    it('stops auth keepalive in finally when awaitAuthApproval rejects', async () => {
+      mockedNative.startAuthFlow.mockResolvedValue({
+        flowId: 'flow-1',
+        authorizationUrl: 'pubkyauth://grant',
+      });
+      mockedNative.awaitAuthApproval.mockRejectedValue({
+        code: 'network',
+        message: 'network error',
+      });
+
+      const flow = await LinkService.enable();
+      await expect(flow.awaitEnabled()).rejects.toEqual({
+        code: 'network',
+        message: 'network error',
+      });
+      expect(mockedNative.stopAuthKeepalive).toHaveBeenCalledWith('flow-1');
+    });
+
+    it('stops auth keepalive on cancel even if awaitEnabled was never called', async () => {
+      mockedNative.startAuthFlow.mockResolvedValue({
+        flowId: 'flow-1',
+        authorizationUrl: 'pubkyauth://grant',
+      });
+
+      const flow = await LinkService.enable();
+      flow.cancel();
+      await Promise.resolve();
+
+      expect(mockedNative.awaitAuthApproval).not.toHaveBeenCalled();
+      expect(mockedNative.stopAuthKeepalive).toHaveBeenCalledWith('flow-1');
+    });
+
+    it('does not mask awaitEnabled success if stopAuthKeepalive rejects', async () => {
+      mockedNative.startAuthFlow.mockResolvedValue({
+        flowId: 'flow-1',
+        authorizationUrl: 'pubkyauth://grant',
+      });
+      mockedNative.awaitAuthApproval.mockResolvedValue({
+        sessionAlias: SESSION_ALIAS,
+        pubky: OWNER,
+      });
+      mockedNative.getReceiverPublicKey.mockResolvedValue('existing-noise');
+      mockedNative.stopAuthKeepalive.mockRejectedValue({
+        code: 'unavailable',
+        message: 'unavailable',
+      });
+
+      const flow = await LinkService.enable();
+      await expect(flow.awaitEnabled()).resolves.toEqual({
+        pubky: OWNER,
+        receiverPath: LINK_RECEIVER_PATH,
+        noisePublicKey: 'existing-noise',
+      });
+      expect(mockedNative.stopAuthKeepalive).toHaveBeenCalledWith('flow-1');
+    });
+
+    it('does not let a cancelled flow stop a newer attempt keepalive', async () => {
+      mockedNative.startAuthFlow
+        .mockResolvedValueOnce({
+          flowId: 'flow-old',
+          authorizationUrl: 'pubkyauth://grant',
+        })
+        .mockResolvedValueOnce({
+          flowId: 'flow-new',
+          authorizationUrl: 'pubkyauth://grant',
+        });
+      mockedNative.awaitAuthApproval.mockResolvedValue({
+        sessionAlias: SESSION_ALIAS,
+        pubky: OWNER,
+      });
+      mockedNative.getReceiverPublicKey.mockResolvedValue('existing-noise');
+
+      const first = await LinkService.enable();
+      const second = await LinkService.enable();
+      first.cancel();
+      await Promise.resolve();
+
+      expect(mockedNative.stopAuthKeepalive).toHaveBeenCalledWith('flow-old');
+      expect(mockedNative.stopAuthKeepalive.mock.calls.map(call => call[0])).toEqual(['flow-old']);
+
+      await second.awaitEnabled();
+      expect(mockedNative.stopAuthKeepalive).toHaveBeenCalledWith('flow-new');
     });
   });
 

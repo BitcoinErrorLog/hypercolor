@@ -18,6 +18,10 @@ RCT_EXTERN_METHOD(awaitAuthApproval:(NSString *)flowId
                   resolver:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject)
 
+RCT_EXTERN_METHOD(stopAuthKeepalive:(NSString *)flowId
+                  resolver:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
+
 RCT_EXTERN_METHOD(signinWithSecret:(NSString *)identitySecretHex
                   resolver:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject)

@@ -168,6 +168,12 @@ export interface PaykitLinkNativeApi {
   startAuthFlow(capabilities: string, relayUrl?: string): Promise<AuthFlowStart>;
   awaitAuthApproval(flowId: string): Promise<AuthSessionResult>;
   /**
+   * Android: stop the Ring-auth foreground keepalive if `flowId` still owns
+   * it. A stale id must not stop a newer attempt. No-op when the native
+   * method is missing (iOS / older builds).
+   */
+  stopAuthKeepalive(flowId: string): Promise<void>;
+  /**
    * Dev/e2e only — release native builds reject with `unavailable` /
    * "secret import is disabled in release builds". Signs in with an
    * identity secret; native stores the bearer under `sessionAlias`.
@@ -333,6 +339,13 @@ export const PaykitLinkNative: PaykitLinkNativeApi = {
 
   awaitAuthApproval(flowId: string): Promise<AuthSessionResult> {
     return invoke('awaitAuthApproval', flowId);
+  },
+
+  stopAuthKeepalive(flowId: string): Promise<void> {
+    if (PaykitLinkModule == null || typeof PaykitLinkModule.stopAuthKeepalive !== 'function') {
+      return Promise.resolve();
+    }
+    return invoke('stopAuthKeepalive', flowId);
   },
 
   signinWithSecret(identitySecretHex: string): Promise<AuthSessionResult> {
