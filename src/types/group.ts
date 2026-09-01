@@ -1,6 +1,6 @@
 import type { PubkyKey } from './index';
 import type { LinkDeliveryState } from './link';
-import { LINK_MESSAGE_MAX_BYTES, parseLinkSentAt } from './link';
+import { isLinkSentAtUnixMs, LINK_MESSAGE_MAX_BYTES, parseLinkSentAt } from './link';
 import { CHAT_ATTACHMENT_KIND } from './attachment';
 
 /**
@@ -516,7 +516,7 @@ export function buildGroupMessageEnvelope(input: {
   if (!UUID_PATTERN.test(input.eventId)) {
     throw new GroupServiceError('invalid-input', `${GROUP_MESSAGE_KIND} event_id must be a UUID`);
   }
-  if (!Number.isInteger(input.sentAt) || input.sentAt <= 0) {
+  if (!isLinkSentAtUnixMs(input.sentAt)) {
     throw new GroupServiceError(
       'invalid-input',
       `${GROUP_MESSAGE_KIND} sent_at must be a positive Unix-millisecond integer`,
@@ -572,7 +572,7 @@ export function buildGroupReactionEnvelope(input: {
       `${GROUP_REACTION_KIND} target_author_pubky is invalid`,
     );
   }
-  if (!Number.isInteger(input.sentAt) || input.sentAt <= 0) {
+  if (!isLinkSentAtUnixMs(input.sentAt)) {
     throw new GroupServiceError('invalid-input', `${GROUP_REACTION_KIND} sent_at is invalid`);
   }
   if (emoji.length === 0 || emoji.length > 32) {
@@ -610,7 +610,7 @@ export function buildGroupEditEnvelope(input: {
       `${GROUP_EDIT_KIND} target_author_pubky is invalid`,
     );
   }
-  if (!Number.isInteger(input.sentAt) || input.sentAt <= 0) {
+  if (!isLinkSentAtUnixMs(input.sentAt)) {
     throw new GroupServiceError('invalid-input', `${GROUP_EDIT_KIND} sent_at is invalid`);
   }
   if (body.length === 0) {
@@ -646,7 +646,7 @@ export function buildGroupDeleteEnvelope(input: {
       `${GROUP_DELETE_KIND} target_author_pubky is invalid`,
     );
   }
-  if (!Number.isInteger(input.sentAt) || input.sentAt <= 0) {
+  if (!isLinkSentAtUnixMs(input.sentAt)) {
     throw new GroupServiceError('invalid-input', `${GROUP_DELETE_KIND} sent_at is invalid`);
   }
   const envelope: GroupDeleteEnvelope = {
@@ -677,7 +677,7 @@ export function buildGroupMembershipEnvelope(input: {
       `${GROUP_MEMBERSHIP_KIND} event_id must be a UUID`,
     );
   }
-  if (!Number.isInteger(input.sentAt) || input.sentAt <= 0) {
+  if (!isLinkSentAtUnixMs(input.sentAt)) {
     throw new GroupServiceError('invalid-input', `${GROUP_MEMBERSHIP_KIND} sent_at is invalid`);
   }
   const envelope: GroupMembershipEnvelope = {

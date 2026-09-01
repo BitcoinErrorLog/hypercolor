@@ -11,7 +11,9 @@ import {
   isValidReceiverPath,
   LINK_MESSAGE_MAX_BYTES,
   LINK_RECEIVER_PATH,
+  LINK_SENT_AT_UNIX_MS_MAX,
   parseDmConversationId,
+  parseLinkSentAt,
   PUBKY_APP_DM_KIND,
 } from '../../../types/link';
 
@@ -92,6 +94,12 @@ describe('link wire contracts', () => {
       ).toThrow('sent_at');
     });
 
+    it('throws on a sent_at outside the Date range', () => {
+      expect(() =>
+        buildChatMessageEnvelope({ eventId: EVENT_ID, sentAt: 1e30, body: 'hi' }),
+      ).toThrow('sent_at');
+    });
+
     it('throws when the serialized envelope exceeds the byte ceiling', () => {
       expect(() =>
         buildChatMessageEnvelope({
@@ -152,6 +160,10 @@ describe('link wire contracts', () => {
       expect(decodeChatMessageEnvelope(JSON.stringify({ ...valid, sent_at: '2026' }))).toBeNull();
     });
 
+    it('returns null for sent_at outside the Date range', () => {
+      expect(decodeChatMessageEnvelope(JSON.stringify({ ...valid, sent_at: 1e30 }))).toBeNull();
+    });
+
     it('returns null for an empty body', () => {
       expect(decodeChatMessageEnvelope(JSON.stringify({ ...valid, body: '  ' }))).toBeNull();
     });
@@ -160,6 +172,25 @@ describe('link wire contracts', () => {
       const iso = '2026-01-01T00:00:00.000Z';
       const decoded = decodeChatMessageEnvelope(JSON.stringify({ ...valid, sent_at: iso }));
       expect(decoded?.sent_at).toBe(Date.parse(iso));
+    });
+  });
+
+  describe('parseLinkSentAt', () => {
+    it('accepts a positive Unix-ms integer at the Date ceiling', () => {
+      expect(parseLinkSentAt(LINK_SENT_AT_UNIX_MS_MAX)).toBe(LINK_SENT_AT_UNIX_MS_MAX);
+      expect(parseLinkSentAt(1_756_742_400_000)).toBe(1_756_742_400_000);
+    });
+
+    it('rejects integers outside the Date range', () => {
+      expect(parseLinkSentAt(1e30)).toBeNull();
+      expect(parseLinkSentAt(8.64e15 + 1)).toBeNull();
+      expect(parseLinkSentAt(2 ** 53 + 1)).toBeNull();
+    });
+
+    it('accepts a legacy ISO-8601 datetime and normalizes to Unix-ms', () => {
+      expect(parseLinkSentAt('2026-08-21T10:00:00.000Z')).toBe(
+        Date.parse('2026-08-21T10:00:00.000Z'),
+      );
     });
   });
 
