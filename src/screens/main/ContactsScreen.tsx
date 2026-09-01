@@ -25,7 +25,8 @@ export default function ContactsScreen() {
   const nav = useNavigation<Nav>();
   const ownerPubky = useAuthStore(s => s.pubky);
   const upsertContact = useContactStore(s => s.upsertContact);
-  const storeContacts = useContactStore(s => Object.values(s.contacts));
+  const contactsMap = useContactStore(s => s.contacts);
+  const storeContacts = Object.values(contactsMap);
   const [pendingCount, setPendingCount] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
   const [syncing, setSyncing] = useState(false);
