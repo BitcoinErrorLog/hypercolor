@@ -635,6 +635,23 @@ describe('LinkService', () => {
       expect(mockedNative.stopAuthKeepalive).toHaveBeenCalledWith('flow-1');
     });
 
+    it('does not call native awaitAuthApproval after cancel', async () => {
+      mockedNative.startAuthFlow.mockResolvedValue({
+        flowId: 'flow-1',
+        authorizationUrl: 'pubkyauth://grant',
+      });
+
+      const flow = await LinkService.enable();
+      flow.cancel();
+      await Promise.resolve();
+
+      await expect(flow.awaitEnabled()).rejects.toThrow(
+        'LinkService.enable: the messaging enable flow was cancelled',
+      );
+      expect(mockedNative.awaitAuthApproval).not.toHaveBeenCalled();
+      expect(mockedNative.stopAuthKeepalive).toHaveBeenCalledWith('flow-1');
+    });
+
     it('stops auth keepalive on cancel even if awaitEnabled was never called', async () => {
       mockedNative.startAuthFlow.mockResolvedValue({
         flowId: 'flow-1',

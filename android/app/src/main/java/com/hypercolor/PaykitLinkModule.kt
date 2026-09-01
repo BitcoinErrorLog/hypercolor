@@ -44,7 +44,6 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.withContext
 import org.json.JSONObject
 
 class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaModule(reactContext) {
@@ -54,19 +53,33 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
     private val clientMutex = Mutex()
     private var client: ChatClient? = null
     private val sessions = ConcurrentHashMap<String, ChatSession>()
-    private val flows = ConcurrentHashMap<String, ChatAuthFlow>()
+    private val flows = AuthFlowSlots<ChatAuthFlow>()
     private val handles = ConcurrentHashMap<String, LinkHandle>()
-    private val keepaliveOwner = AuthKeepaliveOwner()
+    private val keepalive = AuthKeepaliveCoordinator(
+        ops = object : AuthKeepaliveOps {
+            override fun start() {
+                PaykitAuthKeepaliveService.start(reactApplicationContext.applicationContext)
+            }
+
+            override fun stop() {
+                PaykitAuthKeepaliveService.stop(reactApplicationContext.applicationContext)
+            }
+        },
+        handler = MainKeepaliveHandler(),
+        scheduler = HandlerKeepaliveScheduler(),
+    )
 
     override fun getName(): String = "PaykitLinkModule"
 
     override fun initialize() {
         super.initialize()
         PaykitAndroid.initializeOrThrow(reactApplicationContext)
+        keepalive.attach()
     }
 
     override fun invalidate() {
-        releaseAllAuthKeepalive()
+        keepalive.releaseAll()
+        keepalive.detach()
         job.cancel()
         super.invalidate()
     }
@@ -100,11 +113,11 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
                 optionalText(relayUrl),
             )
             val flowId = UUID.randomUUID().toString()
-            flows[flowId] = flow
+            flows.put(flowId, flow)
             try {
                 startAuthKeepalive(flowId)
             } catch (error: Throwable) {
-                flows.remove(flowId)
+                flows.take(flowId)
                 throw if (error is PaykitLinkBridgeError) error else mapError(error)
             }
             resolveMap(promise) {
@@ -118,10 +131,13 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
     fun awaitAuthApproval(flowId: String, promise: Promise) {
         launch(promise) {
             val id = requireText(flowId, "flowId")
-            val flow = flows.remove(id)
+            if (flows.peek(id) == null) {
+                throw PaykitLinkBridgeError("validation", "unknown auth flow")
+            }
+            startAuthKeepalive(id)
+            val flow = flows.take(id)
                 ?: throw PaykitLinkBridgeError("validation", "unknown auth flow")
             try {
-                startAuthKeepalive(id)
                 persistSession(flow.awaitApproval(), promise)
             } finally {
                 releaseAuthKeepalive(id)
@@ -198,7 +214,7 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
             sessions.clear()
             flows.clear()
             handles.clear()
-            releaseAllAuthKeepalive()
+            keepalive.releaseAll()
             clientMutex.withLock { client = null }
             store.clearAll()
             promise.resolve(null)
@@ -648,31 +664,17 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
         }
     }
 
-    private suspend fun startAuthKeepalive(attemptId: String) {
-        when (keepaliveOwner.claim(attemptId)) {
-            AuthKeepaliveOwner.ClaimResult.AlreadyRunning -> return
-            AuthKeepaliveOwner.ClaimResult.Adopted -> return
-            AuthKeepaliveOwner.ClaimResult.Start -> Unit
-        }
+    private fun startAuthKeepalive(attemptId: String) {
         try {
-            withContext(Dispatchers.Main.immediate) {
-                PaykitAuthKeepaliveService.start(reactApplicationContext.applicationContext)
-            }
+            keepalive.ensureStarted(attemptId)
         } catch (error: Throwable) {
-            keepaliveOwner.release(attemptId)
             Log.e(PAYKIT_LINK_LOG_TAG, "auth keepalive start failed type=${error.javaClass.name}")
             throw PaykitLinkBridgeError("unavailable", staticMessage("unavailable"))
         }
     }
 
     private fun releaseAuthKeepalive(attemptId: String) {
-        if (!keepaliveOwner.release(attemptId)) return
-        PaykitAuthKeepaliveService.stop(reactApplicationContext.applicationContext)
-    }
-
-    private fun releaseAllAuthKeepalive() {
-        if (!keepaliveOwner.releaseAll()) return
-        PaykitAuthKeepaliveService.stop(reactApplicationContext.applicationContext)
+        keepalive.release(attemptId)
     }
 
     private fun launch(promise: Promise, block: suspend () -> Unit) {

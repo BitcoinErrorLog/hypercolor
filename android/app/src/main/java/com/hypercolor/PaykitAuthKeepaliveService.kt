@@ -31,6 +31,29 @@ class PaykitAuthKeepaliveService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
+    /**
+     * Android 15+ `dataSync` FGS timeout. The product ceiling is the
+     * pubky-core HTTP relay unused-request timeout (10 minutes); this
+     * callback is the system backstop so a missed client stop cannot
+     * leave the 6-hour shade notification.
+     *
+     * API 35 calls `onTimeout(startId, fgsType)`, whose default
+     * implementation delegates here. Override both so a timeout on
+     * either entry stops this startId only.
+     */
+    override fun onTimeout(startId: Int) {
+        handleSystemTimeout(startId)
+    }
+
+    override fun onTimeout(startId: Int, fgsType: Int) {
+        handleSystemTimeout(startId)
+    }
+
+    private fun handleSystemTimeout(startId: Int) {
+        systemTimeoutListener?.invoke()
+        stopSelf(startId)
+    }
+
     private fun ensureChannel() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val manager = getSystemService(NotificationManager::class.java) ?: return
@@ -84,6 +107,9 @@ class PaykitAuthKeepaliveService : Service() {
     companion object {
         private const val CHANNEL_ID = "paykit_auth_keepalive"
         private const val NOTIFICATION_ID = 0x504B41 // "PKA"
+
+        @Volatile
+        internal var systemTimeoutListener: (() -> Unit)? = null
 
         fun start(context: Context) {
             val app = context.applicationContext

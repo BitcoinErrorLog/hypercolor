@@ -364,6 +364,9 @@ export const LinkService = {
       },
       awaitEnabled: async () => {
         try {
+          if (cancelled) {
+            throw new Error('LinkService.enable: the messaging enable flow was cancelled');
+          }
           const { sessionAlias, pubky } = await PaykitLinkNative.awaitAuthApproval(flowId);
           if (cancelled) {
             try {

@@ -1,59 +1,135 @@
 package com.hypercolor
 
 /**
- * Race-safe ownership for the Ring-auth foreground keepalive.
+ * Race-safe ownership and start-lifecycle for the Ring-auth foreground
+ * keepalive.
  *
- * A stale attempt must not stop a newer attempt's service. [claim] and
- * [release] are keyed by the Paykit auth `flowId` (the attempt token).
+ * Lifecycle is [Phase.Idle] → [Phase.Starting] → [Phase.Confirmed]. A
+ * superseding claim must not treat an unconfirmed start as a running
+ * service. A stale [failStart] / [release] must not clear a newer owner.
+ *
+ * [generation] increments on every new [ClaimKind.Start] so a late
+ * confirm/fail from a previous start cannot mutate the current attempt.
  */
 internal class AuthKeepaliveOwner {
     private val lock = Any()
     private var ownerId: String? = null
+    private var phase: Phase = Phase.Idle
+    private var generation: Long = 0L
 
-    enum class ClaimResult {
-        /** No owner; caller must start the foreground service. */
+    enum class Phase { Idle, Starting, Confirmed }
+
+    enum class ClaimKind {
+        /** Caller must start the service, then [confirmStart] or [failStart]. */
         Start,
 
-        /** This attempt already owns the keepalive; do not start again. */
-        AlreadyRunning,
+        /** This attempt already owns a confirmed service. */
+        AlreadyConfirmed,
+
+        /** Ownership moved onto a service that is already confirmed. */
+        AdoptedConfirmed,
 
         /**
-         * Ownership moved from another attempt. The service should already
-         * be running; do not call `startForegroundService` (the app may
-         * already be backgrounded).
+         * A start is in flight (this attempt or another). Wait for that
+         * generation to settle, then [claim] again. Do not start again.
          */
-        Adopted,
+        AwaitUnconfirmed,
     }
+
+    data class ClaimResult(
+        val kind: ClaimKind,
+        val generation: Long,
+    )
 
     fun claim(attemptId: String): ClaimResult {
         synchronized(lock) {
-            val previous = ownerId
-            ownerId = attemptId
-            return when (previous) {
-                attemptId -> ClaimResult.AlreadyRunning
-                null -> ClaimResult.Start
-                else -> ClaimResult.Adopted
+            if (ownerId == attemptId) {
+                return when (phase) {
+                    Phase.Confirmed -> ClaimResult(ClaimKind.AlreadyConfirmed, generation)
+                    Phase.Starting -> ClaimResult(ClaimKind.AwaitUnconfirmed, generation)
+                    Phase.Idle -> beginStart(attemptId)
+                }
+            }
+            return when (phase) {
+                Phase.Confirmed -> {
+                    ownerId = attemptId
+                    ClaimResult(ClaimKind.AdoptedConfirmed, generation)
+                }
+                Phase.Starting -> {
+                    ownerId = attemptId
+                    ClaimResult(ClaimKind.AwaitUnconfirmed, generation)
+                }
+                Phase.Idle -> beginStart(attemptId)
             }
         }
     }
 
-    /** Returns true iff the caller should stop the service. */
-    fun release(attemptId: String): Boolean {
+    /**
+     * Marks the in-flight start confirmed. Returns true when this generation
+     * is still the current start. If ownership was cleared while starting,
+     * returns false so the starter stops the orphaned service.
+     */
+    fun confirmStart(attemptId: String, startGeneration: Long): Boolean {
         synchronized(lock) {
-            if (ownerId != attemptId) return false
-            ownerId = null
+            if (startGeneration != generation || phase != Phase.Starting) return false
+            if (ownerId == null) {
+                phase = Phase.Idle
+                return false
+            }
+            phase = Phase.Confirmed
             return true
         }
     }
 
-    /** Returns true iff a service was owned and should stop. */
+    /**
+     * Records that [startGeneration] failed. Clears ownership only when this
+     * attempt still owns. A newer owner is left in [Phase.Idle] so it can
+     * [claim] [ClaimKind.Start].
+     */
+    fun failStart(attemptId: String, startGeneration: Long): Boolean {
+        synchronized(lock) {
+            if (startGeneration != generation || phase != Phase.Starting) return false
+            phase = Phase.Idle
+            if (ownerId == attemptId) {
+                ownerId = null
+            }
+            return true
+        }
+    }
+
+    /** Returns true iff the caller should stop the confirmed service. */
+    fun release(attemptId: String): Boolean {
+        synchronized(lock) {
+            if (ownerId != attemptId) return false
+            val shouldStop = phase == Phase.Confirmed
+            ownerId = null
+            if (phase == Phase.Confirmed) {
+                phase = Phase.Idle
+            }
+            return shouldStop
+        }
+    }
+
+    /** Returns true iff a confirmed service should stop. */
     fun releaseAll(): Boolean {
         synchronized(lock) {
-            val hadOwner = ownerId != null
+            val shouldStop = phase == Phase.Confirmed
             ownerId = null
-            return hadOwner
+            phase = Phase.Idle
+            return shouldStop
         }
     }
 
     fun owner(): String? = synchronized(lock) { ownerId }
+
+    fun phase(): Phase = synchronized(lock) { phase }
+
+    fun generation(): Long = synchronized(lock) { generation }
+
+    private fun beginStart(attemptId: String): ClaimResult {
+        ownerId = attemptId
+        phase = Phase.Starting
+        generation += 1L
+        return ClaimResult(ClaimKind.Start, generation)
+    }
 }
