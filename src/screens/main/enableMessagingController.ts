@@ -80,6 +80,18 @@ export function createEnableMessagingController(
         message: null,
         copied: false,
       });
+      // Web parity: present the pubkyauth URL immediately. Ring already in
+      // the Android back stack still receives a new VIEW intent; a failed
+      // open must not abort awaitEnabled (QR + Open Pubky Ring remain).
+      try {
+        await deps.openUrl(flow.authorizationUrl);
+      } catch {
+        // Keep authorizing; the user can tap Open Pubky Ring or scan the QR.
+      }
+      if (cancelled) {
+        flow.cancel();
+        return;
+      }
       const enabled = await flow.awaitEnabled();
       if (cancelled) return;
       emit({

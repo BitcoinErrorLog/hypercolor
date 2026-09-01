@@ -1,7 +1,16 @@
 import React from 'react';
+import { Linking } from 'react-native';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import EnableMessagingScreen from '../EnableMessagingScreen';
 import { LinkService } from '../../../services/link/LinkService';
+
+beforeEach(() => {
+  jest.spyOn(Linking, 'openURL').mockResolvedValue(undefined);
+});
+
+afterEach(() => {
+  jest.restoreAllMocks();
+});
 
 const PUBKYAUTH_URL =
   'pubkyauth:///?caps=/pub/paykit/:rw,/pub/hypercolor.app/v1/:rw&secret=abc&relay=https://relay.example';

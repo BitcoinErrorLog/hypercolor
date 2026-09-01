@@ -37,10 +37,56 @@ export const PAYKIT_MESSAGING_CAPABILITY = '/pub/paykit/:rw';
 export const HYPERCOLOR_WRITE_CAPABILITY = '/pub/hypercolor.app/v1/:rw';
 
 /**
+ * Paykit Chat FFI `startAuthFlow` parses capabilities with
+ * `Capabilities::try_from`: comma-split, then each entry as
+ * `<scope>:<actions>` (exactly one `:`). A combined string treated as
+ * one `Capability` is invalid (two `:`). Always join individually valid
+ * entries. `/pub/paykit/:rw` (or a directory prefix / `/`) is required.
+ */
+const AUTH_FLOW_CAPABILITY_PATTERN = /^\/[^:]*:[rw]+$/;
+const PAYKIT_AUTH_SCOPE = '/pub/paykit/';
+
+/** True when one capability grants read+write over `/pub/paykit/`. */
+export function capabilityCoversPaykitRw(entry: string): boolean {
+  const colon = entry.lastIndexOf(':');
+  if (colon <= 0) return false;
+  const scope = entry.slice(0, colon);
+  const actions = entry.slice(colon + 1);
+  if (!actions.includes('r') || !actions.includes('w')) return false;
+  return scope === PAYKIT_AUTH_SCOPE || (scope.endsWith('/') && PAYKIT_AUTH_SCOPE.startsWith(scope));
+}
+
+/**
+ * Canonical Chat FFI capability list: comma-joined, no empties, each
+ * entry a single `<scope>:<actions>` grant. Throws when the list is
+ * empty, an entry is not a single capability, or `/pub/paykit/` rw is
+ * missing — the same rejects the native `startAuthFlow` would emit.
+ */
+export function formatAuthFlowCapabilities(input: string | readonly string[]): string {
+  const rawParts: readonly string[] = typeof input === 'string' ? input.split(',') : input;
+  const parts = rawParts.map(part => part.trim()).filter(part => part.length > 0);
+  if (parts.length === 0) {
+    throw new Error('capabilities must contain at least one valid entry');
+  }
+  for (const part of parts) {
+    if (!AUTH_FLOW_CAPABILITY_PATTERN.test(part)) {
+      throw new Error('capabilities must be comma-separated <scope>:<actions> entries');
+    }
+  }
+  if (!parts.some(capabilityCoversPaykitRw)) {
+    throw new Error('capabilities must grant /pub/paykit/ read+write');
+  }
+  return parts.join(',');
+}
+
+/**
  * One Ring grant for DMs + owner writes. Requested by Enable Messaging
  * (`startAuthFlow`) and advertised on Welcome `paykit-connect` as `caps=`.
  */
-export const RING_GRANT_CAPABILITIES = `${PAYKIT_MESSAGING_CAPABILITY},${HYPERCOLOR_WRITE_CAPABILITY}`;
+export const RING_GRANT_CAPABILITIES = formatAuthFlowCapabilities([
+  PAYKIT_MESSAGING_CAPABILITY,
+  HYPERCOLOR_WRITE_CAPABILITY,
+]);
 
 const RECEIVER_PATH_PATTERN = /^[a-z0-9][a-z0-9.-]*\/(wallet|server)$/;
 

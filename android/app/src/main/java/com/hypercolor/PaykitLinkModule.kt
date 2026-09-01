@@ -92,7 +92,10 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
     @ReactMethod
     fun startAuthFlow(capabilities: String, relayUrl: String?, promise: Promise) {
         launch(promise) {
-            val flow = chatClient().startAuthFlow(requireText(capabilities, "capabilities"), optionalText(relayUrl))
+            val flow = chatClient().startAuthFlow(
+                canonicalizeCapabilities(requireText(capabilities, "capabilities")),
+                optionalText(relayUrl),
+            )
             val flowId = UUID.randomUUID().toString()
             flows[flowId] = flow
             resolveMap(promise) {
@@ -824,18 +827,35 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
         if (paykit != null) {
             val code = ffiCode(paykit) ?: "protocol"
             val coarse = mapFfiCode(code)
-            if (BuildConfig.DEBUG) {
-                Log.d(PAYKIT_LINK_LOG_TAG, "Paykit FFI error code=$code mapped=$coarse")
-            }
+            // Release must keep the FFI code; do not log exception text
+            // (auth URLs carry a client secret).
+            Log.e(PAYKIT_LINK_LOG_TAG, "Paykit FFI error code=$code mapped=$coarse")
             return PaykitLinkBridgeError(coarse, staticMessage(coarse))
         }
-        Log.d(PAYKIT_LINK_LOG_TAG, "unmapped native error type=${error.javaClass.name}")
+        Log.e(PAYKIT_LINK_LOG_TAG, "unmapped native error type=${error.javaClass.name}")
         return PaykitLinkBridgeError("protocol", staticMessage("protocol"))
     }
 
+    /**
+     * Chat FFI `Capabilities::try_from` comma-splits. Passing the joined
+     * grant as one `Capability` fails (two `:`). Re-join valid entries.
+     */
+    private fun canonicalizeCapabilities(raw: String): String {
+        val parts = raw.split(',').map { it.trim() }.filter { it.isNotEmpty() }
+        if (parts.isEmpty()) {
+            throw PaykitLinkBridgeError("validation", staticMessage("validation"))
+        }
+        for (part in parts) {
+            if (!part.startsWith("/") || part.count { it == ':' } != 1) {
+                throw PaykitLinkBridgeError("validation", staticMessage("validation"))
+            }
+        }
+        return parts.joinToString(",")
+    }
+
     private fun mapFfiCode(code: String): String = when (code) {
-        "transport_error", "send_failed", "receive_failed" -> "network"
-        "signin_failed", "signup_failed", "session_restore_failed", "auth_flow_failed", "capabilities_missing" -> "auth"
+        "transport_error", "send_failed", "receive_failed", "auth_flow_failed" -> "network"
+        "signin_failed", "signup_failed", "session_restore_failed", "capabilities_missing" -> "auth"
         "validation" -> "validation"
         "consumed" -> "consumed"
         else -> "protocol"

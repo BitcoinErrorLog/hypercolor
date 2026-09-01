@@ -79,7 +79,9 @@ class PaykitLinkModule: NSObject {
         rejecter reject: @escaping RCTPromiseRejectBlock
     ) {
         runAsync(resolve, reject) {
-            let caps = try Self.requireText(capabilities, name: "capabilities")
+            let caps = try Self.canonicalizeCapabilities(
+                try Self.requireText(capabilities, name: "capabilities")
+            )
             let relay = Self.optionalText(relayUrl)
             let flow = try await self.chatClient().startAuthFlow(capabilities: caps, relayUrl: relay)
             let flowId = UUID().uuidString.lowercased()
@@ -933,32 +935,47 @@ class PaykitLinkModule: NSObject {
             return bridge
         }
         guard let paykit = error as? PaykitError else {
-            paykitLinkLog.debug("unmapped native error type=\(String(describing: type(of: error)), privacy: .public)")
+            paykitLinkLog.error("unmapped native error type=\(String(describing: type(of: error)), privacy: .public)")
             return PaykitLinkBridgeError(code: "protocol", message: staticMessage("protocol"))
         }
-        let (ffiCode, context): (String, String)
+        let ffiCode: String
         switch paykit {
-        case let .Storage(code, ctx),
-             let .Identity(code, ctx),
-             let .Transport(code, ctx),
-             let .NotFound(code, ctx),
-             let .Protocol(code, ctx),
-             let .Policy(code, ctx),
-             let .PaymentAdapter(code, ctx),
-             let .RecoveryRequired(code, ctx):
+        case let .Storage(code, _),
+             let .Identity(code, _),
+             let .Transport(code, _),
+             let .NotFound(code, _),
+             let .Protocol(code, _),
+             let .Policy(code, _),
+             let .PaymentAdapter(code, _),
+             let .RecoveryRequired(code, _):
             ffiCode = code
-            context = ctx
         }
         let coarse = mapFfiCode(ffiCode)
-        paykitLinkLog.debug("Paykit FFI error code=\(ffiCode, privacy: .public) mapped=\(coarse, privacy: .public) context=\(context, privacy: .private)")
+        // Release must keep the FFI code; do not log context (auth URLs carry a client secret).
+        paykitLinkLog.error("Paykit FFI error code=\(ffiCode, privacy: .public) mapped=\(coarse, privacy: .public)")
         return PaykitLinkBridgeError(code: coarse, message: staticMessage(coarse))
+    }
+
+    /// Chat FFI `Capabilities::try_from` comma-splits. Passing the joined
+    /// grant as one `Capability` fails (two `:`). Re-join valid entries.
+    private static func canonicalizeCapabilities(_ raw: String) throws -> String {
+        let parts = raw.split(separator: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+        if parts.isEmpty {
+            throw PaykitLinkBridgeError(code: "validation", message: staticMessage("validation"))
+        }
+        for part in parts {
+            if !part.hasPrefix("/") || part.filter({ $0 == ":" }).count != 1 {
+                throw PaykitLinkBridgeError(code: "validation", message: staticMessage("validation"))
+            }
+        }
+        return parts.joined(separator: ",")
     }
 
     private static func mapFfiCode(_ code: String) -> String {
         switch code {
-        case "transport_error", "send_failed", "receive_failed":
+        case "transport_error", "send_failed", "receive_failed", "auth_flow_failed":
             return "network"
-        case "signin_failed", "signup_failed", "session_restore_failed", "auth_flow_failed", "capabilities_missing":
+        case "signin_failed", "signup_failed", "session_restore_failed", "capabilities_missing":
             return "auth"
         case "validation":
             return "validation"
