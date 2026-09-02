@@ -28,21 +28,53 @@ import { ENABLE_AUTH_TTL_MS } from '../copy/uxCopy';
 
 // ─── Pending handoff state ────────────────────────────────────────────────────
 
+export class StaleDelegationRequestError extends Error {
+  override readonly name = 'StaleDelegationRequestError';
+  constructor() {
+    super('Stale delegation request');
+  }
+}
+
+export function isStaleDelegationRequestError(err: unknown): boolean {
+  return err instanceof StaleDelegationRequestError;
+}
+
+export type PendingDelegationSnapshot = {
+  url: string;
+  expiresAt: number;
+  generation: number;
+};
+
+export type DelegationRequest = PendingDelegationSnapshot;
+
 interface PendingHandoff {
   ephemeralSkHex: string;
   startedAt: number;
+  url: string;
+  generation: number;
 }
 
 let _pending: PendingHandoff | null = null;
+let delegationGeneration = 0;
+let writeChain: Promise<void> = Promise.resolve();
 
 export async function cancelPendingDelegation(): Promise<void> {
+  delegationGeneration += 1;
   _pending = null;
   await KeyStore.clearPendingRingHandoff();
 }
 
+export function getPendingDelegationSnapshot(): PendingDelegationSnapshot | null {
+  if (!_pending?.url) return null;
+  return {
+    url: _pending.url,
+    expiresAt: _pending.startedAt + ENABLE_AUTH_TTL_MS,
+    generation: _pending.generation,
+  };
+}
+
 export function getPendingDelegationExpiresAt(): number | null {
-  if (!_pending) return null;
-  return _pending.startedAt + ENABLE_AUTH_TTL_MS;
+  return getPendingDelegationSnapshot()?.expiresAt ?? null;
 }
 
 export function buildPaykitConnectUrl(deviceId: string, ephemeralPkHex: string): string {
@@ -57,29 +89,70 @@ export function buildPaykitConnectUrl(deviceId: string, ephemeralPkHex: string):
   );
 }
 
+async function discardIfCurrentGeneration(myGen: number): Promise<void> {
+  if (_pending?.generation !== myGen) return;
+  _pending = null;
+  await KeyStore.clearPendingRingHandoff();
+}
+
 /**
  * Generates an ephemeral X25519 keypair and builds the paykit-connect deep link.
  * Opens pubky-ring when it is installed on this device. Always returns
- * `{ url, expiresAt }` so Welcome can show a QR / copy on AwaitingRingAuth
- * even if Ring is elsewhere. Each call mints a new ephemeral keypair.
+ * `{ url, expiresAt, generation }` so Welcome can show a QR / copy on
+ * AwaitingRingAuth even if Ring is elsewhere. Each call mints a new
+ * ephemeral keypair.
+ *
+ * Concurrent calls share one generation counter. Stale generations never persist
+ * `_pending`, never open Ring, and never return a URL.
  *
  * @param deviceId - An identifier for this device/session, e.g. "hypercolor-{timestamp}"
  */
-export async function requestDelegation(
-  deviceId: string,
-): Promise<{ url: string; expiresAt: number }> {
+export async function requestDelegation(deviceId: string): Promise<DelegationRequest> {
+  const myGen = ++delegationGeneration;
   const { secretKey: ephemeralSkHex, publicKey: ephemeralPkHex } = await x25519GenerateKeypair();
 
-  const url = buildPaykitConnectUrl(deviceId, ephemeralPkHex);
-  const startedAt = Date.now();
-  _pending = { ephemeralSkHex, startedAt };
-  await KeyStore.setPendingRingHandoff(ephemeralSkHex);
+  let result: DelegationRequest | null = null;
+  let stale = false;
 
-  const canOpen = await Linking.canOpenURL('pubkyring://');
-  if (canOpen) {
-    await Linking.openURL(url);
+  const write = writeChain.then(async () => {
+    if (myGen !== delegationGeneration) {
+      stale = true;
+      return;
+    }
+    const url = buildPaykitConnectUrl(deviceId, ephemeralPkHex);
+    const startedAt = Date.now();
+    _pending = { ephemeralSkHex, startedAt, url, generation: myGen };
+    await KeyStore.setPendingRingHandoff(ephemeralSkHex);
+    if (myGen !== delegationGeneration) {
+      await discardIfCurrentGeneration(myGen);
+      stale = true;
+      return;
+    }
+    const canOpen = await Linking.canOpenURL('pubkyring://');
+    if (myGen !== delegationGeneration) {
+      await discardIfCurrentGeneration(myGen);
+      stale = true;
+      return;
+    }
+    if (canOpen) {
+      await Linking.openURL(url);
+    }
+    if (myGen !== delegationGeneration) {
+      await discardIfCurrentGeneration(myGen);
+      stale = true;
+      return;
+    }
+    result = { url, expiresAt: startedAt + ENABLE_AUTH_TTL_MS, generation: myGen };
+  });
+  writeChain = write.then(
+    () => undefined,
+    () => undefined,
+  );
+  await write;
+  if (stale || !result) {
+    throw new StaleDelegationRequestError();
   }
-  return { url, expiresAt: startedAt + ENABLE_AUTH_TTL_MS };
+  return result;
 }
 
 /**
@@ -257,4 +330,6 @@ export const PubkyRingAuthService = {
   handleRingCallback,
   cancelPendingDelegation,
   getPendingDelegationExpiresAt,
+  getPendingDelegationSnapshot,
+  isStaleDelegationRequestError,
 };

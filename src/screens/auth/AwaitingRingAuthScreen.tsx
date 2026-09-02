@@ -16,16 +16,48 @@ import type { RouteProp } from '@react-navigation/native';
 import type { AuthStackParamList } from '../../types';
 import { AuthQr } from '../../components/AuthQr';
 import { copyText } from '../../utils/copyText';
-import { COPY, ENABLE_AUTH_TTL_MS } from '../../copy/uxCopy';
+import { COPY } from '../../copy/uxCopy';
 import { CustodyLine } from '../../ui/CustodyLine';
 import { HIT_SLOP_44 } from '../../ui/hitTarget';
-import { PubkyRingAuthService } from '../../services/PubkyRingAuthService';
+import {
+  PubkyRingAuthService,
+  type PendingDelegationSnapshot,
+} from '../../services/PubkyRingAuthService';
 import { subscribeConnectAuthFeedback } from '../../ui/connectAuthFeedback';
+import {
+  finishConnectDelegation,
+  tryBeginConnectDelegation,
+} from '../../ui/connectDelegationStart';
 
 type Nav = NativeStackNavigationProp<AuthStackParamList, 'AwaitingRingAuth'>;
 type Route = RouteProp<AuthStackParamList, 'AwaitingRingAuth'>;
 
 type AwaitPhase = 'waiting' | 'expired' | 'denied' | 'offline';
+
+function resolveHandoff(params: Route['params'] | undefined): PendingDelegationSnapshot | null {
+  const pending = PubkyRingAuthService.getPendingDelegationSnapshot();
+  const paramUrl = params?.ringAuthUrl;
+  const paramExpires = params?.expiresAt;
+  const paramGen = params?.generation;
+  const paramsCoherent = Boolean(paramUrl) && typeof paramExpires === 'number';
+  if (paramsCoherent && pending) {
+    if (pending.generation > (paramGen ?? 0)) return pending;
+    return {
+      url: paramUrl as string,
+      expiresAt: paramExpires as number,
+      generation: paramGen ?? pending.generation,
+    };
+  }
+  if (paramsCoherent) {
+    return {
+      url: paramUrl as string,
+      expiresAt: paramExpires as number,
+      generation: paramGen ?? 0,
+    };
+  }
+  if (pending) return pending;
+  return null;
+}
 
 /**
  * Shown after Welcome starts paykit-connect.
@@ -34,22 +66,14 @@ type AwaitPhase = 'waiting' | 'expired' | 'denied' | 'offline';
 export default function AwaitingRingAuthScreen() {
   const nav = useNavigation<Nav>();
   const route = useRoute<Route>();
-  const initialUrl = route.params?.ringAuthUrl ?? '';
-  const [ringAuthUrl, setRingAuthUrl] = useState(initialUrl);
-  const [expiresAt, setExpiresAt] = useState(() => {
-    return (
-      route.params?.expiresAt ??
-      PubkyRingAuthService.getPendingDelegationExpiresAt() ??
-      Date.now() + ENABLE_AUTH_TTL_MS
-    );
-  });
+  const initial = resolveHandoff(route.params);
+  const [ringAuthUrl, setRingAuthUrl] = useState(initial?.url ?? '');
+  const [expiresAt, setExpiresAt] = useState(initial?.expiresAt ?? 0);
   const [copied, setCopied] = useState(false);
+  const [delegationBusy, setDelegationBusy] = useState(false);
   const [phase, setPhase] = useState<AwaitPhase>(() => {
-    const expires =
-      route.params?.expiresAt ??
-      PubkyRingAuthService.getPendingDelegationExpiresAt() ??
-      Date.now() + ENABLE_AUTH_TTL_MS;
-    return Date.now() >= expires ? 'expired' : 'waiting';
+    if (!initial) return 'expired';
+    return Date.now() >= initial.expiresAt ? 'expired' : 'waiting';
   });
 
   function handleCopy() {
@@ -64,14 +88,30 @@ export default function AwaitingRingAuthScreen() {
   }, [nav]);
 
   const startNewDelegation = useCallback(async () => {
-    await PubkyRingAuthService.cancelPendingDelegation();
-    const deviceId = `hypercolor-${Date.now().toString(16)}`;
-    const next = await PubkyRingAuthService.requestDelegation(deviceId);
-    setRingAuthUrl(next.url);
-    setExpiresAt(next.expiresAt);
-    setCopied(false);
-    setPhase(Date.now() >= next.expiresAt ? 'expired' : 'waiting');
-  }, []);
+    if (!tryBeginConnectDelegation()) return;
+    setDelegationBusy(true);
+    try {
+      await PubkyRingAuthService.cancelPendingDelegation();
+      const deviceId = `hypercolor-${Date.now().toString(16)}`;
+      const next = await PubkyRingAuthService.requestDelegation(deviceId);
+      nav.setParams({
+        ringAuthUrl: next.url,
+        expiresAt: next.expiresAt,
+        generation: next.generation,
+      });
+      setRingAuthUrl(next.url);
+      setExpiresAt(next.expiresAt);
+      setCopied(false);
+      setPhase(Date.now() >= next.expiresAt ? 'expired' : 'waiting');
+    } catch (err) {
+      if (!PubkyRingAuthService.isStaleDelegationRequestError(err)) {
+        setPhase('offline');
+      }
+    } finally {
+      finishConnectDelegation();
+      setDelegationBusy(false);
+    }
+  }, [nav]);
 
   const handleGenerateNew = useCallback(async () => {
     await PubkyRingAuthService.cancelPendingDelegation();
@@ -79,14 +119,11 @@ export default function AwaitingRingAuthScreen() {
   }, [nav]);
 
   const handleTryAgain = useCallback(async () => {
+    if (delegationBusy) return;
     if (phase === 'offline' || phase === 'denied' || phase === 'expired') {
-      try {
-        await startNewDelegation();
-      } catch {
-        setPhase('offline');
-      }
+      await startNewDelegation();
     }
-  }, [phase, startNewDelegation]);
+  }, [delegationBusy, phase, startNewDelegation]);
 
   useEffect(() => {
     const sub = BackHandler.addEventListener('hardwareBackPress', () => {
@@ -192,7 +229,9 @@ export default function AwaitingRingAuthScreen() {
               testID="awaitingRingAuthGenerateNew"
               accessibilityRole="button"
               accessibilityLabel={COPY.generateNewLink}
-              style={styles.primaryButton}
+              accessibilityState={{ busy: delegationBusy, disabled: delegationBusy }}
+              disabled={delegationBusy}
+              style={[styles.primaryButton, delegationBusy && styles.buttonDisabled]}
               onPress={() => {
                 void handleGenerateNew();
               }}
@@ -206,12 +245,18 @@ export default function AwaitingRingAuthScreen() {
                 testID="awaitingRingAuthTryAgain"
                 accessibilityRole="button"
                 accessibilityLabel={COPY.tryAgain}
-                style={styles.primaryButton}
+                accessibilityState={{ busy: delegationBusy, disabled: delegationBusy }}
+                disabled={delegationBusy}
+                style={[styles.primaryButton, delegationBusy && styles.buttonDisabled]}
                 onPress={() => {
                   void handleTryAgain();
                 }}
               >
-                <Text style={styles.primaryButtonText}>{COPY.tryAgain}</Text>
+                {delegationBusy ? (
+                  <ActivityIndicator color="#fff" />
+                ) : (
+                  <Text style={styles.primaryButtonText}>{COPY.tryAgain}</Text>
+                )}
               </TouchableOpacity>
               <TouchableOpacity
                 testID="awaitingRingAuthSecondaryCancel"
@@ -268,6 +313,7 @@ const styles = StyleSheet.create({
     alignSelf: 'stretch',
   },
   primaryButtonText: { color: '#fff', fontSize: 16, fontWeight: '600' },
+  buttonDisabled: { opacity: 0.6 },
   secondaryButton: {
     borderWidth: 1,
     borderColor: '#374151',

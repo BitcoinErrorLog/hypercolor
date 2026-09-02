@@ -90,8 +90,10 @@ export type AuthStackParamList = {
   /**
    * Waiting for `hypercolor://ring-callback`.
    * `ringAuthUrl` is the `pubkyring://paykit-connect…` link shown as QR + copy.
+   * URL, absolute `expiresAt`, and `generation` are one handoff; a restore
+   * without that record is expired — never a fabricated TTL.
    */
-  AwaitingRingAuth: { ringAuthUrl: string; expiresAt?: number };
+  AwaitingRingAuth: { ringAuthUrl: string; expiresAt?: number; generation?: number };
 };
 
 export type MainTabParamList = {

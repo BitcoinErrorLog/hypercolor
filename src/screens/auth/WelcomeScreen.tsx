@@ -1,4 +1,4 @@
-import React, { useCallback, useRef, useState } from 'react';
+import React, { useCallback, useState } from 'react';
 import {
   View,
   Text,
@@ -17,6 +17,10 @@ import { COPY } from '../../copy/uxCopy';
 import { CustodyLine } from '../../ui/CustodyLine';
 import { ErrorDetails } from '../../ui/ErrorDetails';
 import { sanitizeError } from '../../ui/sanitizedError';
+import {
+  finishConnectDelegation,
+  tryBeginConnectDelegation,
+} from '../../ui/connectDelegationStart';
 
 type Nav = NativeStackNavigationProp<AuthStackParamList, 'Welcome'>;
 
@@ -24,29 +28,33 @@ export default function WelcomeScreen() {
   const nav = useNavigation<Nav>();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<{ message: string; details: string | null } | null>(null);
-  const inFlight = useRef(false);
 
   useFocusEffect(
     useCallback(() => {
-      inFlight.current = false;
+      finishConnectDelegation();
       setLoading(false);
+      return () => {
+        finishConnectDelegation();
+      };
     }, []),
   );
 
   async function handleConnect() {
-    if (inFlight.current || loading) return;
-    inFlight.current = true;
+    if (loading) return;
+    if (!tryBeginConnectDelegation()) return;
     setLoading(true);
     setError(null);
     try {
       const deviceId = `hypercolor-${Date.now().toString(16)}`;
-      const { url, expiresAt } = await PubkyRingAuthService.requestDelegation(deviceId);
-      nav.navigate('AwaitingRingAuth', { ringAuthUrl: url, expiresAt });
+      const { url, expiresAt, generation } = await PubkyRingAuthService.requestDelegation(deviceId);
+      nav.navigate('AwaitingRingAuth', { ringAuthUrl: url, expiresAt, generation });
     } catch (err) {
-      inFlight.current = false;
-      const sanitized = sanitizeError(err, COPY.couldNotStartAuthorization);
-      setError({ message: sanitized.message, details: sanitized.details });
+      if (!PubkyRingAuthService.isStaleDelegationRequestError(err)) {
+        const sanitized = sanitizeError(err, COPY.couldNotStartAuthorization);
+        setError({ message: sanitized.message, details: sanitized.details });
+      }
     } finally {
+      finishConnectDelegation();
       setLoading(false);
     }
   }

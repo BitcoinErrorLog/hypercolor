@@ -3,6 +3,7 @@ import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import WelcomeScreen from '../WelcomeScreen';
 import { PubkyRingAuthService } from '../../../services/PubkyRingAuthService';
 import { COPY } from '../../../copy/uxCopy';
+import { finishConnectDelegation } from '../../../ui/connectDelegationStart';
 
 const PAYKIT_CONNECT_URL =
   'pubkyring://paykit-connect?deviceId=hypercolor-sim&callback=hypercolor%3A%2F%2Fring-callback&ephemeralPk=aabbcc&caps=%2Fpub%2Fpaykit%2F%3Arw%2C%2Fpub%2Fhypercolor.app%2Fv1%2F%3Arw';
@@ -25,6 +26,7 @@ jest.mock('@react-navigation/native', () => ({
 jest.mock('../../../services/PubkyRingAuthService', () => ({
   PubkyRingAuthService: {
     requestDelegation: jest.fn(),
+    isStaleDelegationRequestError: jest.fn().mockReturnValue(false),
   },
 }));
 
@@ -37,7 +39,9 @@ describe('WelcomeScreen', () => {
     mockNavigate.mockReset();
     mockFocusCallback = undefined;
     mockLastFocusEffect = undefined;
+    finishConnectDelegation();
     (PubkyRingAuthService.requestDelegation as jest.Mock).mockReset();
+    (PubkyRingAuthService.isStaleDelegationRequestError as jest.Mock).mockReturnValue(false);
   });
 
   it('shows the custody line and never uses pubky-ring hyphenation', async () => {
@@ -58,6 +62,7 @@ describe('WelcomeScreen', () => {
     (PubkyRingAuthService.requestDelegation as jest.Mock).mockResolvedValue({
       url: PAYKIT_CONNECT_URL,
       expiresAt,
+      generation: 1,
     });
 
     let tree!: ReactTestRenderer;
@@ -74,6 +79,7 @@ describe('WelcomeScreen', () => {
     expect(mockNavigate).toHaveBeenCalledWith('AwaitingRingAuth', {
       ringAuthUrl: PAYKIT_CONNECT_URL,
       expiresAt,
+      generation: 1,
     });
     await act(async () => {
       tree.unmount();

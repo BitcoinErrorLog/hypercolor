@@ -4,16 +4,18 @@ import AwaitingRingAuthScreen from '../AwaitingRingAuthScreen';
 import { COPY, ENABLE_AUTH_TTL_MS } from '../../../copy/uxCopy';
 import { PubkyRingAuthService } from '../../../services/PubkyRingAuthService';
 import { notifyConnectAuthFeedback } from '../../../ui/connectAuthFeedback';
+import { finishConnectDelegation } from '../../../ui/connectDelegationStart';
 
 const PAYKIT_CONNECT_URL =
   'pubkyring://paykit-connect?deviceId=hypercolor-sim&callback=hypercolor%3A%2F%2Fring-callback&ephemeralPk=aabbcc&caps=%2Fpub%2Fpaykit%2F%3Arw%2C%2Fpub%2Fhypercolor.app%2Fv1%2F%3Arw';
 
 const mockGoBack = jest.fn();
+const mockSetParams = jest.fn();
 const mockUseRoute = jest.fn();
 const mockSetString = jest.fn();
 
 jest.mock('@react-navigation/native', () => ({
-  useNavigation: () => ({ goBack: mockGoBack }),
+  useNavigation: () => ({ goBack: mockGoBack, setParams: mockSetParams }),
   useRoute: () => mockUseRoute(),
 }));
 
@@ -25,6 +27,8 @@ jest.mock('../../../services/PubkyRingAuthService', () => ({
   PubkyRingAuthService: {
     cancelPendingDelegation: jest.fn().mockResolvedValue(undefined),
     getPendingDelegationExpiresAt: jest.fn().mockReturnValue(null),
+    getPendingDelegationSnapshot: jest.fn().mockReturnValue(null),
+    isStaleDelegationRequestError: jest.fn().mockReturnValue(false),
     requestDelegation: jest.fn(),
   },
 }));
@@ -47,10 +51,19 @@ describe('AwaitingRingAuthScreen', () => {
   beforeEach(() => {
     mockSetString.mockReset();
     mockGoBack.mockReset();
+    mockSetParams.mockReset();
+    finishConnectDelegation();
     mockUseRoute.mockReturnValue({
-      params: { ringAuthUrl: PAYKIT_CONNECT_URL, expiresAt: Date.now() + ENABLE_AUTH_TTL_MS },
+      params: {
+        ringAuthUrl: PAYKIT_CONNECT_URL,
+        expiresAt: Date.now() + ENABLE_AUTH_TTL_MS,
+        generation: 1,
+      },
     });
     (PubkyRingAuthService.getPendingDelegationExpiresAt as jest.Mock).mockReturnValue(null);
+    (PubkyRingAuthService.getPendingDelegationSnapshot as jest.Mock).mockReturnValue(null);
+    (PubkyRingAuthService.isStaleDelegationRequestError as jest.Mock).mockReturnValue(false);
+    (PubkyRingAuthService.requestDelegation as jest.Mock).mockReset();
   });
 
   it('shows a QR of the paykit-connect URL and first-class scan copy', async () => {
@@ -119,6 +132,77 @@ describe('AwaitingRingAuthScreen', () => {
       notifyConnectAuthFeedback('offline');
     });
     expect(JSON.stringify(tree.toJSON())).toContain(COPY.sessionOffline);
+    await unmount(tree);
+  });
+
+  it('ignores a second Try again tap while requestDelegation is in flight', async () => {
+    let resolveRequest!: (value: { url: string; expiresAt: number; generation: number }) => void;
+    (PubkyRingAuthService.requestDelegation as jest.Mock).mockImplementation(
+      () =>
+        new Promise(resolve => {
+          resolveRequest = resolve;
+        }),
+    );
+    const tree = await render(<AwaitingRingAuthScreen />);
+    await act(async () => {
+      notifyConnectAuthFeedback('denied');
+    });
+    await act(async () => {
+      tree.root.findByProps({ testID: 'awaitingRingAuthTryAgain' }).props.onPress();
+      tree.root.findByProps({ testID: 'awaitingRingAuthTryAgain' }).props.onPress();
+    });
+    expect(PubkyRingAuthService.requestDelegation).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      resolveRequest({
+        url: `${PAYKIT_CONNECT_URL}&retry=1`,
+        expiresAt: Date.now() + ENABLE_AUTH_TTL_MS,
+        generation: 2,
+      });
+    });
+    expect(PubkyRingAuthService.requestDelegation).toHaveBeenCalledTimes(1);
+    await unmount(tree);
+  });
+
+  it('writes retried URL and expiry into route params and keeps them across remount', async () => {
+    const retryUrl = `${PAYKIT_CONNECT_URL}&ephemeralPk=retry`;
+    const retryExpiresAt = Date.now() + ENABLE_AUTH_TTL_MS;
+    (PubkyRingAuthService.requestDelegation as jest.Mock).mockResolvedValue({
+      url: retryUrl,
+      expiresAt: retryExpiresAt,
+      generation: 2,
+    });
+    const tree = await render(<AwaitingRingAuthScreen />);
+    await act(async () => {
+      notifyConnectAuthFeedback('denied');
+    });
+    await act(async () => {
+      tree.root.findByProps({ testID: 'awaitingRingAuthTryAgain' }).props.onPress();
+    });
+    expect(mockSetParams).toHaveBeenCalledWith({
+      ringAuthUrl: retryUrl,
+      expiresAt: retryExpiresAt,
+      generation: 2,
+    });
+    await unmount(tree);
+
+    mockUseRoute.mockReturnValue({
+      params: { ringAuthUrl: retryUrl, expiresAt: retryExpiresAt, generation: 2 },
+    });
+    const remounted = await render(<AwaitingRingAuthScreen />);
+    expect(remounted.root.findAllByProps({ children: retryUrl }).length).toBeGreaterThan(0);
+    expect(remounted.root.findAllByProps({ children: PAYKIT_CONNECT_URL })).toHaveLength(0);
+    await unmount(remounted);
+  });
+
+  it('shows expired recovery when restored without a coherent pending record', async () => {
+    mockUseRoute.mockReturnValue({ params: undefined });
+    (PubkyRingAuthService.getPendingDelegationSnapshot as jest.Mock).mockReturnValue(null);
+    (PubkyRingAuthService.getPendingDelegationExpiresAt as jest.Mock).mockReturnValue(null);
+    const tree = await render(<AwaitingRingAuthScreen />);
+    expect(JSON.stringify(tree.toJSON())).toContain(COPY.authorizationExpired);
+    expect(tree.root.findAllByProps({ testID: 'authQr' })).toHaveLength(0);
+    expect(tree.root.findByProps({ testID: 'awaitingRingAuthGenerateNew' })).toBeTruthy();
+    expect(tree.root.findAllByProps({ testID: 'awaitingRingAuthOpenRing' })).toHaveLength(0);
     await unmount(tree);
   });
 });

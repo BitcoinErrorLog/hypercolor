@@ -44,13 +44,29 @@ import {
   buildPaykitConnectUrl,
   cancelPendingDelegation,
   certFromHandoffAppKey,
+  getPendingDelegationSnapshot,
   handleRingCallback,
   requestDelegation,
   resolvePendingEphemeralSk,
+  StaleDelegationRequestError,
 } from '../PubkyRingAuthService';
 import { RING_GRANT_CAPABILITIES } from '../../types/link';
 import { pubkyZ32ToHex } from '../../utils/pubkyId';
 import { ENABLE_AUTH_TTL_MS } from '../../copy/uxCopy';
+
+function deferred<T>(): {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+  reject: (reason?: unknown) => void;
+} {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
 
 let mockPersistedHandoffSk: string | null = null;
 
@@ -151,6 +167,39 @@ describe('requestDelegation', () => {
     expect(second.url).toBe(buildPaykitConnectUrl('hypercolor-other', 'pk-2'));
     expect(x25519GenerateKeypair).toHaveBeenCalledTimes(2);
     expect(KeyStore.setPendingRingHandoff).toHaveBeenLastCalledWith('ephemeral-sk-2');
+  });
+
+  it('discards a stale requestDelegation when a newer generation finishes first', async () => {
+    (Linking.canOpenURL as jest.Mock).mockResolvedValue(true);
+    const firstKey = deferred<{ secretKey: string; publicKey: string }>();
+    const secondKey = deferred<{ secretKey: string; publicKey: string }>();
+    (x25519GenerateKeypair as jest.Mock)
+      .mockImplementationOnce(() => firstKey.promise)
+      .mockImplementationOnce(() => secondKey.promise);
+
+    const first = requestDelegation('device-a');
+    const second = requestDelegation('device-b');
+
+    secondKey.resolve({ secretKey: 'sk-b', publicKey: 'pk-b' });
+    const secondResult = await second;
+    expect(secondResult.url).toBe(buildPaykitConnectUrl('device-b', 'pk-b'));
+    expect(secondResult.generation).toBeGreaterThan(0);
+    expect(await resolvePendingEphemeralSk()).toBe('sk-b');
+    expect(getPendingDelegationSnapshot()).toEqual(
+      expect.objectContaining({
+        url: secondResult.url,
+        generation: secondResult.generation,
+      }),
+    );
+    expect(Linking.openURL).toHaveBeenCalledTimes(1);
+    expect(Linking.openURL).toHaveBeenCalledWith(secondResult.url);
+
+    firstKey.resolve({ secretKey: 'sk-a', publicKey: 'pk-a' });
+    await expect(first).rejects.toBeInstanceOf(StaleDelegationRequestError);
+    expect(await resolvePendingEphemeralSk()).toBe('sk-b');
+    expect(getPendingDelegationSnapshot()?.url).toBe(secondResult.url);
+    expect(KeyStore.setPendingRingHandoff).not.toHaveBeenCalledWith('sk-a');
+    expect(Linking.openURL).not.toHaveBeenCalledWith(buildPaykitConnectUrl('device-a', 'pk-a'));
   });
 });
 
