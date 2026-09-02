@@ -42,17 +42,28 @@ describe('paymentComposeError', () => {
 });
 
 describe('PaymentComposeSheet', () => {
+  it('starts with an empty amount so the user must enter one', async () => {
+    const tree = await render(
+      <PaymentComposeSheet visible busy={false} onClose={jest.fn()} onSubmit={jest.fn()} />,
+    );
+    expect(tree.root.findByProps({ testID: 'paymentComposeAmount' }).props.value).toBe('');
+    await unmount(tree);
+  });
+
   it('does not submit an empty payment reference and shows an error', async () => {
     const onSubmit = jest.fn();
     const tree = await render(
       <PaymentComposeSheet visible busy={false} onClose={jest.fn()} onSubmit={onSubmit} />,
     );
+    await act(async () => {
+      tree.root.findByProps({ testID: 'paymentComposeAmount' }).props.onChangeText('0.001');
+    });
     const submit = tree.root.findByProps({ testID: 'paymentComposeSubmit' });
     await act(async () => {
       submit.props.onPress();
     });
     expect(onSubmit).not.toHaveBeenCalled();
-    expect(tree.root.findByProps({ testID: 'paymentComposeError' }).props.children).toBe(
+    expect(tree.root.findByProps({ testID: 'paymentComposeError' }).props.accessibilityLabel).toBe(
       'Enter a payment reference',
     );
     await unmount(tree);
@@ -63,6 +74,9 @@ describe('PaymentComposeSheet', () => {
     const tree = await render(
       <PaymentComposeSheet visible busy={false} onClose={jest.fn()} onSubmit={onSubmit} />,
     );
+    await act(async () => {
+      tree.root.findByProps({ testID: 'paymentComposeAmount' }).props.onChangeText('0.001');
+    });
     await act(async () => {
       tree.root.findByProps({ testID: 'paymentComposeReference' }).props.onChangeText('  p7-ref  ');
     });

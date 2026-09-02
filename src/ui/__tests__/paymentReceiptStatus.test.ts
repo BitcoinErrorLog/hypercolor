@@ -1,0 +1,76 @@
+import { COPY } from '../../copy/uxCopy';
+import type { PaymentRequestRecord } from '../../types/payment';
+import { formatPaymentReceiptStatus, receiptWordForDisplay } from '../paymentReceiptStatus';
+
+function record(
+  partial: Partial<PaymentRequestRecord> & Pick<PaymentRequestRecord, 'status'>,
+): PaymentRequestRecord {
+  return {
+    ownerPubky: 'a'.repeat(52),
+    peerPubky: 'b'.repeat(52),
+    direction: 'received',
+    paymentRequestId: 'req-1',
+    eventId: 'evt-1',
+    amountValue: '0.001',
+    amountAsset: 'btc',
+    paymentReference: 'ref',
+    endpointIds: [],
+    expiresAt: null,
+    createdAt: 1,
+    updatedAt: 1,
+    proofJson: null,
+    reason: null,
+    pendingEventId: null,
+    displayedPaymentHash: null,
+    proofVerified: null,
+    ...partial,
+  };
+}
+
+describe('formatPaymentReceiptStatus', () => {
+  it('renders only requested, paid, expired, or failed', () => {
+    const now = 1_000_000;
+    expect(formatPaymentReceiptStatus(record({ status: 'pending' }), now)).toBe(
+      COPY.paymentRequested,
+    );
+    expect(formatPaymentReceiptStatus(record({ status: 'accepted' }), now)).toBe(
+      COPY.paymentRequested,
+    );
+    expect(
+      formatPaymentReceiptStatus(record({ status: 'pending', pendingEventId: 'queued' }), now),
+    ).toBe(COPY.paymentRequested);
+    expect(
+      formatPaymentReceiptStatus(record({ status: 'proof_received', proofVerified: true }), now),
+    ).toBe(COPY.paymentPaid);
+    expect(
+      formatPaymentReceiptStatus(record({ status: 'proof_received', proofVerified: false }), now),
+    ).toBe(COPY.paymentPaid);
+    expect(formatPaymentReceiptStatus(record({ status: 'rejected' }), now)).toBe(
+      COPY.paymentFailed,
+    );
+    expect(formatPaymentReceiptStatus(record({ status: 'cancelled' }), now)).toBe(
+      COPY.paymentFailed,
+    );
+    expect(formatPaymentReceiptStatus(record({ status: 'pending', expiresAt: now - 1 }), now)).toBe(
+      COPY.paymentExpired,
+    );
+  });
+
+  it('never emits delivered', () => {
+    const words = [
+      receiptWordForDisplay('pending'),
+      receiptWordForDisplay('accepted'),
+      receiptWordForDisplay('sending'),
+      receiptWordForDisplay('claimed'),
+      receiptWordForDisplay('verified'),
+      receiptWordForDisplay('expired'),
+      receiptWordForDisplay('rejected'),
+      receiptWordForDisplay('cancelled'),
+      receiptWordForDisplay('proof_received'),
+    ];
+    expect(words).not.toContain('delivered');
+    expect(new Set(words)).toEqual(
+      new Set([COPY.paymentRequested, COPY.paymentPaid, COPY.paymentExpired, COPY.paymentFailed]),
+    );
+  });
+});
