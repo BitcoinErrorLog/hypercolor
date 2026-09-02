@@ -104,6 +104,29 @@ export function sanitizeError(
   err: unknown,
   fallback: string = COPY.couldNotStartAuthorization,
 ): SanitizedError {
+  const coded =
+    typeof err === 'object' && err !== null ? (err as { code?: unknown }).code : undefined;
+  if (coded === 'wipe-wait-timeout') {
+    return {
+      category: 'unknown',
+      message: COPY.signOutIncompleteTryAgain,
+      details: null,
+    };
+  }
+  if (coded === 'reset-app-data-failed') {
+    return {
+      category: 'unknown',
+      message: COPY.resetAppDataFailed,
+      details: null,
+    };
+  }
+  if (rawMessage(err) === 'interrupted sign-out marker unreadable') {
+    return {
+      category: 'unknown',
+      message: COPY.signOutIncompleteTryAgain,
+      details: null,
+    };
+  }
   if (err instanceof LinkSendError) {
     if (err.code === 'denied') {
       return {

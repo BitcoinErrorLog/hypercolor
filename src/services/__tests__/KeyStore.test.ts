@@ -199,25 +199,35 @@ describe('KeyStore session and Ring pending', () => {
     await expect(hasPersistedSession()).resolves.toBe(true);
   });
 
-  it('keeps the sign-out-incomplete owner across KeyStore.clear', async () => {
+  it('keeps the sign-out-incomplete owner across KeyStore.clearIfPubky', async () => {
+    const OWNER = 'operrr8wsbpr3ue9d4qj41ge1kcc6r7fdiy6o3ugjrrhi4y77rdo';
     const {
       initKeyStore,
       setPubky,
       markSignOutIncomplete,
       isSignOutIncomplete,
       getSignOutIncompleteOwner,
-      clear,
+      clearIfPubky,
       clearSignOutIncomplete,
     } = await freshKeyStore();
     await initKeyStore();
-    setPubky('pubky-owner');
-    markSignOutIncomplete('pubky-owner');
+    setPubky(OWNER);
+    markSignOutIncomplete(OWNER);
     expect(isSignOutIncomplete()).toBe(true);
-    expect(getSignOutIncompleteOwner()).toBe('pubky-owner');
-    await clear();
+    expect(getSignOutIncompleteOwner()).toBe(OWNER);
+    await clearIfPubky(OWNER);
     expect(isSignOutIncomplete()).toBe(true);
-    expect(getSignOutIncompleteOwner()).toBe('pubky-owner');
+    expect(getSignOutIncompleteOwner()).toBe(OWNER);
     clearSignOutIncomplete();
+    expect(isSignOutIncomplete()).toBe(false);
+    expect(getSignOutIncompleteOwner()).toBeNull();
+  });
+
+  it('rejects a non-pubky sign-out-incomplete marker', async () => {
+    const { initKeyStore, markSignOutIncomplete, getSignOutIncompleteOwner, isSignOutIncomplete } =
+      await freshKeyStore();
+    await initKeyStore();
+    expect(() => markSignOutIncomplete('1')).toThrow(/owner is required/);
     expect(isSignOutIncomplete()).toBe(false);
     expect(getSignOutIncompleteOwner()).toBeNull();
   });

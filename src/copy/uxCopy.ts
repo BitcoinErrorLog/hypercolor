@@ -115,6 +115,12 @@ export const COPY = {
   couldNotCreateBackup: 'Could not create a backup.',
   recoveryCodeDidNotWork: 'That recovery code did not work.',
   couldNotSignOut: 'Could not sign out.',
+  signOutIncompleteTryAgain: 'Sign-out incomplete, try again',
+  resetAppData: 'Reset app data',
+  resetAppDataTitle: 'Reset all local app data?',
+  resetAppDataBody:
+    'Data for the previous account could not be removed normally. This will delete all local app data.',
+  resetAppDataFailed: 'Could not reset app data. Try again.',
   couldNotSendMessage: 'Could not send that message.',
   couldNotReact: 'Could not add that reaction.',
   couldNotDeleteMessage: 'Could not delete that message.',

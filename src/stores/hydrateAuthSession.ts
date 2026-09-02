@@ -1,6 +1,7 @@
 import { KeyStore } from '../services/KeyStore';
 import { PubkyService } from '../services/PubkyService';
 import { paintNeedsSignIn, resetPaintOverlayForBoot } from '../services/paintedOwner';
+import { recordBootWipeFailure } from '../services/resetAfterFailedWipe';
 import { useAuthStore } from './authStore';
 
 const INTERRUPTED_SIGN_OUT_MARKER_UNREADABLE = 'interrupted sign-out marker unreadable';
@@ -24,7 +25,7 @@ export async function hydratePersistedAuth(): Promise<boolean> {
     try {
       await PubkyService.completeInterruptedSignOut();
     } catch {
-      // Wipe failed: keep identity, keep markers, leave signing-out paint.
+      await recordBootWipeFailure();
     }
     return false;
   }

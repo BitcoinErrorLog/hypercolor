@@ -35,8 +35,12 @@ jest.mock('../KeyStore', () => ({
     markSignOutIncomplete: jest.fn(),
     isSignOutIncomplete: jest.fn(() => false),
     getSignOutIncompleteOwner: jest.fn(() => null),
+    markSignOutIncompleteAlias: jest.fn(),
+    getSignOutIncompleteAlias: jest.fn(() => null),
     clearSignOutIncomplete: jest.fn(),
-    clear: jest.fn(),
+    setSignOutWipeFailureCount: jest.fn(),
+    getSignOutWipeFailureCount: jest.fn(() => 0),
+    clearSignOutWipeFailures: jest.fn(),
     clearIfPubky: jest.fn(),
     getSessionSecret: jest.fn(),
     getHomeserver: jest.fn(() => 'homeserver-pk'),
@@ -122,10 +126,13 @@ jest.mock('../../db', () => {
   };
 });
 
+import { existsSync, mkdtempSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
 import { setDbForTests } from '../../db';
 import { ownerCommitGetDbGate } from './ownerCommitGetDbGate';
 import { runMigrations } from '../../db/migrations';
-import { openMemoryDb } from '../../db/__tests__/betterSqliteAdapter';
+import { openFileDb, openMemoryDb } from '../../db/__tests__/betterSqliteAdapter';
 import { StorageService } from '../StorageService';
 import { KeyStore } from '../KeyStore';
 import { INTERRUPTED_SIGN_OUT_MARKER_UNREADABLE, PubkyService } from '../PubkyService';
@@ -133,6 +140,7 @@ import { FollowsImportSettings } from '../contacts/followsImportSettings';
 import {
   LinkService,
   LINK_GROUP_FANOUT_PAYLOAD_TYPE,
+  LINK_RETRY_PAYLOAD_TYPE,
   resetLinkServiceHarnessState,
   stopLinkRetryDrain,
   buildPreparedSendIntent,
@@ -142,11 +150,22 @@ import { CHAT_MESSAGE_KIND, LINK_RECEIVER_PATH, buildDmConversationId } from '..
 import { GROUP_MESSAGE_KIND } from '../../types/group';
 import {
   activeOwnerAtCommit,
+  ensureSignOutPaint,
   isNeedsSignInPaint,
   paintOwner,
-  paintSigningOut,
+  pendingWipeInFlight,
+  resetPaintedOwnerModuleForTests,
+  shouldHoldPreAuthWork,
   SIGNING_OUT,
+  trackWipeInFlight,
+  waitForWipeInFlight,
+  WIPE_WAIT_TIMEOUT_MS,
 } from '../paintedOwner';
+import {
+  BOOT_WIPE_FAILURES_BEFORE_RESET,
+  resetAppDataAfterFailedWipe,
+  shouldOfferResetAfterFailedWipe,
+} from '../resetAfterFailedWipe';
 import { hydratePersistedAuth } from '../../stores/hydrateAuthSession';
 import {
   EMPTY_PAYMENT_RECORD_EXTRAS,
@@ -210,6 +229,8 @@ function switchPaintedOwner(): void {
 
 function wireSignOutIncomplete(): { isSet: () => boolean; owner: () => string | null } {
   let incompleteOwner: string | null = null;
+  let incompleteAlias: string | null = null;
+  let wipeFailures: { owner: string; count: number } | null = null;
   mockedKeyStore.markSignOutIncomplete.mockImplementation((owner: string) => {
     incompleteOwner = owner;
   });
@@ -217,8 +238,22 @@ function wireSignOutIncomplete(): { isSet: () => boolean; owner: () => string | 
     () => typeof incompleteOwner === 'string' && incompleteOwner.length > 0,
   );
   mockedKeyStore.getSignOutIncompleteOwner.mockImplementation(() => incompleteOwner);
+  mockedKeyStore.markSignOutIncompleteAlias.mockImplementation((alias: string) => {
+    incompleteAlias = alias;
+  });
+  mockedKeyStore.getSignOutIncompleteAlias.mockImplementation(() => incompleteAlias);
   mockedKeyStore.clearSignOutIncomplete.mockImplementation(() => {
     incompleteOwner = null;
+    incompleteAlias = null;
+  });
+  mockedKeyStore.setSignOutWipeFailureCount.mockImplementation((owner: string, count: number) => {
+    wipeFailures = { owner, count };
+  });
+  mockedKeyStore.getSignOutWipeFailureCount.mockImplementation((owner: string) => {
+    return wipeFailures?.owner === owner ? wipeFailures.count : 0;
+  });
+  mockedKeyStore.clearSignOutWipeFailures.mockImplementation((owner: string) => {
+    if (wipeFailures?.owner === owner) wipeFailures = null;
   });
   mockedKeyStore.deleteLinkSession.mockImplementation(() => {
     mockedKeyStore.getLinkSession.mockReturnValue(null);
@@ -231,12 +266,6 @@ function wireSignOutIncomplete(): { isSet: () => boolean; owner: () => string | 
     mockedKeyStore.hasPersistedSession.mockResolvedValue(false);
     return true;
   });
-  mockedKeyStore.clear.mockImplementation(async () => {
-    const current = mockedKeyStore.getPubky();
-    if (typeof current === 'string' && current.length > 0) {
-      await mockedKeyStore.clearIfPubky(current);
-    }
-  });
   mockedKeyStore.hasPersistedSession.mockImplementation(
     async () => mockedKeyStore.getPubky() != null,
   );
@@ -245,6 +274,7 @@ function wireSignOutIncomplete(): { isSet: () => boolean; owner: () => string | 
 
 async function simulateRelaunch(): Promise<void> {
   resetLinkServiceHarnessState();
+  resetPaintedOwnerModuleForTests();
   await hydratePersistedAuth();
 }
 
@@ -533,7 +563,7 @@ describe('owner-conditional persist at commit time', () => {
       },
     });
     await stall.waiting;
-    paintSigningOut();
+    ensureSignOutPaint();
     await StorageService.clearAccountData(OWNER);
     mockedKeyStore.getPubky.mockReturnValue(null);
     stall.release();
@@ -587,7 +617,7 @@ describe('owner-conditional persist at commit time', () => {
       },
     });
     await stall.waiting;
-    paintSigningOut();
+    ensureSignOutPaint();
     await StorageService.clearAccountData(OWNER);
     expect(mockedKeyStore.getPubky()).toBe(OWNER);
     stall.release();
@@ -1221,5 +1251,192 @@ describe('owner-conditional persist at commit time', () => {
       false,
     );
     expect(await StorageService.hasQueueItem('q-missing-owner')).toBe(false);
+  });
+
+  it('boot prelude failure keeps signing-out paint, holds drain, and does not send queued DMs', async () => {
+    const eventId = '00000000-0000-4000-8000-00000000r121';
+    await StorageService.persistLinkSendIntent({
+      message: {
+        ownerPubky: OWNER,
+        eventId,
+        conversationId: buildDmConversationId(PEER),
+        peerPubky: PEER,
+        senderPubky: OWNER,
+        direction: 'sent',
+        kind: CHAT_MESSAGE_KIND,
+        rawJson: '{}',
+        body: 'queued',
+        sentAt: NOW,
+        receivedAt: null,
+        deliveryState: 'sending',
+      },
+      queueItem: {
+        id: 'q-boot-prelude',
+        messageId: eventId,
+        recipientPubky: PEER,
+        payload: JSON.stringify({
+          type: LINK_RETRY_PAYLOAD_TYPE,
+          ownerPubky: OWNER,
+          peerPubky: PEER,
+          senderPubky: OWNER,
+          kind: CHAT_MESSAGE_KIND,
+          eventId,
+          rawJson: '{}',
+        }),
+        attempts: 0,
+        nextRetryAt: NOW,
+        createdAt: NOW,
+      },
+    });
+    mockedKeyStore.markSignOutIncomplete(OWNER);
+    await StorageService.persistSignOutIncompleteJournal(OWNER, SESSION_ALIAS);
+    mockedNative.sendPrivateMessageJson.mockClear();
+    const spy = jest
+      .spyOn(StorageService, 'getAllLinks')
+      .mockRejectedValueOnce(new Error('sql locked'));
+    await simulateRelaunch();
+    spy.mockRestore();
+    expect(activeOwnerAtCommit()).toBe(SIGNING_OUT);
+    expect(shouldHoldPreAuthWork()).toBe(true);
+    expect(mockedKeyStore.getPubky()).toBe(OWNER);
+    await LinkService.drainRetries();
+    expect(mockedNative.sendPrivateMessageJson).not.toHaveBeenCalled();
+  });
+
+  it('rejects sign-in after a hung wipe timeout and proceeds once the wipe settles', async () => {
+    mockedNative.signinWithSecret.mockClear();
+    mockedNative.signinWithSecret.mockResolvedValue({ sessionAlias: 'session-b', pubky: OTHER });
+    mockedKeyStore.setPubky.mockImplementation((pubky: string) => {
+      mockedKeyStore.getPubky.mockReturnValue(pubky);
+    });
+    mockedKeyStore.setLinkSession.mockImplementation((alias: string) => {
+      mockedKeyStore.getLinkSession.mockReturnValue(alias);
+    });
+    let resolveWipe = (): void => undefined;
+    const hung = new Promise<void>(resolve => {
+      resolveWipe = resolve;
+    });
+    jest.spyOn(Date, 'now').mockRestore();
+    jest.useFakeTimers();
+    try {
+      void trackWipeInFlight(hung);
+      const pending = LinkService.signinWithSecret('b-secret');
+      const assertion = expect(pending).rejects.toMatchObject({
+        name: 'WipeWaitTimeoutError',
+        code: 'wipe-wait-timeout',
+        retryable: true,
+      });
+      await jest.advanceTimersByTimeAsync(WIPE_WAIT_TIMEOUT_MS);
+      await assertion;
+      expect(pendingWipeInFlight()).not.toBeNull();
+      expect(mockedNative.signinWithSecret).not.toHaveBeenCalled();
+      resolveWipe();
+      await hung;
+      await waitForWipeInFlight();
+      await LinkService.signinWithSecret('b-secret');
+      expect(mockedNative.signinWithSecret).toHaveBeenCalledWith('b-secret');
+    } finally {
+      jest.useRealTimers();
+      jest.spyOn(Date, 'now').mockReturnValue(NOW);
+    }
+  });
+
+  it('boot wipe signs out the marker alias when KeyStore names a different owner', async () => {
+    const spy = jest
+      .spyOn(StorageService, 'clearAccountData')
+      .mockRejectedValueOnce(new Error('sql locked'));
+    await expect(PubkyService.signOut()).rejects.toThrow('sql locked');
+    spy.mockRestore();
+    expect(mockedKeyStore.getSignOutIncompleteAlias()).toBe(SESSION_ALIAS);
+    mockedKeyStore.getPubky.mockReturnValue(OTHER);
+    mockedKeyStore.getLinkSession.mockReturnValue('session-b');
+    mockedNative.signOutSession.mockClear();
+    mockedNative.clearAllNativeSecrets.mockClear();
+    await simulateRelaunch();
+    expect(mockedNative.signOutSession).toHaveBeenCalledWith(SESSION_ALIAS);
+    expect(mockedNative.signOutSession).not.toHaveBeenCalledWith('session-b');
+    expect(mockedNative.clearAllNativeSecrets).not.toHaveBeenCalled();
+  });
+
+  it('keeps another owner sign-out journal row when persisting a new marker', async () => {
+    await StorageService.persistSignOutIncompleteJournal(OWNER, SESSION_ALIAS);
+    await StorageService.persistSignOutIncompleteJournal(OTHER, 'session-b');
+    expect(await StorageService.getSignOutIncompleteJournalOwner(OWNER)).toBe(OWNER);
+    expect(await StorageService.getSignOutIncompleteJournalOwner(OTHER)).toBe(OTHER);
+    expect(await StorageService.getSignOutIncompleteJournalAlias(OWNER)).toBe(SESSION_ALIAS);
+    expect(await StorageService.getSignOutIncompleteJournalAlias(OTHER)).toBe('session-b');
+  });
+
+  it('offers reset after two failed boot wipes and not after one', async () => {
+    mockedKeyStore.markSignOutIncomplete(OWNER);
+    await StorageService.persistSignOutIncompleteJournal(OWNER, SESSION_ALIAS);
+    const spy = jest
+      .spyOn(StorageService, 'getAllLinks')
+      .mockRejectedValue(new Error('sql locked'));
+    await simulateRelaunch();
+    expect(await shouldOfferResetAfterFailedWipe()).toBe(false);
+    await simulateRelaunch();
+    expect(mockedKeyStore.getSignOutWipeFailureCount(OWNER)).toBe(BOOT_WIPE_FAILURES_BEFORE_RESET);
+    expect(await shouldOfferResetAfterFailedWipe()).toBe(true);
+    spy.mockRestore();
+  });
+
+  it('reset after failed wipe deletes the database file, clears markers, and paints nothing', async () => {
+    db?.close();
+    const dir = mkdtempSync(join(tmpdir(), 'hypercolor-reset-'));
+    const path = join(dir, 'hypercolor.db');
+    db = openFileDb(path);
+    setDbForTests(db);
+    await runMigrations(db);
+    mockedKeyStore.markSignOutIncomplete(OWNER);
+    await StorageService.persistSignOutIncompleteJournal(OWNER, SESSION_ALIAS);
+    mockedKeyStore.setSignOutWipeFailureCount(OWNER, BOOT_WIPE_FAILURES_BEFORE_RESET);
+    await StorageService.persistSignOutWipeFailureCount(OWNER, BOOT_WIPE_FAILURES_BEFORE_RESET);
+    ensureSignOutPaint();
+    mockedNative.signOutSession.mockClear();
+    await resetAppDataAfterFailedWipe();
+    expect(existsSync(path)).toBe(false);
+    expect(mockedKeyStore.isSignOutIncomplete()).toBe(false);
+    expect(mockedKeyStore.getSignOutWipeFailureCount(OWNER)).toBe(0);
+    expect(activeOwnerAtCommit()).toBeNull();
+    expect(isNeedsSignInPaint()).toBe(true);
+    expect(mockedNative.signOutSession).toHaveBeenCalledWith(SESSION_ALIAS);
+  });
+
+  it('keeps markers and the failure counter when reset throws midway', async () => {
+    mockedKeyStore.markSignOutIncomplete(OWNER);
+    await StorageService.persistSignOutIncompleteJournal(OWNER, SESSION_ALIAS);
+    mockedKeyStore.setSignOutWipeFailureCount(OWNER, BOOT_WIPE_FAILURES_BEFORE_RESET);
+    await StorageService.persistSignOutWipeFailureCount(OWNER, BOOT_WIPE_FAILURES_BEFORE_RESET);
+    mockedKeyStore.clearIfPubky.mockRejectedValueOnce(new Error('keystore locked'));
+    await expect(resetAppDataAfterFailedWipe()).rejects.toMatchObject({
+      code: 'reset-app-data-failed',
+      retryable: true,
+    });
+    expect(mockedKeyStore.isSignOutIncomplete()).toBe(true);
+    expect(mockedKeyStore.getSignOutIncompleteOwner()).toBe(OWNER);
+    expect(mockedKeyStore.getSignOutWipeFailureCount(OWNER)).toBe(BOOT_WIPE_FAILURES_BEFORE_RESET);
+  });
+
+  it('does not touch KeyStore B or native secrets when the marker names A', async () => {
+    mockedKeyStore.markSignOutIncomplete(OWNER);
+    await StorageService.persistSignOutIncompleteJournal(OWNER, SESSION_ALIAS);
+    mockedKeyStore.setSignOutWipeFailureCount(OWNER, BOOT_WIPE_FAILURES_BEFORE_RESET);
+    await StorageService.persistSignOutWipeFailureCount(OWNER, BOOT_WIPE_FAILURES_BEFORE_RESET);
+    mockedKeyStore.getPubky.mockReturnValue(OTHER);
+    mockedKeyStore.getLinkSession.mockReturnValue('session-b');
+    paintOwner(OTHER);
+    mockedNative.clearAllNativeSecrets.mockClear();
+    mockedNative.signOutSession.mockClear();
+    mockedKeyStore.clearIfPubky.mockClear();
+    await expect(resetAppDataAfterFailedWipe()).rejects.toMatchObject({
+      code: 'reset-app-data-failed',
+    });
+    expect(mockedKeyStore.getPubky()).toBe(OTHER);
+    expect(mockedKeyStore.getLinkSession()).toBe('session-b');
+    expect(mockedKeyStore.clearIfPubky).not.toHaveBeenCalled();
+    expect(mockedNative.clearAllNativeSecrets).not.toHaveBeenCalled();
+    expect(mockedNative.signOutSession).not.toHaveBeenCalled();
+    expect(mockedKeyStore.isSignOutIncomplete()).toBe(true);
   });
 });

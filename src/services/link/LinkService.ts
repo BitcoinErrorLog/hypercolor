@@ -66,6 +66,7 @@ import {
   pendingWipeInFlight,
   restorePaintedOwner,
   SIGNING_OUT,
+  waitForWipeInFlight,
 } from '../paintedOwner';
 
 /**
@@ -235,7 +236,7 @@ export const LinkService = {
    */
   async signinWithSecret(identitySecretHex: string): Promise<{ pubky: string }> {
     const pendingWipe = pendingWipeInFlight();
-    if (pendingWipe) await pendingWipe;
+    if (pendingWipe) await waitForWipeInFlight();
     const { sessionAlias, pubky } = await PaykitLinkNative.signinWithSecret(identitySecretHex);
     KeyStore.setPubky(pubky);
     KeyStore.setLinkSession(sessionAlias);
@@ -288,20 +289,30 @@ export const LinkService = {
    * native session out, wipe every native-owned secret (receivers, sessions,
    * snapshot key), and drop every account-scoped Encrypted-Link row.
    */
-  async clearSession(opts?: { owner?: PubkyKey }): Promise<void> {
+  async clearSession(opts?: {
+    owner?: PubkyKey;
+    alias?: string | null;
+    restorable?: boolean;
+  }): Promise<void> {
     const previousOwner = opts?.owner ?? session?.pubky ?? KeyStore.getPubky() ?? null;
     if (!previousOwner) {
       throw new Error('sign-out requires an owner');
     }
     const owner = previousOwner;
     const generation = ensureSignOutPaint();
+    const restorable = opts?.restorable !== false;
+    if (!restorable) {
+      invalidateSignOutRestore();
+    }
     stopLinkRetryDrain();
     const alias =
       session?.pubky === owner
         ? session.alias
-        : KeyStore.getPubky() === owner
-          ? KeyStore.getLinkSession()
-          : null;
+        : typeof opts?.alias === 'string' && opts.alias.length > 0
+          ? opts.alias
+          : KeyStore.getPubky() === owner
+            ? KeyStore.getLinkSession()
+            : null;
     let markerPath = LINK_RECEIVER_PATH;
     try {
       const receiver = await StorageService.getLinkReceiver(owner);
@@ -312,13 +323,13 @@ export const LinkService = {
         if (live) await closeQuietly(live.linkId);
       }
     } catch (err) {
-      restorePaintedOwner(owner, generation);
+      if (restorable) restorePaintedOwner(owner, generation);
       throw err;
     }
     try {
       await commitSignOutWipe({ owner, alias, markerPath });
     } catch (err) {
-      restorePaintedOwner(owner, generation);
+      if (restorable) restorePaintedOwner(owner, generation);
       throw err;
     }
   },
@@ -330,7 +341,7 @@ export const LinkService = {
    */
   async adoptHarnessSession(sessionAlias: string, pubky: string): Promise<void> {
     const pendingWipe = pendingWipeInFlight();
-    if (pendingWipe) await pendingWipe;
+    if (pendingWipe) await waitForWipeInFlight();
     const alias = sessionAlias.trim();
     const id = pubky.trim();
     if (alias.length === 0 || id.length === 0) {
@@ -368,7 +379,7 @@ export const LinkService = {
    */
   async enable(): Promise<LinkEnableFlow> {
     const pendingWipe = pendingWipeInFlight();
-    if (pendingWipe) await pendingWipe;
+    if (pendingWipe) await waitForWipeInFlight();
     if (!PaykitLinkNative.isAvailable()) {
       throw createLinkNativeError('unavailable', 'PaykitLinkModule native module is not available');
     }
@@ -402,7 +413,7 @@ export const LinkService = {
       },
       awaitEnabled: async () => {
         const pendingWipe = pendingWipeInFlight();
-        if (pendingWipe) await pendingWipe;
+        if (pendingWipe) await waitForWipeInFlight();
         try {
           if (cancelled) {
             throw new Error('LinkService.enable: the messaging enable flow was cancelled');
@@ -3089,7 +3100,10 @@ async function closeQuietly(linkId: string): Promise<void> {
 
 const SIGN_OUT_MARKER_WRITE_FAILED = 'sign-out marker write failed';
 
-async function persistAndVerifySignOutIncompleteMarker(owner: PubkyKey): Promise<void> {
+async function persistAndVerifySignOutIncompleteMarker(
+  owner: PubkyKey,
+  alias: string | null,
+): Promise<void> {
   try {
     KeyStore.markSignOutIncomplete(owner);
   } catch {
@@ -3103,8 +3117,15 @@ async function persistAndVerifySignOutIncompleteMarker(owner: PubkyKey): Promise
     }
     throw new Error(SIGN_OUT_MARKER_WRITE_FAILED);
   }
+  if (alias) {
+    try {
+      KeyStore.markSignOutIncompleteAlias(alias);
+    } catch {
+      // Alias is needed for native teardown on boot, not for the wipe itself.
+    }
+  }
   try {
-    await StorageService.persistSignOutIncompleteJournal(owner);
+    await StorageService.persistSignOutIncompleteJournal(owner, alias);
   } catch {
     try {
       KeyStore.clearSignOutIncomplete();
@@ -3115,7 +3136,7 @@ async function persistAndVerifySignOutIncompleteMarker(owner: PubkyKey): Promise
   }
   let journalOwner: string | null;
   try {
-    journalOwner = await StorageService.getSignOutIncompleteJournalOwner();
+    journalOwner = await StorageService.getSignOutIncompleteJournalOwner(owner);
   } catch {
     try {
       KeyStore.clearSignOutIncomplete();
@@ -3161,7 +3182,7 @@ async function commitSignOutWipe(input: {
   alias: string | null;
   markerPath: string;
 }): Promise<void> {
-  await persistAndVerifySignOutIncompleteMarker(input.owner);
+  await persistAndVerifySignOutIncompleteMarker(input.owner, input.alias);
   invalidateSignOutRestore();
   const errors: unknown[] = [];
   const capture = async (work: () => Promise<void>): Promise<void> => {
@@ -3174,24 +3195,12 @@ async function commitSignOutWipe(input: {
 
   await capture(() => StorageService.clearAccountData(input.owner));
   if (input.alias) {
-    try {
-      await PaykitLinkNative.removeReceiverMarker(input.alias, input.markerPath);
-    } catch {
-      // Best-effort: peers should stop handshaking into a dead inbox.
-    }
-    try {
-      await PaykitLinkNative.signOutSession(input.alias);
-    } catch {
-      // Native may already have dropped the bearer.
-    }
+    await capture(() => PaykitLinkNative.removeReceiverMarker(input.alias!, input.markerPath));
+    await capture(() => PaykitLinkNative.signOutSession(input.alias!));
   }
   const current = KeyStore.getPubky();
   if (current === input.owner) {
-    try {
-      await PaykitLinkNative.clearAllNativeSecrets();
-    } catch {
-      // Best-effort: leftover receiver/session aliases must not survive a switch.
-    }
+    await capture(() => PaykitLinkNative.clearAllNativeSecrets());
   }
   if (session?.pubky === input.owner) {
     session = null;

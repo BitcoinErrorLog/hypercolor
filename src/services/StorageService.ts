@@ -75,6 +75,23 @@ const now = () => Date.now();
 
 const SIGN_OUT_INCOMPLETE_KIND = 'sign-out-incomplete';
 const SIGN_OUT_INCOMPLETE_TARGET = 'identity';
+const SIGN_OUT_INCOMPLETE_ALIAS_PREFIX = 'alias:';
+const SIGN_OUT_WIPE_FAILURES_KIND = 'sign-out-wipe-failures';
+
+function journalTargetForAlias(alias: string | null | undefined): string {
+  if (typeof alias === 'string' && alias.length > 0) {
+    return `${SIGN_OUT_INCOMPLETE_ALIAS_PREFIX}${alias}`;
+  }
+  return SIGN_OUT_INCOMPLETE_TARGET;
+}
+
+function aliasFromJournalTarget(target: string): string | null {
+  if (target.startsWith(SIGN_OUT_INCOMPLETE_ALIAS_PREFIX)) {
+    const alias = target.slice(SIGN_OUT_INCOMPLETE_ALIAS_PREFIX.length);
+    return alias.length > 0 ? alias : null;
+  }
+  return null;
+}
 
 /**
  * Owner-conditional commit: one synchronous check against the painted
@@ -1380,6 +1397,7 @@ export const StorageService = {
       const targetKind = String(row.target_kind);
       const target = String(row.target);
       if (targetKind === SIGN_OUT_INCOMPLETE_KIND) continue;
+      if (targetKind === SIGN_OUT_WIPE_FAILURES_KIND) continue;
       let ok = false;
       if (
         targetKind === 'keystore' &&
@@ -1408,17 +1426,22 @@ export const StorageService = {
     }
   },
 
-  async persistSignOutIncompleteJournal(ownerPubky: PubkyKey): Promise<void> {
+  async persistSignOutIncompleteJournal(
+    ownerPubky: PubkyKey,
+    alias?: string | null,
+  ): Promise<void> {
     const db = await getDb();
+    const target = journalTargetForAlias(alias);
     transact(db, () => {
-      db.executeSync(`DELETE FROM pending_cleanup WHERE target_kind = ?`, [
+      db.executeSync(`DELETE FROM pending_cleanup WHERE target_kind = ? AND owner_pubky = ?`, [
         SIGN_OUT_INCOMPLETE_KIND,
+        ownerPubky,
       ]);
       db.executeSync(
         `INSERT INTO pending_cleanup
           (owner_pubky, target_kind, target, created_at)
          VALUES (?, ?, ?, ?)`,
-        [ownerPubky, SIGN_OUT_INCOMPLETE_KIND, SIGN_OUT_INCOMPLETE_TARGET, now()],
+        [ownerPubky, SIGN_OUT_INCOMPLETE_KIND, target, now()],
       );
     });
   },
@@ -1431,14 +1454,28 @@ export const StorageService = {
     return (result.rows?.length ?? 0) > 0;
   },
 
-  async getSignOutIncompleteJournalOwner(): Promise<PubkyKey | null> {
+  async getSignOutIncompleteJournalOwner(expectedOwner?: PubkyKey): Promise<PubkyKey | null> {
     const db = await getDb();
-    const result = db.executeSync(
-      `SELECT owner_pubky FROM pending_cleanup WHERE target_kind = ? LIMIT 1`,
-      [SIGN_OUT_INCOMPLETE_KIND],
-    );
+    const result = expectedOwner
+      ? db.executeSync(
+          `SELECT owner_pubky FROM pending_cleanup WHERE target_kind = ? AND owner_pubky = ? LIMIT 1`,
+          [SIGN_OUT_INCOMPLETE_KIND, expectedOwner],
+        )
+      : db.executeSync(`SELECT owner_pubky FROM pending_cleanup WHERE target_kind = ? LIMIT 1`, [
+          SIGN_OUT_INCOMPLETE_KIND,
+        ]);
     const owner = result.rows?.[0]?.owner_pubky;
     return typeof owner === 'string' && owner.length > 0 ? owner : null;
+  },
+
+  async getSignOutIncompleteJournalAlias(ownerPubky: PubkyKey): Promise<string | null> {
+    const db = await getDb();
+    const result = db.executeSync(
+      `SELECT target FROM pending_cleanup WHERE target_kind = ? AND owner_pubky = ? LIMIT 1`,
+      [SIGN_OUT_INCOMPLETE_KIND, ownerPubky],
+    );
+    const target = result.rows?.[0]?.target;
+    return typeof target === 'string' ? aliasFromJournalTarget(target) : null;
   },
 
   async clearSignOutIncompleteJournal(ownerPubky?: PubkyKey): Promise<void> {
@@ -1451,6 +1488,42 @@ export const StorageService = {
       return;
     }
     db.executeSync(`DELETE FROM pending_cleanup WHERE target_kind = ?`, [SIGN_OUT_INCOMPLETE_KIND]);
+  },
+
+  async persistSignOutWipeFailureCount(ownerPubky: PubkyKey, count: number): Promise<void> {
+    const db = await getDb();
+    transact(db, () => {
+      db.executeSync(`DELETE FROM pending_cleanup WHERE target_kind = ? AND owner_pubky = ?`, [
+        SIGN_OUT_WIPE_FAILURES_KIND,
+        ownerPubky,
+      ]);
+      db.executeSync(
+        `INSERT INTO pending_cleanup
+          (owner_pubky, target_kind, target, created_at)
+         VALUES (?, ?, ?, ?)`,
+        [ownerPubky, SIGN_OUT_WIPE_FAILURES_KIND, String(count), now()],
+      );
+    });
+  },
+
+  async getSignOutWipeFailureCount(ownerPubky: PubkyKey): Promise<number> {
+    const db = await getDb();
+    const result = db.executeSync(
+      `SELECT target FROM pending_cleanup WHERE target_kind = ? AND owner_pubky = ? LIMIT 1`,
+      [SIGN_OUT_WIPE_FAILURES_KIND, ownerPubky],
+    );
+    const raw = result.rows?.[0]?.target;
+    if (typeof raw !== 'string') return 0;
+    const n = Number(raw);
+    return Number.isInteger(n) && n >= 0 ? n : 0;
+  },
+
+  async clearSignOutWipeFailureCount(ownerPubky: PubkyKey): Promise<void> {
+    const db = await getDb();
+    db.executeSync(`DELETE FROM pending_cleanup WHERE target_kind = ? AND owner_pubky = ?`, [
+      SIGN_OUT_WIPE_FAILURES_KIND,
+      ownerPubky,
+    ]);
   },
 
   // ── Attachments (M4) ──────────────────────────────────────────────────────

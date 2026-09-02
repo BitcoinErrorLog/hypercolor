@@ -29,6 +29,7 @@ function adapt(db: Database.Database): TestDb {
   return {
     raw: db,
     close: () => {
+      if (!db.open) return;
       try {
         db.pragma('wal_checkpoint(TRUNCATE)');
       } catch {

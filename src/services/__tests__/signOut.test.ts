@@ -9,6 +9,12 @@ jest.mock('@synonymdev/react-native-pubky', () => ({
   removeEventListener: jest.fn(),
 }));
 
+jest.mock('../resetAfterFailedWipe', () => ({
+  shouldOfferResetAfterFailedWipe: jest.fn(),
+  resetAppDataAfterFailedWipe: jest.fn(),
+  recordBootWipeFailure: jest.fn(),
+}));
+
 jest.mock('../link/LinkService', () => ({
   LinkService: {
     clearSession: jest.fn(),
@@ -21,12 +27,12 @@ jest.mock('../KeyStore', () => ({
     getPubky: jest.fn(() => 'a'.repeat(52)),
     isAppCertValid: jest.fn(),
     getAppKeypair: jest.fn(),
-    clear: jest.fn(),
     clearIfPubky: jest.fn(),
     markSignOutIncomplete: jest.fn(),
     isSignOutIncomplete: jest.fn(() => false),
     getSignOutIncompleteOwner: jest.fn(() => null),
     clearSignOutIncomplete: jest.fn(),
+    clearSignOutWipeFailures: jest.fn(),
   },
 }));
 
@@ -36,6 +42,7 @@ jest.mock('../StorageService', () => ({
     hasSignOutIncompleteJournal: jest.fn().mockResolvedValue(false),
     getSignOutIncompleteJournalOwner: jest.fn().mockResolvedValue(null),
     clearSignOutIncompleteJournal: jest.fn().mockResolvedValue(undefined),
+    clearSignOutWipeFailureCount: jest.fn().mockResolvedValue(undefined),
   },
 }));
 

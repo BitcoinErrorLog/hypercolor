@@ -66,6 +66,28 @@ describe('sanitizeError', () => {
     expect(sanitized.details).not.toContain(SAMPLE_PUBKY);
     expect(sanitized.details).toContain('[pubky]');
   });
+
+  it('maps a hung wipe timeout to sign-out-incomplete copy instead of expired', () => {
+    const err = {
+      name: 'WipeWaitTimeoutError',
+      code: 'wipe-wait-timeout',
+      message: 'wipe-wait-timeout',
+    };
+    const sanitized = sanitizeError(err);
+    expect(sanitized.message).toBe(COPY.signOutIncompleteTryAgain);
+    expect(sanitized.details).toBeNull();
+    expect(classifyError(err)).toBe('expired');
+  });
+
+  it('maps a failed app-data reset to retryable product copy', () => {
+    const sanitized = sanitizeError({
+      name: 'ResetAppDataError',
+      code: 'reset-app-data-failed',
+      message: 'reset-app-data-failed',
+    });
+    expect(sanitized.message).toBe(COPY.resetAppDataFailed);
+    expect(sanitized.details).toBeNull();
+  });
 });
 
 describe('stripSensitive', () => {

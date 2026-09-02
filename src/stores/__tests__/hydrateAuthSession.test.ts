@@ -4,6 +4,7 @@ const mockGetHomeserver = jest.fn();
 const mockSetAuthenticated = jest.fn();
 const mockHasInterrupted = jest.fn();
 const mockCompleteInterrupted = jest.fn();
+const mockRecordBootWipeFailure = jest.fn();
 
 jest.mock('../../services/KeyStore', () => ({
   KeyStore: {
@@ -18,6 +19,10 @@ jest.mock('../../services/PubkyService', () => ({
     hasInterruptedSignOut: (...args: unknown[]) => mockHasInterrupted(...args),
     completeInterruptedSignOut: (...args: unknown[]) => mockCompleteInterrupted(...args),
   },
+}));
+
+jest.mock('../../services/resetAfterFailedWipe', () => ({
+  recordBootWipeFailure: (...args: unknown[]) => mockRecordBootWipeFailure(...args),
 }));
 
 jest.mock('../authStore', () => ({
@@ -36,8 +41,10 @@ describe('hydratePersistedAuth', () => {
     mockSetAuthenticated.mockReset();
     mockHasInterrupted.mockReset();
     mockCompleteInterrupted.mockReset();
+    mockRecordBootWipeFailure.mockReset();
     mockHasInterrupted.mockResolvedValue(false);
     mockCompleteInterrupted.mockResolvedValue(undefined);
+    mockRecordBootWipeFailure.mockResolvedValue(undefined);
   });
 
   it('sets authenticated from a persisted Welcome session', async () => {
@@ -78,5 +85,14 @@ describe('hydratePersistedAuth', () => {
     expect(mockSetAuthenticated).not.toHaveBeenCalled();
     expect(warn).toHaveBeenCalledWith('interrupted sign-out marker unreadable');
     warn.mockRestore();
+  });
+
+  it('records a boot wipe failure and does not paint when the boot wipe throws', async () => {
+    mockHasInterrupted.mockResolvedValue(true);
+    mockCompleteInterrupted.mockRejectedValue(new Error('sql locked'));
+
+    await expect(hydratePersistedAuth()).resolves.toBe(false);
+    expect(mockRecordBootWipeFailure).toHaveBeenCalled();
+    expect(mockSetAuthenticated).not.toHaveBeenCalled();
   });
 });

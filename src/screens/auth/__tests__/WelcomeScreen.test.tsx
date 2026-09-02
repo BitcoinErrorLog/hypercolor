@@ -35,9 +35,15 @@ jest.mock('../../../services/PubkyRingAuthService', () => ({
   },
 }));
 
+jest.mock('react-native-safe-area-context', () => ({
+  useSafeAreaInsets: () => ({ top: 0, bottom: 12, left: 0, right: 0 }),
+}));
+
 jest.mock('../../../services/PubkyService', () => ({
   PubkyService: {
     awaitSignOutWipe: jest.fn().mockResolvedValue(undefined),
+    shouldOfferResetAfterFailedWipe: jest.fn().mockResolvedValue(false),
+    resetAppDataAfterFailedWipe: jest.fn().mockResolvedValue(undefined),
   },
 }));
 
@@ -54,6 +60,8 @@ describe('WelcomeScreen', () => {
     (PubkyRingAuthService.requestDelegation as jest.Mock).mockReset();
     (PubkyRingAuthService.isStaleDelegationRequestError as jest.Mock).mockReturnValue(false);
     jest.mocked(PubkyService.awaitSignOutWipe).mockResolvedValue(undefined);
+    jest.mocked(PubkyService.shouldOfferResetAfterFailedWipe).mockResolvedValue(false);
+    jest.mocked(PubkyService.resetAppDataAfterFailedWipe).mockResolvedValue(undefined);
   });
 
   it('shows the custody line and never uses pubky-ring hyphenation', async () => {
@@ -218,6 +226,82 @@ describe('WelcomeScreen', () => {
     ).toEqual(expect.objectContaining({ busy: true, disabled: false }));
     finishConnectDelegation(awaitingToken as number);
     resetConnectDelegationForTests();
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('hides Reset app data until two boot wipe failures have been recorded', async () => {
+    let tree!: ReactTestRenderer;
+    await act(async () => {
+      tree = create(<WelcomeScreen />);
+    });
+    expect(() => tree.root.findByProps({ testID: 'welcomeResetAppData' })).toThrow();
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('shows Reset app data after two failed boot wipes and confirms through the dialog', async () => {
+    jest.mocked(PubkyService.shouldOfferResetAfterFailedWipe).mockResolvedValue(true);
+    let tree!: ReactTestRenderer;
+    await act(async () => {
+      tree = create(<WelcomeScreen />);
+    });
+    await act(async () => {
+      tree.root.findByProps({ testID: 'welcomeResetAppData' }).props.onPress();
+    });
+    expect(tree.root.findByProps({ testID: 'confirmSheet' })).toBeTruthy();
+    const serialized = JSON.stringify(tree.toJSON());
+    expect(serialized).toContain(COPY.resetAppDataTitle);
+    expect(serialized).toContain(COPY.resetAppDataBody);
+    await act(async () => {
+      tree.root.findByProps({ testID: 'confirmSheetConfirm' }).props.onPress();
+    });
+    expect(PubkyService.resetAppDataAfterFailedWipe).toHaveBeenCalled();
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('keeps Reset app data retryable when the confirm step fails', async () => {
+    jest.mocked(PubkyService.shouldOfferResetAfterFailedWipe).mockResolvedValue(true);
+    jest
+      .mocked(PubkyService.resetAppDataAfterFailedWipe)
+      .mockRejectedValueOnce(new Error('disk full'));
+    let tree!: ReactTestRenderer;
+    await act(async () => {
+      tree = create(<WelcomeScreen />);
+    });
+    await act(async () => {
+      tree.root.findByProps({ testID: 'welcomeResetAppData' }).props.onPress();
+    });
+    await act(async () => {
+      tree.root.findByProps({ testID: 'confirmSheetConfirm' }).props.onPress();
+    });
+    const serialized = JSON.stringify(tree.toJSON());
+    expect(serialized).toContain(COPY.resetAppDataFailed);
+    expect(serialized).not.toContain('disk full');
+    expect(() => tree.root.findByProps({ testID: 'welcomeResetAppData' })).not.toThrow();
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('shows sign-out-incomplete copy when connect waits on a hung wipe', async () => {
+    jest
+      .mocked(PubkyService.awaitSignOutWipe)
+      .mockRejectedValueOnce({ code: 'wipe-wait-timeout', message: 'wipe-wait-timeout' });
+    let tree!: ReactTestRenderer;
+    await act(async () => {
+      tree = create(<WelcomeScreen />);
+    });
+    await act(async () => {
+      tree.root.findByProps({ testID: 'welcomeConnectRing' }).props.onPress();
+    });
+    const serialized = JSON.stringify(tree.toJSON());
+    expect(serialized).toContain(COPY.signOutIncompleteTryAgain);
+    expect(serialized).not.toContain('wipe-wait-timeout');
     await act(async () => {
       tree.unmount();
     });

@@ -9,11 +9,17 @@ import { LinkService } from './link/LinkService';
 import { StorageService } from './StorageService';
 import {
   ensureSignOutPaint,
+  invalidateSignOutRestore,
   paintNeedsSignIn,
   restorePaintedOwner,
   trackWipeInFlight,
   waitForWipeInFlight,
 } from './paintedOwner';
+import {
+  resetAppDataAfterFailedWipe,
+  shouldOfferResetAfterFailedWipe,
+} from './resetAfterFailedWipe';
+import { readInterruptedSignOutAlias, readInterruptedSignOutOwner } from './signOutMarker';
 import type { UserProfile, PubkyKey } from '../types';
 
 /**
@@ -48,22 +54,22 @@ function unwrap<T>(result: { isOk(): boolean; value?: T; error?: Error }): T {
   return result.value as T;
 }
 
-async function readInterruptedSignOutOwner(): Promise<PubkyKey | null> {
-  const fromMmkv = KeyStore.getSignOutIncompleteOwner();
-  if (fromMmkv) return fromMmkv;
-  return StorageService.getSignOutIncompleteJournalOwner();
-}
-
 async function finishIdentityClear(owner: PubkyKey): Promise<void> {
   try {
     await KeyStore.clearIfPubky(owner);
     if (KeyStore.getSignOutIncompleteOwner() === owner) {
       KeyStore.clearSignOutIncomplete();
     }
+    KeyStore.clearSignOutWipeFailures(owner);
     try {
       await StorageService.clearSignOutIncompleteJournal(owner);
     } catch {
       // Journal clear is best-effort once the wipe completed.
+    }
+    try {
+      await StorageService.clearSignOutWipeFailureCount(owner);
+    } catch {
+      // Counter clear is best-effort once the wipe completed.
     }
   } catch (err) {
     try {
@@ -122,9 +128,11 @@ export const PubkyService = {
     await waitForWipeInFlight();
     const owner = await readInterruptedSignOutOwner();
     if (!owner) return;
+    const alias = await readInterruptedSignOutAlias(owner);
     const run = async (): Promise<void> => {
       ensureSignOutPaint();
-      await LinkService.clearSession({ owner });
+      invalidateSignOutRestore();
+      await LinkService.clearSession({ owner, alias, restorable: false });
       await finishIdentityClear(owner);
       paintNeedsSignIn();
     };
@@ -146,6 +154,9 @@ export const PubkyService = {
     if (!interrupted) return;
     await PubkyService.completeInterruptedSignOut();
   },
+
+  shouldOfferResetAfterFailedWipe,
+  resetAppDataAfterFailedWipe,
 
   // ── Profile ────────────────────────────────────────────────────────────────
 

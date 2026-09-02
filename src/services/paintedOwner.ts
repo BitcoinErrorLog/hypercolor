@@ -15,6 +15,31 @@ import { KeyStore } from './KeyStore';
  */
 export const SIGNING_OUT = 'signing-out';
 
+/**
+ * Sign-in waits this long for an in-flight wipe, then rejects. The wipe
+ * promise is left running — timeout must not fail-open into sign-in and
+ * must not clear the in-flight gate (the wipe may still complete).
+ * Keychain / native teardown can hang forever on some emulators; this is
+ * the bounded analogue of App.tsx's splash timer, fail-closed.
+ */
+export const WIPE_WAIT_TIMEOUT_MS = 30_000;
+
+export class WipeWaitTimeoutError extends Error {
+  readonly code = 'wipe-wait-timeout';
+  readonly retryable = true;
+
+  constructor() {
+    super('wipe-wait-timeout');
+    this.name = 'WipeWaitTimeoutError';
+  }
+}
+
+export function isWipeWaitTimeoutError(err: unknown): err is WipeWaitTimeoutError {
+  if (err instanceof WipeWaitTimeoutError) return true;
+  if (typeof err !== 'object' || err === null) return false;
+  return (err as { code?: unknown }).code === 'wipe-wait-timeout';
+}
+
 export type PaintedOwner = PubkyKey | typeof SIGNING_OUT | null;
 
 type Overlay =
@@ -25,6 +50,7 @@ type Overlay =
 
 let overlay: Overlay = { kind: 'unset' };
 let authOwnerReader: (() => PubkyKey | null) | null = null;
+let onOwnerPainted: (() => void) | null = null;
 let signOutGeneration = 0;
 let wipeInFlight: Promise<void> | null = null;
 
@@ -32,18 +58,19 @@ export function registerAuthOwnerReader(reader: () => PubkyKey | null): void {
   authOwnerReader = reader;
 }
 
+/**
+ * Called after a successful owner paint so boot can start the retry drain
+ * once Welcome signs in (the splash effect has `[]` deps and will not).
+ */
+export function registerOnOwnerPainted(listener: (() => void) | null): void {
+  onOwnerPainted = listener;
+}
+
 /** Active identity for commit guards. Call on sign-in / session adopt. */
 export function paintOwner(pubky: PubkyKey): void {
   signOutGeneration += 1;
   overlay = { kind: 'owner', pubky };
-}
-
-/**
- * Distinct no-owner state. Paint synchronously before any sign-out await
- * so in-flight owned writes cannot interleave with teardown.
- */
-export function paintSigningOut(): void {
-  overlay = { kind: 'signing-out' };
+  onOwnerPainted?.();
 }
 
 /**
@@ -75,14 +102,11 @@ export function restorePaintedOwner(pubky: PubkyKey, generation: number): void {
 /**
  * Bump the sign-out generation so a pending restore cannot fire. Called
  * after the sign-out marker is verified, before the first destructive
- * statement, and implicitly by {@link paintOwner}.
+ * statement, and implicitly by {@link paintOwner}. Boot also calls this
+ * immediately so a prelude failure cannot repaint the old owner.
  */
 export function invalidateSignOutRestore(): void {
   signOutGeneration += 1;
-}
-
-export function currentSignOutGeneration(): number {
-  return signOutGeneration;
 }
 
 /**
@@ -117,6 +141,16 @@ export function resetPaintOverlayForBoot(): void {
   signOutGeneration = 0;
 }
 
+/**
+ * Model a process death for tests: overlay, generation, and the wipe gate
+ * all return to the values a new JS context starts with.
+ */
+export function resetPaintedOwnerModuleForTests(): void {
+  overlay = { kind: 'unset' };
+  signOutGeneration = 0;
+  wipeInFlight = null;
+}
+
 export function trackWipeInFlight<T>(work: Promise<T>): Promise<T> {
   const gate: Promise<void> = work.then(
     () => undefined,
@@ -130,17 +164,28 @@ export function trackWipeInFlight<T>(work: Promise<T>): Promise<T> {
 }
 
 export async function waitForWipeInFlight(): Promise<void> {
-  if (wipeInFlight) await wipeInFlight;
-}
-
-export function hasWipeInFlight(): boolean {
-  return wipeInFlight !== null;
+  const gate = wipeInFlight;
+  if (!gate) return;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      gate,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          reject(new WipeWaitTimeoutError());
+        }, WIPE_WAIT_TIMEOUT_MS);
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
 }
 
 /**
  * Returns the in-flight wipe promise, or null when idle. Callers that must
  * not yield a microtask when there is no wipe (Ring cancel vs approve)
- * should `if (pending) await pending` rather than always `await`.
+ * should `if (pending) await waitForWipeInFlight()` rather than always
+ * `await`. The wait is bounded by {@link WIPE_WAIT_TIMEOUT_MS}.
  */
 export function pendingWipeInFlight(): Promise<void> | null {
   return wipeInFlight;

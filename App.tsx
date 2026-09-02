@@ -20,7 +20,11 @@ import { handleE2eDeepLink } from './src/navigation/e2eDeepLinks';
 import { loadMainTabIconFont } from './src/navigation/tabBarIcons';
 import { KeyStore } from './src/services/KeyStore';
 import { LinkService, startLinkRetryDrain } from './src/services/link/LinkService';
-import { paintNeedsSignIn, shouldHoldPreAuthWork } from './src/services/paintedOwner';
+import {
+  paintNeedsSignIn,
+  registerOnOwnerPainted,
+  shouldHoldPreAuthWork,
+} from './src/services/paintedOwner';
 import { hydratePersistedAuth } from './src/stores/hydrateAuthSession';
 import { ReduceMotionProvider } from './src/ui/reduceMotion';
 
@@ -101,12 +105,19 @@ export default function App() {
       }
     };
 
+    const startDrainIfReady = () => {
+      if (disposed) return;
+      if (shouldHoldPreAuthWork()) return;
+      stopDrain?.();
+      stopDrain = startLinkRetryDrain();
+    };
+    registerOnOwnerPainted(startDrainIfReady);
+
     const onAppState = (state: AppStateStatus) => {
       if (disposed) return;
       if (state === 'active') {
         if (shouldHoldPreAuthWork()) return;
-        stopDrain?.();
-        stopDrain = startLinkRetryDrain();
+        startDrainIfReady();
         void recoverAndDrain();
       } else {
         stopDrain?.();
@@ -140,7 +151,7 @@ export default function App() {
         if (disposed || myEpoch !== initEpochRef.current) return;
         if (!shouldHoldPreAuthWork()) {
           void recoverAndDrain();
-          stopDrain = startLinkRetryDrain();
+          startDrainIfReady();
         }
         afterIconFont(markReady);
       })
@@ -168,6 +179,7 @@ export default function App() {
       clearTimeout(continueTimer);
       sub.remove();
       linkingSub?.remove();
+      registerOnOwnerPainted(null);
       stopDrain?.();
     };
   }, []);
