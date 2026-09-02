@@ -92,6 +92,9 @@ describe('public graph consent gate', () => {
     expect(mockTakePending).not.toHaveBeenCalled();
     expect(tree.root.findByProps({ testID: 'channelsLoadPublic' })).toBeTruthy();
     expect(tree.root.findByProps({ testID: 'channelsPendingInvite' })).toBeTruthy();
+    expect(tree.root.findByProps({ testID: 'channelsPendingInviteDetail' }).props.children).toBe(
+      `Channel ${LOCAL} hosted by ${HOST.slice(0, 6)}…${HOST.slice(-4)}`,
+    );
     expect(tree.root.findByProps({ testID: 'channelsPendingJoin' }).props.disabled).toBe(true);
     await act(async () => {
       tree.unmount();

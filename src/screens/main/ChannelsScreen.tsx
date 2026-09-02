@@ -25,8 +25,10 @@ import {
   subscribeGroupEvents,
   takePendingPublicJoin,
 } from '../../services/group/GroupService';
-import { COPY, publicGraphWarning } from '../../copy/uxCopy';
+import { parsePublicChannelRef } from '../../types/group';
+import { COPY, pendingInviteChannelHost, publicGraphWarning } from '../../copy/uxCopy';
 import { HIT_SLOP_44 } from '../../ui/hitTarget';
+import { shortPubky } from '../../ui/shortPubky';
 import {
   filterChannelsByMode,
   mayReadPublicGraph,
@@ -252,6 +254,13 @@ export function ChannelsScreenContent({
   const [selected, setSelected] = useState<Record<string, boolean>>({});
   const [joinRef, setJoinRef] = useState('');
   const isPublic = publicOptIn && (publicOverride ?? createPublicDefault);
+  const pendingInviteParsed = pendingInvite ? parsePublicChannelRef(pendingInvite) : null;
+  const pendingInviteDetail = pendingInviteParsed
+    ? pendingInviteChannelHost(
+        pendingInviteParsed.localId,
+        shortPubky(pendingInviteParsed.hostPubky),
+      )
+    : null;
 
   const visible = useMemo(() => {
     const filtered = filterChannelsByMode(channels, mode);
@@ -401,6 +410,11 @@ export function ChannelsScreenContent({
       {pendingInvite ? (
         <View testID="channelsPendingInvite" accessibilityRole="alert" style={styles.pendingInvite}>
           <Text style={styles.pendingTitle}>{COPY.pendingPublicInvite}</Text>
+          {pendingInviteDetail ? (
+            <Text testID="channelsPendingInviteDetail" style={styles.pendingBody}>
+              {pendingInviteDetail}
+            </Text>
+          ) : null}
           {!publicOptIn ? (
             <Text style={styles.pendingBody}>{COPY.loadPublicTopicsToJoin}</Text>
           ) : null}

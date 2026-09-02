@@ -40,7 +40,9 @@ function nowMs(): number {
 }
 
 function isLive(record: DeferredPublicJoinRecord, now = nowMs()): boolean {
-  return now - record.createdAt < DEFERRED_PUBLIC_JOIN_TTL_MS && !record.dismissed;
+  const age = now - record.createdAt;
+  if (age < 0 || age >= DEFERRED_PUBLIC_JOIN_TTL_MS) return false;
+  return !record.dismissed;
 }
 
 function parseRecord(raw: string | undefined): DeferredPublicJoinRecord | null {
@@ -142,17 +144,11 @@ export function setDeferredPublicJoin(ref: string, ownerPubky?: string | null): 
   persist(ownerPubky, record);
 }
 
-/** Persist an unsigned tap once an owner is known. */
+/** Unsigned taps stay in memory until the user confirms Join. They are not
+ * persisted under whichever identity signs in next. */
 export function bindDeferredPublicJoinToOwner(ownerPubky: string): void {
   dropLegacyGlobal();
-  if (!unsigned) {
-    hydrateOwner(ownerPubky);
-    return;
-  }
-  const record = liveOrDrop(null, unsigned);
-  unsigned = null;
-  if (!record) return;
-  persist(ownerPubky, { ...record, redirected: false });
+  hydrateOwner(ownerPubky);
 }
 
 export function peekDeferredPublicJoin(ownerPubky?: string | null): string | null {
@@ -169,8 +165,9 @@ export function peekDeferredPublicJoin(ownerPubky?: string | null): string | nul
 /** Invite still waiting for an explicit Join/Dismiss, including after the one allowed redirect. */
 export function peekDeferredPublicInvite(ownerPubky: string): string | null {
   const record = liveOrDrop(ownerPubky, hydrateOwner(ownerPubky));
-  if (!record || record.dismissed) return null;
-  return record.ref;
+  if (record && !record.dismissed) return record.ref;
+  const unsignedRecord = liveOrDrop(null, unsigned);
+  return unsignedRecord?.ref ?? null;
 }
 
 /** Returns true once per stored ref so launch cannot hijack every cold start. */
@@ -183,8 +180,11 @@ export function consumeDeferredPublicJoinRedirect(ownerPubky: string): boolean {
 
 export function dismissDeferredPublicJoin(ownerPubky: string): void {
   const record = liveOrDrop(ownerPubky, hydrateOwner(ownerPubky));
-  if (!record) return;
-  persist(ownerPubky, { ...record, dismissed: true });
+  if (record) {
+    persist(ownerPubky, { ...record, dismissed: true });
+    return;
+  }
+  unsigned = null;
 }
 
 export function takeDeferredPublicJoin(ownerPubky?: string | null): string | null {
@@ -195,9 +195,13 @@ export function takeDeferredPublicJoin(ownerPubky?: string | null): string | nul
     return record?.ref ?? null;
   }
   const record = liveOrDrop(ownerPubky, hydrateOwner(ownerPubky));
-  if (!record || record.dismissed) return null;
-  removeOwner(ownerPubky);
-  return record.ref;
+  if (record && !record.dismissed) {
+    removeOwner(ownerPubky);
+    return record.ref;
+  }
+  const unsignedRecord = liveOrDrop(null, unsigned);
+  unsigned = null;
+  return unsignedRecord?.ref ?? null;
 }
 
 export function clearDeferredPublicJoin(ownerPubky?: string | null): void {

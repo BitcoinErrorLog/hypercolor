@@ -68,7 +68,7 @@ describe('deferredPublicJoin', () => {
     expect(peekDeferredPublicJoin(OWNER_A)).toBe(REF);
   });
 
-  it('holds an unsigned tap in memory until an owner is known, then persists', () => {
+  it('holds an unsigned tap in memory and does not persist it under the next owner', () => {
     setDeferredPublicJoin(REF);
     expect(peekDeferredPublicJoin()).toBe(REF);
     forgetDeferredPublicJoinMemoryForTests();
@@ -78,9 +78,11 @@ describe('deferredPublicJoin', () => {
     mockBags.clear();
     setDeferredPublicJoin(REF);
     bindDeferredPublicJoinToOwner(OWNER_A);
+    expect(peekDeferredPublicInvite(OWNER_A)).toBe(REF);
+    expect(consumeDeferredPublicJoinRedirect(OWNER_A)).toBe(false);
     forgetDeferredPublicJoinMemoryForTests();
-    expect(peekDeferredPublicJoin(OWNER_A)).toBe(REF);
-    expect(peekDeferredPublicJoin(OWNER_B)).toBeNull();
+    expect(peekDeferredPublicJoin(OWNER_A)).toBeNull();
+    expect(peekDeferredPublicInvite(OWNER_A)).toBeNull();
   });
 
   it('clears the owner record on sign-out', () => {
@@ -117,5 +119,24 @@ describe('deferredPublicJoin', () => {
     forgetDeferredPublicJoinMemoryForTests();
     expect(peekDeferredPublicInvite(OWNER_A)).toBeNull();
     expect(consumeDeferredPublicJoinRedirect(OWNER_A)).toBe(false);
+  });
+
+  it('discards an invite when the clock jumps backward', () => {
+    const now = 1_700_000_000_000;
+    jest.spyOn(Date, 'now').mockReturnValue(now);
+    setDeferredPublicJoin(REF, OWNER_A);
+    jest.spyOn(Date, 'now').mockReturnValue(now - 1);
+    expect(peekDeferredPublicJoin(OWNER_A)).toBeNull();
+    expect(peekDeferredPublicInvite(OWNER_A)).toBeNull();
+  });
+
+  it('lets Join consume an unsigned invite after auth without persisting it first', () => {
+    setDeferredPublicJoin(REF);
+    bindDeferredPublicJoinToOwner(OWNER_A);
+    expect(peekDeferredPublicInvite(OWNER_A)).toBe(REF);
+    expect(takeDeferredPublicJoin(OWNER_A)).toBe(REF);
+    expect(peekDeferredPublicInvite(OWNER_A)).toBeNull();
+    forgetDeferredPublicJoinMemoryForTests();
+    expect(peekDeferredPublicInvite(OWNER_A)).toBeNull();
   });
 });

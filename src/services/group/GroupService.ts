@@ -39,11 +39,9 @@ import { LinkService } from '../link/LinkService';
 import { notifyGroupEvent } from './groupEvents';
 import {
   bindDeferredPublicJoinToOwner,
-  clearDeferredPublicJoin,
   consumeDeferredPublicJoinRedirect,
   dismissDeferredPublicJoin,
   peekDeferredPublicInvite,
-  peekDeferredPublicJoin,
   setDeferredPublicJoin,
   takeDeferredPublicJoin,
 } from '../../stores/deferredPublicJoin';
@@ -53,10 +51,6 @@ export { PRIVATE_GROUP_MEMBER_CAP };
 
 export function setPendingPublicJoin(ref: string, ownerPubky?: string | null): void {
   setDeferredPublicJoin(ref, ownerPubky);
-}
-
-export function peekPendingPublicJoin(ownerPubky?: string | null): string | null {
-  return peekDeferredPublicJoin(ownerPubky);
 }
 
 export function peekPendingPublicInvite(ownerPubky: string): string | null {
@@ -77,10 +71,6 @@ export function dismissPendingPublicJoin(ownerPubky: string): void {
 
 export function takePendingPublicJoin(ownerPubky?: string | null): string | null {
   return takeDeferredPublicJoin(ownerPubky);
-}
-
-export function clearPendingPublicJoin(ownerPubky?: string | null): void {
-  clearDeferredPublicJoin(ownerPubky);
 }
 
 export const GroupService = {
