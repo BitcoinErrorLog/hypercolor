@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   View,
   ActivityIndicator,
@@ -21,6 +21,7 @@ import { loadMainTabIconFont } from './src/navigation/tabBarIcons';
 import { KeyStore } from './src/services/KeyStore';
 import { LinkService, startLinkRetryDrain } from './src/services/link/LinkService';
 import { hydratePersistedAuth } from './src/stores/hydrateAuthSession';
+import { ReduceMotionProvider } from './src/ui/reduceMotion';
 
 if (__DEV__) {
   startE2eClipboardChannel();
@@ -28,6 +29,8 @@ if (__DEV__) {
 
 export default function App() {
   const [ready, setReady] = useState(false);
+  const [allowContinue, setAllowContinue] = useState(false);
+  const initEpochRef = useRef(0);
 
   useEffect(() => {
     // Dev-only, env-gated live-proof auto-runner. EXPO_PUBLIC_LIVEPROOF is
@@ -74,6 +77,7 @@ export default function App() {
   useEffect(() => {
     let disposed = false;
     let stopDrain: (() => void) | undefined;
+    const myEpoch = ++initEpochRef.current;
 
     // Foreground notification strategy: see docs/NOTIFICATIONS.md.
     // AppState 'active' restarts the retry drain and syncs the Encrypted-Link inbox.
@@ -107,7 +111,7 @@ export default function App() {
     };
 
     const markReady = () => {
-      if (!disposed) setReady(true);
+      if (!disposed && myEpoch === initEpochRef.current) setReady(true);
     };
     const iconFontReady = loadMainTabIconFont().catch(err => {
       console.warn('[App] tab icon font failed to load:', err);
@@ -118,15 +122,18 @@ export default function App() {
     // Keychain / keystore2 can hang forever on some emulators (never
     // resolve or reject). Fail-open to Welcome; do not invent a crypto path.
     const readyTimer = setTimeout(() => afterIconFont(markReady), 4000);
+    const continueTimer = setTimeout(() => {
+      if (!disposed) setAllowContinue(true);
+    }, 4000);
     KeyStore.initKeyStore()
       .then(async () => {
-        if (disposed) return;
+        if (disposed || myEpoch !== initEpochRef.current) return;
         try {
           await hydratePersistedAuth();
         } catch {
           // Auth hydrate is best-effort; Welcome is still the right screen.
         }
-        if (disposed) return;
+        if (disposed || myEpoch !== initEpochRef.current) return;
         void recoverAndDrain();
         stopDrain = startLinkRetryDrain();
         afterIconFont(markReady);
@@ -152,6 +159,7 @@ export default function App() {
     return () => {
       disposed = true;
       clearTimeout(readyTimer);
+      clearTimeout(continueTimer);
       sub.remove();
       linkingSub?.remove();
       stopDrain?.();
@@ -162,20 +170,29 @@ export default function App() {
     return (
       <View style={styles.loading}>
         <ActivityIndicator size="large" color="#7c3aed" />
-        <TouchableOpacity
-          testID="appSplashContinue"
-          accessibilityRole="button"
-          accessibilityLabel="Continue"
-          onPress={() => setReady(true)}
-          style={styles.splashContinue}
-        >
-          <Text style={styles.splashContinueText}>Continue</Text>
-        </TouchableOpacity>
+        {allowContinue ? (
+          <TouchableOpacity
+            testID="appSplashContinue"
+            accessibilityRole="button"
+            accessibilityLabel="Continue"
+            onPress={() => {
+              initEpochRef.current += 1;
+              setReady(true);
+            }}
+            style={styles.splashContinue}
+          >
+            <Text style={styles.splashContinueText}>Continue</Text>
+          </TouchableOpacity>
+        ) : null}
       </View>
     );
   }
 
-  return <RootNavigator />;
+  return (
+    <ReduceMotionProvider>
+      <RootNavigator />
+    </ReduceMotionProvider>
+  );
 }
 
 const styles = StyleSheet.create({

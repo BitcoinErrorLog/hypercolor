@@ -30,7 +30,13 @@ import type {
   GroupMemberStatus,
   GroupMessage,
 } from '../types/group';
-import { isGroupWireKind, peekEnvelopeKind } from '../types/group';
+import {
+  GROUP_MEMBERSHIP_KIND,
+  GROUP_MESSAGE_KIND,
+  PUBLIC_CHANNEL_MESSAGE_KIND,
+  isGroupWireKind,
+  peekEnvelopeKind,
+} from '../types/group';
 import {
   GROUP_DEFERRED_QUOTA_PER_SENDER,
   GROUP_DEFERRED_TTL_MS,
@@ -1423,12 +1429,57 @@ export const StorageService = {
   async listGroupChannels(ownerPubky: PubkyKey): Promise<GroupChannel[]> {
     const db = await getDb();
     const result = db.executeSync(
-      `SELECT * FROM group_channels
-       WHERE owner_pubky = ?
-       ORDER BY last_message_at DESC, updated_at DESC`,
-      [ownerPubky],
+      `SELECT c.*,
+              (
+                SELECT COUNT(*) FROM group_messages m
+                 WHERE m.owner_pubky = c.owner_pubky
+                   AND m.channel_id = c.channel_id
+                   AND m.sender_pubky != c.owner_pubky
+                   AND m.deleted = 0
+                   AND m.kind IN (?, ?, ?, ?)
+                   AND m.sent_at > COALESCE((
+                     SELECT last_read_at FROM link_read_cursors
+                      WHERE owner_pubky = c.owner_pubky
+                        AND conversation_id = 'group:' || c.channel_id
+                   ), 0)
+              ) AS unread_count
+         FROM group_channels c
+        WHERE c.owner_pubky = ?
+        ORDER BY last_message_at DESC, updated_at DESC`,
+      [
+        GROUP_MESSAGE_KIND,
+        PUBLIC_CHANNEL_MESSAGE_KIND,
+        GROUP_MEMBERSHIP_KIND,
+        CHAT_ATTACHMENT_KIND,
+        ownerPubky,
+      ],
     );
     return (result.rows ?? []).map(rowToGroupChannel);
+  },
+
+  async countUnreadGroupMessages(ownerPubky: PubkyKey): Promise<number> {
+    const db = await getDb();
+    const result = db.executeSync(
+      `SELECT COUNT(*) AS unread
+         FROM group_messages m
+        WHERE m.owner_pubky = ?
+          AND m.sender_pubky != m.owner_pubky
+          AND m.deleted = 0
+          AND m.kind IN (?, ?, ?, ?)
+          AND m.sent_at > COALESCE((
+            SELECT last_read_at FROM link_read_cursors
+             WHERE owner_pubky = m.owner_pubky
+               AND conversation_id = 'group:' || m.channel_id
+          ), 0)`,
+      [
+        ownerPubky,
+        GROUP_MESSAGE_KIND,
+        PUBLIC_CHANNEL_MESSAGE_KIND,
+        GROUP_MEMBERSHIP_KIND,
+        CHAT_ATTACHMENT_KIND,
+      ],
+    );
+    return Number(result.rows?.[0]?.unread ?? 0);
   },
 
   async touchGroupChannel(
@@ -2408,6 +2459,7 @@ function rowToGroupChannel(row: any): GroupChannel {
     isPublic: row.is_public === 1,
     lastMessageAt: row.last_message_at ?? null,
     membershipEpoch: row.membership_epoch,
+    unreadCount: Number(row.unread_count ?? 0),
   };
 }
 

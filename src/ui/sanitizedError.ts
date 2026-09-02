@@ -18,6 +18,12 @@ export type SanitizedError = {
 
 const URL_PATTERN = /(?:https?:\/\/|pubky:\/\/|pubkyring:\/\/|pubkyauth:\/\/|hypercolor:\/\/)\S+/gi;
 const Z32_PATTERN = /[ybndrfg8ejkmcpqxot1uwisza345h769]{52}/gi;
+const BARE_HOST_PATTERN =
+  /(?:^|[\s'"<(])(?:(?:[a-z0-9-]+\.)+[a-z]{2,})(?::\d{2,5})?(?:\/[^\s'"<>]*)?/gi;
+const SENSITIVE_QUERY_PATTERN = /(?:\?|&|#)?(?:secret|token|session|code)=([^&\s#]+)/gi;
+const REQUEST_ID_PATTERN = /(?:request[_-]?id|req(?:uest)?id)[=:/\s]+([^\s&/"']+)/gi;
+const CAPABILITY_PATTERN = /\/pub\/[a-z0-9._-]+(?::[a-z]+)?/gi;
+const AUTH_PAYLOAD_PATTERN = /(?:ephemeralPk|caps|authorizationUrl|paykit-connect)[=:]\S+/gi;
 
 function rawMessage(err: unknown): string {
   if (err instanceof Error && err.message.trim().length > 0) return err.message;
@@ -29,8 +35,18 @@ function rawMessage(err: unknown): string {
   return '';
 }
 
-function stripSensitive(text: string): string {
-  return text.replace(URL_PATTERN, '[url]').replace(Z32_PATTERN, '[pubky]');
+export function stripSensitive(text: string): string {
+  return text
+    .replace(URL_PATTERN, '[url]')
+    .replace(SENSITIVE_QUERY_PATTERN, '[redacted]')
+    .replace(REQUEST_ID_PATTERN, 'request_id=[redacted]')
+    .replace(AUTH_PAYLOAD_PATTERN, '[auth]')
+    .replace(CAPABILITY_PATTERN, '[capability]')
+    .replace(BARE_HOST_PATTERN, match => {
+      const prefix = /^\s/.test(match) || /['"<(]/.test(match[0] ?? '') ? match[0] : '';
+      return `${prefix}[host]`;
+    })
+    .replace(Z32_PATTERN, '[pubky]');
 }
 
 export function classifyError(err: unknown): SanitizedErrorCategory {

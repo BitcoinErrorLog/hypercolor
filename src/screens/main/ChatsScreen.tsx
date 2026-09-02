@@ -32,7 +32,6 @@ export default function ChatsScreen() {
   const ownerPubky = useAuthStore(s => s.pubky);
   const sessionKind = useSessionStatusStore(s => s.kind);
   const pendingRequests = useSessionStatusStore(s => s.pendingRequestCount);
-  const refreshSession = useSessionStatusStore(s => s.refresh);
   const setPendingRequestCount = useSessionStatusStore(s => s.setPendingRequestCount);
   const [conversations, setConversations] = useState<LinkConversationSummary[]>([]);
   const [contacts, setContacts] = useState<Record<string, Contact>>({});
@@ -62,7 +61,6 @@ export default function ChatsScreen() {
   }, [ownerPubky, setPendingRequestCount]);
 
   const refresh = useCallback(async () => {
-    await refreshSession();
     if (ownerPubky && LinkService.hasSession()) {
       try {
         await LinkService.syncInbox();
@@ -71,7 +69,7 @@ export default function ChatsScreen() {
       }
     }
     await loadLocal();
-  }, [loadLocal, ownerPubky, refreshSession]);
+  }, [loadLocal, ownerPubky]);
 
   useFocusEffect(
     useCallback(() => {

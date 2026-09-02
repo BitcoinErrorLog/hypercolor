@@ -1,5 +1,14 @@
 import { COPY } from '../../copy/uxCopy';
-import { formatDeliveryState, formatLinkStatus, isOutboundStatusWord } from '../messageStatus';
+import { formatDeliveryState, formatLinkStatus } from '../messageStatus';
+
+const OUTBOUND_WORDS = new Set([
+  COPY.queued,
+  COPY.sent,
+  COPY.failed,
+  COPY.inboxClosed,
+  COPY.offline,
+  COPY.needsEnable,
+]);
 
 describe('formatDeliveryState', () => {
   it('maps sending to Queued and failed to Failed', () => {
@@ -15,7 +24,7 @@ describe('formatDeliveryState', () => {
       const label = formatDeliveryState(state);
       expect(label.toLowerCase()).not.toBe('delivered');
       expect(label.toLowerCase()).not.toBe('read');
-      expect(isOutboundStatusWord(label)).toBe(true);
+      expect(OUTBOUND_WORDS.has(label)).toBe(true);
     }
   });
 });

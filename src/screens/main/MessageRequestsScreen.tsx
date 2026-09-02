@@ -22,6 +22,7 @@ import { HIT_SLOP_44 } from '../../ui/hitTarget';
 import { peerIdentity } from '../../ui/peerIdentity';
 import { copyText } from '../../utils/copyText';
 import { sanitizeError } from '../../ui/sanitizedError';
+import { useSessionStatusStore } from '../../stores/sessionStatusStore';
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
 
@@ -45,6 +46,7 @@ export default function MessageRequestsScreen() {
       next.push({ request, contact });
     }
     setRows(next);
+    useSessionStatusStore.getState().setPendingRequestCount(pending.length);
   }, [ownerPubky]);
 
   useEffect(() => {
@@ -267,6 +269,8 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     paddingHorizontal: 16,
     paddingVertical: 10,
+    minHeight: 44,
+    justifyContent: 'center',
   },
   acceptText: { color: '#fff', fontWeight: '600' },
   decline: {
@@ -275,6 +279,8 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     paddingHorizontal: 16,
     paddingVertical: 10,
+    minHeight: 44,
+    justifyContent: 'center',
   },
   declineText: { color: '#d1d5db', fontWeight: '600' },
   empty: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: 8, paddingHorizontal: 32 },

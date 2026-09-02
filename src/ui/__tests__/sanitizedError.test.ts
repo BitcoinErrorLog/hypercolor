@@ -1,5 +1,5 @@
 import { COPY } from '../../copy/uxCopy';
-import { classifyError, sanitizeError } from '../sanitizedError';
+import { classifyError, sanitizeError, stripSensitive } from '../sanitizedError';
 
 const SAMPLE_PUBKY = 'gcumbhd7sqit6nn457jxmrwqx9pyymqwamnarekgo3xppqo6a19o';
 
@@ -30,5 +30,28 @@ describe('sanitizeError', () => {
     expect(sanitized.details).not.toContain('https://evil.example');
     expect(sanitized.details).not.toContain(SAMPLE_PUBKY);
     expect(classifyError(err)).toBe('unknown');
+  });
+});
+
+describe('stripSensitive', () => {
+  it('redacts bare hosts, query secrets, request ids, capabilities, and auth payload keys', () => {
+    const raw =
+      'homeserver.staging.pubky.app refused secret=abc token=def session=ghi code=jkl ' +
+      'request_id=req-handoff-1 /pub/paykit/:rw ephemeralPk=aabb caps=/pub/hypercolor.app/v1/:rw ' +
+      'paykit-connect=pubkyring://x';
+    const stripped = stripSensitive(raw);
+    expect(stripped).not.toMatch(/homeserver\.staging\.pubky\.app/);
+    expect(stripped).toContain('[host]');
+    expect(stripped).not.toContain('secret=abc');
+    expect(stripped).not.toContain('token=def');
+    expect(stripped).not.toContain('session=ghi');
+    expect(stripped).not.toContain('code=jkl');
+    expect(stripped).toContain('[redacted]');
+    expect(stripped).not.toContain('req-handoff-1');
+    expect(stripped).toContain('request_id=[redacted]');
+    expect(stripped).not.toContain('/pub/paykit/:rw');
+    expect(stripped).toContain('[capability]');
+    expect(stripped).not.toContain('ephemeralPk=aabb');
+    expect(stripped).toContain('[auth]');
   });
 });

@@ -1,4 +1,4 @@
-import { filterDmConversations, requestsBadgeCount } from '../chatList';
+import { filterDmConversations } from '../chatList';
 import { shortPubky } from '../shortPubky';
 import { peerIdentity } from '../peerIdentity';
 
@@ -14,13 +14,6 @@ describe('filterDmConversations', () => {
       { conversationId: 'not-a-dm', label: 'junk' },
     ];
     expect(filterDmConversations(rows).map(row => row.label)).toEqual(['dm']);
-  });
-});
-
-describe('requestsBadgeCount', () => {
-  it('omits the badge at zero and mirrors a positive pending count', () => {
-    expect(requestsBadgeCount(0)).toBeNull();
-    expect(requestsBadgeCount(3)).toBe(3);
   });
 });
 

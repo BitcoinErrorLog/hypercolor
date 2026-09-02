@@ -16,6 +16,7 @@ import { ContactsService } from '../../services/ContactsService';
 import { threadRouteParams } from '../../types/link';
 import { useAuthStore } from '../../stores/authStore';
 import { useContactStore } from '../../stores/contactStore';
+import { sanitizeError } from '../../ui/sanitizedError';
 import { isValidPubky, parsePubky } from '../../utils/pubkyId';
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
@@ -35,7 +36,10 @@ export default function ContactSearchScreen() {
     try {
       const result = await ContactsService.addManualContact(localPubky, parsed);
       if (!result.ok) {
-        Alert.alert(result.reason === 'not-found' ? 'Not Found' : 'Cannot add', result.message);
+        Alert.alert(
+          result.reason === 'not-found' ? 'Not Found' : 'Cannot add',
+          sanitizeError(result.message).message,
+        );
         return;
       }
       upsertContact(result.contact);

@@ -4,7 +4,11 @@ import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import type { MainTabParamList } from '../types';
 import { MainTabBarIcon, type MainTabName } from './tabBarIcons';
 import { useAuthStore } from '../stores/authStore';
-import { sessionBannerVisible, useSessionStatusStore } from '../stores/sessionStatusStore';
+import {
+  sessionBannerVisible,
+  startSessionStatusLifecycle,
+  useSessionStatusStore,
+} from '../stores/sessionStatusStore';
 import { StatusBanner } from '../ui/StatusBanner';
 import { COPY } from '../copy/uxCopy';
 import { sessionUiModel } from '../ui/sessionUi';
@@ -47,12 +51,13 @@ function SessionBannerHost() {
 
 export function MainTabs() {
   const pending = useSessionStatusStore(s => s.pendingRequestCount);
-  const refresh = useSessionStatusStore(s => s.refresh);
+  const groupUnread = useSessionStatusStore(s => s.groupUnreadCount);
   const isAuthenticated = useAuthStore(s => s.isAuthenticated);
 
   useEffect(() => {
-    if (isAuthenticated) void refresh();
-  }, [isAuthenticated, refresh]);
+    if (!isAuthenticated) return;
+    return startSessionStatusLifecycle();
+  }, [isAuthenticated]);
 
   return (
     <View style={styles.shell}>
@@ -85,7 +90,13 @@ export function MainTabs() {
         <Tab.Screen
           name="Channels"
           component={ChannelsScreen as React.ComponentType}
-          options={{ tabBarLabel: 'Channels', tabBarButtonTestID: 'tabChannels' }}
+          options={{
+            tabBarLabel: 'Channels',
+            tabBarButtonTestID: 'tabChannels',
+            ...(groupUnread > 0 ? { tabBarBadge: groupUnread } : {}),
+            tabBarAccessibilityLabel:
+              groupUnread > 0 ? `Channels, ${groupUnread} unread` : 'Channels',
+          }}
         />
         <Tab.Screen
           name="Contacts"

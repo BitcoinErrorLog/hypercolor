@@ -4,7 +4,3 @@ export function shortPubky(pubky: string): string {
   if (value.length <= 12) return value;
   return `${value.slice(0, 6)}…${value.slice(-4)}`;
 }
-
-export function pubkyAccessibilityLabel(role: string, pubky: string): string {
-  return `${role} ${shortPubky(pubky)}`;
-}

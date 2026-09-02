@@ -1,5 +1,13 @@
-import React, { Suspense, useEffect, useCallback } from 'react';
-import { View, ActivityIndicator, StyleSheet, Alert, Linking } from 'react-native';
+import React, { Suspense, useEffect, useCallback, useState } from 'react';
+import {
+  View,
+  ActivityIndicator,
+  StyleSheet,
+  Alert,
+  Linking,
+  Text,
+  TouchableOpacity,
+} from 'react-native';
 import { NavigationContainer, type LinkingOptions } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../types';
@@ -18,6 +26,8 @@ import { parsePublicChannelRef } from '../types/group';
 import { sanitizeError } from '../ui/sanitizedError';
 import { COPY } from '../copy/uxCopy';
 import { notifyEnableMessagingResume } from '../ui/enableMessagingResume';
+import { notifyConnectAuthFeedback } from '../ui/connectAuthFeedback';
+import { stackTransitionAnimation, useReduceMotion } from '../ui/reduceMotion';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
@@ -63,15 +73,41 @@ const linking: LinkingOptions<RootStackParamList> = {
 };
 
 function LoadingFallback() {
+  const [showExit, setShowExit] = useState(false);
+  useEffect(() => {
+    const timer = setTimeout(() => setShowExit(true), 8_000);
+    return () => clearTimeout(timer);
+  }, []);
   return (
     <View style={styles.loading}>
       <ActivityIndicator size="large" color="#7c3aed" />
+      {showExit ? (
+        <TouchableOpacity
+          testID="navigationLoadingContinue"
+          accessibilityRole="button"
+          accessibilityLabel="Continue"
+          onPress={() => {
+            if (!navigationRef.isReady()) return;
+            const authed = useAuthStore.getState().isAuthenticated;
+            navigationRef.reset({
+              index: 0,
+              routes: [{ name: authed ? 'Main' : 'Auth' }],
+            });
+          }}
+          style={styles.loadingContinue}
+        >
+          <Text style={styles.loadingContinueText}>{COPY.stillLoading}</Text>
+        </TouchableOpacity>
+      ) : null}
     </View>
   );
 }
 
 export function RootNavigator() {
   const { isAuthenticated, setAuthenticated } = useAuthStore();
+  const reduceMotion = useReduceMotion();
+  const stackAnimation = (kind: 'slide_from_right' | 'slide_from_bottom') =>
+    stackTransitionAnimation(reduceMotion, kind);
 
   const handleDeepLink = useCallback(
     async (url: string) => {
@@ -98,6 +134,11 @@ export function RootNavigator() {
         notifyEnableMessagingResume();
       } catch (err) {
         const sanitized = sanitizeError(err, COPY.couldNotCompleteAuthorization);
+        if (sanitized.category === 'denied') {
+          notifyConnectAuthFeedback('denied');
+        } else if (sanitized.category === 'offline' || sanitized.category === 'network') {
+          notifyConnectAuthFeedback('offline');
+        }
         Alert.alert(COPY.couldNotCompleteAuthorization, sanitized.message);
       }
     },
@@ -132,32 +173,32 @@ export function RootNavigator() {
                 <Stack.Screen
                   name="Thread"
                   component={ThreadScreen}
-                  options={{ animation: 'slide_from_right', headerShown: false }}
+                  options={{ animation: stackAnimation('slide_from_right'), headerShown: false }}
                 />
                 <Stack.Screen
                   name="ChannelScreen"
                   component={ChannelScreen}
-                  options={{ animation: 'slide_from_right', headerShown: false }}
+                  options={{ animation: stackAnimation('slide_from_right'), headerShown: false }}
                 />
                 <Stack.Screen
                   name="ContactSearch"
                   component={ContactSearchScreen}
-                  options={{ animation: 'slide_from_bottom', headerShown: false }}
+                  options={{ animation: stackAnimation('slide_from_bottom'), headerShown: false }}
                 />
                 <Stack.Screen
                   name="MessageRequests"
                   component={MessageRequestsScreen}
-                  options={{ animation: 'slide_from_right', headerShown: false }}
+                  options={{ animation: stackAnimation('slide_from_right'), headerShown: false }}
                 />
                 <Stack.Screen
                   name="Settings"
                   component={SettingsScreen}
-                  options={{ animation: 'slide_from_bottom', headerShown: false }}
+                  options={{ animation: stackAnimation('slide_from_bottom'), headerShown: false }}
                 />
                 <Stack.Screen
                   name="EnableMessaging"
                   component={EnableMessagingScreen}
-                  options={{ animation: 'slide_from_right', headerShown: false }}
+                  options={{ animation: stackAnimation('slide_from_right'), headerShown: false }}
                 />
               </>
             ) : (
@@ -178,5 +219,13 @@ const styles = StyleSheet.create({
     backgroundColor: '#0a0a0a',
     justifyContent: 'center',
     alignItems: 'center',
+    gap: 24,
   },
+  loadingContinue: {
+    minHeight: 44,
+    minWidth: 44,
+    paddingHorizontal: 24,
+    justifyContent: 'center',
+  },
+  loadingContinueText: { color: '#8f57f0', fontSize: 16, fontWeight: '600' },
 });

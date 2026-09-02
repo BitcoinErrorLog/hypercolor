@@ -15,7 +15,6 @@ import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { Contact, RootStackParamList } from '../../types';
 import type { GroupChannel } from '../../types/group';
-import { GroupServiceError } from '../../types/group';
 import { PRIVATE_GROUP_MEMBER_CAP } from '../../flags/config';
 import { useAuthStore } from '../../stores/authStore';
 import { StorageService } from '../../services/StorageService';
@@ -24,8 +23,17 @@ import {
   takePendingPublicJoin,
   subscribeGroupEvents,
 } from '../../services/group/GroupService';
+import { COPY } from '../../copy/uxCopy';
+import { sanitizeError } from '../../ui/sanitizedError';
+import { HIT_SLOP_44, minHitStyle } from '../../ui/hitTarget';
+import { modalAnimationType, useReduceMotion } from '../../ui/reduceMotion';
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
+
+function alertSanitized(err: unknown, fallback: string): void {
+  const sanitized = sanitizeError(err, fallback);
+  Alert.alert(sanitized.message);
+}
 
 export default function ChannelsScreen() {
   const nav = useNavigation<Nav>();
@@ -60,7 +68,7 @@ export default function ChannelsScreen() {
             nav.navigate('ChannelScreen', { channelId: ch.channelId });
           })
           .catch(err => {
-            Alert.alert('Join failed', err instanceof Error ? err.message : String(err));
+            alertSanitized(err, COPY.couldNotJoinChannel);
           });
       }
     }, [reload, nav]),
@@ -93,10 +101,7 @@ export default function ChannelsScreen() {
           await reload();
           nav.navigate('ChannelScreen', { channelId: channel.channelId });
         } catch (err) {
-          Alert.alert(
-            'Could not create group',
-            err instanceof GroupServiceError ? err.message : String(err),
-          );
+          alertSanitized(err, COPY.couldNotCreateGroup);
         } finally {
           setBusy(false);
         }
@@ -109,10 +114,7 @@ export default function ChannelsScreen() {
           await reload();
           nav.navigate('ChannelScreen', { channelId: channel.channelId });
         } catch (err) {
-          Alert.alert(
-            'Could not create channel',
-            err instanceof GroupServiceError ? err.message : String(err),
-          );
+          alertSanitized(err, COPY.couldNotCreateChannel);
         } finally {
           setBusy(false);
         }
@@ -125,10 +127,7 @@ export default function ChannelsScreen() {
           await reload();
           nav.navigate('ChannelScreen', { channelId: channel.channelId });
         } catch (err) {
-          Alert.alert(
-            'Could not join',
-            err instanceof GroupServiceError ? err.message : String(err),
-          );
+          alertSanitized(err, COPY.couldNotJoinChannel);
         } finally {
           setBusy(false);
         }
@@ -173,32 +172,45 @@ export function ChannelsScreenContent({
   const [isPublic, setIsPublic] = useState(false);
   const [selected, setSelected] = useState<Record<string, boolean>>({});
   const [joinRef, setJoinRef] = useState('');
+  const reduceMotion = useReduceMotion();
+  const modalMotion = modalAnimationType(reduceMotion, 'slide');
 
   const selectedPubkys = Object.keys(selected).filter(k => selected[k]);
 
   const renderChannel = useCallback(
-    ({ item }: { item: GroupChannel }) => (
-      <TouchableOpacity style={styles.row} onPress={() => onOpenChannel(item.channelId)}>
-        <View style={styles.avatar}>
-          <Text style={styles.avatarLetter}>
-            {item.isPublic ? '#' : item.name.charAt(0).toUpperCase()}
-          </Text>
-        </View>
-        <View style={styles.body}>
-          <View style={styles.rowHeader}>
-            <Text style={styles.name} numberOfLines={1}>
-              {item.name}
+    ({ item }: { item: GroupChannel }) => {
+      const unread = item.unreadCount ?? 0;
+      const kind = item.isPublic ? 'Public topic' : 'Private group';
+      return (
+        <TouchableOpacity
+          accessibilityRole="button"
+          accessibilityLabel={`Open ${item.name}`}
+          accessibilityHint={unread > 0 ? `${kind}, ${unread} unread` : kind}
+          style={styles.row}
+          onPress={() => onOpenChannel(item.channelId)}
+        >
+          <View style={styles.avatar}>
+            <Text style={styles.avatarLetter}>
+              {item.isPublic ? '#' : item.name.charAt(0).toUpperCase()}
             </Text>
-            {item.lastMessageAt ? (
-              <Text style={styles.time}>{formatRelativeTime(item.lastMessageAt)}</Text>
-            ) : null}
           </View>
-          <Text style={styles.meta} numberOfLines={1}>
-            {item.isPublic ? 'Public topic' : 'Private group'}
-          </Text>
-        </View>
-      </TouchableOpacity>
-    ),
+          <View style={styles.body}>
+            <View style={styles.rowHeader}>
+              <Text style={styles.name} numberOfLines={1}>
+                {item.name}
+              </Text>
+              {item.lastMessageAt ? (
+                <Text style={styles.time}>{formatRelativeTime(item.lastMessageAt)}</Text>
+              ) : null}
+            </View>
+            <Text style={styles.meta} numberOfLines={1}>
+              {kind}
+              {unread > 0 ? ` · ${unread}` : ''}
+            </Text>
+          </View>
+        </TouchableOpacity>
+      );
+    },
     [onOpenChannel],
   );
 
@@ -210,7 +222,7 @@ export function ChannelsScreenContent({
           <TouchableOpacity
             accessibilityRole="button"
             accessibilityLabel="Join a public topic"
-            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+            hitSlop={HIT_SLOP_44}
             onPress={onOpenJoin}
             style={{ minHeight: 44, justifyContent: 'center' }}
           >
@@ -219,7 +231,7 @@ export function ChannelsScreenContent({
           <TouchableOpacity
             accessibilityRole="button"
             accessibilityLabel="New channel"
-            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+            hitSlop={HIT_SLOP_44}
             onPress={onOpenCreate}
             style={{ minHeight: 44, minWidth: 44, alignItems: 'center', justifyContent: 'center' }}
           >
@@ -241,7 +253,12 @@ export function ChannelsScreenContent({
         />
       )}
 
-      <Modal visible={createOpen} animationType="slide" transparent onRequestClose={onCloseCreate}>
+      <Modal
+        visible={createOpen}
+        animationType={modalMotion}
+        transparent
+        onRequestClose={onCloseCreate}
+      >
         <View style={styles.modalBackdrop}>
           <View style={styles.modalCard}>
             <Text style={styles.modalTitle}>New channel</Text>
@@ -254,12 +271,18 @@ export function ChannelsScreenContent({
             />
             <View style={styles.toggleRow}>
               <TouchableOpacity
+                accessibilityRole="button"
+                accessibilityLabel="Private group"
+                accessibilityState={{ selected: !isPublic }}
                 style={[styles.toggle, !isPublic && styles.toggleOn]}
                 onPress={() => setIsPublic(false)}
               >
                 <Text style={styles.toggleText}>Private group</Text>
               </TouchableOpacity>
               <TouchableOpacity
+                accessibilityRole="button"
+                accessibilityLabel="Public topic"
+                accessibilityState={{ selected: isPublic }}
                 style={[styles.toggle, isPublic && styles.toggleOn]}
                 onPress={() => setIsPublic(true)}
               >
@@ -277,6 +300,9 @@ export function ChannelsScreenContent({
                   return (
                     <TouchableOpacity
                       key={contact.pubky}
+                      accessibilityRole="checkbox"
+                      accessibilityLabel={`Select ${contact.displayName ?? 'member'}`}
+                      accessibilityState={{ checked: on, disabled: wouldExceed }}
                       style={styles.memberRow}
                       disabled={wouldExceed}
                       onPress={() =>
@@ -301,11 +327,22 @@ export function ChannelsScreenContent({
               </Text>
             )}
             <View style={styles.modalActions}>
-              <TouchableOpacity onPress={onCloseCreate} disabled={busy}>
+              <TouchableOpacity
+                accessibilityRole="button"
+                accessibilityLabel="Cancel"
+                accessibilityState={{ disabled: busy }}
+                onPress={onCloseCreate}
+                disabled={busy}
+                style={minHitStyle}
+              >
                 <Text style={styles.action}>Cancel</Text>
               </TouchableOpacity>
               <TouchableOpacity
+                accessibilityRole="button"
+                accessibilityLabel="Create"
+                accessibilityState={{ busy, disabled: busy || name.trim().length === 0 }}
                 disabled={busy || name.trim().length === 0}
+                style={minHitStyle}
                 onPress={() => {
                   if (isPublic) onCreatePublic(name);
                   else onCreatePrivate(name, selectedPubkys);
@@ -318,7 +355,12 @@ export function ChannelsScreenContent({
         </View>
       </Modal>
 
-      <Modal visible={joinOpen} animationType="slide" transparent onRequestClose={onCloseJoin}>
+      <Modal
+        visible={joinOpen}
+        animationType={modalMotion}
+        transparent
+        onRequestClose={onCloseJoin}
+      >
         <View style={styles.modalBackdrop}>
           <View style={styles.modalCard}>
             <Text style={styles.modalTitle}>Join public channel</Text>
@@ -331,11 +373,22 @@ export function ChannelsScreenContent({
               autoCapitalize="none"
             />
             <View style={styles.modalActions}>
-              <TouchableOpacity onPress={onCloseJoin} disabled={busy}>
+              <TouchableOpacity
+                accessibilityRole="button"
+                accessibilityLabel="Cancel"
+                accessibilityState={{ disabled: busy }}
+                onPress={onCloseJoin}
+                disabled={busy}
+                style={minHitStyle}
+              >
                 <Text style={styles.action}>Cancel</Text>
               </TouchableOpacity>
               <TouchableOpacity
+                accessibilityRole="button"
+                accessibilityLabel="Join"
+                accessibilityState={{ busy, disabled: busy || joinRef.trim().length === 0 }}
                 disabled={busy || joinRef.trim().length === 0}
+                style={minHitStyle}
                 onPress={() => onJoinPublic(joinRef)}
               >
                 <Text style={styles.actionPrimary}>{busy ? '…' : 'Join'}</Text>
@@ -378,6 +431,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: 20,
     paddingVertical: 14,
+    minHeight: 44,
     gap: 14,
   },
   avatar: {
@@ -424,13 +478,15 @@ const styles = StyleSheet.create({
     flex: 1,
     borderRadius: 10,
     paddingVertical: 8,
+    minHeight: 44,
     alignItems: 'center',
+    justifyContent: 'center',
     backgroundColor: '#1a1a1a',
   },
   toggleOn: { backgroundColor: '#4c1d95' },
   toggleText: { color: '#f9fafb', fontWeight: '600' },
   memberList: { maxHeight: 240 },
-  memberRow: { paddingVertical: 8 },
+  memberRow: { paddingVertical: 8, minHeight: 44, justifyContent: 'center' },
   memberName: { color: '#9ca3af', fontSize: 14 },
   memberOn: { color: '#c4b5fd', fontWeight: '600' },
   hint: { color: '#6b7280', fontSize: 13, lineHeight: 18 },

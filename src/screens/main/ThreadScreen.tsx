@@ -91,7 +91,7 @@ export default function ThreadScreen({ route }: Props) {
     const contact = await StorageService.getContact(participantPubky, localPubky);
     setPeerContact(contact);
     try {
-      setLinkStatus(await LinkService.ensureLinkWith(participantPubky));
+      setLinkStatus(await LinkService.getLinkStatus(participantPubky));
     } catch {
       setLinkStatus(null);
     }

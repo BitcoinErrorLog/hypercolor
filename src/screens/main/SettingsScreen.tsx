@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   View,
   Text,
@@ -9,6 +9,8 @@ import {
   ScrollView,
   TextInput,
   ActivityIndicator,
+  Alert,
+  BackHandler,
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -31,6 +33,7 @@ import { sessionUiModel } from '../../ui/sessionUi';
 import { sanitizeError } from '../../ui/sanitizedError';
 import { setLastBackupAt } from '../../stores/backupMetaStore';
 import { shortPubky } from '../../ui/shortPubky';
+import { copyText } from '../../utils/copyText';
 
 type Nav = NativeStackNavigationProp<RootStackParamList, 'Settings'>;
 
@@ -45,9 +48,44 @@ export default function SettingsScreen() {
   const [telemetryEnabled, setTelemetryEnabled] = useState(() => FeatureFlags.get('telemetry'));
   const [backupBusy, setBackupBusy] = useState(false);
   const [recoveryCode, setRecoveryCode] = useState<string | null>(null);
+  const [recoveryConfirmed, setRecoveryConfirmed] = useState(false);
+  const [recoveryCopied, setRecoveryCopied] = useState(false);
+  const [recoveryGateActive, setRecoveryGateActive] = useState(false);
   const [restoreCode, setRestoreCode] = useState('');
   const [restoreNote, setRestoreNote] = useState<string | null>(null);
   const [restoreError, setRestoreError] = useState<string | null>(null);
+
+  const leaveSettings = useCallback(() => {
+    nav.goBack();
+  }, [nav]);
+
+  const requestLeave = useCallback(() => {
+    if (!recoveryGateActive) {
+      leaveSettings();
+      return;
+    }
+    Alert.alert(COPY.leaveRecoveryTitle, COPY.leaveRecoveryBody, [
+      { text: COPY.goBack, style: 'cancel' },
+      {
+        text: COPY.leaveAnyway,
+        style: 'destructive',
+        onPress: () => {
+          setRecoveryGateActive(false);
+          setRecoveryCode(null);
+          setRecoveryConfirmed(false);
+          leaveSettings();
+        },
+      },
+    ]);
+  }, [leaveSettings, recoveryGateActive]);
+
+  useEffect(() => {
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      requestLeave();
+      return true;
+    });
+    return () => sub.remove();
+  }, [requestLeave]);
 
   function toggleMesh(val: boolean) {
     FeatureFlags.set('mesh_transport', val);
@@ -67,7 +105,7 @@ export default function SettingsScreen() {
           accessibilityRole="button"
           accessibilityLabel="Back"
           hitSlop={HIT_SLOP_44}
-          onPress={() => nav.goBack()}
+          onPress={requestLeave}
           style={styles.backHit}
         >
           <Text style={styles.back}>← Back</Text>
@@ -144,7 +182,9 @@ export default function SettingsScreen() {
               void BackupService.exportBackup()
                 .then(result => {
                   setRecoveryCode(result.recoveryCode);
-                  setLastBackupAt(Date.now());
+                  setRecoveryConfirmed(false);
+                  setRecoveryCopied(false);
+                  setRecoveryGateActive(true);
                 })
                 .catch(err => {
                   const sanitized = sanitizeError(err, 'Could not create a backup.');
@@ -162,14 +202,50 @@ export default function SettingsScreen() {
           </TouchableOpacity>
           {recoveryCode ? (
             <View style={styles.row}>
-              <View>
-                <Text style={styles.rowLabel}>Write this recovery code down</Text>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.rowLabel}>{COPY.writeRecoveryCodeDown}</Text>
                 <Text style={styles.recoveryCode} selectable>
                   {recoveryCode}
                 </Text>
-                <Text style={styles.rowHint}>
-                  It is shown once here. Store it in Ring or a password manager.
-                </Text>
+                <TouchableOpacity
+                  testID="settingsRecoveryCopy"
+                  accessibilityRole="button"
+                  accessibilityLabel={COPY.copyRecoveryCode}
+                  style={styles.gateButton}
+                  onPress={() => {
+                    copyText(recoveryCode);
+                    setRecoveryCopied(true);
+                  }}
+                >
+                  <Text style={styles.gateButtonText}>
+                    {recoveryCopied ? COPY.copied : COPY.copyRecoveryCode}
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  testID="settingsRecoveryConfirm"
+                  accessibilityRole="checkbox"
+                  accessibilityLabel={COPY.writtenRecoveryCode}
+                  accessibilityState={{ checked: recoveryConfirmed }}
+                  style={styles.checkRow}
+                  onPress={() => setRecoveryConfirmed(value => !value)}
+                >
+                  <Text style={styles.checkMark}>{recoveryConfirmed ? '☑' : '☐'}</Text>
+                  <Text style={styles.checkLabel}>{COPY.writtenRecoveryCode}</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  testID="settingsRecoveryDone"
+                  accessibilityRole="button"
+                  accessibilityLabel={COPY.done}
+                  accessibilityState={{ disabled: !recoveryConfirmed }}
+                  disabled={!recoveryConfirmed}
+                  style={[styles.liveButton, !recoveryConfirmed && styles.liveButtonDisabled]}
+                  onPress={() => {
+                    setLastBackupAt(Date.now());
+                    setRecoveryGateActive(false);
+                  }}
+                >
+                  <Text style={styles.liveButtonText}>{COPY.done}</Text>
+                </TouchableOpacity>
               </View>
             </View>
           ) : null}
@@ -328,6 +404,21 @@ const styles = StyleSheet.create({
   },
   liveButtonDisabled: { opacity: 0.4 },
   liveButtonText: { color: '#fff', fontSize: 16, fontWeight: '600' },
+  gateButton: {
+    minHeight: 44,
+    justifyContent: 'center',
+    marginTop: 8,
+  },
+  gateButtonText: { color: '#8f57f0', fontSize: 15, fontWeight: '600' },
+  checkRow: {
+    minHeight: 44,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginTop: 8,
+  },
+  checkMark: { color: '#f9fafb', fontSize: 18, width: 24 },
+  checkLabel: { color: '#f9fafb', fontSize: 15, flex: 1 },
   liveStep: {
     paddingHorizontal: 20,
     paddingVertical: 8,

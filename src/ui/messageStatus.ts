@@ -9,19 +9,6 @@ export type OutboundStatusWord =
   | typeof COPY.offline
   | typeof COPY.needsEnable;
 
-const STATUS_WORDS: readonly OutboundStatusWord[] = [
-  COPY.queued,
-  COPY.sent,
-  COPY.failed,
-  COPY.inboxClosed,
-  COPY.offline,
-  COPY.needsEnable,
-];
-
-export function isOutboundStatusWord(value: string): value is OutboundStatusWord {
-  return (STATUS_WORDS as readonly string[]).includes(value);
-}
-
 /**
  * Outbound bubble status. `delivered` and `read` fold into `Sent` because
  * receipt kinds are reserved and unimplemented.

@@ -378,6 +378,12 @@ export interface GroupChannel {
   isPublic: boolean;
   lastMessageAt: number | null;
   membershipEpoch: number;
+  unreadCount?: number;
+}
+
+/** Local read-cursor conversation id for a group or public channel. */
+export function groupReadCursorId(channelId: string): string {
+  return `group:${channelId}`;
 }
 
 export interface GroupMember {

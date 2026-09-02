@@ -19,6 +19,7 @@ jest.mock('../../services/StorageService', () => ({
   StorageService: {
     getLinkReceiver: jest.fn(),
     countPendingMessageRequests: jest.fn(),
+    countUnreadGroupMessages: jest.fn(),
   },
 }));
 
@@ -28,20 +29,41 @@ jest.mock('../authStore', () => ({
   },
 }));
 
-describe('sessionStatusStore.retryOffline', () => {
+function deferred<T>(): {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+  reject: (reason?: unknown) => void;
+} {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+function resetStore(): void {
+  useSessionStatusStore.setState({
+    kind: 'offline',
+    enableStatus: 'session-offline',
+    pendingRequestCount: 0,
+    groupUnreadCount: 0,
+    refreshing: false,
+    lastError: null,
+  });
+}
+
+describe('sessionStatusStore', () => {
   beforeEach(() => {
     mockAuthState.isAuthenticated = true;
     mockAuthState.pubky = 'c'.repeat(52);
-    useSessionStatusStore.setState({
-      kind: 'offline',
-      enableStatus: 'session-offline',
-      pendingRequestCount: 0,
-      refreshing: false,
-    });
+    resetStore();
     (LinkService.restorePersistedSession as jest.Mock).mockResolvedValue(undefined);
     (LinkService.getEnableStatus as jest.Mock).mockResolvedValue('enabled');
     (StorageService.getLinkReceiver as jest.Mock).mockResolvedValue({ markerPublished: true });
     (StorageService.countPendingMessageRequests as jest.Mock).mockResolvedValue(0);
+    (StorageService.countUnreadGroupMessages as jest.Mock).mockResolvedValue(0);
   });
 
   it('retries restore instead of routing to Enable', async () => {
@@ -57,5 +79,65 @@ describe('sessionStatusStore.retryOffline', () => {
       'You are offline. Messages will send when you reconnect.',
     );
     expect(COPY.tryAgain).toBe('Try again');
+  });
+
+  it('ignores a stale getEnableStatus result when a newer refresh wins', async () => {
+    const first = deferred<string>();
+    const second = deferred<string>();
+    let calls = 0;
+    (LinkService.getEnableStatus as jest.Mock).mockImplementation(() => {
+      calls += 1;
+      return calls === 1 ? first.promise : second.promise;
+    });
+    (StorageService.getLinkReceiver as jest.Mock).mockResolvedValue({ markerPublished: false });
+    const stale = useSessionStatusStore.getState().refresh();
+    const latest = useSessionStatusStore.getState().refresh();
+    second.resolve('needs-enable');
+    await latest;
+    expect(useSessionStatusStore.getState().kind).toBe('needs-enable');
+    first.resolve('enabled');
+    await stale;
+    expect(useSessionStatusStore.getState().kind).toBe('needs-enable');
+    expect(useSessionStatusStore.getState().enableStatus).toBe('needs-enable');
+  });
+
+  it('does not keep a stale enabled kind when status is offline and optional reads fail', async () => {
+    useSessionStatusStore.setState({
+      kind: 'enabled',
+      enableStatus: 'enabled',
+      pendingRequestCount: 4,
+      groupUnreadCount: 2,
+      refreshing: false,
+      lastError: null,
+    });
+    (LinkService.getEnableStatus as jest.Mock).mockResolvedValue('session-offline');
+    (StorageService.getLinkReceiver as jest.Mock).mockRejectedValue(new Error('disk'));
+    await useSessionStatusStore.getState().refresh();
+    expect(useSessionStatusStore.getState().kind).toBe('offline');
+    expect(useSessionStatusStore.getState().enableStatus).toBe('session-offline');
+    expect(useSessionStatusStore.getState().pendingRequestCount).toBe(4);
+    expect(useSessionStatusStore.getState().lastError).toBeNull();
+  });
+
+  it('marks network failures on status as offline without dropping identity', async () => {
+    (LinkService.getEnableStatus as jest.Mock).mockRejectedValue(
+      new Error('network request failed https://relay.example'),
+    );
+    await useSessionStatusStore.getState().refresh();
+    const state = useSessionStatusStore.getState();
+    expect(state.kind).toBe('offline');
+    expect(state.lastError).not.toBeNull();
+    expect(state.lastError?.details).not.toContain('https://relay.example');
+    expect(state.refreshing).toBe(false);
+  });
+
+  it('lets overlapping retryOffline calls settle without sticking on refreshing', async () => {
+    await Promise.all([
+      useSessionStatusStore.getState().retryOffline(),
+      useSessionStatusStore.getState().retryOffline(),
+    ]);
+    expect(useSessionStatusStore.getState().kind).toBe('enabled');
+    expect(useSessionStatusStore.getState().refreshing).toBe(false);
+    expect(useSessionStatusStore.getState().lastError).toBeNull();
   });
 });

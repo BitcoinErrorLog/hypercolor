@@ -21,7 +21,7 @@ import type { GroupChannel, GroupMember, GroupMessage } from '../../types/group'
 import {
   GROUP_REACTION_KIND,
   GROUP_MEMBERSHIP_KIND,
-  GroupServiceError,
+  groupReadCursorId,
   isGroupTimelineVisible,
 } from '../../types/group';
 import { CHAT_ATTACHMENT_KIND, type AttachmentRecord } from '../../types/attachment';
@@ -34,10 +34,18 @@ import { ComposerAttachButton } from '../../components/ComposerAttachButton';
 import { formatDeliveryState } from '../../ui/messageStatus';
 import { HIT_SLOP_44, minHitStyle } from '../../ui/hitTarget';
 import { peerIdentity } from '../../ui/peerIdentity';
+import { COPY } from '../../copy/uxCopy';
+import { sanitizeError } from '../../ui/sanitizedError';
+import { useSessionStatusStore } from '../../stores/sessionStatusStore';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'ChannelScreen'>;
 
 const REACTION_EMOJIS = ['👍', '❤️', '😂', '🔥', '👎'];
+
+function alertSanitized(err: unknown, fallback: string): void {
+  const sanitized = sanitizeError(err, fallback);
+  Alert.alert(sanitized.message);
+}
 
 export default function ChannelScreen({ route }: Props) {
   const { channelId } = route.params;
@@ -74,6 +82,16 @@ export default function ChannelScreen({ route }: Props) {
       setContacts(await StorageService.getAllContacts(ownerPubky));
     }
     setLoading(false);
+    if (ownerPubky) {
+      const latest = msgs.reduce((max, m) => Math.max(max, m.sentAt), 0);
+      await StorageService.setLinkReadCursor(
+        ownerPubky,
+        groupReadCursorId(channelId),
+        latest > 0 ? latest : Date.now(),
+      );
+      const unread = await StorageService.countUnreadGroupMessages(ownerPubky);
+      useSessionStatusStore.getState().setGroupUnreadCount(unread);
+    }
   }, [channelId, ownerPubky]);
 
   useEffect(() => {
@@ -120,7 +138,7 @@ export default function ChannelScreen({ route }: Props) {
       }
       await reload();
     } catch (err) {
-      Alert.alert('Send failed', err instanceof Error ? err.message : String(err));
+      alertSanitized(err, COPY.couldNotSendMessage);
     } finally {
       setSending(false);
     }
@@ -160,7 +178,7 @@ export default function ChannelScreen({ route }: Props) {
           await GroupService.reactToMessage(channelId, eventId, emoji, authorPubky);
           await reload();
         } catch (err) {
-          Alert.alert('Reaction failed', err instanceof Error ? err.message : String(err));
+          alertSanitized(err, COPY.couldNotReact);
         }
       }}
       onEdit={eventId => {
@@ -175,10 +193,7 @@ export default function ChannelScreen({ route }: Props) {
           await GroupService.deleteMessage(channelId, eventId);
           await reload();
         } catch (err) {
-          Alert.alert(
-            'Delete failed',
-            err instanceof GroupServiceError ? err.message : String(err),
-          );
+          alertSanitized(err, COPY.couldNotDeleteMessage);
         }
       }}
       onAddMember={async () => {
@@ -189,7 +204,7 @@ export default function ChannelScreen({ route }: Props) {
           setAddPubky('');
           await reload();
         } catch (err) {
-          Alert.alert('Add failed', err instanceof GroupServiceError ? err.message : String(err));
+          alertSanitized(err, COPY.couldNotAddMember);
         }
       }}
       onRemoveMember={async pubky => {
@@ -197,10 +212,7 @@ export default function ChannelScreen({ route }: Props) {
           await GroupService.removeMember(channelId, pubky);
           await reload();
         } catch (err) {
-          Alert.alert(
-            'Remove failed',
-            err instanceof GroupServiceError ? err.message : String(err),
-          );
+          alertSanitized(err, COPY.couldNotRemoveMember);
         }
       }}
       onLeave={async () => {
@@ -208,7 +220,7 @@ export default function ChannelScreen({ route }: Props) {
           await GroupService.leaveChannel(channelId);
           nav.goBack();
         } catch (err) {
-          Alert.alert('Leave failed', err instanceof Error ? err.message : String(err));
+          alertSanitized(err, COPY.couldNotLeaveChannel);
         }
       }}
       onRefreshPublic={async () => {
@@ -216,7 +228,7 @@ export default function ChannelScreen({ route }: Props) {
           await GroupService.refreshPublicChannel(channelId);
           await reload();
         } catch (err) {
-          Alert.alert('Refresh failed', err instanceof Error ? err.message : String(err));
+          alertSanitized(err, COPY.couldNotRefreshChannel);
         }
       }}
     />

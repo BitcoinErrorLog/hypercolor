@@ -44,4 +44,27 @@ describe('SignOutSheet', () => {
       tree.unmount();
     });
   });
+
+  it('keeps the sheet open and shows a sanitized failure', async () => {
+    let tree!: ReturnType<typeof create>;
+    await act(async () => {
+      tree = create(
+        <SignOutSheet
+          visible
+          lastBackupRelative={null}
+          busy={false}
+          error={{ message: COPY.couldNotSignOut, details: '[url]' }}
+          onCancel={jest.fn()}
+          onConfirm={jest.fn()}
+        />,
+      );
+    });
+    const json = JSON.stringify(tree.toJSON());
+    expect(json).toContain(COPY.couldNotSignOut);
+    expect(json).toContain('Details');
+    expect(json).toContain(COPY.signOutTitle);
+    await act(async () => {
+      tree.unmount();
+    });
+  });
 });

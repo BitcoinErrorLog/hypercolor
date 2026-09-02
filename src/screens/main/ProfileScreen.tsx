@@ -15,6 +15,7 @@ import { SignOutSheet } from '../../ui/SignOutSheet';
 import { HIT_SLOP_44 } from '../../ui/hitTarget';
 import { shortPubky } from '../../ui/shortPubky';
 import { sessionUiModel } from '../../ui/sessionUi';
+import { sanitizeError } from '../../ui/sanitizedError';
 import { copyText } from '../../utils/copyText';
 import {
   clearLastBackupAt,
@@ -28,20 +29,23 @@ export default function ProfileScreen() {
   const nav = useNavigation<Nav>();
   const { profile, pubky, setProfile, clearSession } = useAuthStore();
   const sessionKind = useSessionStatusStore(s => s.kind);
-  const refreshSession = useSessionStatusStore(s => s.refresh);
   const [, setE2eRefresh] = useState(0);
   const [signOutOpen, setSignOutOpen] = useState(false);
+  const [signOutBusy, setSignOutBusy] = useState(false);
+  const [signOutError, setSignOutError] = useState<{
+    message: string;
+    details: string | null;
+  } | null>(null);
   const [copied, setCopied] = useState(false);
 
   useFocusEffect(
     useCallback(() => {
       setE2eRefresh(tick => tick + 1);
-      void refreshSession();
       if (!pubky) return;
       void PubkyService.getProfile(pubky).then(next => {
         if (next) setProfile(next);
       });
-    }, [pubky, refreshSession, setProfile]),
+    }, [pubky, setProfile]),
   );
 
   const session = sessionUiModel(sessionKind);
@@ -50,10 +54,19 @@ export default function ProfileScreen() {
   const lastBackupAt = getLastBackupAt();
 
   async function confirmSignOut() {
-    setSignOutOpen(false);
-    await PubkyService.signOut();
-    clearLastBackupAt();
-    clearSession();
+    setSignOutBusy(true);
+    setSignOutError(null);
+    try {
+      await PubkyService.signOut();
+      clearLastBackupAt();
+      clearSession();
+      setSignOutOpen(false);
+    } catch (err) {
+      const sanitized = sanitizeError(err, COPY.couldNotSignOut);
+      setSignOutError({ message: sanitized.message, details: sanitized.details });
+    } finally {
+      setSignOutBusy(false);
+    }
   }
 
   return (
@@ -193,7 +206,13 @@ export default function ProfileScreen() {
       <SignOutSheet
         visible={signOutOpen}
         lastBackupRelative={lastBackupAt ? formatRelativeBackupTime(lastBackupAt) : null}
-        onCancel={() => setSignOutOpen(false)}
+        busy={signOutBusy}
+        error={signOutError}
+        onCancel={() => {
+          if (signOutBusy) return;
+          setSignOutOpen(false);
+          setSignOutError(null);
+        }}
         onConfirm={() => {
           void confirmSignOut();
         }}
