@@ -1,0 +1,47 @@
+import React from 'react';
+import { act, create } from 'react-test-renderer';
+import { SignOutSheet } from '../SignOutSheet';
+import { COPY, lastBackupLine } from '../../copy/uxCopy';
+
+describe('SignOutSheet', () => {
+  it('states what is wiped locally versus what Ring holds', async () => {
+    let tree!: ReturnType<typeof create>;
+    await act(async () => {
+      tree = create(
+        <SignOutSheet
+          visible
+          lastBackupRelative={null}
+          onCancel={jest.fn()}
+          onConfirm={jest.fn()}
+        />,
+      );
+    });
+    const json = JSON.stringify(tree.toJSON());
+    expect(json).toContain(COPY.signOutTitle);
+    expect(json).toContain(COPY.signOutBodyLocal);
+    expect(json).toContain(COPY.signOutBodyRing);
+    expect(json).toContain(COPY.signOutNoBackup);
+    expect(json).not.toMatch(/pubky-ring/);
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('names the last backup when one exists', async () => {
+    let tree!: ReturnType<typeof create>;
+    await act(async () => {
+      tree = create(
+        <SignOutSheet
+          visible
+          lastBackupRelative="2 hours ago"
+          onCancel={jest.fn()}
+          onConfirm={jest.fn()}
+        />,
+      );
+    });
+    expect(JSON.stringify(tree.toJSON())).toContain(lastBackupLine('2 hours ago'));
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+});

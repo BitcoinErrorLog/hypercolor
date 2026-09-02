@@ -2,6 +2,7 @@ import React from 'react';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import WelcomeScreen from '../WelcomeScreen';
 import { PubkyRingAuthService } from '../../../services/PubkyRingAuthService';
+import { COPY } from '../../../copy/uxCopy';
 
 const PAYKIT_CONNECT_URL =
   'pubkyring://paykit-connect?deviceId=hypercolor-sim&callback=hypercolor%3A%2F%2Fring-callback&ephemeralPk=aabbcc&caps=%2Fpub%2Fpaykit%2F%3Arw%2C%2Fpub%2Fhypercolor.app%2Fv1%2F%3Arw';
@@ -15,6 +16,7 @@ jest.mock('@react-navigation/native', () => ({
 jest.mock('../../../services/PubkyRingAuthService', () => ({
   PubkyRingAuthService: {
     requestDelegation: jest.fn(),
+    getPendingDelegationUrl: jest.fn(),
   },
 }));
 
@@ -23,6 +25,25 @@ jest.mock('../DebugSignupPanel', () => ({
 }));
 
 describe('WelcomeScreen', () => {
+  beforeEach(() => {
+    mockNavigate.mockReset();
+    (PubkyRingAuthService.getPendingDelegationUrl as jest.Mock).mockReturnValue(null);
+    (PubkyRingAuthService.requestDelegation as jest.Mock).mockReset();
+  });
+
+  it('shows the custody line and never uses pubky-ring hyphenation', async () => {
+    let tree!: ReactTestRenderer;
+    await act(async () => {
+      tree = create(<WelcomeScreen />);
+    });
+    expect(tree.root.findByProps({ testID: 'custodyLine' }).props.children).toBe(COPY.custodyLine);
+    const serialized = JSON.stringify(tree.toJSON());
+    expect(serialized).not.toMatch(/pubky-ring/);
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
   it('navigates to AwaitingRingAuth with the paykit-connect URL', async () => {
     (PubkyRingAuthService.requestDelegation as jest.Mock).mockResolvedValue({
       url: PAYKIT_CONNECT_URL,
@@ -42,6 +63,49 @@ describe('WelcomeScreen', () => {
     expect(mockNavigate).toHaveBeenCalledWith('AwaitingRingAuth', {
       ringAuthUrl: PAYKIT_CONNECT_URL,
     });
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('does not mint a second authorization while a pending URL is live', async () => {
+    (PubkyRingAuthService.getPendingDelegationUrl as jest.Mock).mockReturnValue(PAYKIT_CONNECT_URL);
+
+    let tree!: ReactTestRenderer;
+    await act(async () => {
+      tree = create(<WelcomeScreen />);
+    });
+    await act(async () => {
+      tree.root.findByProps({ testID: 'welcomeConnectRing' }).props.onPress();
+      tree.root.findByProps({ testID: 'welcomeConnectRing' }).props.onPress();
+    });
+
+    expect(PubkyRingAuthService.requestDelegation).not.toHaveBeenCalled();
+    expect(mockNavigate).toHaveBeenCalledTimes(1);
+    expect(mockNavigate).toHaveBeenCalledWith('AwaitingRingAuth', {
+      ringAuthUrl: PAYKIT_CONNECT_URL,
+    });
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('sanitizes connect failures instead of showing Error.message', async () => {
+    (PubkyRingAuthService.requestDelegation as jest.Mock).mockRejectedValue(
+      new Error('https://evil.example/callback?secret=leak failed'),
+    );
+
+    let tree!: ReactTestRenderer;
+    await act(async () => {
+      tree = create(<WelcomeScreen />);
+    });
+    await act(async () => {
+      tree.root.findByProps({ testID: 'welcomeConnectRing' }).props.onPress();
+    });
+
+    const serialized = JSON.stringify(tree.toJSON());
+    expect(serialized).not.toContain('https://evil.example');
+    expect(serialized).toContain(COPY.couldNotStartAuthorization);
     await act(async () => {
       tree.unmount();
     });

@@ -4,6 +4,7 @@ import {
   type EnableMessagingDeps,
 } from '../enableMessagingController';
 import type { LinkEnableFlow } from '../../../services/link/LinkService';
+import { COPY, ENABLE_AUTH_TTL_MS } from '../../../copy/uxCopy';
 
 function deferred<T>(): {
   promise: Promise<T>;
@@ -42,6 +43,21 @@ function authFlow(overrides: Partial<LinkEnableFlow> = {}): LinkEnableFlow {
   };
 }
 
+async function flush(): Promise<void> {
+  await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
+async function beginAuthorizing(
+  controller: ReturnType<typeof createEnableMessagingController>,
+): Promise<{ started: Promise<void> }> {
+  await controller.start();
+  const started = controller.beginAuth();
+  await flush();
+  return { started };
+}
+
 describe('enableMessagingController', () => {
   it('surfaces native-missing without starting a Ring flow', async () => {
     const deps = makeDeps({ getEnableStatus: jest.fn().mockResolvedValue('native-missing') });
@@ -50,16 +66,27 @@ describe('enableMessagingController', () => {
     await controller.start();
 
     expect(controller.getState().phase).toBe('native-missing');
+    expect(controller.getState().message).toBe(COPY.messagingUnavailable);
     expect(deps.enable).not.toHaveBeenCalled();
   });
 
-  it('surfaces already-enabled without starting a Ring flow', async () => {
+  it('surfaces already-enabled as success without starting a Ring flow', async () => {
     const deps = makeDeps({ getEnableStatus: jest.fn().mockResolvedValue('enabled') });
     const controller = createEnableMessagingController(deps);
 
     await controller.start();
 
-    expect(controller.getState().phase).toBe('enabled');
+    expect(controller.getState().phase).toBe('success');
+    expect(deps.enable).not.toHaveBeenCalled();
+  });
+
+  it('waits on needs-enable without auto-starting auth', async () => {
+    const deps = makeDeps();
+    const controller = createEnableMessagingController(deps);
+
+    await controller.start();
+
+    expect(controller.getState().phase).toBe('needs-enable');
     expect(deps.enable).not.toHaveBeenCalled();
   });
 
@@ -79,10 +106,7 @@ describe('enableMessagingController', () => {
     const deps = makeDeps({ enable: jest.fn().mockResolvedValue(flow) });
     const controller = createEnableMessagingController(deps);
 
-    const started = controller.start();
-    await Promise.resolve();
-    await Promise.resolve();
-    await Promise.resolve();
+    const { started } = await beginAuthorizing(controller);
 
     expect(controller.getState()).toEqual(
       expect.objectContaining({
@@ -108,7 +132,7 @@ describe('enableMessagingController', () => {
     );
   });
 
-  it('records enable errors after awaitEnabled rejects', async () => {
+  it('records a declined grant as denied without the raw error string', async () => {
     const flow = authFlow({
       awaitEnabled: jest.fn().mockRejectedValue(new Error('ring denied')),
     });
@@ -116,13 +140,15 @@ describe('enableMessagingController', () => {
     const controller = createEnableMessagingController(deps);
 
     await controller.start();
+    await controller.beginAuth();
 
     expect(controller.getState()).toEqual(
       expect.objectContaining({
-        phase: 'error',
-        message: 'ring denied',
+        phase: 'denied',
+        message: COPY.authorizationDeclinedBody,
       }),
     );
+    expect(controller.getState().message).not.toContain('ring denied');
   });
 
   it('stays authorizing when auto-open fails because Ring is already in the back stack', async () => {
@@ -133,14 +159,11 @@ describe('enableMessagingController', () => {
       openUrl: jest.fn().mockRejectedValue(new Error('Activity already on stack')),
     });
     const controller = createEnableMessagingController(deps);
-    const started = controller.start();
-    await Promise.resolve();
-    await Promise.resolve();
-    await Promise.resolve();
+    const { started } = await beginAuthorizing(controller);
 
     expect(controller.getState().phase).toBe('authorizing');
     expect(controller.getState().authorizationUrl).toBe('pubkyauth://grant');
-    expect(controller.getState().message).toBeNull();
+    expect(controller.getState().message).toBe(COPY.waitingForRingBody);
 
     pending.resolve({
       pubky: 'z'.repeat(52),
@@ -156,10 +179,7 @@ describe('enableMessagingController', () => {
     const flow = authFlow({ awaitEnabled: jest.fn(() => pending.promise) });
     const deps = makeDeps({ enable: jest.fn().mockResolvedValue(flow) });
     const controller = createEnableMessagingController(deps);
-    const started = controller.start();
-    await Promise.resolve();
-    await Promise.resolve();
-    await Promise.resolve();
+    const { started } = await beginAuthorizing(controller);
 
     await controller.openRing();
     controller.copyAuthorizationUrl();
@@ -179,10 +199,7 @@ describe('enableMessagingController', () => {
     const flow = authFlow({ awaitEnabled: jest.fn(() => pending.promise) });
     const deps = makeDeps({ enable: jest.fn().mockResolvedValue(flow) });
     const controller = createEnableMessagingController(deps);
-    const started = controller.start();
-    await Promise.resolve();
-    await Promise.resolve();
-    await Promise.resolve();
+    const { started } = await beginAuthorizing(controller);
 
     controller.cancel();
     pending.resolve({
@@ -205,10 +222,7 @@ describe('enableMessagingController', () => {
     });
     const deps = makeDeps({ enable: jest.fn().mockResolvedValue(flow) });
     const controller = createEnableMessagingController(deps);
-    const started = controller.start();
-    await Promise.resolve();
-    await Promise.resolve();
-    await Promise.resolve();
+    const { started } = await beginAuthorizing(controller);
 
     expect(controller.getState().phase).toBe('authorizing');
     expect(controller.getState().authorizationUrl).toBe(httpsUrl);
@@ -240,10 +254,7 @@ describe('enableMessagingController', () => {
       });
       const deps = makeDeps({ enable: jest.fn().mockResolvedValue(flow) });
       const controller = createEnableMessagingController(deps);
-      const started = controller.start();
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
+      const { started } = await beginAuthorizing(controller);
 
       expect(controller.getState().phase).toBe('authorizing');
       expect(deps.openUrl).not.toHaveBeenCalled();
@@ -265,6 +276,52 @@ describe('enableMessagingController', () => {
 
     expect(deps.enable).toHaveBeenCalledTimes(1);
     expect(controller.getState().phase).toBe('success');
+  });
+
+  it('onAppActive shows success when the grant landed while backgrounded', async () => {
+    const pending = deferred<{ pubky: string; receiverPath: string; noisePublicKey: string }>();
+    const flow = authFlow({ awaitEnabled: jest.fn(() => pending.promise) });
+    const getEnableStatus = jest
+      .fn()
+      .mockResolvedValueOnce('needs-enable')
+      .mockResolvedValue('enabled');
+    const deps = makeDeps({
+      getEnableStatus,
+      enable: jest.fn().mockResolvedValue(flow),
+    });
+    const controller = createEnableMessagingController(deps);
+    const { started } = await beginAuthorizing(controller);
+    expect(controller.getState().phase).toBe('authorizing');
+
+    await controller.onAppActive();
+
+    expect(controller.getState().phase).toBe('success');
+    pending.reject(new Error('cancelled after success'));
+    await started.catch(() => undefined);
+    expect(controller.getState().phase).toBe('success');
+  });
+
+  it('onAppActive expires an authorizing grant past the five-minute TTL', async () => {
+    const pending = deferred<{ pubky: string; receiverPath: string; noisePublicKey: string }>();
+    const flow = authFlow({ awaitEnabled: jest.fn(() => pending.promise) });
+    let now = 1_000;
+    const deps = makeDeps({
+      enable: jest.fn().mockResolvedValue(flow),
+      now: () => now,
+    });
+    const controller = createEnableMessagingController(deps);
+    const { started } = await beginAuthorizing(controller);
+    expect(controller.getState().phase).toBe('authorizing');
+
+    now += ENABLE_AUTH_TTL_MS + 1;
+    await controller.onAppActive();
+
+    expect(controller.getState().phase).toBe('expired');
+    expect(controller.getState().message).toBe(COPY.enableExpiredBody);
+    expect(flow.cancel).toHaveBeenCalled();
+    pending.reject(new Error('expired'));
+    await started.catch(() => undefined);
+    expect(controller.getState().phase).toBe('expired');
   });
 });
 

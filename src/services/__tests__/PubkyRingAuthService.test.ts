@@ -42,6 +42,7 @@ import {
 import { KeyStore } from '../KeyStore';
 import {
   buildPaykitConnectUrl,
+  cancelPendingDelegation,
   certFromHandoffAppKey,
   handleRingCallback,
   requestDelegation,
@@ -79,12 +80,19 @@ describe('requestDelegation', () => {
   const deviceId = 'hypercolor-sim';
   const ephemeralPk = 'aabbcc';
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    await cancelPendingDelegation();
+    jest.mocked(KeyStore.clearPendingRingHandoff).mockClear();
+    jest.mocked(KeyStore.setPendingRingHandoff).mockClear();
     (x25519GenerateKeypair as jest.Mock).mockResolvedValue({
       secretKey: 'ephemeral-sk',
       publicKey: ephemeralPk,
     });
     (Linking.openURL as jest.Mock).mockResolvedValue(undefined);
+  });
+
+  afterEach(async () => {
+    await cancelPendingDelegation();
   });
 
   it('builds a paykit-connect URL with callback, ephemeralPk, and caps', () => {
@@ -114,6 +122,15 @@ describe('requestDelegation', () => {
 
     expect(result.url).toBe(buildPaykitConnectUrl(deviceId, ephemeralPk));
     expect(Linking.openURL).toHaveBeenCalledWith(result.url);
+  });
+
+  it('reuses a live pending URL instead of minting a second keypair', async () => {
+    (Linking.canOpenURL as jest.Mock).mockResolvedValue(false);
+    const first = await requestDelegation(deviceId);
+    (x25519GenerateKeypair as jest.Mock).mockClear();
+    const second = await requestDelegation('hypercolor-other');
+    expect(second.url).toBe(first.url);
+    expect(x25519GenerateKeypair).not.toHaveBeenCalled();
   });
 });
 
@@ -148,6 +165,7 @@ describe('handleRingCallback z32 owner pubky', () => {
   const ephemeralSk = 'ephemeral-sk-hex';
 
   beforeEach(async () => {
+    await cancelPendingDelegation();
     (x25519GenerateKeypair as jest.Mock).mockResolvedValue({
       secretKey: ephemeralSk,
       publicKey: 'ephemeral-pk-hex',

@@ -15,16 +15,18 @@ describe('formatAuthFlowCapabilities', () => {
   });
 
   it('splits a combined string so it is not treated as one Capability', () => {
-    expect(
-      formatAuthFlowCapabilities('/pub/paykit/:rw,/pub/hypercolor.app/v1/:rw'),
-    ).toBe(RING_GRANT_CAPABILITIES);
+    expect(formatAuthFlowCapabilities('/pub/paykit/:rw,/pub/hypercolor.app/v1/:rw')).toBe(
+      RING_GRANT_CAPABILITIES,
+    );
     expect(formatAuthFlowCapabilities(' /pub/paykit/:rw , /pub/hypercolor.app/v1/:rw ')).toBe(
       RING_GRANT_CAPABILITIES,
     );
   });
 
   it('accepts a single /pub/paykit/:rw grant', () => {
-    expect(formatAuthFlowCapabilities(PAYKIT_MESSAGING_CAPABILITY)).toBe(PAYKIT_MESSAGING_CAPABILITY);
+    expect(formatAuthFlowCapabilities(PAYKIT_MESSAGING_CAPABILITY)).toBe(
+      PAYKIT_MESSAGING_CAPABILITY,
+    );
     expect(capabilityCoversPaykitRw(PAYKIT_MESSAGING_CAPABILITY)).toBe(true);
   });
 
@@ -36,9 +38,9 @@ describe('formatAuthFlowCapabilities', () => {
   });
 
   it('rejects a combined string with two colons as one entry', () => {
-    expect(() => formatAuthFlowCapabilities(['/pub/paykit/:rw,/pub/hypercolor.app/v1/:rw'])).toThrow(
-      'comma-separated',
-    );
+    expect(() =>
+      formatAuthFlowCapabilities(['/pub/paykit/:rw,/pub/hypercolor.app/v1/:rw']),
+    ).toThrow('comma-separated');
   });
 
   it('rejects missing paykit read+write and empty lists', () => {
