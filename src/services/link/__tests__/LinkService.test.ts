@@ -338,6 +338,20 @@ function givenEstablishedLink(): void {
   mockedNative.restoreLink.mockResolvedValue({ linkId: 'handle-1' });
 }
 
+function deferred<T>(): {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+  reject: (reason?: unknown) => void;
+} {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
 function sendingRow(overrides: Partial<LinkMessage> = {}): LinkMessage {
   return {
     ownerPubky: OWNER,
@@ -716,6 +730,75 @@ describe('LinkService', () => {
 
       await second.awaitEnabled();
       expect(mockedNative.stopAuthKeepalive).toHaveBeenCalledWith('flow-new');
+    });
+
+    it('does not sign out a late approval after releaseKeepalive', async () => {
+      mockedNative.startAuthFlow.mockResolvedValue({
+        flowId: 'flow-1',
+        authorizationUrl: 'pubkyauth://grant',
+      });
+      const approval = deferred<{ sessionAlias: string; pubky: string }>();
+      mockedNative.awaitAuthApproval.mockImplementation(() => approval.promise);
+      mockedNative.getReceiverPublicKey.mockResolvedValue('existing-noise');
+      mockedKeyStore.setPubky.mockClear();
+      mockedNative.signOutSession.mockClear();
+
+      const flow = await LinkService.enable();
+      const enabled = flow.awaitEnabled();
+      flow.releaseKeepalive();
+      await Promise.resolve();
+      expect(mockedNative.stopAuthKeepalive).toHaveBeenCalledWith('flow-1');
+
+      approval.resolve({ sessionAlias: SESSION_ALIAS, pubky: OWNER });
+      await expect(enabled).resolves.toEqual({
+        pubky: OWNER,
+        receiverPath: LINK_RECEIVER_PATH,
+        noisePublicKey: 'existing-noise',
+      });
+      expect(mockedNative.signOutSession).not.toHaveBeenCalled();
+      expect(mockedKeyStore.setPubky).toHaveBeenCalledWith(OWNER);
+    });
+
+    it('signs out a session that is approved after cancel', async () => {
+      mockedNative.startAuthFlow.mockResolvedValue({
+        flowId: 'flow-1',
+        authorizationUrl: 'pubkyauth://grant',
+      });
+      const approval = deferred<{ sessionAlias: string; pubky: string }>();
+      mockedNative.awaitAuthApproval.mockImplementation(() => approval.promise);
+      mockedKeyStore.setPubky.mockClear();
+      mockedNative.signOutSession.mockClear();
+
+      const flow = await LinkService.enable();
+      const enabled = flow.awaitEnabled();
+      flow.cancel();
+      approval.resolve({ sessionAlias: SESSION_ALIAS, pubky: OWNER });
+      await expect(enabled).rejects.toThrow(
+        'LinkService.enable: the messaging enable flow was cancelled',
+      );
+      expect(mockedNative.signOutSession).toHaveBeenCalledWith(SESSION_ALIAS);
+      expect(mockedKeyStore.setPubky).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('getLinkStatus', () => {
+    it('reads persisted link state without initiating a handshake', async () => {
+      mockedStorage.getLink.mockResolvedValue(
+        storedLink({ status: 'established', snapshot: 'est-1' }),
+      );
+      await expect(LinkService.getLinkStatus(PEER)).resolves.toBe('ready');
+      expect(mockedNative.initiateLink).not.toHaveBeenCalled();
+      expect(mockedNative.restoreHandshake).not.toHaveBeenCalled();
+      expect(mockedNative.restoreLink).not.toHaveBeenCalled();
+      expect(mockedNative.probeInboundLink).not.toHaveBeenCalled();
+    });
+
+    it('maps a stored initiator handshake without calling native', async () => {
+      mockedStorage.getLink.mockResolvedValue(
+        storedLink({ role: 'initiator', status: 'handshaking' }),
+      );
+      await expect(LinkService.getLinkStatus(PEER)).resolves.toBe('handshaking-initiator');
+      expect(mockedNative.advanceHandshake).not.toHaveBeenCalled();
     });
   });
 

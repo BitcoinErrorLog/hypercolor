@@ -986,6 +986,7 @@ describe('product live-proof step machines', () => {
     const enable = jest.fn(async () => ({
       authorizationUrl: authUrl,
       cancel: () => undefined,
+      releaseKeepalive: () => undefined,
       awaitEnabled: async () => ({
         pubky: PUBKY_A,
         receiverPath: LINK_RECEIVER_PATH,
@@ -1023,6 +1024,7 @@ describe('product live-proof step machines', () => {
     const enable = jest.fn(async () => ({
       authorizationUrl: 'pubkyauth://grant',
       cancel,
+      releaseKeepalive: jest.fn(),
       awaitEnabled,
     }));
     const report = await runRingAuthLiveProof(

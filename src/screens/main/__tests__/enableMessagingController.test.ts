@@ -39,6 +39,7 @@ function authFlow(overrides: Partial<LinkEnableFlow> = {}): LinkEnableFlow {
       noisePublicKey: 'noise',
     }),
     cancel: jest.fn(),
+    releaseKeepalive: jest.fn(),
     ...overrides,
   };
 }
@@ -296,6 +297,8 @@ describe('enableMessagingController', () => {
     await controller.onAppActive();
 
     expect(controller.getState().phase).toBe('success');
+    expect(flow.releaseKeepalive).toHaveBeenCalled();
+    expect(flow.cancel).not.toHaveBeenCalled();
     pending.reject(new Error('cancelled after success'));
     await started.catch(() => undefined);
     expect(controller.getState().phase).toBe('success');
@@ -322,6 +325,154 @@ describe('enableMessagingController', () => {
     pending.reject(new Error('expired'));
     await started.catch(() => undefined);
     expect(controller.getState().phase).toBe('expired');
+  });
+
+  it('ignores a second tap while enable() is unresolved', async () => {
+    const pendingEnable = deferred<LinkEnableFlow>();
+    const pendingAwait = deferred<{
+      pubky: string;
+      receiverPath: string;
+      noisePublicKey: string;
+    }>();
+    const flow = authFlow({ awaitEnabled: jest.fn(() => pendingAwait.promise) });
+    const deps = makeDeps({ enable: jest.fn(() => pendingEnable.promise) });
+    const controller = createEnableMessagingController(deps);
+    await controller.start();
+
+    const first = controller.beginAuth();
+    const second = controller.beginAuth();
+    await flush();
+    expect(deps.enable).toHaveBeenCalledTimes(1);
+
+    pendingEnable.resolve(flow);
+    await flush();
+    pendingAwait.resolve({
+      pubky: 'z'.repeat(52),
+      receiverPath: 'hypercolor/wallet',
+      noisePublicKey: 'noise-pk',
+    });
+    await Promise.all([first, second]);
+    expect(deps.enable).toHaveBeenCalledTimes(1);
+    expect(controller.getState().phase).toBe('success');
+  });
+
+  it('cancels a stale enable() result after the attempt was superseded', async () => {
+    const firstEnable = deferred<LinkEnableFlow>();
+    const secondEnable = deferred<LinkEnableFlow>();
+    const firstFlow = authFlow({
+      authorizationUrl: 'pubkyauth://first',
+      awaitEnabled: jest.fn(() => new Promise(() => undefined)),
+    });
+    const secondFlow = authFlow({
+      authorizationUrl: 'pubkyauth://second',
+      awaitEnabled: jest.fn().mockResolvedValue({
+        pubky: 'z'.repeat(52),
+        receiverPath: 'hypercolor/wallet',
+        noisePublicKey: 'noise-pk',
+      }),
+    });
+    const enable = jest
+      .fn()
+      .mockImplementationOnce(() => firstEnable.promise)
+      .mockImplementationOnce(() => secondEnable.promise);
+    const deps = makeDeps({ enable });
+    const controller = createEnableMessagingController(deps);
+    await controller.start();
+
+    const stale = controller.beginAuth();
+    await flush();
+    controller.cancel();
+    await controller.start();
+    const fresh = controller.beginAuth();
+    await flush();
+
+    firstEnable.resolve(firstFlow);
+    await stale;
+    expect(firstFlow.cancel).toHaveBeenCalled();
+    expect(controller.getState().authorizationUrl).not.toBe('pubkyauth://first');
+
+    secondEnable.resolve(secondFlow);
+    await fresh;
+    expect(controller.getState().phase).toBe('success');
+    expect(controller.getState().authorizationUrl).toBeNull();
+  });
+
+  it('cancels the native flow when cancel() races an unresolved enable()', async () => {
+    const pendingEnable = deferred<LinkEnableFlow>();
+    const flow = authFlow();
+    const deps = makeDeps({ enable: jest.fn(() => pendingEnable.promise) });
+    const controller = createEnableMessagingController(deps);
+    await controller.start();
+    const started = controller.beginAuth();
+    await flush();
+    controller.cancel();
+    pendingEnable.resolve(flow);
+    await started;
+    expect(flow.cancel).toHaveBeenCalled();
+    expect(flow.releaseKeepalive).not.toHaveBeenCalled();
+    expect(controller.getState().phase).not.toBe('success');
+  });
+
+  it('does not start a second flow while already authorizing', async () => {
+    const pending = deferred<{ pubky: string; receiverPath: string; noisePublicKey: string }>();
+    const flow = authFlow({ awaitEnabled: jest.fn(() => pending.promise) });
+    const deps = makeDeps({ enable: jest.fn().mockResolvedValue(flow) });
+    const controller = createEnableMessagingController(deps);
+    const { started } = await beginAuthorizing(controller);
+    expect(deps.enable).toHaveBeenCalledTimes(1);
+    await controller.beginAuth();
+    expect(deps.enable).toHaveBeenCalledTimes(1);
+    controller.cancel();
+    pending.reject(new Error('cancelled'));
+    await started.catch(() => undefined);
+  });
+
+  it('does not sign out when a delayed awaitEnabled resolves after AppState enabled', async () => {
+    const pending = deferred<{ pubky: string; receiverPath: string; noisePublicKey: string }>();
+    const flow = authFlow({ awaitEnabled: jest.fn(() => pending.promise) });
+    const getEnableStatus = jest
+      .fn()
+      .mockResolvedValueOnce('needs-enable')
+      .mockResolvedValue('enabled');
+    const deps = makeDeps({
+      getEnableStatus,
+      enable: jest.fn().mockResolvedValue(flow),
+    });
+    const controller = createEnableMessagingController(deps);
+    const { started } = await beginAuthorizing(controller);
+    await controller.onAppActive();
+    expect(controller.getState().phase).toBe('success');
+    expect(flow.cancel).not.toHaveBeenCalled();
+    pending.resolve({
+      pubky: 'z'.repeat(52),
+      receiverPath: 'hypercolor/wallet',
+      noisePublicKey: 'noise-pk',
+    });
+    await started;
+    expect(flow.cancel).not.toHaveBeenCalled();
+    expect(controller.getState().phase).toBe('success');
+  });
+
+  it('keeps the latest AppState status when polls overlap', async () => {
+    const firstStatus = deferred<Awaited<ReturnType<EnableMessagingDeps['getEnableStatus']>>>();
+    const secondStatus = deferred<Awaited<ReturnType<EnableMessagingDeps['getEnableStatus']>>>();
+    let calls = 0;
+    const getEnableStatus = jest.fn().mockImplementation(() => {
+      calls += 1;
+      return calls === 1 ? firstStatus.promise : secondStatus.promise;
+    });
+    const deps = makeDeps({ getEnableStatus });
+    const controller = createEnableMessagingController(deps);
+    const first = controller.start();
+    await flush();
+    const second = controller.onAppActive();
+    secondStatus.resolve('session-offline');
+    await second;
+    expect(controller.getState().phase).toBe('session-offline');
+    firstStatus.resolve('enabled');
+    await first;
+    expect(controller.getState().phase).toBe('session-offline');
+    expect(controller.getState().phase).not.toBe('success');
   });
 });
 

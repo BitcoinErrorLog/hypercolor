@@ -22,6 +22,7 @@ export type EnableMessagingState = {
   receiverPath: string | null;
   copied: boolean;
   authorizingStartedAt: number | null;
+  starting: boolean;
 };
 
 export const INITIAL_ENABLE_MESSAGING_STATE: EnableMessagingState = {
@@ -33,6 +34,7 @@ export const INITIAL_ENABLE_MESSAGING_STATE: EnableMessagingState = {
   receiverPath: null,
   copied: false,
   authorizingStartedAt: null,
+  starting: false,
 };
 
 export type EnableMessagingDeps = {
@@ -91,6 +93,9 @@ export function createEnableMessagingController(
   let state: EnableMessagingState = { ...INITIAL_ENABLE_MESSAGING_STATE };
   let flow: LinkEnableFlow | null = null;
   let cancelled = false;
+  let attempt = 0;
+  let starting = false;
+  let statusGeneration = 0;
   const listeners = new Set<(next: EnableMessagingState) => void>();
   const now = () => (deps.now ? deps.now() : Date.now());
 
@@ -113,19 +118,23 @@ export function createEnableMessagingController(
     return now() - startedAt >= ENABLE_AUTH_TTL_MS;
   }
 
+  function isCurrentAttempt(generation: number): boolean {
+    return !cancelled && generation === attempt;
+  }
+
   async function applyStatus(status: LinkEnableStatus): Promise<void> {
     if (status === 'native-missing') {
       flow?.cancel();
       flow = null;
-      emitPhase('native-missing');
+      emitPhase('native-missing', { starting: false });
       return;
     }
     if (status === 'enabled') {
-      flow?.cancel();
-      flow = null;
+      flow?.releaseKeepalive();
       emitPhase('success', {
         authorizationUrl: null,
         authorizingStartedAt: null,
+        starting: false,
       });
       return;
     }
@@ -133,32 +142,43 @@ export function createEnableMessagingController(
       emitPhase('session-offline', {
         authorizationUrl: null,
         authorizingStartedAt: null,
+        starting: false,
       });
       return;
     }
     emitPhase('needs-enable', {
       authorizationUrl: null,
       authorizingStartedAt: null,
+      starting: false,
     });
   }
 
   async function beginAuth(): Promise<void> {
     if (cancelled) return;
+    if (starting) return;
+    if (state.phase === 'authorizing' && flow) return;
+    if (flow && state.phase !== 'success') {
+      flow.cancel();
+      flow = null;
+    }
+    starting = true;
+    const myAttempt = ++attempt;
+    emit({ starting: true });
     try {
-      flow = await deps.enable();
-      if (cancelled) {
-        flow.cancel();
+      const nextFlow = await deps.enable();
+      if (!isCurrentAttempt(myAttempt)) {
+        nextFlow.cancel();
         return;
       }
+      flow = nextFlow;
       emitPhase('authorizing', {
         authorizationUrl: flow.authorizationUrl,
         copied: false,
         authorizingStartedAt: now(),
         details: null,
+        starting: false,
       });
-      // Only pubkyauth:// may hit the OS. https:/intent: URLs carry a client
-      // secret and would leak it to a browser or another app. Non-matching
-      // schemes stay authorizing so QR + copy still work.
+      starting = false;
       if (isAutoOpenableAuthUrl(flow.authorizationUrl)) {
         try {
           await deps.openUrl(flow.authorizationUrl);
@@ -166,43 +186,54 @@ export function createEnableMessagingController(
           // Keep authorizing; the user can tap Open Pubky Ring or scan the QR.
         }
       }
-      if (cancelled) {
-        flow.cancel();
+      if (!isCurrentAttempt(myAttempt)) {
         return;
       }
       const enabled = await flow.awaitEnabled();
-      if (cancelled || state.phase !== 'authorizing') return;
+      if (!isCurrentAttempt(myAttempt)) return;
+      if (state.phase === 'success') return;
       emitPhase('success', {
         pubky: enabled.pubky,
         receiverPath: enabled.receiverPath,
         authorizationUrl: null,
         authorizingStartedAt: null,
+        starting: false,
       });
     } catch (err) {
-      if (cancelled || state.phase !== 'authorizing') return;
+      if (!isCurrentAttempt(myAttempt)) return;
+      if (state.phase === 'success' || state.phase === 'expired' || state.phase === 'denied') {
+        return;
+      }
       const sanitized = sanitizeError(err);
       if (isDeniedEnableError(err)) {
-        emitPhase('denied', { details: sanitized.details });
+        emitPhase('denied', { details: sanitized.details, starting: false });
         return;
       }
       emitPhase('error', {
         message: sanitized.message,
         details: sanitized.details,
+        starting: false,
       });
+    } finally {
+      if (myAttempt === attempt) {
+        starting = false;
+        if (state.starting) emit({ starting: false });
+      }
     }
   }
 
   async function readStatusAndApply(): Promise<void> {
+    const gen = ++statusGeneration;
     let status: LinkEnableStatus;
     try {
       status = await deps.getEnableStatus();
     } catch (err) {
-      if (cancelled) return;
+      if (cancelled || gen !== statusGeneration) return;
       const sanitized = sanitizeError(err);
       emitPhase('error', { message: sanitized.message, details: sanitized.details });
       return;
     }
-    if (cancelled) return;
+    if (cancelled || gen !== statusGeneration) return;
     await applyStatus(status);
   }
 
@@ -217,6 +248,8 @@ export function createEnableMessagingController(
     },
     async start() {
       cancelled = false;
+      attempt += 1;
+      starting = false;
       emit({ ...INITIAL_ENABLE_MESSAGING_STATE });
       await readStatusAndApply();
     },
@@ -231,13 +264,14 @@ export function createEnableMessagingController(
     },
     async onAppActive() {
       if (cancelled) return;
+      const gen = ++statusGeneration;
       let status: LinkEnableStatus;
       try {
         status = await deps.getEnableStatus();
       } catch {
         return;
       }
-      if (cancelled) return;
+      if (cancelled || gen !== statusGeneration) return;
       if (status === 'enabled') {
         await applyStatus(status);
         return;
@@ -253,6 +287,7 @@ export function createEnableMessagingController(
           emitPhase('expired', {
             authorizationUrl: null,
             authorizingStartedAt: null,
+            starting: false,
           });
         }
         return;
@@ -279,7 +314,14 @@ export function createEnableMessagingController(
     },
     cancel() {
       cancelled = true;
+      attempt += 1;
+      starting = false;
+      if (state.phase === 'success') {
+        flow?.releaseKeepalive();
+        return;
+      }
       flow?.cancel();
+      flow = null;
     },
   };
 }

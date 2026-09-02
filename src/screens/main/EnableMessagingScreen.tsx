@@ -237,7 +237,15 @@ export default function EnableMessagingScreen() {
             }
             accessibilityRole="button"
             accessibilityLabel={primaryLabel}
-            style={styles.primaryButton}
+            accessibilityState={{
+              busy: state.starting && state.phase === 'needs-enable',
+              disabled: state.starting && state.phase === 'needs-enable',
+            }}
+            style={[
+              styles.primaryButton,
+              state.starting && state.phase === 'needs-enable' && styles.buttonDisabled,
+            ]}
+            disabled={state.starting && state.phase === 'needs-enable'}
             onPress={
               state.phase === 'success'
                 ? handleOpenChats
@@ -350,6 +358,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     alignSelf: 'stretch',
   },
+  buttonDisabled: { opacity: 0.6 },
   primaryButtonText: { color: '#fff', fontSize: 16, fontWeight: '600' },
   secondaryButton: {
     borderWidth: 1,

@@ -125,7 +125,18 @@ export const LINK_RETRY_TICK_PHASE_TIMEOUT_MS = 20_000;
 export type LinkEnableFlow = {
   authorizationUrl: string;
   awaitEnabled: () => Promise<{ pubky: string; receiverPath: string; noisePublicKey: string }>;
+  /**
+   * Marks the flow cancelled. A subsequently approved session is signed out.
+   * Use only for user/OS cancel, expiry, or a superseded attempt.
+   */
   cancel: () => void;
+  /**
+   * Stops the Android auth keepalive without cancelling approval.
+   * A later approved session is still adopted. Call this when UI already
+   * observed `enabled` status; do not call {@link LinkEnableFlow.cancel}
+   * in that case. Does not change {@link awaitEnabled}'s approval path.
+   */
+  releaseKeepalive: () => void;
 };
 
 /**
@@ -362,6 +373,9 @@ export const LinkService = {
         cancelled = true;
         void stopKeepalive();
       },
+      releaseKeepalive: () => {
+        void stopKeepalive();
+      },
       awaitEnabled: async () => {
         try {
           if (cancelled) {
@@ -419,6 +433,23 @@ export const LinkService = {
         return 'error';
       }
     });
+  },
+
+  /**
+   * Read-only persisted Encrypted Link state for display. Does not
+   * initiate or resume a handshake.
+   */
+  async getLinkStatus(peerPubky: PubkyKey): Promise<LinkStatus | null> {
+    const owner = KeyStore.getPubky();
+    if (!owner) return 'needs-enable';
+    try {
+      const record = await StorageService.getLink(owner, peerPubky);
+      if (!record) return null;
+      if (record.status === 'established') return 'ready';
+      return record.role === 'initiator' ? 'handshaking-initiator' : 'handshaking-responder';
+    } catch {
+      return 'error';
+    }
   },
 
   // ── Send ──────────────────────────────────────────────────────────────────

@@ -76,6 +76,7 @@ describe('EnableMessagingScreen', () => {
       authorizationUrl: PUBKYAUTH_URL,
       awaitEnabled: () => pending,
       cancel: jest.fn(),
+      releaseKeepalive: jest.fn(),
     });
 
     const tree = await render(<EnableMessagingScreen />);
@@ -103,6 +104,7 @@ describe('EnableMessagingScreen', () => {
       authorizationUrl: httpsUrl,
       awaitEnabled: () => pending,
       cancel: jest.fn(),
+      releaseKeepalive: jest.fn(),
     });
 
     const tree = await render(<EnableMessagingScreen />);
@@ -168,6 +170,7 @@ describe('EnableMessagingScreen', () => {
       authorizationUrl: PUBKYAUTH_URL,
       awaitEnabled: () => pending,
       cancel: jest.fn(),
+      releaseKeepalive: jest.fn(),
     });
 
     const tree = await render(<EnableMessagingScreen />);
@@ -188,6 +191,42 @@ describe('EnableMessagingScreen', () => {
       COPY.encryptedMessagingEnabled,
     );
     expect(tree.root.findByProps({ testID: 'enableMessagingOpenChats' })).toBeTruthy();
+    await unmount(tree);
+  });
+
+  it('disables Enable encrypted messaging while enable() is unresolved', async () => {
+    let resolveEnable!: (flow: {
+      authorizationUrl: string;
+      awaitEnabled: () => Promise<unknown>;
+      cancel: () => void;
+      releaseKeepalive: () => void;
+    }) => void;
+    (LinkService.getEnableStatus as jest.Mock).mockResolvedValue('needs-enable');
+    (LinkService.enable as jest.Mock).mockImplementation(
+      () =>
+        new Promise(resolve => {
+          resolveEnable = resolve;
+        }),
+    );
+
+    const tree = await render(<EnableMessagingScreen />);
+    await flushController();
+    await act(async () => {
+      tree.root.findByProps({ testID: 'enableMessagingStart' }).props.onPress();
+    });
+    const start = tree.root.findByProps({ testID: 'enableMessagingStart' });
+    expect(start.props.disabled).toBe(true);
+    expect(start.props.accessibilityState).toEqual({ busy: true, disabled: true });
+    await act(async () => {
+      resolveEnable({
+        authorizationUrl: PUBKYAUTH_URL,
+        awaitEnabled: () => new Promise(() => undefined),
+        cancel: jest.fn(),
+        releaseKeepalive: jest.fn(),
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
     await unmount(tree);
   });
 });
