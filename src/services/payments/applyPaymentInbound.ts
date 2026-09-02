@@ -66,10 +66,6 @@ export async function applyPaymentInbound(input: {
   const conversationId = buildDmConversationId(input.peerPubky);
   const kind = peekPaymentKind(input.rawJson);
 
-  if (kind === PAYKIT_PRIVATE_PAYMENT_LIST_KIND) {
-    return applyTipList(input, conversationId);
-  }
-
   const eventId = peekEventId(input.rawJson);
   if (
     eventId &&
@@ -81,6 +77,10 @@ export async function applyPaymentInbound(input: {
     ))
   ) {
     return { action: 'ignored' };
+  }
+
+  if (kind === PAYKIT_PRIVATE_PAYMENT_LIST_KIND) {
+    return applyTipList(input, conversationId, eventId);
   }
 
   if (kind === PAYKIT_PAYMENT_REQUEST_KIND) {
@@ -110,13 +110,15 @@ async function applyTipList(
     receivedAt: number;
   },
   conversationId: string,
+  eventId: string | null,
 ): Promise<PaymentInboundOutcome> {
   const envelope = decodePrivatePaymentListEnvelope(input.rawJson);
+  const markerId = envelope?.event_id ?? eventId;
   if (!envelope) {
     await markSeen(
       input,
       conversationId,
-      `tip:${input.receivedAt}`,
+      markerId ?? `tip:${input.receivedAt}`,
       PAYKIT_PRIVATE_PAYMENT_LIST_KIND,
       null,
       false,
@@ -126,7 +128,7 @@ async function applyTipList(
   const endpoints = Object.entries(envelope.payment_endpoints).map(([identifier, payload]) =>
     validateTipEndpoint(identifier, payload),
   );
-  await StorageService.replaceTipEndpoints(
+  const changed = await StorageService.replaceTipEndpoints(
     input.ownerPubky,
     input.senderPubky,
     endpoints,
@@ -135,10 +137,10 @@ async function applyTipList(
   await markSeen(
     input,
     conversationId,
-    `list:${input.receivedAt}`,
+    markerId ?? `list:${input.receivedAt}`,
     PAYKIT_PRIVATE_PAYMENT_LIST_KIND,
     null,
-    true,
+    changed,
   );
   return { action: 'applied', request: null };
 }
@@ -443,11 +445,23 @@ async function applyProof(
       if (reused) {
         proofVerified = false;
       } else {
-        const invoice = await StorageService.getOwnInvoiceHash(
+        let invoice = await StorageService.getOwnInvoiceHash(
           input.ownerPubky,
           decoded.payment_endpoint_identifier,
           h,
         );
+        if (invoice?.paymentRequestId && invoice.paymentRequestId !== decoded.payment_request_id) {
+          await StorageService.releaseOwnInvoiceBindingIfInactive(
+            input.ownerPubky,
+            invoice.paymentRequestId,
+            nowMs,
+          );
+          invoice = await StorageService.getOwnInvoiceHash(
+            input.ownerPubky,
+            decoded.payment_endpoint_identifier,
+            h,
+          );
+        }
         const bound = bindProofToRequest(row, h, invoice);
         proofVerified = bound.proofVerified;
         if (bound.rebindHash) rebindHash = bound.rebindHash;

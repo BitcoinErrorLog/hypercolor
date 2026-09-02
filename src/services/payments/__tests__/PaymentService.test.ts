@@ -29,7 +29,7 @@ jest.mock('../../StorageService', () => ({
     listPaymentRequestsForPeer: jest.fn(),
     setDisplayedPaymentHash: jest.fn(),
     getTipEndpoint: jest.fn(),
-    hasNonTerminalDisplayedPaymentHash: jest.fn(),
+    hasDisplayedPaymentHash: jest.fn(),
   },
 }));
 
@@ -134,7 +134,7 @@ describe('PaymentService', () => {
     mockedStorage.persistPaymentEventWithSendIntent.mockResolvedValue(undefined);
     mockedStorage.getTipEndpoint.mockResolvedValue(null);
     mockedStorage.recordOwnInvoiceDisplay.mockResolvedValue(undefined);
-    mockedStorage.hasNonTerminalDisplayedPaymentHash.mockResolvedValue(false);
+    mockedStorage.hasDisplayedPaymentHash.mockResolvedValue(false);
   });
 
   it('persists and sends a payment_request within the link byte budget', async () => {
@@ -387,10 +387,7 @@ describe('PaymentService', () => {
       }),
     );
     await PaymentService.requestPayment(PEER, { value: '0.001' }, 'invoice-2026-0001');
-    expect(mockedStorage.hasNonTerminalDisplayedPaymentHash).toHaveBeenCalledWith(
-      OWNER,
-      'ab'.repeat(32),
-    );
+    expect(mockedStorage.hasDisplayedPaymentHash).toHaveBeenCalledWith(OWNER, 'ab'.repeat(32));
     expect(mockedStorage.persistPaymentCreateWithSendIntent).toHaveBeenCalledWith(
       expect.objectContaining({
         record: expect.objectContaining({
@@ -417,7 +414,7 @@ describe('PaymentService', () => {
       invoiceExpiresAt: null,
       paymentHash: 'ab'.repeat(32),
     });
-    mockedStorage.hasNonTerminalDisplayedPaymentHash.mockResolvedValue(true);
+    mockedStorage.hasDisplayedPaymentHash.mockResolvedValue(true);
     mockedStorage.getPaymentRequest.mockResolvedValue(
       row({
         direction: 'sent',

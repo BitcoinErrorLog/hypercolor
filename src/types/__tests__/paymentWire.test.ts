@@ -191,6 +191,11 @@ describe('payment wire contracts', () => {
     ).toEqual(OFFICIAL_LIST);
   });
 
+  it('accepts an optional event_id on private_payment_list', () => {
+    const withId = { ...OFFICIAL_LIST, event_id: EVENT_ID };
+    expect(decodePrivatePaymentListEnvelope(JSON.stringify(withId))).toEqual(withId);
+  });
+
   it('omits reason on rejection/cancellation when absent and rejects null reason', () => {
     const noReason = buildPaymentRejectionEnvelope({
       eventId: REJECT_EVENT,

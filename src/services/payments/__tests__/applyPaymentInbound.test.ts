@@ -21,6 +21,7 @@ jest.mock('../../StorageService', () => ({
     hasVerifiedPaymentHash: jest.fn(),
     hasOwnInvoiceHash: jest.fn(),
     getOwnInvoiceHash: jest.fn(),
+    releaseOwnInvoiceBindingIfInactive: jest.fn(),
   },
 }));
 
@@ -67,6 +68,7 @@ const EVENT_REJ = '8a0d8b4c-913f-4e31-9f2c-2a6f5bb4d103';
 const EVENT_CAN = '8a0d8b4c-913f-4e31-9f2c-2a6f5bb4d104';
 const EVENT_PRF = '8a0d8b4c-913f-4e31-9f2c-2a6f5bb4d105';
 const EVENT_PRF_2 = '8a0d8b4c-913f-4e31-9f2c-2a6f5bb4d107';
+const EVENT_LIST = '8a0d8b4c-913f-4e31-9f2c-2a6f5bb4d108';
 const REQUEST_MSAT = '100000000';
 
 const mockedStorage = jest.mocked(StorageService);
@@ -154,8 +156,32 @@ function installStore(store: Store): void {
       return true;
     },
   );
-  mockedStorage.replaceTipEndpoints.mockResolvedValue(undefined);
+  mockedStorage.replaceTipEndpoints.mockResolvedValue(true);
   mockedStorage.getTipEndpoint.mockResolvedValue(null);
+  mockedStorage.releaseOwnInvoiceBindingIfInactive.mockImplementation(
+    async (owner, requestId, nowMs) => {
+      let inactive = false;
+      for (const existing of store.requests.values()) {
+        if (existing.ownerPubky !== owner) continue;
+        if (existing.paymentRequestId !== requestId) continue;
+        if (
+          existing.status === 'cancelled' ||
+          existing.status === 'rejected' ||
+          (existing.status === 'pending' &&
+            existing.expiresAt !== null &&
+            nowMs >= existing.expiresAt)
+        ) {
+          inactive = true;
+        }
+      }
+      if (!inactive) return;
+      for (const [key, inv] of store.ownInvoices.entries()) {
+        if (inv.ownerPubky === owner && inv.paymentRequestId === requestId) {
+          store.ownInvoices.set(key, { ...inv, paymentRequestId: null });
+        }
+      }
+    },
+  );
   mockedStorage.hasVerifiedPaymentHash.mockImplementation(async (owner, hash, exceptId) => {
     for (const existing of store.requests.values()) {
       if (existing.ownerPubky !== owner) continue;
@@ -513,6 +539,39 @@ describe('applyPaymentInbound authorization (S2)', () => {
     );
     expect(PAYKIT_PAYMENT_REQUEST_KIND).toBe('paykit.payment_request');
     expect(PAYKIT_PRIVATE_PAYMENT_LIST_KIND).toBe('paykit.private_payment_list');
+  });
+
+  it('keys a tip-list marker by event_id and ignores a replay', async () => {
+    const built = buildPrivatePaymentListEnvelope({
+      paymentEndpoints: {
+        [ENDPOINT_LIGHTNING_BOLT11]: MAINNET_BOLT11_20U,
+      },
+    });
+    const json = JSON.stringify({ ...JSON.parse(built.json), event_id: EVENT_LIST });
+    expect((await inbound(PEER_A, json)).action).toBe('applied');
+    expect(store.events.get(eventKey(OWNER, `dm:${PEER_A}`, PEER_A, EVENT_LIST))?.applied).toBe(
+      true,
+    );
+    expect((await inbound(PEER_A, json, NOW + 1)).action).toBe('ignored');
+    expect(store.events.size).toBe(1);
+    expect(mockedStorage.replaceTipEndpoints).toHaveBeenCalledTimes(1);
+  });
+
+  it('marks a tip list that did not change endpoints unapplied', async () => {
+    mockedStorage.replaceTipEndpoints.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+    const list = buildPrivatePaymentListEnvelope({
+      paymentEndpoints: {
+        [ENDPOINT_LIGHTNING_BOLT11]: MAINNET_BOLT11_20U,
+      },
+    });
+    expect((await inbound(PEER_A, list.json)).action).toBe('applied');
+    expect(store.events.get(eventKey(OWNER, `dm:${PEER_A}`, PEER_A, `list:${NOW}`))?.applied).toBe(
+      true,
+    );
+    expect((await inbound(PEER_A, list.json, NOW + 1)).action).toBe('applied');
+    expect(
+      store.events.get(eventKey(OWNER, `dm:${PEER_A}`, PEER_A, `list:${NOW + 1}`))?.applied,
+    ).toBe(false);
   });
 
   it('does not mark a second request paid when the same preimage is reused', async () => {
@@ -1124,6 +1183,96 @@ describe('applyPaymentInbound authorization (S2)', () => {
     expect(formatPaymentReceipt(afterGood!, NOW)).toEqual({
       word: COPY.paymentPaid,
       note: null,
+    });
+  });
+
+  it('marks paid when a cancelled first request left a leftover invoice bind', async () => {
+    const preimage = 'ab'.repeat(32);
+    const paymentHash = createHash('sha256').update(Buffer.from(preimage, 'hex')).digest('hex');
+    const firstId = 'c7f9c2a1-6d43-4b0e-a8d4-0fe2c712ab44';
+    store.requests.set(
+      requestKey(OWNER, PEER_A, firstId),
+      sentRow({
+        paymentRequestId: firstId,
+        status: 'cancelled',
+        displayedPaymentHash: paymentHash,
+      }),
+    );
+    store.requests.set(
+      requestKey(OWNER, PEER_A, REQUEST_ID),
+      sentRow({
+        status: 'accepted',
+        displayedPaymentHash: paymentHash,
+        invoiceReused: true,
+      }),
+    );
+    putOwnInvoice(store, paymentHash, REQUEST_MSAT, NOW + 86_400_000, {
+      displayContext: 'request',
+      paymentRequestId: firstId,
+    });
+    const proof = buildPaymentProofEnvelope({
+      eventId: EVENT_PRF,
+      paymentRequestId: REQUEST_ID,
+      paymentReference: 'invoice-2026-0001',
+      paymentEndpointIdentifier: ENDPOINT_LIGHTNING_BOLT11,
+      proofData: preimage,
+    });
+    expect((await inbound(PEER_A, proof.json)).action).toBe('applied');
+    const payee = store.requests.get(requestKey(OWNER, PEER_A, REQUEST_ID));
+    expect(payee?.proofVerified).toBe(true);
+    expect(payee?.status).toBe('proof_received');
+    expect(formatPaymentReceipt(payee!, NOW)).toEqual({ word: COPY.paymentPaid, note: null });
+    const payer = sentRow({
+      direction: 'received',
+      status: 'proof_received',
+      displayedPaymentHash: paymentHash,
+      proofVerified: true,
+    });
+    expect(formatPaymentReceipt(payer, NOW)).toEqual({ word: COPY.paymentPaid, note: null });
+    expect(
+      store.ownInvoices.get(`${OWNER}|${ENDPOINT_LIGHTNING_BOLT11}|${paymentHash}`)
+        ?.paymentRequestId,
+    ).toBeNull();
+  });
+
+  it('does not unbind a pending first request so a second request stays unprovable', async () => {
+    const preimage = 'ab'.repeat(32);
+    const paymentHash = createHash('sha256').update(Buffer.from(preimage, 'hex')).digest('hex');
+    const firstId = 'c7f9c2a1-6d43-4b0e-a8d4-0fe2c712ab44';
+    store.requests.set(
+      requestKey(OWNER, PEER_A, firstId),
+      sentRow({
+        paymentRequestId: firstId,
+        status: 'pending',
+        displayedPaymentHash: paymentHash,
+      }),
+    );
+    store.requests.set(
+      requestKey(OWNER, PEER_A, REQUEST_ID),
+      sentRow({
+        status: 'accepted',
+        displayedPaymentHash: paymentHash,
+        invoiceReused: true,
+      }),
+    );
+    putOwnInvoice(store, paymentHash, REQUEST_MSAT, NOW + 86_400_000, {
+      displayContext: 'request',
+      paymentRequestId: firstId,
+    });
+    const proof = buildPaymentProofEnvelope({
+      eventId: EVENT_PRF,
+      paymentRequestId: REQUEST_ID,
+      paymentReference: 'invoice-2026-0001',
+      paymentEndpointIdentifier: ENDPOINT_LIGHTNING_BOLT11,
+      proofData: preimage,
+    });
+    expect((await inbound(PEER_A, proof.json)).action).toBe('applied');
+    const second = store.requests.get(requestKey(OWNER, PEER_A, REQUEST_ID));
+    expect(second?.proofVerified).not.toBe(true);
+    expect(second?.status).toBe('accepted');
+    expect(formatPaymentReceipt(second!, NOW)).toEqual({
+      word: COPY.paymentRequested,
+      note: COPY.invoiceAlreadyAttachedRotate,
     });
   });
 });

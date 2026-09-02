@@ -52,7 +52,7 @@ export const PaymentService = {
     const displayedPaymentHash = await snapshotOwnInvoiceHash(owner, endpointIds);
     const invoiceReused =
       displayedPaymentHash !== null &&
-      (await StorageService.hasNonTerminalDisplayedPaymentHash(owner, displayedPaymentHash));
+      (await StorageService.hasDisplayedPaymentHash(owner, displayedPaymentHash));
     const built = buildPaymentRequestEnvelope({
       eventId,
       paymentRequestId,

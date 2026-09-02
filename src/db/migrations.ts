@@ -88,12 +88,12 @@ export async function runMigrations(db: SqlExecutor): Promise<void> {
 
   // In-branch v16 databases may predate amount/expiry columns or the table
   // itself (W2b-stamped v16). Idempotent; no version bump. Never startup-fatal:
-  // structural repair commits before amount backfill so a backfill throw cannot
-  // roll back CREATE TABLE. Backfill errors are logged and retried next launch.
+  // `repairOwnInvoiceHashes` commits `invoice_reused` before the rest of
+  // repair, then this runner commits amount backfill separately, so a later
+  // throw cannot roll back CREATE TABLE or the additive column. Backfill
+  // errors are logged and retried next launch.
   try {
-    db.executeSync('BEGIN');
     repairOwnInvoiceHashes(db);
-    db.executeSync('COMMIT');
   } catch (err) {
     logOwnInvoiceHashRepairFailure(db, err);
   }

@@ -67,6 +67,7 @@ const PROOF_KEYS = [
   'proof',
 ] as const;
 const LIST_KEYS = ['version', 'kind', 'payment_endpoints'] as const;
+const LIST_OPTIONAL_KEYS = ['event_id'] as const;
 const RECURRENCE_REQUIRED = ['every', 'unit', 'starts_at', 'anchor', 'ends_at'] as const;
 const BILLING_PERIOD_KEYS = ['starts_at', 'ends_at'] as const;
 const RECURRENCE_UNITS = new Set(['minute', 'hour', 'day', 'week', 'month', 'year']);
@@ -199,6 +200,7 @@ export interface PaymentProofEnvelope {
 export interface PrivatePaymentListEnvelope {
   version: 1;
   kind: typeof PAYKIT_PRIVATE_PAYMENT_LIST_KIND;
+  event_id?: string;
   payment_endpoints: Record<string, string>;
 }
 
@@ -229,7 +231,7 @@ export interface PaymentRequestRecord {
   pendingEventId: string | null;
   displayedPaymentHash: string | null;
   proofVerified: boolean | null;
-  /** Local-only. True when create-time snapshot matched another open request. */
+  /** Local-only. True when create-time snapshot matched any prior request's displayed hash. */
   invoiceReused: boolean;
 }
 
@@ -1016,8 +1018,13 @@ export function decodePrivatePaymentListEnvelope(
   rawJson: string,
 ): PrivatePaymentListEnvelope | null {
   const candidate = parseObject(rawJson);
-  if (!candidate || !hasExactKeys(candidate, LIST_KEYS)) return null;
+  if (!candidate || !hasExactKeys(candidate, LIST_KEYS, LIST_OPTIONAL_KEYS)) return null;
   if (candidate.version !== 1 || candidate.kind !== PAYKIT_PRIVATE_PAYMENT_LIST_KIND) return null;
+  let eventId: string | undefined;
+  if (Object.prototype.hasOwnProperty.call(candidate, 'event_id')) {
+    if (typeof candidate.event_id !== 'string' || !isUuidV4(candidate.event_id)) return null;
+    eventId = candidate.event_id;
+  }
   const map = asRecord(candidate.payment_endpoints);
   if (!map) return null;
   const payment_endpoints: Record<string, string> = {};
@@ -1029,11 +1036,13 @@ export function decodePrivatePaymentListEnvelope(
     if (typeof payload !== 'string') return null;
     payment_endpoints[identifier] = payload;
   }
-  return {
+  const envelope: PrivatePaymentListEnvelope = {
     version: 1,
     kind: PAYKIT_PRIVATE_PAYMENT_LIST_KIND,
     payment_endpoints,
   };
+  if (eventId !== undefined) envelope.event_id = eventId;
+  return envelope;
 }
 
 export function decodePaymentEnvelope(rawJson: string): PaymentEnvelope | null {

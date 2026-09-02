@@ -917,17 +917,35 @@ primary.
      was recorded (recordFailed path), or the snapshot no longer matches the
      paid invoice (the payee wallet rotated after create), history may
      corroborate only an invoice whose `firstSeenAt >= request.createdAt`
-     and that was not displayed for a different request or as a tip. A
-     successful mismatch bind rewrites `displayedPaymentHash` to the paid
-     invoice so both receipts show `paid`. A tip invoice
-     (`display_context = 'tip'`) never corroborates a request. The bound
-     invoice amount must satisfy the request: invoice millisatoshis ≥ request
-     millisatoshis. Over-payment is `paid`. Under-payment is not. An amountless
-     invoice cannot satisfy an amount-bearing request (v1 requests always carry
-     an amount). An invoice that expired at or before the request was created
-     cannot corroborate it. Amount mismatch does not occupy the verified-hash
-     unique index, so the matching request can still be marked `paid` by the
-     same preimage. A hash that has already verified any request cannot
+     and that was not displayed for a different *active* request or as a
+     tip. A successful mismatch bind rewrites `displayedPaymentHash` to the
+     paid invoice so both receipts show `paid`.
+
+     Binder vs flag: `own_invoice_hashes.payment_request_id` is the first
+     binding. Cancelled, rejected, and proposal-expired requests clear that
+     column in the same transaction as the terminal transition, so a later
+     request that reuses the invoice can still prove. A verified/paid
+     binding stays sticky — the unique index and replay protection depend
+     on it. `invoiceReused` is set at create when *any* prior request for
+     this owner (terminal or not) already displayed the same hash; the
+     receipt tells the payee to rotate.
+
+     Deliberate trade-off: a payee's currently published invoice (display
+     context NULL, first-seen at or after create) is corroboration-eligible
+     even if it was never shown in Review for this request. The preimage
+     proves settlement of the payee's own invoice; the amount must be ≥
+     requested; the payee is made whole. This is weaker than "displayed for
+     this request" and is accepted as such.
+
+     A tip invoice (`display_context = 'tip'`) never corroborates a
+     request. The bound invoice amount must satisfy the request: invoice
+     millisatoshis ≥ request millisatoshis. Over-payment is `paid`.
+     Under-payment is not. An amountless invoice cannot satisfy an
+     amount-bearing request (v1 requests always carry an amount). An
+     invoice that expired at or before the request was created cannot
+     corroborate it. Amount mismatch does not occupy the verified-hash
+     unique index, so the matching request can still be marked `paid` by
+     the same preimage. A hash that has already verified any request cannot
      verify another (partial unique index on `displayed_payment_hash WHERE
      proof_verified = 1`).
 
@@ -958,7 +976,8 @@ primary.
        can still land).
      - `This invoice is already attached to another request — rotate your invoice`
        when the request was created with a snapshot hash already displayed on
-       another non-terminal request (`invoiceReused`). The receipt word stays
+       any prior request for this owner (`invoiceReused`), including cancelled,
+       rejected, expired, pending, and paid rows. The receipt word stays
        `requested` (or `failed` / `expired` / `paid` when those apply).
 
 ### D.13 Backup / recovery-code gate

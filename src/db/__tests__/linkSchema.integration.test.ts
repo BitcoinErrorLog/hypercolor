@@ -1908,6 +1908,39 @@ describe('schema v16 — own invoice history and verified-hash unique index', ()
     );
     expect(after).toContain('invoice_reused');
   });
+
+  it('keeps invoice_reused when a later repair statement throws', async () => {
+    const db = openMemoryDb();
+    applyThroughV15(db);
+    for (const statement of SCHEMA_V16_STATEMENTS) {
+      db.executeSync(statement);
+    }
+    db.executeSync('PRAGMA user_version = 16');
+    const original = db.executeSync.bind(db);
+    db.executeSync = (query, params) => {
+      const sql = String(query);
+      if (
+        sql.includes('CREATE UNIQUE INDEX IF NOT EXISTS idx_payment_requests_owner_verified_hash')
+      ) {
+        throw new Error('index boom');
+      }
+      return original(query, params);
+    };
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    setDbForTests(db);
+    await expect(runMigrations(db)).resolves.toBeUndefined();
+    db.executeSync = original;
+    expect(
+      (db.executeSync('PRAGMA table_info(payment_requests)').rows ?? []).map(col =>
+        String(col.name),
+      ),
+    ).toContain('invoice_reused');
+    expect(warn).toHaveBeenCalledWith(
+      '[db] own_invoice_hashes repair failed; will retry next launch',
+      'index boom',
+    );
+    warn.mockRestore();
+  });
 });
 
 function applyThroughV5(db: ReturnType<typeof openMemoryDb>): void {

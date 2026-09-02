@@ -36,10 +36,14 @@ import { StorageService } from '../../StorageService';
 import { applyPaymentInbound } from '../applyPaymentInbound';
 import { COPY } from '../../../copy/uxCopy';
 import { formatPaymentReceipt } from '../../../ui/paymentReceiptStatus';
+import { MAINNET_BOLT11_20U } from './bolt11Vectors';
 import {
   EMPTY_PAYMENT_RECORD_EXTRAS,
   ENDPOINT_LIGHTNING_BOLT11,
   buildPaymentProofEnvelope,
+  buildPaymentRequestEnvelope,
+  buildPrivatePaymentListEnvelope,
+  expectedStatusesForAction,
   type PaymentRequestRecord,
 } from '../../../types/payment';
 
@@ -375,7 +379,7 @@ describe('payment_events unapplied prune', () => {
   });
 });
 
-describe('invoice reuse detection', () => {
+describe('invoice reuse and terminal unbind', () => {
   afterEach(() => {
     setDbForTests(null);
   });
@@ -388,7 +392,7 @@ describe('invoice reuse detection', () => {
     const idA = 'b7f9c2a1-6d43-4b0e-a8d4-0fe2c712ab33';
     const idB = 'c7f9c2a1-6d43-4b0e-a8d4-0fe2c712ab44';
     await StorageService.savePaymentRequest(sentAccepted(PEER_A, idA, hash));
-    expect(await StorageService.hasNonTerminalDisplayedPaymentHash(OWNER, hash)).toBe(true);
+    expect(await StorageService.hasDisplayedPaymentHash(OWNER, hash)).toBe(true);
     await StorageService.savePaymentRequest({
       ...sentAccepted(PEER_B, idB, hash),
       invoiceReused: true,
@@ -401,15 +405,344 @@ describe('invoice reuse detection', () => {
     });
   });
 
-  it('does not treat a cancelled request as occupying the invoice', async () => {
+  it('flags reuse after a cancelled request and still proves the next request', async () => {
+    const db = openMemoryDb();
+    setDbForTests(db);
+    await runMigrations(db);
+    const preimage = 'ab'.repeat(32);
+    const paymentHash = createHash('sha256').update(Buffer.from(preimage, 'hex')).digest('hex');
+    const idA = 'b7f9c2a1-6d43-4b0e-a8d4-0fe2c712ab33';
+    const idB = 'c7f9c2a1-6d43-4b0e-a8d4-0fe2c712ab44';
+    await StorageService.savePaymentRequest(sentAccepted(PEER_A, idA, paymentHash));
+    await StorageService.recordOwnInvoiceDisplay({
+      ownerPubky: OWNER,
+      endpointIdentifier: ENDPOINT_LIGHTNING_BOLT11,
+      paymentHash,
+      context: 'request',
+      paymentRequestId: idA,
+      firstSeenAt: NOW,
+      invoiceAmountMsat: '100000000',
+      invoiceExpiresAt: NOW + 86_400_000,
+    });
+    expect(
+      await StorageService.compareAndSetPaymentRequest(
+        OWNER,
+        PEER_A,
+        idA,
+        expectedStatusesForAction('cancel'),
+        { status: 'cancelled' },
+      ),
+    ).toBe(true);
+    expect(
+      (await StorageService.getOwnInvoiceHash(OWNER, ENDPOINT_LIGHTNING_BOLT11, paymentHash))
+        ?.paymentRequestId,
+    ).toBeNull();
+    expect(await StorageService.hasDisplayedPaymentHash(OWNER, paymentHash)).toBe(true);
+    await StorageService.savePaymentRequest({
+      ...sentAccepted(PEER_A, idB, paymentHash),
+      invoiceReused: true,
+    });
+    const proof = buildPaymentProofEnvelope({
+      eventId: '8a0d8b4c-913f-4e31-9f2c-2a6f5bb4d108',
+      paymentRequestId: idB,
+      paymentReference: 'invoice-2026-0001',
+      paymentEndpointIdentifier: ENDPOINT_LIGHTNING_BOLT11,
+      proofData: preimage,
+    });
+    expect(
+      (
+        await applyPaymentInbound({
+          ownerPubky: OWNER,
+          senderPubky: PEER_A,
+          peerPubky: PEER_A,
+          rawJson: proof.json,
+          receivedAt: NOW,
+          nowMs: NOW,
+        })
+      ).action,
+    ).toBe('applied');
+    const payee = await StorageService.getPaymentRequest(OWNER, PEER_A, idB);
+    expect(payee?.proofVerified).toBe(true);
+    expect(payee?.status).toBe('proof_received');
+    expect(formatPaymentReceipt(payee!, NOW)).toEqual({ word: COPY.paymentPaid, note: null });
+    const payer = sentAccepted(PEER_A, idB, paymentHash);
+    payer.direction = 'received';
+    payer.status = 'proof_received';
+    payer.proofVerified = true;
+    expect(formatPaymentReceipt(payer, NOW)).toEqual({ word: COPY.paymentPaid, note: null });
+    const cancelled = await StorageService.getPaymentRequest(OWNER, PEER_A, idA);
+    expect(cancelled?.status).toBe('cancelled');
+    expect(formatPaymentReceipt(cancelled!, NOW).word).toBe(COPY.paymentFailed);
+  });
+
+  it('keeps a verified binding sticky so a second request stays accepted and flagged', async () => {
+    const db = openMemoryDb();
+    setDbForTests(db);
+    await runMigrations(db);
+    const preimage = 'ab'.repeat(32);
+    const paymentHash = createHash('sha256').update(Buffer.from(preimage, 'hex')).digest('hex');
+    const idA = 'b7f9c2a1-6d43-4b0e-a8d4-0fe2c712ab33';
+    const idB = 'c7f9c2a1-6d43-4b0e-a8d4-0fe2c712ab44';
+    await StorageService.savePaymentRequest(sentAccepted(PEER_A, idA, paymentHash));
+    await StorageService.recordOwnInvoiceDisplay({
+      ownerPubky: OWNER,
+      endpointIdentifier: ENDPOINT_LIGHTNING_BOLT11,
+      paymentHash,
+      context: 'request',
+      paymentRequestId: idA,
+      firstSeenAt: NOW,
+      invoiceAmountMsat: '100000000',
+      invoiceExpiresAt: NOW + 86_400_000,
+    });
+    const proofA = buildPaymentProofEnvelope({
+      eventId: '8a0d8b4c-913f-4e31-9f2c-2a6f5bb4d105',
+      paymentRequestId: idA,
+      paymentReference: 'invoice-2026-0001',
+      paymentEndpointIdentifier: ENDPOINT_LIGHTNING_BOLT11,
+      proofData: preimage,
+    });
+    expect(
+      (
+        await applyPaymentInbound({
+          ownerPubky: OWNER,
+          senderPubky: PEER_A,
+          peerPubky: PEER_A,
+          rawJson: proofA.json,
+          receivedAt: NOW,
+          nowMs: NOW,
+        })
+      ).action,
+    ).toBe('applied');
+    expect(
+      (await StorageService.getOwnInvoiceHash(OWNER, ENDPOINT_LIGHTNING_BOLT11, paymentHash))
+        ?.paymentRequestId,
+    ).toBe(idA);
+    await StorageService.savePaymentRequest({
+      ...sentAccepted(PEER_B, idB, paymentHash),
+      invoiceReused: true,
+    });
+    const proofB = buildPaymentProofEnvelope({
+      eventId: '8a0d8b4c-913f-4e31-9f2c-2a6f5bb4d106',
+      paymentRequestId: idB,
+      paymentReference: 'invoice-2026-0001',
+      paymentEndpointIdentifier: ENDPOINT_LIGHTNING_BOLT11,
+      proofData: preimage,
+    });
+    expect(
+      (
+        await applyPaymentInbound({
+          ownerPubky: OWNER,
+          senderPubky: PEER_B,
+          peerPubky: PEER_B,
+          rawJson: proofB.json,
+          receivedAt: NOW + 1,
+          nowMs: NOW + 1,
+        })
+      ).action,
+    ).toBe('applied');
+    const second = await StorageService.getPaymentRequest(OWNER, PEER_B, idB);
+    expect(second?.status).toBe('accepted');
+    expect(second?.proofVerified).toBe(false);
+    expect(second?.invoiceReused).toBe(true);
+    expect(formatPaymentReceipt(second!, NOW)).toEqual({
+      word: COPY.paymentRequested,
+      note: COPY.invoiceAlreadyAttachedRotate,
+    });
+    const first = await StorageService.getPaymentRequest(OWNER, PEER_A, idA);
+    expect(first?.proofVerified).toBe(true);
+  });
+
+  it('flags a new request when a pending request already displayed the hash', async () => {
     const db = openMemoryDb();
     setDbForTests(db);
     await runMigrations(db);
     const hash = 'cd'.repeat(32);
     await StorageService.savePaymentRequest({
       ...sentAccepted(PEER_A, 'b7f9c2a1-6d43-4b0e-a8d4-0fe2c712ab33', hash),
-      status: 'cancelled',
+      status: 'pending',
     });
-    expect(await StorageService.hasNonTerminalDisplayedPaymentHash(OWNER, hash)).toBe(false);
+    expect(await StorageService.hasDisplayedPaymentHash(OWNER, hash)).toBe(true);
+  });
+});
+
+describe('invoice_reused column repair isolation', () => {
+  afterEach(() => {
+    setDbForTests(null);
+  });
+
+  it('keeps invoice_reused after a later repair statement throws and still inserts', async () => {
+    const db = openMemoryDb();
+    setDbForTests(db);
+    await runMigrations(db);
+    db.executeSync('ALTER TABLE payment_requests DROP COLUMN invoice_reused');
+    expect(
+      (db.executeSync('PRAGMA table_info(payment_requests)').rows ?? []).map(col =>
+        String(col.name),
+      ),
+    ).not.toContain('invoice_reused');
+    const original = db.executeSync.bind(db);
+    db.executeSync = (query, params) => {
+      const sql = String(query);
+      if (
+        sql.includes('CREATE UNIQUE INDEX IF NOT EXISTS idx_payment_requests_owner_verified_hash')
+      ) {
+        throw new Error('index boom');
+      }
+      return original(query, params);
+    };
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    await expect(runMigrations(db)).resolves.toBeUndefined();
+    db.executeSync = original;
+    expect(
+      (db.executeSync('PRAGMA table_info(payment_requests)').rows ?? []).map(col =>
+        String(col.name),
+      ),
+    ).toContain('invoice_reused');
+    await StorageService.savePaymentRequest(
+      sentAccepted(PEER_A, 'b7f9c2a1-6d43-4b0e-a8d4-0fe2c712ab33', 'ab'.repeat(32)),
+    );
+    const row = await StorageService.getPaymentRequest(
+      OWNER,
+      PEER_A,
+      'b7f9c2a1-6d43-4b0e-a8d4-0fe2c712ab33',
+    );
+    expect(row?.paymentRequestId).toBe('b7f9c2a1-6d43-4b0e-a8d4-0fe2c712ab33');
+    expect(warn).toHaveBeenCalledWith(
+      '[db] own_invoice_hashes repair failed; will retry next launch',
+      'index boom',
+    );
+    warn.mockRestore();
+  });
+
+  it('inserts and marks inbound seen when invoice_reused is absent and ALTER fails', async () => {
+    const db = openMemoryDb();
+    setDbForTests(db);
+    await runMigrations(db);
+    db.executeSync('ALTER TABLE payment_requests DROP COLUMN invoice_reused');
+    const original = db.executeSync.bind(db);
+    db.executeSync = (query, params) => {
+      const sql = String(query);
+      if (sql.includes('ADD COLUMN invoice_reused')) {
+        throw new Error('alter boom');
+      }
+      return original(query, params);
+    };
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    await expect(runMigrations(db)).resolves.toBeUndefined();
+    db.executeSync = original;
+    expect(
+      (db.executeSync('PRAGMA table_info(payment_requests)').rows ?? []).map(col =>
+        String(col.name),
+      ),
+    ).not.toContain('invoice_reused');
+    const built = buildPaymentRequestEnvelope({
+      eventId: '8a0d8b4c-913f-4e31-9f2c-2a6f5bb4d101',
+      paymentRequestId: 'b7f9c2a1-6d43-4b0e-a8d4-0fe2c712ab33',
+      amountValue: '0.001',
+      paymentReference: 'invoice-2026-0001',
+      endpointIds: [ENDPOINT_LIGHTNING_BOLT11],
+    });
+    const result = await applyPaymentInbound({
+      ownerPubky: OWNER,
+      senderPubky: PEER_A,
+      peerPubky: PEER_A,
+      rawJson: built.json,
+      receivedAt: NOW,
+      nowMs: NOW,
+    });
+    expect(result.action).toBe('applied');
+    const row = await StorageService.getPaymentRequest(
+      OWNER,
+      PEER_A,
+      'b7f9c2a1-6d43-4b0e-a8d4-0fe2c712ab33',
+    );
+    expect(row?.status).toBe('pending');
+    expect(row?.invoiceReused).toBe(false);
+    expect(
+      await StorageService.hasPaymentEvent(OWNER, `dm:${PEER_A}`, PEER_A, built.envelope.event_id),
+    ).toBe(true);
+    expect(warn).toHaveBeenCalledWith(
+      '[db] payment_requests.invoice_reused missing; inserting without the flag',
+    );
+    warn.mockRestore();
+  });
+});
+
+describe('tip-list payment_events markers', () => {
+  afterEach(() => {
+    setDbForTests(null);
+  });
+
+  it('keys a tip list by event_id so a replay is ignored', async () => {
+    const db = openMemoryDb();
+    setDbForTests(db);
+    await runMigrations(db);
+    const built = buildPrivatePaymentListEnvelope({
+      paymentEndpoints: { [ENDPOINT_LIGHTNING_BOLT11]: MAINNET_BOLT11_20U },
+    });
+    const eventId = '8a0d8b4c-913f-4e31-9f2c-2a6f5bb4d109';
+    const rawJson = JSON.stringify({ ...JSON.parse(built.json), event_id: eventId });
+    const first = await applyPaymentInbound({
+      ownerPubky: OWNER,
+      senderPubky: PEER_A,
+      peerPubky: PEER_A,
+      rawJson,
+      receivedAt: NOW,
+      nowMs: NOW,
+    });
+    const second = await applyPaymentInbound({
+      ownerPubky: OWNER,
+      senderPubky: PEER_A,
+      peerPubky: PEER_A,
+      rawJson,
+      receivedAt: NOW + 1,
+      nowMs: NOW + 1,
+    });
+    expect(first.action).toBe('applied');
+    expect(second.action).toBe('ignored');
+    expect(await StorageService.hasPaymentEvent(OWNER, `dm:${PEER_A}`, PEER_A, eventId)).toBe(true);
+    const total =
+      db.executeSync(
+        `SELECT COUNT(*) AS n FROM payment_events
+          WHERE owner_pubky = ? AND conversation_id = ? AND sender_pubky = ?`,
+        [OWNER, `dm:${PEER_A}`, PEER_A],
+      ).rows ?? [];
+    expect(Number(total[0]?.n)).toBe(1);
+  });
+
+  it('marks an unchanged tip list unapplied so prune covers a flood', async () => {
+    const db = openMemoryDb();
+    setDbForTests(db);
+    await runMigrations(db);
+    const built = buildPrivatePaymentListEnvelope({
+      paymentEndpoints: { [ENDPOINT_LIGHTNING_BOLT11]: MAINNET_BOLT11_20U },
+    });
+    for (let i = 0; i < 200; i += 1) {
+      const result = await applyPaymentInbound({
+        ownerPubky: OWNER,
+        senderPubky: PEER_A,
+        peerPubky: PEER_A,
+        rawJson: built.json,
+        receivedAt: NOW + i,
+        nowMs: NOW + i,
+      });
+      expect(result.action).toBe('applied');
+    }
+    const applied =
+      db.executeSync(
+        `SELECT COUNT(*) AS n FROM payment_events
+          WHERE owner_pubky = ? AND conversation_id = ? AND sender_pubky = ?
+            AND applied = 1`,
+        [OWNER, `dm:${PEER_A}`, PEER_A],
+      ).rows ?? [];
+    expect(Number(applied[0]?.n)).toBe(1);
+    const unapplied =
+      db.executeSync(
+        `SELECT COUNT(*) AS n FROM payment_events
+          WHERE owner_pubky = ? AND conversation_id = ? AND sender_pubky = ?
+            AND applied = 0`,
+        [OWNER, `dm:${PEER_A}`, PEER_A],
+      ).rows ?? [];
+    expect(Number(unapplied[0]?.n)).toBeLessThanOrEqual(100);
   });
 });

@@ -6,7 +6,7 @@ import type {
   MessageRequestStatus,
   PubkyKey,
 } from '../types';
-import type { SqlExecutor } from '../db/sql';
+import type { SqlExecutor, SqlValue } from '../db/sql';
 import type {
   HandshakeBudget,
   HandshakeBudgetInput,
@@ -64,7 +64,9 @@ import { bindingFromEndpoint, preferVerifiedInvoiceAmount } from './payments/inv
 import { isVerifiedHashUniqueError } from './payments/verifiedHashUniqueError';
 import {
   isMissingOwnInvoiceHashesTableError,
+  isMissingPaymentRequestInvoiceReusedColumnError,
   logMissingOwnInvoiceHashTableRuntime,
+  logMissingPaymentRequestInvoiceReusedColumn,
 } from '../db/ownInvoiceHashes';
 import { KeyStore } from './KeyStore';
 import { cachePathsForAttachment, deleteCacheFiles } from './attachments/fileIo';
@@ -2147,14 +2149,18 @@ export const StorageService = {
     patch: PaymentRequestPatch,
   ): Promise<boolean> {
     const db = await getDb();
-    return casPaymentRequestRow(
-      db,
-      ownerPubky,
-      peerPubky,
-      paymentRequestId,
-      expectedStatuses,
-      patch,
-    );
+    let applied = false;
+    transact(db, () => {
+      applied = casPaymentRequestRow(
+        db,
+        ownerPubky,
+        peerPubky,
+        paymentRequestId,
+        expectedStatuses,
+        patch,
+      );
+    });
+    return applied;
   },
 
   /**
@@ -2201,6 +2207,7 @@ export const StorageService = {
   }): Promise<void> {
     const db = await getDb();
     transact(db, () => {
+      releaseExpiredOwnInvoiceBindings(db, input.record.ownerPubky, now());
       insertPaymentRequest(db, input.record);
       insertPaymentEvent(db, input.event);
       insertLinkMessage(db, input.sendIntent.message);
@@ -2283,7 +2290,9 @@ export const StorageService = {
   /**
    * Record that this owner displayed `paymentHash` for a request or a tip.
    * Tip context is sticky and never overwritten by a later request bind.
-   * A request id is write-once: the first binding wins.
+   * A request id is write-once until the bound request is cancelled, rejected,
+   * or proposal-expired, which clears it so a later request can bind. A
+   * verified/paid binding is never cleared.
    */
   async recordOwnInvoiceDisplay(input: {
     ownerPubky: PubkyKey;
@@ -2331,27 +2340,33 @@ export const StorageService = {
   },
 
   /**
-   * True when this owner already has a non-terminal request whose displayed
-   * invoice hash is `paymentHash`. Used to flag a new request that reused
-   * an in-flight invoice.
+   * True when this owner already has any request whose displayed invoice hash
+   * is `paymentHash`, including cancelled, rejected, expired, and paid rows.
+   * Used to flag a new request that reused an invoice.
    */
-  async hasNonTerminalDisplayedPaymentHash(
-    ownerPubky: PubkyKey,
-    paymentHash: string,
-  ): Promise<boolean> {
+  async hasDisplayedPaymentHash(ownerPubky: PubkyKey, paymentHash: string): Promise<boolean> {
     const db = await getDb();
     const result = db.executeSync(
       `SELECT 1 FROM payment_requests
        WHERE owner_pubky = ?
          AND displayed_payment_hash = ?
-         AND (
-           status IN ('pending', 'accepted')
-           OR (status = 'proof_received' AND (proof_verified IS NULL OR proof_verified != 1))
-         )
        LIMIT 1`,
       [ownerPubky, paymentHash],
     );
     return (result.rows?.length ?? 0) > 0;
+  },
+
+  /**
+   * Clear `own_invoice_hashes.payment_request_id` when the bound request is
+   * cancelled, rejected, or proposal-expired. Verified/paid bindings stay.
+   */
+  async releaseOwnInvoiceBindingIfInactive(
+    ownerPubky: PubkyKey,
+    paymentRequestId: string,
+    nowMs: number,
+  ): Promise<void> {
+    const db = await getDb();
+    releaseOwnInvoiceBindingIfInactiveRow(db, ownerPubky, paymentRequestId, nowMs);
   },
 
   async hasOwnInvoiceHash(
@@ -2444,9 +2459,19 @@ export const StorageService = {
       paymentHash?: string | null;
     }[],
     updatedAt: number,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const db = await getDb();
+    let changed = false;
     transact(db, () => {
+      const existing =
+        db.executeSync(
+          `SELECT identifier, payload, validation_status
+             FROM tip_endpoints
+            WHERE owner_pubky = ? AND peer_pubky = ?`,
+          [ownerPubky, peerPubky],
+        ).rows ?? [];
+      if (tipEndpointsUnchanged(existing, endpoints)) return;
+      changed = true;
       db.executeSync('DELETE FROM tip_endpoints WHERE owner_pubky = ? AND peer_pubky = ?', [
         ownerPubky,
         peerPubky,
@@ -2487,6 +2512,7 @@ export const StorageService = {
         }
       }
     });
+    return changed;
   },
 
   async listTipEndpoints(
@@ -2979,6 +3005,109 @@ function nextPaymentRequestId(current: string | null, incoming: string | null): 
   return incoming;
 }
 
+function tipEndpointsUnchanged(
+  existing: readonly Record<string, unknown>[],
+  incoming: readonly {
+    identifier: string;
+    payload: string;
+    validationStatus?: 'valid' | 'rejected';
+  }[],
+): boolean {
+  if (existing.length !== incoming.length) return false;
+  const byId = new Map<string, { payload: string; status: string }>();
+  for (const row of existing) {
+    byId.set(String(row.identifier), {
+      payload: String(row.payload),
+      status: row.validation_status === 'rejected' ? 'rejected' : 'valid',
+    });
+  }
+  for (const endpoint of incoming) {
+    const prev = byId.get(endpoint.identifier);
+    if (!prev) return false;
+    if (prev.payload !== endpoint.payload) return false;
+    if (prev.status !== (endpoint.validationStatus ?? 'valid')) return false;
+  }
+  return true;
+}
+
+function releaseOwnInvoiceRequestBinding(
+  db: SqlExecutor,
+  ownerPubky: string,
+  paymentRequestId: string,
+): void {
+  try {
+    db.executeSync(
+      `UPDATE own_invoice_hashes
+          SET payment_request_id = NULL
+        WHERE owner_pubky = ? AND payment_request_id = ?`,
+      [ownerPubky, paymentRequestId],
+    );
+  } catch (err) {
+    if (!isMissingOwnInvoiceHashesTableError(err)) throw err;
+    logMissingOwnInvoiceHashTableRuntime();
+  }
+}
+
+function releaseExpiredOwnInvoiceBindings(
+  db: SqlExecutor,
+  ownerPubky: string,
+  nowMs: number,
+): void {
+  try {
+    db.executeSync(
+      `UPDATE own_invoice_hashes
+          SET payment_request_id = NULL
+        WHERE owner_pubky = ?
+          AND payment_request_id IS NOT NULL
+          AND EXISTS (
+            SELECT 1 FROM payment_requests AS r
+             WHERE r.owner_pubky = own_invoice_hashes.owner_pubky
+               AND r.payment_request_id = own_invoice_hashes.payment_request_id
+               AND r.status = 'pending'
+               AND r.expires_at IS NOT NULL
+               AND r.expires_at <= ?
+          )`,
+      [ownerPubky, nowMs],
+    );
+  } catch (err) {
+    if (!isMissingOwnInvoiceHashesTableError(err)) throw err;
+    logMissingOwnInvoiceHashTableRuntime();
+  }
+}
+
+function releaseOwnInvoiceBindingIfInactiveRow(
+  db: SqlExecutor,
+  ownerPubky: string,
+  paymentRequestId: string,
+  nowMs: number,
+): void {
+  try {
+    db.executeSync(
+      `UPDATE own_invoice_hashes
+          SET payment_request_id = NULL
+        WHERE owner_pubky = ?
+          AND payment_request_id = ?
+          AND EXISTS (
+            SELECT 1 FROM payment_requests AS r
+             WHERE r.owner_pubky = ?
+               AND r.payment_request_id = ?
+               AND (
+                 r.status IN ('cancelled', 'rejected')
+                 OR (
+                   r.status = 'pending'
+                   AND r.expires_at IS NOT NULL
+                   AND r.expires_at <= ?
+                 )
+               )
+          )`,
+      [ownerPubky, paymentRequestId, ownerPubky, paymentRequestId, nowMs],
+    );
+  } catch (err) {
+    if (!isMissingOwnInvoiceHashesTableError(err)) throw err;
+    logMissingOwnInvoiceHashTableRuntime();
+  }
+}
+
 function insertOwnInvoiceHash(
   db: SqlExecutor,
   ownerPubky: string,
@@ -3101,7 +3230,7 @@ function casPaymentRequestRow(
   patch: PaymentRequestPatch,
 ): boolean {
   try {
-    return compareAndSetPaymentRequestRow(
+    const applied = compareAndSetPaymentRequestRow(
       db,
       ownerPubky,
       peerPubky,
@@ -3109,6 +3238,10 @@ function casPaymentRequestRow(
       expectedStatuses,
       patch,
     );
+    if (applied && (patch.status === 'cancelled' || patch.status === 'rejected')) {
+      releaseOwnInvoiceRequestBinding(db, ownerPubky, paymentRequestId);
+    }
+    return applied;
   } catch (err) {
     if (!isVerifiedHashUniqueError(err) || patch.proofVerified !== true) throw err;
     const replayPatch: PaymentRequestPatch = {
@@ -3130,35 +3263,49 @@ function casPaymentRequestRow(
 }
 
 function insertPaymentRequest(db: SqlExecutor, record: PaymentRequestRecord): void {
-  db.executeSync(
-    `INSERT OR IGNORE INTO payment_requests
-      (owner_pubky, peer_pubky, direction, payment_request_id, event_id,
-       amount_value, amount_asset, payment_reference, endpoint_ids, expires_at,
-       status, created_at, updated_at, proof_json, reason,
-       pending_event_id, displayed_payment_hash, proof_verified, invoice_reused)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [
-      record.ownerPubky,
-      record.peerPubky,
-      record.direction,
-      record.paymentRequestId,
-      record.eventId,
-      record.amountValue,
-      record.amountAsset,
-      record.paymentReference,
-      JSON.stringify(record.endpointIds),
-      record.expiresAt,
-      record.status,
-      record.createdAt,
-      record.updatedAt,
-      record.proofJson,
-      record.reason,
-      record.pendingEventId,
-      record.displayedPaymentHash,
-      record.proofVerified === null ? null : record.proofVerified ? 1 : 0,
-      record.invoiceReused === true ? 1 : null,
-    ],
-  );
+  const baseParams: SqlValue[] = [
+    record.ownerPubky,
+    record.peerPubky,
+    record.direction,
+    record.paymentRequestId,
+    record.eventId,
+    record.amountValue,
+    record.amountAsset,
+    record.paymentReference,
+    JSON.stringify(record.endpointIds),
+    record.expiresAt,
+    record.status,
+    record.createdAt,
+    record.updatedAt,
+    record.proofJson,
+    record.reason,
+    record.pendingEventId,
+    record.displayedPaymentHash,
+    record.proofVerified === null ? null : record.proofVerified ? 1 : 0,
+  ];
+  try {
+    db.executeSync(
+      `INSERT OR IGNORE INTO payment_requests
+        (owner_pubky, peer_pubky, direction, payment_request_id, event_id,
+         amount_value, amount_asset, payment_reference, endpoint_ids, expires_at,
+         status, created_at, updated_at, proof_json, reason,
+         pending_event_id, displayed_payment_hash, proof_verified, invoice_reused)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [...baseParams, record.invoiceReused === true ? 1 : null],
+    );
+  } catch (err) {
+    if (!isMissingPaymentRequestInvoiceReusedColumnError(err)) throw err;
+    logMissingPaymentRequestInvoiceReusedColumn();
+    db.executeSync(
+      `INSERT OR IGNORE INTO payment_requests
+        (owner_pubky, peer_pubky, direction, payment_request_id, event_id,
+         amount_value, amount_asset, payment_reference, endpoint_ids, expires_at,
+         status, created_at, updated_at, proof_json, reason,
+         pending_event_id, displayed_payment_hash, proof_verified)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      baseParams,
+    );
+  }
 }
 
 function insertPaymentEvent(db: SqlExecutor, record: PaymentEventRecord): void {

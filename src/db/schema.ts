@@ -22,6 +22,9 @@
  * `amountless` / `unknown`. `first_seen_at` is the tip row's `updated_at`
  * at seed time. `display_context` / `payment_request_id` start NULL and are
  * written when an invoice is displayed for a request or a tip.
+ * `payment_request_id` is write-once until the bound request is cancelled,
+ * rejected, or proposal-expired, which clears it so a later request can
+ * bind. A verified/paid binding is never cleared.
  *
  * Rows are not pruned. An invoice that expired at or before the request was
  * created cannot corroborate that request; later expiry is not a proof reject

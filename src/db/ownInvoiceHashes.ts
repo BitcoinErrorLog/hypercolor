@@ -22,10 +22,19 @@ export const OWN_INVOICE_HASH_BACKFILL_SCAN_FROM = 'own_invoice_hashes AS h';
 
 let loggedMissingTable = false;
 let loggedMissingRuntime = false;
+let loggedMissingInvoiceReusedColumn = false;
 
 export function isMissingOwnInvoiceHashesTableError(err: unknown): boolean {
   const message = err instanceof Error ? err.message : String(err);
   return /no such table:\s*['"]?own_invoice_hashes['"]?/i.test(message);
+}
+
+export function isMissingPaymentRequestInvoiceReusedColumnError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return (
+    /no such column:\s*['"]?invoice_reused['"]?/i.test(message) ||
+    /has no column named\s*['"]?invoice_reused['"]?/i.test(message)
+  );
 }
 
 /**
@@ -100,6 +109,12 @@ export function logMissingOwnInvoiceHashTableRuntime(): void {
   if (loggedMissingRuntime) return;
   loggedMissingRuntime = true;
   console.warn('[db] own_invoice_hashes table missing; invoice binding skipped');
+}
+
+export function logMissingPaymentRequestInvoiceReusedColumn(): void {
+  if (loggedMissingInvoiceReusedColumn) return;
+  loggedMissingInvoiceReusedColumn = true;
+  console.warn('[db] payment_requests.invoice_reused missing; inserting without the flag');
 }
 
 function schemaMetaTableExists(db: SqlExecutor): boolean {
@@ -233,22 +248,50 @@ export function backfillOwnInvoiceHashAmounts(db: SqlExecutor): void {
 /**
  * Idempotent v16 own-invoice structural repair. Creates the table on any v16
  * database (including a W2b-stamped v16 that never ran this set). Never throws
- * because the table is missing. Amount backfill is a separate transaction.
+ * because the table is missing. The additive `invoice_reused` column commits
+ * in its own transaction before statements that are allowed to fail, matching
+ * repair vs. amount backfill. Amount backfill is a separate transaction.
+ *
+ * The caller must not wrap this function in a transaction.
  */
 export function repairOwnInvoiceHashes(db: SqlExecutor): void {
-  db.executeSync(OWN_INVOICE_HASHES_CREATE_SQL);
-  if (!ownInvoiceHashesTableExists(db)) {
-    logMissingOwnInvoiceHashTableOnce();
-    return;
-  }
-  ensureOwnInvoiceHashColumns(db);
-  if (tableExists(db, 'tip_endpoints')) {
-    db.executeSync(OWN_INVOICE_HASHES_SEED_SQL);
-  }
-  if (tableExists(db, 'payment_requests')) {
+  try {
+    db.executeSync('BEGIN');
     ensurePaymentRequestInvoiceReusedColumn(db);
-    db.executeSync(PAYMENT_REQUESTS_VERIFIED_HASH_DEDUP_SQL);
-    db.executeSync(PAYMENT_REQUESTS_VERIFIED_HASH_INDEX_SQL);
+    db.executeSync('COMMIT');
+  } catch {
+    try {
+      db.executeSync('ROLLBACK');
+    } catch {
+      // Rollback is best-effort if BEGIN never succeeded.
+    }
+    console.warn('[db] payment_requests.invoice_reused ensure failed; will retry next launch');
+  }
+
+  db.executeSync('BEGIN');
+  try {
+    db.executeSync(OWN_INVOICE_HASHES_CREATE_SQL);
+    if (!ownInvoiceHashesTableExists(db)) {
+      logMissingOwnInvoiceHashTableOnce();
+      db.executeSync('COMMIT');
+      return;
+    }
+    ensureOwnInvoiceHashColumns(db);
+    if (tableExists(db, 'tip_endpoints')) {
+      db.executeSync(OWN_INVOICE_HASHES_SEED_SQL);
+    }
+    if (tableExists(db, 'payment_requests')) {
+      db.executeSync(PAYMENT_REQUESTS_VERIFIED_HASH_DEDUP_SQL);
+      db.executeSync(PAYMENT_REQUESTS_VERIFIED_HASH_INDEX_SQL);
+    }
+    db.executeSync('COMMIT');
+  } catch (err) {
+    try {
+      db.executeSync('ROLLBACK');
+    } catch {
+      // Rollback is best-effort if BEGIN never succeeded.
+    }
+    throw err;
   }
 }
 
