@@ -34,6 +34,7 @@ import {
   GROUP_MEMBERSHIP_KIND,
   GROUP_MESSAGE_KIND,
   PUBLIC_CHANNEL_MESSAGE_KIND,
+  groupReadCursorId,
   isGroupWireKind,
   peekEnvelopeKind,
 } from '../types/group';
@@ -1480,6 +1481,40 @@ export const StorageService = {
       ],
     );
     return Number(result.rows?.[0]?.unread ?? 0);
+  },
+
+  async unreadCountsForGroupChannels(ownerPubky: PubkyKey): Promise<Record<string, number>> {
+    const db = await getDb();
+    const channels = await StorageService.listGroupChannels(ownerPubky);
+    const counts: Record<string, number> = {};
+    for (const channel of channels) {
+      const cursorId = groupReadCursorId(channel.channelId);
+      const result = db.executeSync(
+        `SELECT COUNT(*) AS n FROM group_messages
+          WHERE owner_pubky = ?
+            AND channel_id = ?
+            AND sender_pubky != ?
+            AND deleted = 0
+            AND kind IN (?, ?, ?)
+            AND sent_at > COALESCE(
+              (SELECT last_read_at FROM link_read_cursors
+                WHERE owner_pubky = ? AND conversation_id = ?),
+              0
+            )`,
+        [
+          ownerPubky,
+          channel.channelId,
+          ownerPubky,
+          GROUP_MESSAGE_KIND,
+          PUBLIC_CHANNEL_MESSAGE_KIND,
+          CHAT_ATTACHMENT_KIND,
+          ownerPubky,
+          cursorId,
+        ],
+      );
+      counts[channel.channelId] = Number(result.rows?.[0]?.n ?? 0);
+    }
+    return counts;
   },
 
   async touchGroupChannel(

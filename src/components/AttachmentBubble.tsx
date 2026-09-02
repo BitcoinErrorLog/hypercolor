@@ -4,6 +4,8 @@ import type { AttachmentRecord } from '../types/attachment';
 import { isImageContentType } from '../types/attachment';
 import { AttachmentError } from '../types/attachment';
 import { AttachmentService } from '../services/attachments/AttachmentService';
+import { COPY } from '../copy/uxCopy';
+import { HIT_SLOP_44 } from '../ui/hitTarget';
 
 export function AttachmentBubble({
   record,
@@ -91,15 +93,24 @@ export function AttachmentBubble({
 
   if (record.deliveryState === 'failed') {
     return (
-      <View style={styles.card}>
-        <Text style={[styles.meta, styles.error, { color: textColor }]}>Failed to send</Text>
+      <View
+        accessibilityRole="alert"
+        accessibilityLabel={`${COPY.failed}. ${fileLabel(record.contentType)}`}
+        style={styles.card}
+      >
+        <Text style={[styles.meta, styles.error, { color: textColor }]}>{COPY.failed}</Text>
+        <Text style={[styles.meta, { color: textColor }]}>{fileLabel(record.contentType)}</Text>
       </View>
     );
   }
 
   if (record.deliveryState === 'sending' || record.resolveState === 'uploading') {
     return (
-      <View style={styles.card}>
+      <View
+        accessibilityRole="progressbar"
+        accessibilityLabel="Uploading attachment"
+        style={styles.card}
+      >
         <ActivityIndicator color="#c4b5fd" />
         <Text style={[styles.meta, { color: textColor }]}>Uploading…</Text>
       </View>
@@ -108,7 +119,16 @@ export function AttachmentBubble({
 
   if (isImageContentType(record.contentType)) {
     return (
-      <TouchableOpacity onPress={() => void resolveFull()} disabled={loading}>
+      <TouchableOpacity
+        onPress={() => void resolveFull()}
+        disabled={loading}
+        accessibilityRole="button"
+        accessibilityLabel={
+          loading ? 'Decrypting image attachment' : 'Open or decrypt image attachment'
+        }
+        accessibilityState={{ disabled: loading, busy: loading }}
+        hitSlop={HIT_SLOP_44}
+      >
         {preview ? (
           <Image source={{ uri: preview }} style={styles.image} resizeMode="cover" />
         ) : (
@@ -122,7 +142,21 @@ export function AttachmentBubble({
             )}
           </View>
         )}
-        {error ? <Text style={styles.error}>{error}</Text> : null}
+        {error ? (
+          <View accessibilityRole="alert" style={styles.errorRow}>
+            <Text style={styles.errorIcon}>!</Text>
+            <Text style={styles.error}>{error}</Text>
+            <TouchableOpacity
+              accessibilityRole="button"
+              accessibilityLabel={COPY.retry}
+              hitSlop={HIT_SLOP_44}
+              onPress={() => void resolveFull()}
+              style={styles.retry}
+            >
+              <Text style={styles.retryText}>{COPY.retry}</Text>
+            </TouchableOpacity>
+          </View>
+        ) : null}
         {!uri ? (
           <Text style={[styles.meta, { color: textColor }]}>
             {loading ? 'Decrypting…' : 'Tap to download'}
@@ -133,7 +167,19 @@ export function AttachmentBubble({
   }
 
   return (
-    <TouchableOpacity style={styles.card} onPress={() => void resolveFull()} disabled={loading}>
+    <TouchableOpacity
+      style={styles.card}
+      onPress={() => void resolveFull()}
+      disabled={loading}
+      accessibilityRole="button"
+      accessibilityLabel={
+        loading
+          ? `Decrypting file ${fileLabel(record.contentType)}`
+          : `Open or decrypt file ${fileLabel(record.contentType)}`
+      }
+      accessibilityState={{ disabled: loading, busy: loading }}
+      hitSlop={HIT_SLOP_44}
+    >
       <Text style={[styles.fileName, { color: textColor }]}>{fileLabel(record.contentType)}</Text>
       <Text style={[styles.meta, { color: textColor }]}>{formatBytes(record.size)}</Text>
       {loading ? (
@@ -143,7 +189,21 @@ export function AttachmentBubble({
       ) : (
         <Text style={[styles.action, { color: textColor }]}>Download</Text>
       )}
-      {error ? <Text style={styles.error}>{error}</Text> : null}
+      {error ? (
+        <View accessibilityRole="alert" style={styles.errorRow}>
+          <Text style={styles.errorIcon}>!</Text>
+          <Text style={styles.error}>{error}</Text>
+          <TouchableOpacity
+            accessibilityRole="button"
+            accessibilityLabel={COPY.retry}
+            hitSlop={HIT_SLOP_44}
+            onPress={() => void resolveFull()}
+            style={styles.retry}
+          >
+            <Text style={styles.retryText}>{COPY.retry}</Text>
+          </TouchableOpacity>
+        </View>
+      ) : null}
     </TouchableOpacity>
   );
 }
@@ -176,6 +236,10 @@ const styles = StyleSheet.create({
   fileName: { fontSize: 15, fontWeight: '600' },
   meta: { fontSize: 11, opacity: 0.7 },
   action: { fontSize: 13, fontWeight: '700', marginTop: 4 },
-  error: { color: '#fca5a5', fontSize: 11, marginTop: 4 },
+  error: { color: '#fca5a5', fontSize: 11, flex: 1 },
+  errorRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 4, flexWrap: 'wrap' },
+  errorIcon: { color: '#fca5a5', fontSize: 12, fontWeight: '700' },
+  retry: { minHeight: 44, justifyContent: 'center', paddingHorizontal: 4 },
+  retryText: { color: '#c4b5fd', fontSize: 12, fontWeight: '700', textDecorationLine: 'underline' },
   spinner: { marginTop: 6 },
 });

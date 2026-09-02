@@ -11,6 +11,7 @@ import {
   SafeAreaView,
   ActivityIndicator,
   Alert,
+  Linking,
 } from 'react-native';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
@@ -22,24 +23,39 @@ import { useAuthStore } from '../../stores/authStore';
 import { StorageService } from '../../services/StorageService';
 import { LinkService } from '../../services/link/LinkService';
 import { AttachmentBubble } from '../../components/AttachmentBubble';
-import { ComposerAttachButton } from '../../components/ComposerAttachButton';
-import { PaymentRequestBubble } from '../../components/PaymentRequestBubble';
+import {
+  pickAndSendFile,
+  pickAndSendPhoto,
+  type ComposerAttachNotice,
+} from '../../components/ComposerAttachButton';
+import { ComposerActionMenu } from '../../components/ComposerActionMenu';
+import {
+  PaymentRequestBubble,
+  type PaymentReviewRequest,
+} from '../../components/PaymentRequestBubble';
+import { useTickingNow } from '../../components/PaymentRequestCard';
 import { PaymentComposeSheet } from '../../components/PaymentComposeSheet';
-import { ThreadTipBar } from '../../components/ThreadTipBar';
+import { PaymentReviewSheet } from '../../components/PaymentReviewSheet';
+import { ThreadTipBarContent } from '../../components/ThreadTipBar';
 import { EnableMessagingCta } from '../../components/EnableMessagingCta';
 import { PaymentService } from '../../services/payments/PaymentService';
 import { isPaykitPaymentKind, PaymentError, type PaymentRequestRecord } from '../../types/payment';
 import type { TipEndpointRecord } from '../../types/payment';
-import { COPY } from '../../copy/uxCopy';
+import { COPY, messageByteCountLabel } from '../../copy/uxCopy';
 import { HIT_SLOP_44, minHitStyle } from '../../ui/hitTarget';
 import { formatDeliveryState, formatLinkStatus } from '../../ui/messageStatus';
 import { peerIdentity } from '../../ui/peerIdentity';
 import { copyText } from '../../utils/copyText';
 import type { Contact } from '../../types';
 import type { LinkStatus } from '../../types/link';
+import { LINK_MESSAGE_MAX_BYTES } from '../../types/link';
 import { StatusBanner } from '../../ui/StatusBanner';
 import { useSessionStatusStore } from '../../stores/sessionStatusStore';
 import { sanitizeError } from '../../ui/sanitizedError';
+import { composerActionItems, draftByteSize, draftExceedsByteCap } from '../../ui/composerActions';
+import { mapPaymentReview } from '../../ui/paymentReview';
+import { openBuiltUri } from '../../services/payments/walletHandoff';
+import { useReduceMotion } from '../../ui/reduceMotion';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Thread'>;
 
@@ -67,6 +83,11 @@ export default function ThreadScreen({ route }: Props) {
   const [tipEndpoints, setTipEndpoints] = useState<TipEndpointRecord[]>([]);
   const [composePayment, setComposePayment] = useState(false);
   const [paymentBusy, setPaymentBusy] = useState(false);
+  const [actionMenuOpen, setActionMenuOpen] = useState(false);
+  const [tipPickerOpen, setTipPickerOpen] = useState(false);
+  const [review, setReview] = useState<PaymentReviewRequest | null>(null);
+  const [walletUnavailable, setWalletUnavailable] = useState(false);
+  const [composerNotice, setComposerNotice] = useState<ComposerAttachNotice | null>(null);
   const [peerContact, setPeerContact] = useState<Contact | null>(null);
   const [linkStatus, setLinkStatus] = useState<LinkStatus | null>(null);
   const sessionKind = useSessionStatusStore(s => s.kind);
@@ -121,7 +142,7 @@ export default function ThreadScreen({ route }: Props) {
 
   const handleSend = useCallback(async () => {
     const text = draft.trim();
-    if (!text || sending) return;
+    if (!text || sending || draftExceedsByteCap(text)) return;
     setDraft('');
     setSending(true);
     try {
@@ -147,15 +168,56 @@ export default function ThreadScreen({ route }: Props) {
       tipEndpoints={tipEndpoints}
       composePayment={composePayment}
       paymentBusy={paymentBusy}
+      actionMenuOpen={actionMenuOpen}
+      tipPickerOpen={tipPickerOpen}
+      review={review}
+      walletUnavailable={walletUnavailable}
+      composerNotice={composerNotice}
       onBack={() => nav.goBack()}
       onChangeDraft={setDraft}
       onSend={() => {
         void handleSend();
       }}
-      onAttachSent={() => {
-        void reloadEncrypted();
+      onOpenActionMenu={() => setActionMenuOpen(true)}
+      onCloseActionMenu={() => setActionMenuOpen(false)}
+      onComposerAction={id => {
+        setActionMenuOpen(false);
+        if (id === 'photo') {
+          void pickAndSendPhoto({ type: 'conversation', peerPubky: participantPubky }).then(
+            result => {
+              if (result.ok) void reloadEncrypted();
+              else if ('notice' in result) setComposerNotice(result.notice);
+            },
+          );
+          return;
+        }
+        if (id === 'file') {
+          void pickAndSendFile({ type: 'conversation', peerPubky: participantPubky }).then(
+            result => {
+              if (result.ok) void reloadEncrypted();
+              else if ('notice' in result) setComposerNotice(result.notice);
+            },
+          );
+          return;
+        }
+        if (id === 'request-payment') setComposePayment(true);
+        if (id === 'send-tip') setTipPickerOpen(true);
+        if (id === 'send-tip-list') {
+          void PaymentService.sendTipList(participantPubky)
+            .then(() => {
+              void reloadEncrypted();
+            })
+            .catch(err => {
+              const sanitized = sanitizeError(
+                err instanceof PaymentError || err instanceof Error
+                  ? err
+                  : 'Could not send tip list',
+                'Could not send tip list',
+              );
+              Alert.alert('Tip list', sanitized.message);
+            });
+        }
       }}
-      onOpenPaymentCompose={() => setComposePayment(true)}
       onClosePaymentCompose={() => setComposePayment(false)}
       onSubmitPayment={(amountBtc, reference) => {
         setPaymentBusy(true);
@@ -177,6 +239,41 @@ export default function ThreadScreen({ route }: Props) {
       }}
       onPaymentsChanged={() => {
         void reloadEncrypted();
+      }}
+      onReview={next => {
+        setWalletUnavailable(false);
+        setReview(next);
+        setTipPickerOpen(false);
+      }}
+      onCloseReview={() => {
+        setReview(null);
+        setWalletUnavailable(false);
+      }}
+      onCloseTipPicker={() => setTipPickerOpen(false)}
+      onContinueReview={async uri => {
+        if (!review) return;
+        const canOpen = await Linking.canOpenURL(uri);
+        if (!canOpen) {
+          setWalletUnavailable(true);
+          return;
+        }
+        if (review.kind === 'request' && review.record && review.selected) {
+          const { prepareRequestHandoff } = await import('../../services/payments/walletHandoff');
+          const prepared = prepareRequestHandoff({
+            requestAmountBtc: review.amountBtc,
+            endpointIdentifier: review.selected.identifier,
+            payload: review.selected.payload,
+          });
+          if (prepared.ok && prepared.paymentHash) {
+            await PaymentService.recordDisplayedInvoice(
+              review.record.peerPubky,
+              review.record.paymentRequestId,
+              prepared.paymentHash,
+            );
+          }
+        }
+        await openBuiltUri(uri);
+        setReview(null);
       }}
       sessionKind={sessionKind}
       peerContact={peerContact}
@@ -210,14 +307,24 @@ export function ThreadScreenContent({
   tipEndpoints,
   composePayment,
   paymentBusy,
+  actionMenuOpen,
+  tipPickerOpen,
+  review,
+  walletUnavailable,
+  composerNotice,
   onBack,
   onChangeDraft,
   onSend,
-  onAttachSent,
-  onOpenPaymentCompose,
+  onOpenActionMenu,
+  onCloseActionMenu,
+  onComposerAction,
   onClosePaymentCompose,
   onSubmitPayment,
   onPaymentsChanged,
+  onReview,
+  onCloseReview,
+  onCloseTipPicker,
+  onContinueReview,
   sessionKind,
   peerContact,
   linkStatus,
@@ -236,14 +343,26 @@ export function ThreadScreenContent({
   tipEndpoints: TipEndpointRecord[];
   composePayment: boolean;
   paymentBusy: boolean;
+  actionMenuOpen: boolean;
+  tipPickerOpen: boolean;
+  review: PaymentReviewRequest | null;
+  walletUnavailable: boolean;
+  composerNotice: ComposerAttachNotice | null;
   onBack: () => void;
   onChangeDraft: (value: string) => void;
   onSend: () => void;
-  onAttachSent: () => void;
-  onOpenPaymentCompose: () => void;
+  onOpenActionMenu: () => void;
+  onCloseActionMenu: () => void;
+  onComposerAction: (
+    id: 'photo' | 'file' | 'request-payment' | 'send-tip' | 'send-tip-list',
+  ) => void;
   onClosePaymentCompose: () => void;
   onSubmitPayment: (amountBtc: string, reference: string) => void;
   onPaymentsChanged: () => void;
+  onReview: (request: PaymentReviewRequest) => void;
+  onCloseReview: () => void;
+  onCloseTipPicker: () => void;
+  onContinueReview: (uri: string) => void;
   sessionKind: 'offline' | 'needs-enable' | 'revoked' | string;
   peerContact: Contact | null;
   linkStatus: LinkStatus | null;
@@ -252,6 +371,7 @@ export function ThreadScreenContent({
   onCopyPubky: () => void;
 }) {
   const flatListRef = useRef<FlatList<ThreadItem>>(null);
+  const reduceMotion = useReduceMotion();
   const items = useMemo(
     () => mergeThreadItems(linkMessages, attachments, payments),
     [linkMessages, attachments, payments],
@@ -259,9 +379,9 @@ export function ThreadScreenContent({
 
   useEffect(() => {
     if (items.length > 0) {
-      flatListRef.current?.scrollToEnd({ animated: true });
+      flatListRef.current?.scrollToEnd({ animated: !reduceMotion });
     }
-  }, [items.length]);
+  }, [items.length, reduceMotion]);
 
   const renderItem = useCallback(
     ({ item }: { item: ThreadItem }) => {
@@ -277,6 +397,7 @@ export function ThreadScreenContent({
                 record={item.record}
                 localPubky={localPubky}
                 onChanged={onPaymentsChanged}
+                onReview={onReview}
               />
             ) : null}
             <View style={styles.meta}>
@@ -334,7 +455,7 @@ export function ThreadScreenContent({
         </View>
       );
     },
-    [localPubky, onPaymentsChanged, onRetryFailed],
+    [localPubky, onPaymentsChanged, onRetryFailed, onReview],
   );
 
   const identity = peerIdentity(participantPubky, peerContact);
@@ -342,6 +463,29 @@ export function ThreadScreenContent({
   const needsEnable =
     sessionKind === 'needs-enable' || sessionKind === 'revoked' || sessionKind === 'unavailable';
   const composerEnabled = !needsEnable;
+  const inboxClosed = linkStatus === 'not-enrolled';
+  const actions = composerActionItems('dm', {
+    messagingEnabled: composerEnabled,
+    inboxClosed,
+    hasTipEndpoints: tipEndpoints.some(row => row.validationStatus !== 'rejected'),
+  });
+  const overCap = draftExceedsByteCap(draft);
+  const byteLabel = messageByteCountLabel(draftByteSize(draft), LINK_MESSAGE_MAX_BYTES);
+  const nowMs = useTickingNow();
+  const reviewView = review
+    ? mapPaymentReview({
+        kind: review.kind,
+        recipientPubky: review.peerPubky,
+        recipientContact: peerContact,
+        requestAmountBtc: review.amountBtc,
+        amountAsset: review.amountAsset,
+        reference: review.reference,
+        endpoint: review.selected,
+        nowMs,
+        destinationsEmpty: review.destinations.length === 0,
+        walletUnavailable,
+      })
+    : null;
 
   return (
     <SafeAreaView style={styles.container} testID="threadScreen">
@@ -382,22 +526,8 @@ export function ThreadScreenContent({
             </Text>
           ) : null}
         </TouchableOpacity>
-        <TouchableOpacity
-          testID="threadRequestPay"
-          accessibilityRole="button"
-          accessibilityLabel="Request payment"
-          onPress={onOpenPaymentCompose}
-          hitSlop={HIT_SLOP_44}
-          style={styles.backBtn}
-        >
-          <Text style={styles.requestPay}>₿</Text>
-        </TouchableOpacity>
+        <View style={styles.backBtn} />
       </View>
-      <ThreadTipBar
-        peerPubky={participantPubky}
-        endpoints={tipEndpoints}
-        onChanged={onPaymentsChanged}
-      />
       {needsEnable ? (
         <EnableMessagingCta testID="threadEnableMessaging" onPress={onEnableMessaging} />
       ) : null}
@@ -429,48 +559,129 @@ export function ThreadScreenContent({
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         keyboardVerticalOffset={0}
       >
-        <View style={styles.composer}>
-          <PaymentComposeSheet
-            visible={composePayment}
-            busy={paymentBusy}
-            onClose={onClosePaymentCompose}
-            onSubmit={onSubmitPayment}
-          />
-          <ComposerAttachButton
-            target={{ type: 'conversation', peerPubky: participantPubky }}
-            disabled={sending}
-            onSent={onAttachSent}
-          />
-          <TextInput
-            testID="threadComposer"
-            accessibilityLabel="Message"
-            style={styles.input}
-            value={draft}
-            onChangeText={onChangeDraft}
-            placeholder="Message…"
-            placeholderTextColor="#4b5563"
-            multiline
-            maxLength={4000}
-            editable={composerEnabled}
-            returnKeyType="default"
-          />
-          <TouchableOpacity
-            testID="threadSend"
-            accessibilityRole="button"
-            accessibilityLabel="Send message"
-            style={[
-              styles.sendBtn,
-              (!draft.trim() || sending || !composerEnabled) && styles.sendBtnDisabled,
-            ]}
-            onPress={onSend}
-            disabled={!draft.trim() || sending || !composerEnabled}
+        <View style={styles.composerColumn}>
+          {composerNotice ? (
+            <View testID="composerNotice" accessibilityRole="alert" style={styles.notice}>
+              <Text style={styles.noticeText}>{composerNotice.message}</Text>
+              {composerNotice.actionLabel && composerNotice.onAction ? (
+                <TouchableOpacity
+                  accessibilityRole="button"
+                  accessibilityLabel={composerNotice.actionLabel}
+                  hitSlop={HIT_SLOP_44}
+                  onPress={composerNotice.onAction}
+                  style={styles.noticeAction}
+                >
+                  <Text style={styles.noticeActionText}>{composerNotice.actionLabel}</Text>
+                </TouchableOpacity>
+              ) : null}
+            </View>
+          ) : null}
+          {tipPickerOpen ? (
+            <ThreadTipBarContent
+              endpoints={tipEndpoints}
+              onTip={identifier => {
+                const match = tipEndpoints.find(row => row.identifier === identifier) ?? null;
+                onReview({
+                  kind: 'tip',
+                  record: null,
+                  peerPubky: participantPubky,
+                  amountBtc: match?.invoiceAmount ?? '0',
+                  amountAsset: 'btc',
+                  reference: null,
+                  destinations: match ? [match] : [],
+                  selected: match,
+                });
+              }}
+            />
+          ) : null}
+          <View style={styles.composer}>
+            <PaymentComposeSheet
+              visible={composePayment}
+              busy={paymentBusy}
+              onClose={onClosePaymentCompose}
+              onSubmit={onSubmitPayment}
+            />
+            <ComposerActionMenu
+              visible={actionMenuOpen}
+              actions={actions}
+              onSelect={onComposerAction}
+              onClose={onCloseActionMenu}
+            />
+            {reviewView ? (
+              <PaymentReviewSheet
+                visible
+                review={reviewView}
+                busy={false}
+                onClose={onCloseReview}
+                onContinue={() => {
+                  if (reviewView.uri) onContinueReview(reviewView.uri);
+                }}
+                onCopyUri={() => {
+                  if (reviewView.uri) copyText(reviewView.uri);
+                }}
+              />
+            ) : null}
+            <TouchableOpacity
+              testID="threadComposerPlus"
+              accessibilityRole="button"
+              accessibilityLabel={COPY.composerAttach}
+              hitSlop={HIT_SLOP_44}
+              onPress={onOpenActionMenu}
+              style={styles.plusBtn}
+            >
+              <Text style={styles.plusIcon}>+</Text>
+            </TouchableOpacity>
+            <TextInput
+              testID="threadComposer"
+              accessibilityLabel="Message"
+              style={styles.input}
+              value={draft}
+              onChangeText={onChangeDraft}
+              placeholder="Message…"
+              placeholderTextColor="#4b5563"
+              multiline
+              editable={composerEnabled}
+              returnKeyType="default"
+            />
+            <TouchableOpacity
+              testID="threadSend"
+              accessibilityRole="button"
+              accessibilityLabel="Send message"
+              accessibilityState={{
+                disabled: !draft.trim() || sending || !composerEnabled || overCap,
+              }}
+              style={[
+                styles.sendBtn,
+                (!draft.trim() || sending || !composerEnabled || overCap) && styles.sendBtnDisabled,
+              ]}
+              onPress={onSend}
+              disabled={!draft.trim() || sending || !composerEnabled || overCap}
+            >
+              {sending ? (
+                <ActivityIndicator color="#fff" size="small" />
+              ) : (
+                <Text style={styles.sendIcon}>↑</Text>
+              )}
+            </TouchableOpacity>
+          </View>
+          <Text
+            testID="threadByteCap"
+            accessibilityLabel={byteLabel}
+            style={[styles.byteCap, overCap && styles.byteCapOver]}
           >
-            {sending ? (
-              <ActivityIndicator color="#fff" size="small" />
-            ) : (
-              <Text style={styles.sendIcon}>↑</Text>
-            )}
-          </TouchableOpacity>
+            {byteLabel}. {COPY.messageByteCap}
+          </Text>
+          {tipPickerOpen ? (
+            <TouchableOpacity
+              accessibilityRole="button"
+              accessibilityLabel={COPY.cancel}
+              hitSlop={HIT_SLOP_44}
+              onPress={onCloseTipPicker}
+              style={styles.noticeAction}
+            >
+              <Text style={styles.noticeActionText}>{COPY.cancel}</Text>
+            </TouchableOpacity>
+          ) : null}
         </View>
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -614,5 +825,25 @@ const styles = StyleSheet.create({
   },
   sendBtnDisabled: { opacity: 0.4 },
   sendIcon: { color: '#fff', fontSize: 18, fontWeight: '700' },
-  requestPay: { fontSize: 18, color: '#c4b5fd', textAlign: 'right' },
+  composerColumn: { backgroundColor: '#0a0a0a' },
+  plusBtn: {
+    ...minHitStyle,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#1f1f1f',
+  },
+  plusIcon: { color: '#c4b5fd', fontSize: 22, fontWeight: '700', marginTop: -2 },
+  byteCap: { color: '#808692', fontSize: 12, paddingHorizontal: 16, paddingBottom: 8 },
+  byteCapOver: { color: '#fca5a5' },
+  notice: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 16,
+    paddingTop: 8,
+  },
+  noticeText: { flex: 1, color: '#fca5a5', fontSize: 13 },
+  noticeAction: { minHeight: 44, justifyContent: 'center', paddingHorizontal: 8 },
+  noticeActionText: { color: '#8f57f0', fontSize: 14, fontWeight: '700' },
 });

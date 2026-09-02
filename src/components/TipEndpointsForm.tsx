@@ -5,6 +5,7 @@ import {
   ENDPOINT_LIGHTNING_BOLT11,
   type TipEndpointRecord,
 } from '../types/payment';
+import { HIT_SLOP_44 } from '../ui/hitTarget';
 
 export function TipEndpointsForm({
   endpoints,
@@ -50,13 +51,22 @@ export function TipEndpointsForm({
         autoCapitalize="none"
         autoCorrect={false}
       />
-      {error ? <Text style={styles.error}>{error}</Text> : null}
+      {error ? (
+        <View accessibilityRole="alert" accessibilityLabel={error} style={styles.errorRow}>
+          <Text style={styles.errorIcon}>!</Text>
+          <Text style={styles.error}>{error}</Text>
+        </View>
+      ) : null}
       <TouchableOpacity
+        accessibilityRole="button"
+        accessibilityLabel="Save"
+        accessibilityState={{ disabled: busy, busy }}
+        hitSlop={HIT_SLOP_44}
         style={[styles.save, busy && styles.disabled]}
         onPress={() => onSave(bolt11.trim(), address.trim())}
         disabled={busy}
       >
-        <Text style={styles.saveText}>Save tip endpoints</Text>
+        <Text style={styles.saveText}>Save</Text>
       </TouchableOpacity>
     </View>
   );
@@ -82,13 +92,23 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontFamily: 'monospace',
   },
-  error: { color: '#fca5a5', fontSize: 12, paddingHorizontal: 20, marginBottom: 8 },
+  error: { color: '#fca5a5', fontSize: 12, flex: 1 },
+  errorRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+    paddingHorizontal: 20,
+    marginBottom: 8,
+  },
+  errorIcon: { color: '#fca5a5', fontSize: 12, fontWeight: '700' },
   save: {
     backgroundColor: '#7c3aed',
     borderRadius: 12,
     marginHorizontal: 20,
     paddingVertical: 12,
+    minHeight: 44,
     alignItems: 'center',
+    justifyContent: 'center',
   },
   saveText: { color: '#fff', fontSize: 15, fontWeight: '600' },
   disabled: { opacity: 0.4 },

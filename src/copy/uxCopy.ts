@@ -128,7 +128,65 @@ export const COPY = {
   publicGraphWarningBody:
     'anything you post here is world-readable and permanent. Loading this list asks the public index for topics; the index operator sees that query. Your chats and private groups are never sent here.',
   publicSubstrateMobile: 'Public topics here are Hypercolor rooms on your homeserver.',
+  channelsTitle: 'Channels',
+  channelsPrivate: 'Private',
+  channelsPublic: 'Public',
+  privateGroup: 'Private group',
+  publicTopic: 'Public topic',
+  noPrivateGroupsYet: 'No private groups yet.',
+  privateGroupsEmptyBody:
+    'A private group is end-to-end encrypted to every member, up to 50 people.',
+  newPrivateGroup: 'New private group',
+  noPublicTopicsYet: 'No public topics yet.',
+  publicTopicsEmptyBody: 'Join a public topic by link, or create one on your homeserver.',
+  newPublicTopic: 'New public topic',
+  joinByLink: 'Join by link',
+  loadPublicTopics: 'Load public topics',
+  newChannelSheetTitle: 'New',
+  joinPublicTopicTitle: 'Join a public topic',
+  createGroup: 'Create group',
+  channelDestinationPrivate: 'Posts here are end-to-end encrypted to every member.',
+  channelDestinationPublic:
+    'Posts here publish to /pub/hypercolor.app/v1/public-channels and are world-readable.',
+  composerAttach: 'Attach',
+  composerPhoto: 'Photo',
+  composerFile: 'File',
+  composerRequestPayment: 'Request payment',
+  composerSendTip: 'Send a tip',
+  composerSendTipList: 'Send my tip list',
+  enableMessagingReason: 'Enable messaging',
+  paymentsDmOnly: 'Payments are for one-to-one chats.',
+  attachmentsPublicUnsupported: 'Public topics cannot carry encrypted attachments.',
+  noTipDestinations: 'No tip destinations from this peer yet.',
+  photoPermissionNotice: 'Photo library access is required to send images.',
+  openSettings: 'Open settings',
+  messageByteCap: 'Messages are capped at 1000 bytes.',
+  reviewBeforePaying: 'Review before paying',
+  continueInBitkit: 'Continue in Bitkit',
+  openWallet: 'Open wallet',
+  copyPaymentUri: 'Copy payment URI',
+  noMatchingDestination: 'This peer has no destination that matches this request.',
+  invoiceExpired: 'This invoice expired.',
+  noWalletForLink: 'No app on this device can open that payment link.',
+  paymentRequested: 'requested',
+  paymentPaid: 'paid',
+  paymentExpired: 'expired',
+  paymentFailed: 'failed',
+  encryptedBackup: 'Encrypted backup',
+  myTipEndpoints: 'My tip endpoints',
 } as const;
+
+export function publicGraphWarning(): string {
+  return `${COPY.publicGraphWarningTitle} — ${COPY.publicGraphWarningBody}`;
+}
+
+export function invoiceAmountMismatchWarning(invoiceBtc: string, requestedBtc: string): string {
+  return `The invoice is for ${invoiceBtc} BTC, not the ${requestedBtc} BTC that was requested.`;
+}
+
+export function messageByteCountLabel(used: number, cap: number): string {
+  return `${used} / ${cap} bytes`;
+}
 
 export function lastBackupLine(relativeTime: string): string {
   return `Your last backup was ${relativeTime}.`;

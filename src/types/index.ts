@@ -98,10 +98,12 @@ export type AuthStackParamList = {
 
 export type MainTabParamList = {
   Chats: undefined;
-  Channels: undefined;
+  Channels: { mode?: 'private' | 'public' } | undefined;
   Contacts: undefined;
   Profile: undefined;
 };
+
+export type SettingsSection = 'backup' | 'payments';
 
 export type RootStackParamList = {
   Auth: undefined;
@@ -110,7 +112,7 @@ export type RootStackParamList = {
   ChannelScreen: { channelId: string };
   ContactSearch: undefined;
   MessageRequests: undefined;
-  Settings: undefined;
+  Settings: { section?: SettingsSection } | undefined;
   EnableMessaging: undefined;
 };
 

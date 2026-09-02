@@ -12,8 +12,9 @@ import {
   Alert,
   BackHandler,
 } from 'react-native';
-import { useNavigation, usePreventRemove, type NavigationAction } from '@react-navigation/native';
+import { useNavigation, usePreventRemove, useRoute, type NavigationAction } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import type { RouteProp } from '@react-navigation/native';
 import { FeatureFlags } from '../../flags';
 import { useAuthStore } from '../../stores/authStore';
 import { useSessionStatusStore } from '../../stores/sessionStatusStore';
@@ -36,9 +37,12 @@ import { shortPubky } from '../../ui/shortPubky';
 import { copyText } from '../../utils/copyText';
 
 type Nav = NativeStackNavigationProp<RootStackParamList, 'Settings'>;
+type SettingsRoute = RouteProp<RootStackParamList, 'Settings'>;
 
 export default function SettingsScreen() {
   const nav = useNavigation<Nav>();
+  const route = useRoute<SettingsRoute>();
+  const section = route.params?.section;
   const homeserver = useAuthStore(s => s.homeserver);
   const pubky = useAuthStore(s => s.pubky);
   const sessionKind = useSessionStatusStore(s => s.kind);
@@ -181,7 +185,11 @@ export default function SettingsScreen() {
           </View>
         </View>
 
-        <View style={styles.section}>
+        <View
+          testID="settingsFocusBackup"
+          accessibilityState={{ selected: section === 'backup' }}
+          style={styles.section}
+        >
           <Text style={styles.sectionTitle}>Encrypted backup</Text>
           <View style={styles.row}>
             <Text style={styles.rowHint}>{COPY.backupExplanation}</Text>
@@ -348,7 +356,12 @@ export default function SettingsScreen() {
           </TouchableOpacity>
         </View>
 
-        <TipEndpointsSettings />
+        <View
+          testID="settingsFocusPayments"
+          accessibilityState={{ selected: section === 'payments' }}
+        >
+          <TipEndpointsSettings />
+        </View>
 
         {__DEV__ ? <LiveProofSettingsPanel /> : null}
       </ScrollView>
