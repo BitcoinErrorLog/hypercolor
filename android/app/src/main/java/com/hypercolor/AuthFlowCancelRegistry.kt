@@ -28,6 +28,13 @@ package com.hypercolor
  * [AuthFlowAwaitStart.AlreadyAwaiting] (`validation` / "already awaiting")
  * and must never call [finishAwait]. Post-FFI [markSurfaced] fails closed
  * on a tombstone so a cancelled owner cannot persist a session.
+ *
+ * [teardown] (module `invalidate`) is sticky [isTornDown]: reserved/awaiting
+ * owners are cancelled **with their lease** so post-FFI fails closed and
+ * never persists; owner metadata stays until that owner's [finishAwait].
+ * Idle flows are returned for an immediate exact-once `close()`. Later
+ * start/await/cancel observe [AuthFlowAwaitStart.Unavailable] /
+ * [AuthFlowCancelKind.Unavailable] (`unavailable`, not `auth_flow_cancelled`).
  */
 internal fun interface AuthFlowCancellable {
     fun cancel()
@@ -38,12 +45,23 @@ internal enum class AuthFlowCancelKind {
     AlreadyCancelled,
     AlreadySurfaced,
     Unknown,
+    Unavailable,
 }
 
 internal data class AuthFlowCancelOutcome<T>(
     val kind: AuthFlowCancelKind,
+    /**
+     * UniFFI handle to `close()` immediately: idle / cancel-before-await.
+     * Null when an admitted owner still holds the handle and must close
+     * exactly once after its FFI path settles.
+     */
     val droppedFlow: T? = null,
     val droppedCancellable: AuthFlowCancellable? = null,
+)
+
+internal data class AuthFlowTeardown<T>(
+    val idleFlows: List<T>,
+    val ownerCancellables: List<AuthFlowCancellable>,
 )
 
 internal sealed class AuthFlowAwaitStart<out T> {
@@ -51,6 +69,7 @@ internal sealed class AuthFlowAwaitStart<out T> {
     data class Cancelled(val lease: Long) : AuthFlowAwaitStart<Nothing>()
     data object AlreadyAwaiting : AuthFlowAwaitStart<Nothing>()
     data object Missing : AuthFlowAwaitStart<Nothing>()
+    data object Unavailable : AuthFlowAwaitStart<Nothing>()
 }
 
 internal class AuthFlowCancelRegistry<T> {
@@ -60,10 +79,20 @@ internal class AuthFlowCancelRegistry<T> {
     private val cancelled = HashMap<String, Long?>()
     private val surfaced = HashMap<String, Long>()
     private var nextLease = 1L
+    private var tornDown = false
 
-    fun put(id: String, flow: T) {
+    fun isTornDown(): Boolean = synchronized(lock) { tornDown }
+
+    /**
+     * @return false when the module is torn down; the caller must close [flow].
+     */
+    fun put(id: String, flow: T): Boolean {
         synchronized(lock) {
+            if (tornDown) {
+                return false
+            }
             slots[id] = Slot(flow)
+            return true
         }
     }
 
@@ -81,6 +110,9 @@ internal class AuthFlowCancelRegistry<T> {
 
     fun startAwait(id: String): AuthFlowAwaitStart<T> {
         synchronized(lock) {
+            if (tornDown) {
+                return AuthFlowAwaitStart.Unavailable
+            }
             if (surfaced.containsKey(id)) {
                 return AuthFlowAwaitStart.Missing
             }
@@ -154,6 +186,9 @@ internal class AuthFlowCancelRegistry<T> {
 
     fun cancel(id: String): AuthFlowCancelOutcome<T> {
         synchronized(lock) {
+            if (tornDown) {
+                return AuthFlowCancelOutcome(AuthFlowCancelKind.Unavailable)
+            }
             if (surfaced.containsKey(id)) {
                 return AuthFlowCancelOutcome(AuthFlowCancelKind.AlreadySurfaced)
             }
@@ -165,11 +200,42 @@ internal class AuthFlowCancelRegistry<T> {
                 return AuthFlowCancelOutcome(AuthFlowCancelKind.Unknown)
             }
             cancelled[id] = slot.lease
+            val ownerAdmitted = slot.lease != null
             return AuthFlowCancelOutcome(
                 AuthFlowCancelKind.Cancelled,
-                droppedFlow = slot.flow,
+                // Owner closes after FFI. Idle / cancel-before-await closes now.
+                droppedFlow = if (ownerAdmitted) null else slot.flow,
                 droppedCancellable = slot.cancellable,
             )
+        }
+    }
+
+    /**
+     * Bridge/module invalidation. Idempotent. Marks reserved/awaiting owners
+     * cancelled with their lease (do not prune — [finishAwait] is owner-only),
+     * returns idle flows for immediate close, and detaches owner jobs to
+     * cancel **after** this lock is released.
+     */
+    fun teardown(): AuthFlowTeardown<T> {
+        synchronized(lock) {
+            if (tornDown) {
+                return AuthFlowTeardown(emptyList(), emptyList())
+            }
+            tornDown = true
+            val idle = ArrayList<T>()
+            val ownerCancellables = ArrayList<AuthFlowCancellable>()
+            val iterator = slots.entries.iterator()
+            while (iterator.hasNext()) {
+                val (id, slot) = iterator.next()
+                if (slot.lease != null) {
+                    cancelled[id] = slot.lease
+                    slot.cancellable?.let { ownerCancellables.add(it) }
+                } else {
+                    idle.add(slot.flow)
+                }
+                iterator.remove()
+            }
+            return AuthFlowTeardown(idle, ownerCancellables)
         }
     }
 

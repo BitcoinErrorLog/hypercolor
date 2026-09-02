@@ -174,9 +174,14 @@ export interface PaykitLinkNativeApi {
    * settling a cancellation is rejected (`validation` / "already awaiting") —
    * there is no retry-in-place. Only that owner may prune cancellation or
    * surfaced state. Cancel-before-await rejects `auth_flow_cancelled` and that
-   * caller is the owner who prunes the tombstone. After a failed, cancelled,
-   * or successful await the native flow is gone; start a new `startAuthFlow`
-   * to try again.
+   * caller is the owner who prunes the tombstone. Bridge/module invalidation
+   * and coroutine-scope teardown reject `unavailable` (not
+   * `auth_flow_cancelled`) and never persist. After invalidation, a later
+   * `startAuthFlow` / `awaitAuthApproval` / `cancelAuthFlow` rejects
+   * `unavailable` immediately. After a failed, cancelled, torn-down, or
+   * successful await the native flow is gone; start a new `startAuthFlow`
+   * to try again. Close is exact-once: the admitted owner closes after the
+   * FFI wait settles.
    */
   awaitAuthApproval(flowId: string): Promise<AuthSessionResult>;
   /**
@@ -192,12 +197,16 @@ export interface PaykitLinkNativeApi {
    * tombstone the await owner (lease) must observe. A wait already spawned
    * by `awaitApproval` runs to completion inside Paykit and cannot be
    * aborted; after that FFI await returns, native must not persist, must
-   * `close()` the handle, and rejects `auth_flow_cancelled`. Cancel-before-await
-   * rejects the later `awaitAuthApproval` with `auth_flow_cancelled`. A
-   * duplicate await of a live owner is `validation` / "already awaiting" and
-   * cannot consume the tombstone. Unknown ids and a second cancel are no-ops.
-   * A flow whose approval was already surfaced to JS is left untouched. No-op
-   * when the native method is missing (older builds).
+   * `close()` the handle exactly once (the admitted owner closes; idle /
+   * cancel-before-await close immediately), and rejects `auth_flow_cancelled`.
+   * Module invalidation rejects `unavailable` instead — teardown is not a
+   * user cancel. Cancel-before-await rejects the later `awaitAuthApproval`
+   * with `auth_flow_cancelled`. A duplicate await of a live owner is
+   * `validation` / "already awaiting" and cannot consume the tombstone.
+   * Unknown ids and a second cancel are no-ops. A flow whose approval was
+   * already surfaced to JS is left untouched. After invalidation this method
+   * rejects `unavailable`. No-op when the native method is missing (older
+   * builds).
    */
   cancelAuthFlow(flowId: string): Promise<void>;
   /**

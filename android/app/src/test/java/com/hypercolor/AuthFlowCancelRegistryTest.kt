@@ -24,7 +24,7 @@ class AuthFlowCancelRegistryTest {
 
         val outcome = registry.cancel("flow-a")
         assertEquals(AuthFlowCancelKind.Cancelled, outcome.kind)
-        assertSame("auth-flow", outcome.droppedFlow)
+        assertNull(outcome.droppedFlow)
         assertSame(cancellable, outcome.droppedCancellable)
         outcome.droppedCancellable?.cancel()
         assertTrue(cancellable.cancelled)
@@ -180,6 +180,42 @@ class AuthFlowCancelRegistryTest {
         assertEquals(AuthFlowCancelKind.Unknown, outcome.kind)
         assertFalse(registry.isCancelled("flow-a"))
         assertTrue(registry.startAwait("flow-a") is AuthFlowAwaitStart.Missing)
+    }
+
+    @Test
+    fun teardownClosesIdleAndRejectsLaterStart() {
+        val registry = AuthFlowCancelRegistry<String>()
+        registry.put("flow-a", "idle-flow")
+        val snapshot = registry.teardown()
+        assertEquals(listOf("idle-flow"), snapshot.idleFlows)
+        assertTrue(snapshot.ownerCancellables.isEmpty())
+        assertTrue(registry.isTornDown())
+        assertTrue(registry.startAwait("flow-a") is AuthFlowAwaitStart.Unavailable)
+        assertEquals(AuthFlowCancelKind.Unavailable, registry.cancel("flow-a").kind)
+        assertFalse(registry.put("flow-b", "late-flow"))
+        val second = registry.teardown()
+        assertTrue(second.idleFlows.isEmpty())
+        assertTrue(second.ownerCancellables.isEmpty())
+    }
+
+    @Test
+    fun teardownMarksAdmittedOwnerCancelledWithLease() {
+        val registry = AuthFlowCancelRegistry<String>()
+        val cancellable = RecordingCancellable()
+        registry.put("flow-a", "auth-flow")
+        val ready = registry.startAwait("flow-a") as AuthFlowAwaitStart.Ready
+        registry.attachCancellable("flow-a", cancellable)
+        val snapshot = registry.teardown()
+        assertTrue(snapshot.idleFlows.isEmpty())
+        assertEquals(1, snapshot.ownerCancellables.size)
+        snapshot.ownerCancellables.forEach { it.cancel() }
+        assertTrue(cancellable.cancelled)
+        assertTrue(registry.isTornDown())
+        assertTrue(registry.isCancelled("flow-a"))
+        assertFalse(registry.markSurfaced("flow-a", ready.lease))
+        assertTrue(registry.startAwait("flow-a") is AuthFlowAwaitStart.Unavailable)
+        assertNull(registry.finishAwait("flow-a", ready.lease))
+        assertFalse(registry.isCancelled("flow-a"))
     }
 
     private class RecordingCancellable : AuthFlowCancellable {

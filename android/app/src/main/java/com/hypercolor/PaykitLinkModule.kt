@@ -84,6 +84,16 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
     }
 
     override fun invalidate() {
+        // Teardown first so in-flight NonCancellable FFI cannot persist.
+        // Owner jobs are cancelled after the lock; idle flows close here;
+        // admitted owners close exactly once in AuthFlowAwait.finally.
+        val snapshot = flows.teardown()
+        for (cancellable in snapshot.ownerCancellables) {
+            cancellable.cancel()
+        }
+        for (idle in snapshot.idleFlows) {
+            closeAuthFlow(idle)
+        }
         try {
             keepalive.releaseAll()
         } catch (error: Throwable) {
@@ -123,7 +133,10 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
                 optionalText(relayUrl),
             )
             val flowId = UUID.randomUUID().toString()
-            flows.put(flowId, flow)
+            if (!flows.put(flowId, flow)) {
+                closeAuthFlow(flow)
+                throw PaykitLinkBridgeError("unavailable", staticMessage("unavailable"))
+            }
             try {
                 startAuthKeepalive(flowId)
             } catch (error: Throwable) {
@@ -146,10 +159,9 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
                     flows = flows,
                     id = id,
                     awaitFfi = { flow -> flow.awaitApproval() },
-                    closeFlow = { leftover ->
-                        // Await already spawned: Paykit's wait finishes; close after
-                        // the FFI return so the UniFFI clone can drop and the poll stop.
-                        closeAuthFlow(leftover)
+                    closeFlow = { handle ->
+                        // Exact-once owner close after the FFI path settles.
+                        closeAuthFlow(handle)
                     },
                     onOwnerStart = { startAuthKeepalive(id) },
                     onOwnerFinish = { releaseAuthKeepalive(id) },
@@ -181,13 +193,19 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
      * owner rejects `validation` / "already awaiting" and must not prune
      * the owner's lease. Unknown ids and a second cancel are no-ops. A flow
      * whose approval was already surfaced to JS is left untouched.
+     * Close is exact-once: idle flows close here; an admitted owner closes
+     * after its FFI path settles.
      */
     @ReactMethod
     fun cancelAuthFlow(flowId: String, promise: Promise) {
         launch(promise) {
             val id = requireText(flowId, "flowId")
             val outcome = flows.cancel(id)
+            if (outcome.kind == AuthFlowCancelKind.Unavailable) {
+                throw PaykitLinkBridgeError("unavailable", staticMessage("unavailable"))
+            }
             outcome.droppedCancellable?.cancel()
+            // Idle / cancel-before-await only. Admitted owner closes after FFI.
             closeAuthFlow(outcome.droppedFlow)
             if (outcome.kind == AuthFlowCancelKind.Cancelled) {
                 releaseAuthKeepalive(id)

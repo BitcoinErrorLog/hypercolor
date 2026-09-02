@@ -1,4 +1,9 @@
 #import <React/RCTBridgeModule.h>
+#import <React/RCTInvalidating.h>
+
+// RN 0.81.5 RCTCxxBridge invalidates instantiated modules that respond
+// to -invalidate. PaykitLinkModule.swift conforms to RCTInvalidating;
+// that selector is not a JS-exported method.
 
 @interface RCT_EXTERN_MODULE(PaykitLinkModule, NSObject)
 
