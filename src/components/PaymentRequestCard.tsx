@@ -1,5 +1,12 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, TextInput } from 'react-native';
+import {
+  View,
+  Text,
+  TouchableOpacity,
+  StyleSheet,
+  TextInput,
+  ActivityIndicator,
+} from 'react-native';
 import { formatPaymentDisplayText, type PaymentRequestRecord } from '../types/payment';
 import { COPY } from '../copy/uxCopy';
 import { HIT_SLOP_44 } from '../ui/hitTarget';
@@ -51,6 +58,17 @@ export function PaymentRequestCard({
         <Text testID="paymentRequestProofNote" style={styles.reference}>
           {receipt.note}
         </Text>
+      ) : null}
+      {record.pendingEventId !== null ? (
+        <View
+          testID="paymentRequestSending"
+          accessibilityRole="progressbar"
+          accessibilityLabel={COPY.paymentSending}
+          style={styles.sendingRow}
+        >
+          <ActivityIndicator color="#fff" />
+          <Text style={styles.sendingText}>{COPY.paymentSending}</Text>
+        </View>
       ) : null}
       {isPayer &&
       record.status === 'pending' &&
@@ -200,4 +218,6 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontFamily: 'monospace',
   },
+  sendingRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 4, minHeight: 44 },
+  sendingText: { color: 'rgba(255,255,255,0.8)', fontSize: 13, fontWeight: '600' },
 });

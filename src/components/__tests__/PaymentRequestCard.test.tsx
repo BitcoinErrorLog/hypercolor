@@ -1,6 +1,7 @@
 import React from 'react';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import { EMPTY_PAYMENT_RECORD_EXTRAS, type PaymentRequestRecord } from '../../types/payment';
+import { COPY } from '../../copy/uxCopy';
 import { PaymentRequestCard } from '../PaymentRequestCard';
 
 function record(partial: Partial<PaymentRequestRecord> = {}): PaymentRequestRecord {
@@ -52,6 +53,10 @@ describe('PaymentRequestCard', () => {
       .map(node => node.props.accessibilityLabel);
     expect(labels).not.toContain('Accept');
     expect(labels).not.toContain('Reject');
+    expect(tree.root.findByProps({ testID: 'paymentRequestSending' })).toBeTruthy();
+    expect(
+      tree.root.findByProps({ testID: 'paymentRequestSending' }).props.accessibilityLabel,
+    ).toBe(COPY.paymentSending);
     await act(async () => {
       tree.unmount();
     });
@@ -81,6 +86,7 @@ describe('PaymentRequestCard', () => {
       .map(node => node.props.accessibilityLabel);
     expect(labels).toContain('Accept');
     expect(labels).toContain('Reject');
+    expect(tree.root.findAllByProps({ testID: 'paymentRequestSending' })).toHaveLength(0);
     await act(async () => {
       tree.unmount();
     });

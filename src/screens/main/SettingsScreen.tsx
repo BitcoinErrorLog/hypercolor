@@ -45,11 +45,12 @@ import { scrollSettingsToSection, focusSettingsSection } from '../../ui/settings
 
 type Nav = NativeStackNavigationProp<RootStackParamList, 'Settings'>;
 type SettingsRoute = RouteProp<RootStackParamList, 'Settings'>;
+type SettingsSectionFocus = 'backup' | 'payments';
 
 export default function SettingsScreen() {
   const nav = useNavigation<Nav>();
   const route = useRoute<SettingsRoute>();
-  const section = route.params?.section;
+  const sectionParam = route.params?.section;
   const homeserver = useAuthStore(s => s.homeserver);
   const pubky = useAuthStore(s => s.pubky);
   const sessionKind = useSessionStatusStore(s => s.kind);
@@ -65,23 +66,37 @@ export default function SettingsScreen() {
   const [restoreCode, setRestoreCode] = useState('');
   const [restoreNote, setRestoreNote] = useState<string | null>(null);
   const [restoreError, setRestoreError] = useState<string | null>(null);
+  const [highlightedSection, setHighlightedSection] = useState<SettingsSectionFocus | null>(null);
   const scrollRef = useRef<ScrollView>(null);
   const backupRef = useRef<View>(null);
   const paymentsRef = useRef<View>(null);
   const backupY = useRef(0);
   const paymentsY = useRef(0);
   const reduceMotion = useReduceMotion();
+  const markedSection = highlightedSection ?? sectionParam ?? null;
 
-  useEffect(() => {
-    if (section !== 'backup' && section !== 'payments') return;
-    const y = section === 'backup' ? backupY.current : paymentsY.current;
-    const node = section === 'backup' ? backupRef.current : paymentsRef.current;
-    const timer = setTimeout(() => {
+  const consumeSectionFocus = useCallback(
+    (target: SettingsSectionFocus, y: number, node: View | null) => {
+      if (recoveryGateActive) return;
+      if (sectionParam !== target) return;
       scrollSettingsToSection(scrollRef.current, y, reduceMotion);
       focusSettingsSection(node);
+      setHighlightedSection(target);
+      nav.setParams({ section: undefined } as never);
+    },
+    [nav, recoveryGateActive, reduceMotion, sectionParam],
+  );
+
+  useEffect(() => {
+    if (recoveryGateActive) return;
+    if (sectionParam !== 'backup' && sectionParam !== 'payments') return;
+    const y = sectionParam === 'backup' ? backupY.current : paymentsY.current;
+    const node = sectionParam === 'backup' ? backupRef.current : paymentsRef.current;
+    const timer = setTimeout(() => {
+      consumeSectionFocus(sectionParam, y, node);
     }, 50);
     return () => clearTimeout(timer);
-  }, [section, reduceMotion]);
+  }, [consumeSectionFocus, recoveryGateActive, sectionParam]);
 
   const leaveSettings = useCallback(
     (action?: NavigationAction) => {
@@ -212,13 +227,10 @@ export default function SettingsScreen() {
         <View
           ref={backupRef}
           testID="settingsFocusBackup"
-          accessibilityState={{ selected: section === 'backup' }}
+          accessibilityState={{ selected: markedSection === 'backup' }}
           onLayout={event => {
             backupY.current = event.nativeEvent.layout.y;
-            if (section === 'backup') {
-              scrollSettingsToSection(scrollRef.current, event.nativeEvent.layout.y, reduceMotion);
-              focusSettingsSection(backupRef.current);
-            }
+            consumeSectionFocus('backup', event.nativeEvent.layout.y, backupRef.current);
           }}
           style={styles.section}
         >
@@ -391,13 +403,10 @@ export default function SettingsScreen() {
         <View
           ref={paymentsRef}
           testID="settingsFocusPayments"
-          accessibilityState={{ selected: section === 'payments' }}
+          accessibilityState={{ selected: markedSection === 'payments' }}
           onLayout={event => {
             paymentsY.current = event.nativeEvent.layout.y;
-            if (section === 'payments') {
-              scrollSettingsToSection(scrollRef.current, event.nativeEvent.layout.y, reduceMotion);
-              focusSettingsSection(paymentsRef.current);
-            }
+            consumeSectionFocus('payments', event.nativeEvent.layout.y, paymentsRef.current);
           }}
         >
           <TipEndpointsSettings />
