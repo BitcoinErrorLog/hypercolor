@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { AccessibilityInfo, Share } from 'react-native';
 import { useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import type { Contact, RootStackParamList } from '../../../types';
+import type { Contact, PubkyKey, RootStackParamList } from '../../../types';
 import { threadRouteParams } from '../../../types/link';
 import type { TrustExplanation } from '../../../services/TrustEngine';
 import { TrustEngine } from '../../../services/TrustEngine';
@@ -15,12 +15,32 @@ import { useAuthStore } from '../../../stores/authStore';
 import { useContactStore } from '../../../stores/contactStore';
 import { copyText } from '../../../utils/copyText';
 import { ContactDetailView, linkStateLabel } from './ContactDetailView';
+import { loadContactDetail } from './contactDetailLoad';
 
 export { ContactDetailView, linkStateLabel } from './ContactDetailView';
 
 export function ContactDetailContainer({ pubky, onBack }: { pubky: string; onBack: () => void }) {
-  const nav = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
   const ownerPubky = useAuthStore(s => s.pubky);
+  return (
+    <ContactDetailLoader
+      key={`${ownerPubky ?? ''}:${pubky}`}
+      pubky={pubky}
+      ownerPubky={ownerPubky}
+      onBack={onBack}
+    />
+  );
+}
+
+function ContactDetailLoader({
+  pubky,
+  ownerPubky,
+  onBack,
+}: {
+  pubky: string;
+  ownerPubky: PubkyKey | null;
+  onBack: () => void;
+}) {
+  const nav = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
   const stored = useContactStore(s => {
     const row = s.contacts[pubky];
     if (!row || !ownerPubky) return undefined;
@@ -33,6 +53,7 @@ export function ContactDetailContainer({ pubky, onBack }: { pubky: string; onBac
   const [loading, setLoading] = useState(!stored);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loadErrorDetails, setLoadErrorDetails] = useState<string | null>(null);
+  const [retryCleansUpBlock, setRetryCleansUpBlock] = useState(false);
   const [trust, setTrust] = useState<TrustExplanation | null>(null);
   const [linkLabel, setLinkLabel] = useState(linkStateLabel(null));
   const [paymentIdentifiers, setPaymentIdentifiers] = useState<string[]>([]);
@@ -41,44 +62,60 @@ export function ContactDetailContainer({ pubky, onBack }: { pubky: string; onBac
     ? FollowsImportSettings.getFollowsImportEnabled(ownerPubky)
     : false;
 
-  const load = useCallback(async () => {
-    if (!ownerPubky) return;
-    setLoading(true);
-    setLoadError(null);
-    setLoadErrorDetails(null);
-    try {
-      const row = stored ?? (await StorageService.getContact(pubky, ownerPubky));
-      if (!row || row.ownerPubky !== ownerPubky) {
-        setContact(null);
-        setLoadError('Could not load this contact.');
-        return;
-      }
-      setContact(row);
-      const explained = await TrustEngine.explain(row.pubky, ownerPubky);
-      setTrust(explained);
-      const link = await StorageService.getLink(ownerPubky, row.pubky);
-      const status =
-        link?.status === 'established' || link?.status === 'handshaking' ? link.status : null;
-      setLinkLabel(linkStateLabel(status));
-      try {
-        const tips = await PaymentService.getPeerTipEndpoints(row.pubky);
-        setPaymentIdentifiers(tips.map(t => t.identifier));
-        setPaymentsUnavailableOffline(false);
-      } catch {
-        setPaymentsUnavailableOffline(true);
-        setPaymentIdentifiers([]);
-      }
-    } catch (err) {
-      setLoadError('Could not load this contact.');
-      setLoadErrorDetails(err instanceof Error ? err.message : String(err));
-    } finally {
-      setLoading(false);
-    }
-  }, [ownerPubky, pubky, stored]);
+  const applyLoad = useCallback((result: Awaited<ReturnType<typeof loadContactDetail>>) => {
+    if (result === 'cancelled') return;
+    setContact(result.contact);
+    setTrust(result.trust);
+    setLinkLabel(result.linkLabel);
+    setPaymentIdentifiers(result.paymentIdentifiers);
+    setPaymentsUnavailableOffline(result.paymentsUnavailableOffline);
+    setLoadError(result.loadError);
+    setLoadErrorDetails(result.loadErrorDetails);
+    setRetryCleansUpBlock(false);
+    setLoading(false);
+  }, []);
 
   useEffect(() => {
-    void load();
-  }, [load]);
+    if (!ownerPubky) return undefined;
+    let cancelled = false;
+    const ownerAtStart = ownerPubky;
+    void loadContactDetail({
+      ownerPubky: ownerAtStart,
+      pubky,
+      stored,
+      isCurrent: () => !cancelled,
+      getContact: (peer, owner) => StorageService.getContact(peer, owner),
+      explainTrust: (peer, owner) => TrustEngine.explain(peer, owner),
+      getLink: (owner, peer) => StorageService.getLink(owner, peer),
+      getPeerTipEndpoints: peer => PaymentService.getPeerTipEndpoints(peer),
+    }).then(result => {
+      if (cancelled) return;
+      applyLoad(result);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [applyLoad, ownerPubky, pubky, stored]);
+
+  const runBlock = useCallback(async () => {
+    if (!ownerPubky) return;
+    const result = await blockPeer({
+      ownerPubky,
+      peerPubky: pubky,
+      persistBlock: (owner, peer) => FollowsImportSettings.block(owner, peer),
+      declineMessageRequest: peer => LinkService.declineMessageRequest(peer),
+      deleteContact: (owner, peer) => StorageService.deleteContact(owner, peer),
+    });
+    if (result.cleanup === 'complete') {
+      removeContact(pubky);
+      AccessibilityInfo.announceForAccessibility('Pubky blocked');
+      onBack();
+      return;
+    }
+    setRetryCleansUpBlock(true);
+    setLoadError(result.message);
+    setLoadErrorDetails(result.details);
+  }, [onBack, ownerPubky, pubky, removeContact]);
 
   return (
     <ContactDetailView
@@ -101,27 +138,27 @@ export function ContactDetailContainer({ pubky, onBack }: { pubky: string; onBac
         void Share.share({ message: pubky });
       }}
       onRetry={() => {
-        void load();
+        if (retryCleansUpBlock) {
+          void runBlock();
+          return;
+        }
+        if (!ownerPubky) return;
+        setLoading(true);
+        setLoadError(null);
+        setLoadErrorDetails(null);
+        void loadContactDetail({
+          ownerPubky,
+          pubky,
+          stored,
+          isCurrent: () => true,
+          getContact: (peer, owner) => StorageService.getContact(peer, owner),
+          explainTrust: (peer, owner) => TrustEngine.explain(peer, owner),
+          getLink: (owner, peer) => StorageService.getLink(owner, peer),
+          getPeerTipEndpoints: peer => PaymentService.getPeerTipEndpoints(peer),
+        }).then(applyLoad);
       }}
       onBlock={() => {
-        if (!ownerPubky) return;
-        void (async () => {
-          try {
-            await blockPeer({
-              ownerPubky,
-              peerPubky: pubky,
-              persistBlock: (owner, peer) => FollowsImportSettings.block(owner, peer),
-              declineMessageRequest: peer => LinkService.declineMessageRequest(peer),
-              deleteContact: (owner, peer) => StorageService.deleteContact(owner, peer),
-            });
-            removeContact(pubky);
-            AccessibilityInfo.announceForAccessibility('Pubky blocked');
-            onBack();
-          } catch (err) {
-            setLoadError('Could not block this pubky.');
-            setLoadErrorDetails(err instanceof Error ? err.message : String(err));
-          }
-        })();
+        void runBlock();
       }}
       onRemove={() => {
         if (!ownerPubky) return;
