@@ -17,7 +17,11 @@ import {
   SCHEMA_V16_STATEMENTS,
 } from './schema';
 import type { SqlExecutor } from './sql';
-import { repairOwnInvoiceHashes } from './ownInvoiceHashes';
+import {
+  markOwnInvoiceHashRepairRetry,
+  repairOwnInvoiceHashes,
+  runOwnInvoiceHashAmountBackfill,
+} from './ownInvoiceHashes';
 
 /**
  * Migration runner for Hypercolor SQLite database.
@@ -82,14 +86,46 @@ export async function runMigrations(db: SqlExecutor): Promise<void> {
     }
   }
 
-  // In-branch v16 databases may predate amount/expiry columns. Idempotent; no version bump.
-  // Skip cleanly when the table is absent (W2b-stamped v16). Never startup-fatal.
-  db.executeSync('BEGIN');
+  // In-branch v16 databases may predate amount/expiry columns or the table
+  // itself (W2b-stamped v16). Idempotent; no version bump. Never startup-fatal:
+  // structural repair commits before amount backfill so a backfill throw cannot
+  // roll back CREATE TABLE. Backfill errors are logged and retried next launch.
   try {
+    db.executeSync('BEGIN');
     repairOwnInvoiceHashes(db);
     db.executeSync('COMMIT');
   } catch (err) {
+    logOwnInvoiceHashRepairFailure(db, err);
+  }
+  try {
+    db.executeSync('BEGIN');
+    runOwnInvoiceHashAmountBackfill(db);
+    db.executeSync('COMMIT');
+  } catch (err) {
+    logOwnInvoiceHashRepairFailure(db, err);
+  }
+}
+
+function logOwnInvoiceHashRepairFailure(db: SqlExecutor, err: unknown): void {
+  try {
     db.executeSync('ROLLBACK');
-    throw new Error(`own_invoice_hashes amount backfill failed: ${(err as Error).message}`);
+  } catch {
+    // Rollback is best-effort if BEGIN never succeeded.
+  }
+  console.warn(
+    '[db] own_invoice_hashes repair failed; will retry next launch',
+    err instanceof Error ? err.message : 'unknown error',
+  );
+  try {
+    db.executeSync('BEGIN');
+    markOwnInvoiceHashRepairRetry(db);
+    db.executeSync('COMMIT');
+  } catch {
+    try {
+      db.executeSync('ROLLBACK');
+    } catch {
+      // Marker write is best-effort; next launch still retries because the
+      // completion key is not set.
+    }
   }
 }

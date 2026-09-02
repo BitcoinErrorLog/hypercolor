@@ -905,21 +905,28 @@ primary.
 3. Cancelling records no displayed invoice.
 4. In-thread payment receipts use exactly four words:
    - `requested` — the request is still outstanding: `pending`; `accepted`
-     (including after an unverifiable or amount-mismatched proof — those stay
-     `accepted` so a later proof or Cancel can still land); an in-flight send;
-     a legacy `proof_received` row with `proofVerified === null`; or
-     `proof_received` with `proofVerified === false` (this preimage already
-     verified another request).
-   - `paid` — `proof_received` and `proofVerified === true`. The payee verifies
-     `sha256(preimage)` against the owner's invoice history for that endpoint
-     (the create-time snapshot hash is the same history) **and** the bound
+     (including after an unverifiable, amount-mismatched, or replayed proof —
+     those stay `accepted` so a later proof or Cancel can still land); an
+     in-flight send; a legacy `proof_received` row with `proofVerified === null`;
+     or a legacy `proof_received` row with `proofVerified === false`.
+   - `paid` — `proof_received` and `proofVerified === true`. Verification
+     binds to THIS request: `sha256(preimage)` must equal the request's
+     `displayedPaymentHash` (recorded by `continuePaymentReview` →
+     `recordDisplayedInvoice` before wallet open). `own_invoice_hashes`
+     supplies amount/expiry metadata for that hash. When no displayed hash
+     was recorded (recordFailed path), history may corroborate only an
+     invoice whose `firstSeenAt >= request.createdAt` and that was not
+     displayed for a different request or as a tip. A tip invoice
+     (`display_context = 'tip'`) never corroborates a request. The bound
      invoice amount must satisfy the request: invoice millisatoshis ≥ request
      millisatoshis. Over-payment is `paid`. Under-payment is not. An amountless
      invoice cannot satisfy an amount-bearing request (v1 requests always carry
      an amount). An invoice that expired at or before the request was created
      cannot corroborate it. Amount mismatch does not occupy the verified-hash
      unique index, so the matching request can still be marked `paid` by the
-     same preimage.
+     same preimage. A hash that has already verified any request cannot
+     verify another (partial unique index on `displayed_payment_hash WHERE
+     proof_verified = 1`).
 
      Clock trust: payee-side expiry uses this device's wall-clock
      `createdAt` on the locally persisted sent request. The payer's proof
@@ -943,7 +950,9 @@ primary.
        a later proof event can still mark it `paid`.
      - `This proof does not match this request's amount` when the preimage
        hashes to an own invoice whose amount does not satisfy this request.
-     - `This proof was already used` when `proofVerified === false`.
+     - `This proof was already used` when `proofVerified === false` (replayed
+       preimage; the request stays `accepted` so a later valid proof or Cancel
+       can still land).
 
 ### D.13 Backup / recovery-code gate
 

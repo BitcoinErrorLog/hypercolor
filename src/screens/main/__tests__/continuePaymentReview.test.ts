@@ -82,6 +82,7 @@ describe('continuePaymentReview', () => {
       },
       openUri,
       recordDisplayedInvoice,
+      recordDisplayedTipInvoice: jest.fn(),
     });
     expect(result).toEqual({
       closeReview: false,
@@ -99,6 +100,7 @@ describe('continuePaymentReview', () => {
       canOpenURL: async () => true,
       openUri: async () => undefined,
       recordDisplayedInvoice,
+      recordDisplayedTipInvoice: jest.fn(),
     });
     expect(result.closeReview).toBe(true);
     expect(result.recordFailed).toBe(false);
@@ -106,6 +108,7 @@ describe('continuePaymentReview', () => {
       PEER,
       '11111111-1111-4111-8111-111111111111',
       MAINNET_BOLT11_20U_HASH,
+      ENDPOINT_LIGHTNING_BOLT11,
     );
   });
 
@@ -117,6 +120,7 @@ describe('continuePaymentReview', () => {
       recordDisplayedInvoice: async () => {
         throw new Error('No local pubky');
       },
+      recordDisplayedTipInvoice: jest.fn(),
     });
     expect(result.closeReview).toBe(false);
     expect(result.walletUnavailable).toBe(false);
@@ -133,6 +137,7 @@ describe('continuePaymentReview', () => {
         throw new Error('No Activity found to handle Intent');
       },
       recordDisplayedInvoice,
+      recordDisplayedTipInvoice: jest.fn(),
     });
     expect(result.closeReview).toBe(false);
     expect(result.walletUnavailable).toBe(true);
@@ -146,6 +151,7 @@ describe('continuePaymentReview', () => {
       canOpenURL: async () => false,
       openUri: jest.fn(),
       recordDisplayedInvoice: jest.fn(),
+      recordDisplayedTipInvoice: jest.fn(),
     });
     expect(result).toEqual({
       closeReview: false,
@@ -166,6 +172,7 @@ describe('continuePaymentReview', () => {
       canOpenURL,
       openUri,
       recordDisplayedInvoice,
+      recordDisplayedTipInvoice: jest.fn(),
     });
     expect(result).toEqual({
       closeReview: false,
@@ -186,6 +193,7 @@ describe('continuePaymentReview', () => {
       canOpenURL,
       openUri,
       recordDisplayedInvoice,
+      recordDisplayedTipInvoice: jest.fn(),
       prepare: () => ({
         ok: false,
         error: 'endpoint identifier is not a lightning or bitcoin destination',
@@ -218,6 +226,7 @@ describe('continuePaymentReview', () => {
       canOpenURL,
       openUri,
       recordDisplayedInvoice,
+      recordDisplayedTipInvoice: jest.fn(),
     });
     expect(result).toEqual({
       closeReview: false,
@@ -271,6 +280,7 @@ describe('continuePaymentReview', () => {
       canOpenURL,
       openUri,
       recordDisplayedInvoice,
+      recordDisplayedTipInvoice: jest.fn(),
       prepare,
     });
     expect(result.closeReview).toBe(true);
@@ -286,6 +296,7 @@ describe('continuePaymentReview', () => {
       PEER,
       '11111111-1111-4111-8111-111111111111',
       expected.paymentHash,
+      ENDPOINT_LIGHTNING_BOLT11,
     );
     expect(openUri).toHaveBeenCalledTimes(1);
     expect(openUri).toHaveBeenCalledWith(`lightning:${MAINNET_BOLT11_AMOUNTLESS}`);
@@ -312,6 +323,7 @@ describe('continuePaymentReview', () => {
       canOpenURL,
       openUri,
       recordDisplayedInvoice,
+      recordDisplayedTipInvoice: jest.fn(),
     });
     expect(result).toEqual({
       closeReview: false,
@@ -322,5 +334,33 @@ describe('continuePaymentReview', () => {
     expect(canOpenURL).not.toHaveBeenCalled();
     expect(openUri).not.toHaveBeenCalled();
     expect(recordDisplayedInvoice).not.toHaveBeenCalled();
+  });
+
+  it('records a tip display so a tip invoice cannot later corroborate a request', async () => {
+    const dest = endpoint();
+    const tipReview: PaymentReviewRequest = {
+      kind: 'tip',
+      record: null,
+      peerPubky: PEER,
+      amountBtc: MAINNET_BOLT11_20U_BTC,
+      amountAsset: 'btc',
+      reference: null,
+      destinations: [dest],
+      selected: dest,
+    };
+    const recordDisplayedInvoice = jest.fn();
+    const recordDisplayedTipInvoice = jest.fn().mockResolvedValue(undefined);
+    const result = await continuePaymentReview(tipReview, {
+      canOpenURL: async () => true,
+      openUri: async () => undefined,
+      recordDisplayedInvoice,
+      recordDisplayedTipInvoice,
+    });
+    expect(result.closeReview).toBe(true);
+    expect(recordDisplayedInvoice).not.toHaveBeenCalled();
+    expect(recordDisplayedTipInvoice).toHaveBeenCalledWith(
+      ENDPOINT_LIGHTNING_BOLT11,
+      MAINNET_BOLT11_20U_HASH,
+    );
   });
 });

@@ -13,7 +13,11 @@ import {
   type TipEndpointRecord,
 } from '../types/payment';
 import { decodeBolt11Invoice } from '../utils/bolt11';
-import { formatTipIdentifierDisplay, payloadPreview } from '../utils/displaySanitize';
+import {
+  formatPaymentDisplayText,
+  formatTipIdentifierDisplay,
+  payloadPreview,
+} from '../utils/displaySanitize';
 import { peerIdentity, type PeerContactHint } from './peerIdentity';
 import { shortPubky } from './shortPubky';
 
@@ -244,7 +248,7 @@ export function mapPaymentReview(input: PaymentReviewInput): PaymentReviewView {
     recipientShortPubky: shortPubky(input.recipientPubky),
     amountText: `${input.requestAmountBtc} ${input.amountAsset.toUpperCase()}`.trim(),
     invoiceAmountText: invoiceAmount ? `${invoiceAmount} BTC` : null,
-    referenceText: input.reference,
+    referenceText: input.reference ? formatPaymentDisplayText(input.reference) : null,
     destinationText: endpoint
       ? formatTipIdentifierDisplay(endpoint.identifier)
       : needsChoice

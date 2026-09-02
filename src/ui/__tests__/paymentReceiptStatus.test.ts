@@ -117,8 +117,8 @@ describe('formatPaymentReceiptStatus', () => {
         note: COPY.proofAmountMismatch,
       },
       {
-        status: 'proof_received',
-        extras: { proofVerified: false },
+        status: 'accepted',
+        extras: { proofVerified: false, proofJson: '{"data":"aa"}' },
         word: COPY.paymentRequested,
         note: COPY.proofAlreadyUsed,
       },

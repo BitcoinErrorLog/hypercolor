@@ -4,16 +4,29 @@ import {
   INVOICE_AMOUNTLESS,
   encodeInvoiceAmountMsat,
 } from '../services/payments/invoiceAmountBind';
+import {
+  OWN_INVOICE_HASHES_CREATE_SQL,
+  OWN_INVOICE_HASHES_SEED_SQL,
+  PAYMENT_REQUESTS_VERIFIED_HASH_DEDUP_SQL,
+  PAYMENT_REQUESTS_VERIFIED_HASH_INDEX_SQL,
+} from './schema';
 import type { SqlExecutor } from './sql';
 
 export const SCHEMA_META_TABLE = 'schema_meta';
 export const OWN_INVOICE_HASH_BACKFILL_META_KEY = 'own_invoice_hashes_amount_backfill';
 export const OWN_INVOICE_HASH_BACKFILL_COMPLETE = 'complete';
+export const OWN_INVOICE_HASH_REPAIR_RETRY_META_KEY = 'own_invoice_hashes_repair_retry';
 
 /** Distinctive FROM clause so tests can assert this scan did or did not run. */
 export const OWN_INVOICE_HASH_BACKFILL_SCAN_FROM = 'own_invoice_hashes AS h';
 
 let loggedMissingTable = false;
+let loggedMissingRuntime = false;
+
+export function isMissingOwnInvoiceHashesTableError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return /no such table:\s*['"]?own_invoice_hashes['"]?/i.test(message);
+}
 
 /**
  * Idempotent column ensure for `own_invoice_hashes`. v16 CREATE TABLE already
@@ -34,6 +47,12 @@ export function ensureOwnInvoiceHashColumns(db: SqlExecutor): void {
   if (!cols.has('invoice_expires_at')) {
     db.executeSync('ALTER TABLE own_invoice_hashes ADD COLUMN invoice_expires_at INTEGER');
   }
+  if (!cols.has('display_context')) {
+    db.executeSync('ALTER TABLE own_invoice_hashes ADD COLUMN display_context TEXT');
+  }
+  if (!cols.has('payment_request_id')) {
+    db.executeSync('ALTER TABLE own_invoice_hashes ADD COLUMN payment_request_id TEXT');
+  }
 }
 
 export function ownInvoiceHashesTableExists(db: SqlExecutor): boolean {
@@ -46,10 +65,27 @@ export function ownInvoiceHashesTableExists(db: SqlExecutor): boolean {
   return rows.length > 0;
 }
 
+function tableExists(db: SqlExecutor, name: string): boolean {
+  const rows =
+    db.executeSync(
+      `SELECT 1 AS ok FROM sqlite_master
+        WHERE type = 'table' AND name = ?
+        LIMIT 1`,
+      [name],
+    ).rows ?? [];
+  return rows.length > 0;
+}
+
 export function logMissingOwnInvoiceHashTableOnce(): void {
   if (loggedMissingTable) return;
   loggedMissingTable = true;
   console.debug('[db] skipped own_invoice_hashes amount backfill: table absent');
+}
+
+export function logMissingOwnInvoiceHashTableRuntime(): void {
+  if (loggedMissingRuntime) return;
+  loggedMissingRuntime = true;
+  console.warn('[db] own_invoice_hashes table missing; invoice binding skipped');
 }
 
 function schemaMetaTableExists(db: SqlExecutor): boolean {
@@ -62,7 +98,7 @@ function schemaMetaTableExists(db: SqlExecutor): boolean {
   return rows.length > 0;
 }
 
-function ensureSchemaMeta(db: SqlExecutor): void {
+export function ensureSchemaMeta(db: SqlExecutor): void {
   db.executeSync(
     `CREATE TABLE IF NOT EXISTS ${SCHEMA_META_TABLE} (
       key   TEXT PRIMARY KEY NOT NULL,
@@ -86,6 +122,15 @@ function markOwnInvoiceHashBackfillComplete(db: SqlExecutor): void {
     `INSERT INTO ${SCHEMA_META_TABLE} (key, value) VALUES (?, ?)
      ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
     [OWN_INVOICE_HASH_BACKFILL_META_KEY, OWN_INVOICE_HASH_BACKFILL_COMPLETE],
+  );
+}
+
+export function markOwnInvoiceHashRepairRetry(db: SqlExecutor): void {
+  ensureSchemaMeta(db);
+  db.executeSync(
+    `INSERT INTO ${SCHEMA_META_TABLE} (key, value) VALUES (?, ?)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+    [OWN_INVOICE_HASH_REPAIR_RETRY_META_KEY, String(Date.now())],
   );
 }
 
@@ -171,13 +216,37 @@ export function backfillOwnInvoiceHashAmounts(db: SqlExecutor): void {
   }
 }
 
-/** Out-of-band v16 repair. Never throws because the table is missing. */
+/**
+ * Idempotent v16 own-invoice structural repair. Creates the table on any v16
+ * database (including a W2b-stamped v16 that never ran this set). Never throws
+ * because the table is missing. Amount backfill is a separate transaction.
+ */
 export function repairOwnInvoiceHashes(db: SqlExecutor): void {
+  db.executeSync(OWN_INVOICE_HASHES_CREATE_SQL);
   if (!ownInvoiceHashesTableExists(db)) {
     logMissingOwnInvoiceHashTableOnce();
     return;
   }
   ensureOwnInvoiceHashColumns(db);
+  if (tableExists(db, 'tip_endpoints')) {
+    db.executeSync(OWN_INVOICE_HASHES_SEED_SQL);
+  }
+  if (tableExists(db, 'payment_requests')) {
+    db.executeSync(PAYMENT_REQUESTS_VERIFIED_HASH_DEDUP_SQL);
+    db.executeSync(PAYMENT_REQUESTS_VERIFIED_HASH_INDEX_SQL);
+  }
+}
+
+/**
+ * Amount/expiry backfill. Runs in its own transaction after structural repair
+ * so a scan failure cannot roll back CREATE TABLE.
+ */
+export function runOwnInvoiceHashAmountBackfill(db: SqlExecutor): void {
+  if (!ownInvoiceHashesTableExists(db)) {
+    logMissingOwnInvoiceHashTableOnce();
+    return;
+  }
   if (isOwnInvoiceHashBackfillComplete(db)) return;
+  if (!tableExists(db, 'tip_endpoints')) return;
   backfillOwnInvoiceHashAmounts(db);
 }

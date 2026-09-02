@@ -1,5 +1,5 @@
 import { COPY } from '../../../copy/uxCopy';
-import { buildPayUri, openPayUri, prepareRequestHandoff } from '../walletHandoff';
+import { buildPayUri, openBuiltUri, prepareRequestHandoff } from '../walletHandoff';
 import { ENDPOINT_BITCOIN_P2TR, ENDPOINT_LIGHTNING_BOLT11 } from '../../../types/payment';
 import {
   MAINNET_BOLT11_20U,
@@ -151,10 +151,11 @@ describe('prepareRequestHandoff', () => {
   });
 });
 
-describe('openPayUri', () => {
+describe('openBuiltUri', () => {
   it('opens when a wallet is installed', async () => {
     const openURL = jest.fn().mockResolvedValue(undefined);
-    const result = await openPayUri(ENDPOINT_LIGHTNING_BOLT11, MAINNET_BOLT11_20U, {
+    const uri = buildPayUri(ENDPOINT_LIGHTNING_BOLT11, MAINNET_BOLT11_20U).uri;
+    const result = await openBuiltUri(uri, {
       canOpenURL: async () => true,
       openURL,
     });
@@ -165,7 +166,8 @@ describe('openPayUri', () => {
   it('falls back to copy-to-clipboard when canOpenURL is false', async () => {
     const copyText = jest.fn();
     const openURL = jest.fn();
-    const result = await openPayUri(ENDPOINT_LIGHTNING_BOLT11, MAINNET_BOLT11_20U, {
+    const uri = buildPayUri(ENDPOINT_LIGHTNING_BOLT11, MAINNET_BOLT11_20U).uri;
+    const result = await openBuiltUri(uri, {
       canOpenURL: async () => false,
       openURL,
       copyText,
@@ -176,5 +178,22 @@ describe('openPayUri', () => {
     expect(result).toBe('copied');
     expect(openURL).not.toHaveBeenCalled();
     expect(copyText).toHaveBeenCalledWith(`lightning:${MAINNET_BOLT11_20U}`);
+  });
+});
+
+describe('prepareRequestHandoff decode errors', () => {
+  it('maps bolt11 decode failures to fixed copy and never surfaces library text', () => {
+    const result = prepareRequestHandoff({
+      requestAmountBtc: '0.001',
+      amountAsset: 'btc',
+      endpointIdentifier: ENDPOINT_LIGHTNING_BOLT11,
+      payload: 'lnbc1not-a-real-invoice',
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toBe(COPY.invoiceInvalid);
+    expect(result.error).not.toMatch(/Not a proper/i);
+    expect(result.error).not.toMatch(/lightning payment request/i);
+    expect(result.error.toLowerCase()).not.toContain('bolt11');
   });
 });

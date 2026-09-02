@@ -24,6 +24,7 @@ jest.mock('../../StorageService', () => ({
     persistPaymentOutboundTransition: jest.fn(),
     persistPaymentEventWithSendIntent: jest.fn(),
     replaceTipEndpoints: jest.fn(),
+    recordOwnInvoiceDisplay: jest.fn(),
     listTipEndpoints: jest.fn(),
     listPaymentRequestsForPeer: jest.fn(),
     setDisplayedPaymentHash: jest.fn(),
@@ -131,6 +132,7 @@ describe('PaymentService', () => {
     mockedStorage.persistPaymentCreateWithSendIntent.mockResolvedValue(undefined);
     mockedStorage.persistPaymentEventWithSendIntent.mockResolvedValue(undefined);
     mockedStorage.getTipEndpoint.mockResolvedValue(null);
+    mockedStorage.recordOwnInvoiceDisplay.mockResolvedValue(undefined);
   });
 
   it('persists and sends a payment_request within the link byte budget', async () => {

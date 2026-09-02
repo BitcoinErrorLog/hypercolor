@@ -319,8 +319,15 @@ export default function ThreadScreen({ route }: Props) {
             const result = await continuePaymentReview(review, {
               canOpenURL: url => Linking.canOpenURL(url),
               openUri: url => openBuiltUri(url),
-              recordDisplayedInvoice: (peer, paymentRequestId, paymentHash) =>
-                PaymentService.recordDisplayedInvoice(peer, paymentRequestId, paymentHash),
+              recordDisplayedInvoice: (peer, paymentRequestId, paymentHash, endpointIdentifier) =>
+                PaymentService.recordDisplayedInvoice(
+                  peer,
+                  paymentRequestId,
+                  paymentHash,
+                  endpointIdentifier,
+                ),
+              recordDisplayedTipInvoice: (endpointIdentifier, paymentHash) =>
+                PaymentService.recordDisplayedTipInvoice(endpointIdentifier, paymentHash),
             });
             setWalletUnavailable(result.walletUnavailable);
             setRecordFailed(result.recordFailed);

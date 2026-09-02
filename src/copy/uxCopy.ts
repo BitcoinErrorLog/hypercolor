@@ -178,6 +178,7 @@ export const COPY = {
   unsupportedPaymentAmount: 'This payment request is not a supported bitcoin amount.',
   onlyLightningCanPayAmount: 'Only Lightning can pay this amount.',
   invoiceExpired: 'This invoice expired.',
+  invoiceInvalid: 'This invoice could not be read.',
   noWalletForLink: 'No app on this device can open that payment link.',
   paymentRequested: 'requested',
   paymentPaid: 'paid',

@@ -152,6 +152,7 @@ describe('applyPaymentInbound verified-hash unique index', () => {
     expect(verified).toHaveLength(1);
     const other = rowA?.proofVerified === true ? rowB : rowA;
     expect(other?.proofVerified).toBe(false);
+    expect(other?.status).toBe('accepted');
   });
 });
 
@@ -169,7 +170,7 @@ describe('applyPaymentInbound invoice amount binding', () => {
     const smallHash = createHash('sha256').update(Buffer.from(smallPreimage, 'hex')).digest('hex');
     const largeId = 'c7f9c2a1-6d43-4b0e-a8d4-0fe2c712ab44';
     const smallId = 'b7f9c2a1-6d43-4b0e-a8d4-0fe2c712ab33';
-    await StorageService.savePaymentRequest(sentAccepted(PEER_A, largeId, '22'.repeat(32), '0.01'));
+    await StorageService.savePaymentRequest(sentAccepted(PEER_A, largeId, smallHash, '0.01'));
     await StorageService.savePaymentRequest(sentAccepted(PEER_A, smallId, smallHash, '0.00001'));
     db.executeSync(
       `INSERT INTO own_invoice_hashes
@@ -207,5 +208,124 @@ describe('applyPaymentInbound invoice amount binding', () => {
     expect(small?.status).toBe('accepted');
     expect(formatPaymentReceipt(small!, NOW).word).toBe(COPY.paymentRequested);
     expect(formatPaymentReceipt(small!, NOW).note).toBeNull();
+  });
+});
+
+describe('applyPaymentInbound missing own_invoice_hashes table', () => {
+  afterEach(() => {
+    setDbForTests(null);
+  });
+
+  it('marks the stream item processed and does not pay when the table is absent', async () => {
+    const db = openMemoryDb();
+    setDbForTests(db);
+    await runMigrations(db);
+    db.executeSync('DROP TABLE own_invoice_hashes');
+
+    const preimage = 'ab'.repeat(32);
+    const paymentHash = createHash('sha256').update(Buffer.from(preimage, 'hex')).digest('hex');
+    const idA = 'b7f9c2a1-6d43-4b0e-a8d4-0fe2c712ab33';
+    await StorageService.savePaymentRequest(sentAccepted(PEER_A, idA, paymentHash));
+    const proof = buildPaymentProofEnvelope({
+      eventId: '8a0d8b4c-913f-4e31-9f2c-2a6f5bb4d105',
+      paymentRequestId: idA,
+      paymentReference: 'invoice-2026-0001',
+      paymentEndpointIdentifier: ENDPOINT_LIGHTNING_BOLT11,
+      proofData: preimage,
+    });
+    const streamId = 'stream-proof-missing-table';
+    await StorageService.saveLinkStreamItems([
+      {
+        id: streamId,
+        ownerPubky: OWNER,
+        peerPubky: PEER_A,
+        kind: 'paykit.payment_proof',
+        rawJson: proof.json,
+        receivedAt: NOW,
+      },
+    ]);
+
+    await expect(
+      applyPaymentInbound({
+        ownerPubky: OWNER,
+        senderPubky: PEER_A,
+        peerPubky: PEER_A,
+        rawJson: proof.json,
+        receivedAt: NOW,
+        nowMs: NOW,
+      }),
+    ).resolves.toEqual(expect.objectContaining({ action: 'applied' }));
+    await StorageService.markLinkStreamItemProcessed(streamId);
+
+    const row = await StorageService.getPaymentRequest(OWNER, PEER_A, idA);
+    expect(row?.proofVerified).not.toBe(true);
+    expect(row?.status).toBe('accepted');
+    const stream = await StorageService.getUnprocessedLinkStreamItems(OWNER, PEER_A);
+    expect(stream.find(item => item.id === streamId)).toBeUndefined();
+  });
+});
+
+describe('setDisplayedPaymentHash write-once after verification', () => {
+  afterEach(() => {
+    setDbForTests(null);
+  });
+
+  it('refuses to overwrite displayed_payment_hash once proof_verified is 1', async () => {
+    const db = openMemoryDb();
+    setDbForTests(db);
+    await runMigrations(db);
+    const verifiedHash = 'aa'.repeat(32);
+    const idA = 'b7f9c2a1-6d43-4b0e-a8d4-0fe2c712ab33';
+    await StorageService.savePaymentRequest({
+      ...sentAccepted(PEER_A, idA, verifiedHash),
+      status: 'proof_received',
+      proofVerified: true,
+    });
+    await StorageService.setDisplayedPaymentHash(OWNER, PEER_A, idA, 'bb'.repeat(32));
+    const row = await StorageService.getPaymentRequest(OWNER, PEER_A, idA);
+    expect(row?.displayedPaymentHash).toBe(verifiedHash);
+    expect(await StorageService.hasVerifiedPaymentHash(OWNER, verifiedHash, 'other-id')).toBe(true);
+  });
+});
+
+describe('payment_events unapplied prune', () => {
+  afterEach(() => {
+    setDbForTests(null);
+  });
+
+  it('keeps only the newest 100 unapplied events per sender', async () => {
+    const db = openMemoryDb();
+    setDbForTests(db);
+    await runMigrations(db);
+    const conversationId = `dm:${PEER_A}`;
+    for (let i = 0; i < 105; i += 1) {
+      await StorageService.savePaymentEvent({
+        ownerPubky: OWNER,
+        conversationId,
+        senderPubky: PEER_A,
+        eventId: `evt-${i.toString().padStart(3, '0')}`,
+        kind: 'paykit.unknown',
+        paymentRequestId: null,
+        applied: false,
+        receivedAt: NOW + i,
+      });
+    }
+    const remaining =
+      db.executeSync(
+        `SELECT COUNT(*) AS n FROM payment_events
+          WHERE owner_pubky = ? AND conversation_id = ? AND sender_pubky = ?
+            AND applied = 0`,
+        [OWNER, conversationId, PEER_A],
+      ).rows ?? [];
+    expect(Number(remaining[0]?.n)).toBe(100);
+    const newest =
+      db.executeSync(
+        `SELECT event_id FROM payment_events
+          WHERE owner_pubky = ? AND conversation_id = ? AND sender_pubky = ?
+            AND applied = 0
+          ORDER BY received_at DESC LIMIT 1`,
+        [OWNER, conversationId, PEER_A],
+      ).rows ?? [];
+    expect(newest[0]?.event_id).toBe('evt-104');
   });
 });

@@ -23,7 +23,9 @@ export type ContinuePaymentReviewDeps = {
     peer: string,
     paymentRequestId: string,
     paymentHash: string,
+    endpointIdentifier: string,
   ) => Promise<void>;
+  recordDisplayedTipInvoice: (endpointIdentifier: string, paymentHash: string) => Promise<void>;
   prepare?: typeof prepareRequestHandoff;
 };
 
@@ -110,20 +112,25 @@ export async function continuePaymentReview(
   }
 
   let recordError: string | null = null;
-  if (
-    review.kind === 'request' &&
-    review.record &&
-    prepared.paymentHash &&
-    (prepared.ok || isAmountMismatchFailure(prepared))
-  ) {
-    try {
-      await deps.recordDisplayedInvoice(
-        review.record.peerPubky,
-        review.record.paymentRequestId,
-        prepared.paymentHash,
-      );
-    } catch (err) {
-      recordError = sanitizeError(err, fallback).message;
+  const paymentHash = prepared.paymentHash;
+  if (paymentHash && (prepared.ok || isAmountMismatchFailure(prepared))) {
+    if (review.kind === 'request' && review.record) {
+      try {
+        await deps.recordDisplayedInvoice(
+          review.record.peerPubky,
+          review.record.paymentRequestId,
+          paymentHash,
+          endpoint.identifier,
+        );
+      } catch (err) {
+        recordError = sanitizeError(err, fallback).message;
+      }
+    } else if (review.kind === 'tip') {
+      try {
+        await deps.recordDisplayedTipInvoice(endpoint.identifier, paymentHash);
+      } catch (err) {
+        recordError = sanitizeError(err, fallback).message;
+      }
     }
   }
 

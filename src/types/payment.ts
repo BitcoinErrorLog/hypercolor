@@ -83,12 +83,17 @@ export type PaymentAction = 'accept' | 'reject' | 'cancel' | 'proof';
  * | state          | accept | reject | cancel | proof                                      |
  * |----------------|--------|--------|--------|--------------------------------------------|
  * | pending        | payer* | payer  | payee  | — (inbound: mark seen, do not apply)       |
- * | accepted       | —      | —      | payee  | payer                                      |
+ * | accepted       | —      | —      | payee  | payer (including after a replayed,         |
+ * |                |        |        |        | junk, or unverifiable proof — those stay   |
+ * |                |        |        |        | accepted so a later proof or cancel can    |
+ * |                |        |        |        | still land)                                |
  * | rejected       | —      | —      | —      | —                                          |
  * | cancelled      | —      | —      | —      | —                                          |
  * | proof_received | —      | —      | —      | —                                          |
  *
  * Terminal states (rejected / cancelled / proof_received) are never overwritten.
+ * `proof_received` is only written when `proofVerified === true`. A replayed
+ * preimage (`proofVerified === false`) stays `accepted`.
  * Crossing accept/cancel resolves to whichever compare-and-set applied first
  * locally; the later transition is a no-op (inbound: seen-marker; local:
  * `already transitioned`).
@@ -269,6 +274,8 @@ export interface TipEndpointRecord {
   paymentHash: string | null;
 }
 
+export type OwnInvoiceDisplayContext = 'request' | 'tip';
+
 export interface OwnInvoiceHashRecord {
   ownerPubky: string;
   endpointIdentifier: string;
@@ -277,6 +284,10 @@ export interface OwnInvoiceHashRecord {
   /** Bolt11 msat, `amountless`, `unknown`, or null if not yet repaired. */
   invoiceAmountMsat: string | null;
   invoiceExpiresAt: number | null;
+  /** `tip` never corroborates a request. Null until first display. */
+  displayContext: OwnInvoiceDisplayContext | null;
+  /** Request this invoice was displayed for, if any. */
+  paymentRequestId: string | null;
 }
 
 export class PaymentError extends Error {
@@ -391,11 +402,20 @@ function isBtcAtMostCap(value: string): boolean {
   return true;
 }
 
+function isBidiOrIsolateControl(ch: string): boolean {
+  const code = ch.codePointAt(0);
+  if (code === undefined) return false;
+  if (code >= 0x202a && code <= 0x202e) return true;
+  if (code >= 0x2066 && code <= 0x2069) return true;
+  return false;
+}
+
 export function isValidPaymentReference(value: string): boolean {
   if (value.length === 0) return false;
   if ([...value].length > PAYMENT_REFERENCE_MAX_LEN) return false;
   for (const ch of value) {
     if (ch < ' ' || ch === '\u007f') return false;
+    if (isBidiOrIsolateControl(ch)) return false;
   }
   return true;
 }

@@ -57,10 +57,15 @@ import type {
   PaymentStatus,
   TipEndpointRecord,
   OwnInvoiceHashRecord,
+  OwnInvoiceDisplayContext,
 } from '../types/payment';
 import { isPaykitPaymentKind } from '../types/payment';
 import { bindingFromEndpoint, preferVerifiedInvoiceAmount } from './payments/invoiceAmountBind';
 import { isVerifiedHashUniqueError } from './payments/verifiedHashUniqueError';
+import {
+  isMissingOwnInvoiceHashesTableError,
+  logMissingOwnInvoiceHashTableRuntime,
+} from '../db/ownInvoiceHashes';
 import { KeyStore } from './KeyStore';
 import { cachePathsForAttachment, deleteCacheFiles } from './attachments/fileIo';
 import { OWNER_BACKUP_VERSION, type OwnerBackupSnapshot } from './backup/snapshot';
@@ -73,6 +78,9 @@ import { OWNER_BACKUP_VERSION, type OwnerBackupSnapshot } from './backup/snapsho
  */
 
 const now = () => Date.now();
+
+/** Hostile peers can grow unapplied `payment_events` rows; keep the newest N per sender. */
+const PAYMENT_EVENTS_UNAPPLIED_KEEP_PER_SENDER = 100;
 
 function transact(db: SqlExecutor, fn: () => void): void {
   db.executeSync('BEGIN IMMEDIATE');
@@ -1013,10 +1021,7 @@ export const StorageService = {
     const tipEndpoints = (
       db.executeSync(`SELECT * FROM tip_endpoints WHERE owner_pubky = ?`, [ownerPubky]).rows ?? []
     ).map(rowToTipEndpoint);
-    const ownInvoiceHashes = (
-      db.executeSync(`SELECT * FROM own_invoice_hashes WHERE owner_pubky = ?`, [ownerPubky]).rows ??
-      []
-    ).map(rowToOwnInvoiceHash);
+    const ownInvoiceHashes = readOwnInvoiceHashesForOwner(db, ownerPubky);
     const attachments = (
       db.executeSync(`SELECT * FROM attachments WHERE owner_pubky = ?`, [ownerPubky]).rows ?? []
     )
@@ -1137,6 +1142,10 @@ export const StorageService = {
           hashRow.firstSeenAt,
           binding.amountMsat,
           binding.expiresAt,
+          {
+            context: hashRow.displayContext,
+            paymentRequestId: hashRow.paymentRequestId,
+          },
         );
         continue;
       }
@@ -1148,6 +1157,10 @@ export const StorageService = {
         hashRow.firstSeenAt,
         hashRow.invoiceAmountMsat ?? null,
         hashRow.invoiceExpiresAt ?? null,
+        {
+          context: hashRow.displayContext,
+          paymentRequestId: hashRow.paymentRequestId,
+        },
       );
     }
     for (const attachment of snapshot.attachments) {
@@ -1228,7 +1241,12 @@ export const StorageService = {
       db.executeSync('DELETE FROM attachments WHERE owner_pubky = ?', [ownerPubky]);
       db.executeSync('DELETE FROM payment_events WHERE owner_pubky = ?', [ownerPubky]);
       db.executeSync('DELETE FROM payment_requests WHERE owner_pubky = ?', [ownerPubky]);
-      db.executeSync('DELETE FROM own_invoice_hashes WHERE owner_pubky = ?', [ownerPubky]);
+      try {
+        db.executeSync('DELETE FROM own_invoice_hashes WHERE owner_pubky = ?', [ownerPubky]);
+      } catch (err) {
+        if (!isMissingOwnInvoiceHashesTableError(err)) throw err;
+        logMissingOwnInvoiceHashTableRuntime();
+      }
       db.executeSync('DELETE FROM tip_endpoints WHERE owner_pubky = ?', [ownerPubky]);
       db.executeSync('DELETE FROM group_deferred_events WHERE owner_pubky = ?', [ownerPubky]);
       db.executeSync('DELETE FROM group_seen_events WHERE owner_pubky = ?', [ownerPubky]);
@@ -2256,8 +2274,37 @@ export const StorageService = {
     db.executeSync(
       `UPDATE payment_requests
        SET displayed_payment_hash = ?, updated_at = ?
-       WHERE owner_pubky = ? AND peer_pubky = ? AND payment_request_id = ?`,
+       WHERE owner_pubky = ? AND peer_pubky = ? AND payment_request_id = ?
+         AND (proof_verified IS NULL OR proof_verified != 1)`,
       [paymentHash, now(), ownerPubky, peerPubky, paymentRequestId],
+    );
+  },
+
+  /**
+   * Record that this owner displayed `paymentHash` for a request or a tip.
+   * Tip context is sticky and never overwritten by a later request bind.
+   * A request id is write-once: the first binding wins.
+   */
+  async recordOwnInvoiceDisplay(input: {
+    ownerPubky: PubkyKey;
+    endpointIdentifier: string;
+    paymentHash: string;
+    context: OwnInvoiceDisplayContext;
+    paymentRequestId: string | null;
+    firstSeenAt: number;
+    invoiceAmountMsat?: string | null;
+    invoiceExpiresAt?: number | null;
+  }): Promise<void> {
+    const db = await getDb();
+    insertOwnInvoiceHash(
+      db,
+      input.ownerPubky,
+      input.endpointIdentifier,
+      input.paymentHash,
+      input.firstSeenAt,
+      input.invoiceAmountMsat ?? null,
+      input.invoiceExpiresAt ?? null,
+      { context: input.context, paymentRequestId: input.paymentRequestId },
     );
   },
 
@@ -2298,14 +2345,20 @@ export const StorageService = {
     paymentHash: string,
   ): Promise<OwnInvoiceHashRecord | null> {
     const db = await getDb();
-    const result = db.executeSync(
-      `SELECT * FROM own_invoice_hashes
-       WHERE owner_pubky = ? AND endpoint_identifier = ? AND payment_hash = ?
-       LIMIT 1`,
-      [ownerPubky, endpointIdentifier, paymentHash],
-    );
-    const row = result.rows?.[0];
-    return row ? rowToOwnInvoiceHash(row) : null;
+    try {
+      const result = db.executeSync(
+        `SELECT * FROM own_invoice_hashes
+         WHERE owner_pubky = ? AND endpoint_identifier = ? AND payment_hash = ?
+         LIMIT 1`,
+        [ownerPubky, endpointIdentifier, paymentHash],
+      );
+      const row = result.rows?.[0];
+      return row ? rowToOwnInvoiceHash(row) : null;
+    } catch (err) {
+      if (!isMissingOwnInvoiceHashesTableError(err)) throw err;
+      logMissingOwnInvoiceHashTableRuntime();
+      return null;
+    }
   },
 
   async getTipEndpoint(
@@ -2325,29 +2378,18 @@ export const StorageService = {
 
   async savePaymentEvent(record: PaymentEventRecord): Promise<boolean> {
     const db = await getDb();
-    const before = db.executeSync(
-      `SELECT 1 FROM payment_events
-       WHERE owner_pubky = ? AND conversation_id = ? AND sender_pubky = ? AND event_id = ?`,
-      [record.ownerPubky, record.conversationId, record.senderPubky, record.eventId],
-    );
-    if ((before.rows?.length ?? 0) > 0) return false;
-    db.executeSync(
-      `INSERT OR IGNORE INTO payment_events
-        (owner_pubky, conversation_id, sender_pubky, event_id, kind,
-         payment_request_id, applied, received_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        record.ownerPubky,
-        record.conversationId,
-        record.senderPubky,
-        record.eventId,
-        record.kind,
-        record.paymentRequestId,
-        record.applied ? 1 : 0,
-        record.receivedAt,
-      ],
-    );
-    return true;
+    let inserted = false;
+    transact(db, () => {
+      const before = db.executeSync(
+        `SELECT 1 FROM payment_events
+         WHERE owner_pubky = ? AND conversation_id = ? AND sender_pubky = ? AND event_id = ?`,
+        [record.ownerPubky, record.conversationId, record.senderPubky, record.eventId],
+      );
+      if ((before.rows?.length ?? 0) > 0) return;
+      insertPaymentEvent(db, record);
+      inserted = true;
+    });
+    return inserted;
   },
 
   async hasPaymentEvent(
@@ -2446,6 +2488,19 @@ export const StorageService = {
 };
 
 // ─── Row mappers ──────────────────────────────────────────────────────────
+
+function readOwnInvoiceHashesForOwner(db: SqlExecutor, ownerPubky: string): OwnInvoiceHashRecord[] {
+  try {
+    return (
+      db.executeSync(`SELECT * FROM own_invoice_hashes WHERE owner_pubky = ?`, [ownerPubky]).rows ??
+      []
+    ).map(rowToOwnInvoiceHash);
+  } catch (err) {
+    if (!isMissingOwnInvoiceHashesTableError(err)) throw err;
+    logMissingOwnInvoiceHashTableRuntime();
+    return [];
+  }
+}
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function rowToContact(row: any): Contact {
@@ -2860,6 +2915,9 @@ function rowToTipEndpoint(row: any): TipEndpointRecord {
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function rowToOwnInvoiceHash(row: any): OwnInvoiceHashRecord {
+  const contextRaw = typeof row.display_context === 'string' ? row.display_context : null;
+  const displayContext: OwnInvoiceDisplayContext | null =
+    contextRaw === 'tip' || contextRaw === 'request' ? contextRaw : null;
   return {
     ownerPubky: String(row.owner_pubky),
     endpointIdentifier: String(row.endpoint_identifier),
@@ -2867,7 +2925,28 @@ function rowToOwnInvoiceHash(row: any): OwnInvoiceHashRecord {
     firstSeenAt: Number(row.first_seen_at),
     invoiceAmountMsat: typeof row.invoice_amount_msat === 'string' ? row.invoice_amount_msat : null,
     invoiceExpiresAt: typeof row.invoice_expires_at === 'number' ? row.invoice_expires_at : null,
+    displayContext,
+    paymentRequestId: typeof row.payment_request_id === 'string' ? row.payment_request_id : null,
   };
+}
+
+type OwnInvoiceDisplay = {
+  context: OwnInvoiceDisplayContext | null;
+  paymentRequestId: string | null;
+};
+
+function nextDisplayContext(
+  current: string | null,
+  incoming: OwnInvoiceDisplayContext | null,
+): string | null {
+  if (current === 'tip') return 'tip';
+  if (current === 'request') return 'request';
+  return incoming;
+}
+
+function nextPaymentRequestId(current: string | null, incoming: string | null): string | null {
+  if (current !== null && current.length > 0) return current;
+  return incoming;
 }
 
 function insertOwnInvoiceHash(
@@ -2878,18 +2957,49 @@ function insertOwnInvoiceHash(
   firstSeenAt: number,
   invoiceAmountMsat: string | null,
   invoiceExpiresAt: number | null,
+  display?: OwnInvoiceDisplay,
+): void {
+  try {
+    insertOwnInvoiceHashInner(
+      db,
+      ownerPubky,
+      endpointIdentifier,
+      paymentHash,
+      firstSeenAt,
+      invoiceAmountMsat,
+      invoiceExpiresAt,
+      display,
+    );
+  } catch (err) {
+    if (!isMissingOwnInvoiceHashesTableError(err)) throw err;
+    logMissingOwnInvoiceHashTableRuntime();
+  }
+}
+
+function insertOwnInvoiceHashInner(
+  db: SqlExecutor,
+  ownerPubky: string,
+  endpointIdentifier: string,
+  paymentHash: string,
+  firstSeenAt: number,
+  invoiceAmountMsat: string | null,
+  invoiceExpiresAt: number | null,
+  display?: OwnInvoiceDisplay,
 ): void {
   const existing = db.executeSync(
-    `SELECT invoice_amount_msat, invoice_expires_at FROM own_invoice_hashes
+    `SELECT invoice_amount_msat, invoice_expires_at, display_context, payment_request_id
+       FROM own_invoice_hashes
         WHERE owner_pubky = ? AND endpoint_identifier = ? AND payment_hash = ?`,
     [ownerPubky, endpointIdentifier, paymentHash],
   ).rows?.[0];
+  const incomingContext = display?.context ?? null;
+  const incomingRequestId = display?.paymentRequestId ?? null;
   if (!existing) {
     db.executeSync(
       `INSERT INTO own_invoice_hashes
         (owner_pubky, endpoint_identifier, payment_hash, first_seen_at,
-         invoice_amount_msat, invoice_expires_at)
-       VALUES (?, ?, ?, ?, ?, ?)`,
+         invoice_amount_msat, invoice_expires_at, display_context, payment_request_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         ownerPubky,
         endpointIdentifier,
@@ -2897,6 +3007,8 @@ function insertOwnInvoiceHash(
         firstSeenAt,
         invoiceAmountMsat,
         invoiceExpiresAt,
+        incomingContext,
+        incomingRequestId,
       ],
     );
     return;
@@ -2905,14 +3017,36 @@ function insertOwnInvoiceHash(
     typeof existing.invoice_amount_msat === 'string' ? existing.invoice_amount_msat : null;
   const currentExpiry =
     typeof existing.invoice_expires_at === 'number' ? existing.invoice_expires_at : null;
+  const currentContext =
+    typeof existing.display_context === 'string' ? existing.display_context : null;
+  const currentRequestId =
+    typeof existing.payment_request_id === 'string' ? existing.payment_request_id : null;
   const nextAmount = preferVerifiedInvoiceAmount(currentAmount, invoiceAmountMsat);
   const nextExpiry = currentExpiry ?? invoiceExpiresAt;
-  if (nextAmount === currentAmount && nextExpiry === currentExpiry) return;
+  const nextContext = nextDisplayContext(currentContext, incomingContext);
+  const nextRequestId = nextPaymentRequestId(currentRequestId, incomingRequestId);
+  if (
+    nextAmount === currentAmount &&
+    nextExpiry === currentExpiry &&
+    nextContext === currentContext &&
+    nextRequestId === currentRequestId
+  ) {
+    return;
+  }
   db.executeSync(
     `UPDATE own_invoice_hashes
-        SET invoice_amount_msat = ?, invoice_expires_at = ?
+        SET invoice_amount_msat = ?, invoice_expires_at = ?,
+            display_context = ?, payment_request_id = ?
       WHERE owner_pubky = ? AND endpoint_identifier = ? AND payment_hash = ?`,
-    [nextAmount, nextExpiry, ownerPubky, endpointIdentifier, paymentHash],
+    [
+      nextAmount,
+      nextExpiry,
+      nextContext,
+      nextRequestId,
+      ownerPubky,
+      endpointIdentifier,
+      paymentHash,
+    ],
   );
 }
 
@@ -2948,7 +3082,7 @@ function casPaymentRequestRow(
   } catch (err) {
     if (!isVerifiedHashUniqueError(err) || patch.proofVerified !== true) throw err;
     const replayPatch: PaymentRequestPatch = {
-      status: patch.status,
+      status: 'accepted',
       proofVerified: false,
     };
     if (patch.proofJson !== undefined) replayPatch.proofJson = patch.proofJson;
@@ -3011,6 +3145,36 @@ function insertPaymentEvent(db: SqlExecutor, record: PaymentEventRecord): void {
       record.paymentRequestId,
       record.applied ? 1 : 0,
       record.receivedAt,
+    ],
+  );
+  pruneUnappliedPaymentEvents(db, record.ownerPubky, record.conversationId, record.senderPubky);
+}
+
+function pruneUnappliedPaymentEvents(
+  db: SqlExecutor,
+  ownerPubky: string,
+  conversationId: string,
+  senderPubky: string,
+): void {
+  db.executeSync(
+    `DELETE FROM payment_events
+      WHERE owner_pubky = ? AND conversation_id = ? AND sender_pubky = ?
+        AND applied = 0
+        AND rowid NOT IN (
+          SELECT rowid FROM payment_events
+           WHERE owner_pubky = ? AND conversation_id = ? AND sender_pubky = ?
+             AND applied = 0
+           ORDER BY received_at DESC, rowid DESC
+           LIMIT ?
+        )`,
+    [
+      ownerPubky,
+      conversationId,
+      senderPubky,
+      ownerPubky,
+      conversationId,
+      senderPubky,
+      PAYMENT_EVENTS_UNAPPLIED_KEEP_PER_SENDER,
     ],
   );
 }

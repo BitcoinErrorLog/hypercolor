@@ -21,6 +21,7 @@ import {
   peekPaymentKind,
   rfc3339ZToUnixMs,
   PROOF_REASON_AMOUNT_MISMATCH,
+  type OwnInvoiceHashRecord,
   type PaymentAction,
   type PaymentDirection,
   type PaymentRequestRecord,
@@ -447,21 +448,15 @@ async function applyProof(
           decoded.payment_endpoint_identifier,
           h,
         );
-        if (invoice && !invoiceExpiredBeforeRequest(invoice.invoiceExpiresAt, row.createdAt)) {
-          const relation = invoiceAmountRelation(invoice.invoiceAmountMsat, row.amountValue);
-          if (relation === 'satisfies') {
-            proofVerified = true;
-            if (h !== row.displayedPaymentHash) rebindHash = h;
-          } else if (relation === 'mismatch') {
-            proofReason = PROOF_REASON_AMOUNT_MISMATCH;
-          }
-        }
+        const bound = bindProofToRequest(row, h, invoice);
+        proofVerified = bound.proofVerified;
+        if (bound.rebindHash) rebindHash = bound.rebindHash;
+        if (bound.proofReason) proofReason = bound.proofReason;
       }
     }
   }
 
-  const nextStatus: PaymentStatus =
-    proofVerified === true || proofVerified === false ? 'proof_received' : row.status;
+  const nextStatus: PaymentStatus = proofVerified === true ? 'proof_received' : row.status;
   const applied = await StorageService.compareAndSetPaymentRequest(
     input.ownerPubky,
     input.senderPubky,
@@ -512,6 +507,54 @@ async function markSeen(
     applied,
     receivedAt: input.receivedAt,
   });
+}
+
+function bindProofToRequest(
+  row: PaymentRequestRecord,
+  paymentHash: string,
+  invoice: OwnInvoiceHashRecord | null,
+): {
+  proofVerified: boolean | null;
+  rebindHash?: string;
+  proofReason?: string;
+} {
+  if (!invoice) return { proofVerified: null };
+  if (invoice.displayContext === 'tip') return { proofVerified: null };
+  if (invoice.paymentRequestId !== null && invoice.paymentRequestId !== row.paymentRequestId) {
+    return { proofVerified: null };
+  }
+  if (invoiceExpiredBeforeRequest(invoice.invoiceExpiresAt, row.createdAt)) {
+    return { proofVerified: null };
+  }
+
+  const displayed = row.displayedPaymentHash;
+  if (displayed !== null) {
+    if (paymentHash !== displayed) return { proofVerified: null };
+    return amountBindResult(invoice, row, null);
+  }
+
+  // recordFailed path: no displayed hash was recorded for this request.
+  if (invoice.firstSeenAt < row.createdAt) return { proofVerified: null };
+  return amountBindResult(invoice, row, paymentHash);
+}
+
+function amountBindResult(
+  invoice: OwnInvoiceHashRecord,
+  row: PaymentRequestRecord,
+  rebindHash: string | null,
+): {
+  proofVerified: boolean | null;
+  rebindHash?: string;
+  proofReason?: string;
+} {
+  const relation = invoiceAmountRelation(invoice.invoiceAmountMsat, row.amountValue);
+  if (relation === 'satisfies') {
+    return rebindHash ? { proofVerified: true, rebindHash } : { proofVerified: true };
+  }
+  if (relation === 'mismatch') {
+    return { proofVerified: null, proofReason: PROOF_REASON_AMOUNT_MISMATCH };
+  }
+  return { proofVerified: null };
 }
 
 function peekEventId(rawJson: string): string | null {

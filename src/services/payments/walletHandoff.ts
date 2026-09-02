@@ -150,10 +150,10 @@ export function prepareRequestHandoff(input: {
   let decoded: DecodedBolt11Invoice;
   try {
     decoded = decodeBolt11Invoice(input.payload);
-  } catch (err) {
+  } catch {
     return {
       ok: false,
-      error: err instanceof Error ? err.message : 'bolt11 invoice failed validation',
+      error: COPY.invoiceInvalid,
       requestAmountBtc: input.requestAmountBtc,
       invoiceAmountBtc: null,
       paymentHash: null,
@@ -201,16 +201,6 @@ export function prepareRequestHandoff(input: {
     expiresAtMs: decoded.expiresAtMs,
     warning: `Invoice has no amount. Enter ${input.requestAmountBtc} BTC in the wallet.`,
   };
-}
-
-export async function openPayUri(
-  endpointIdentifier: string,
-  payload: string,
-  deps: WalletHandoffDeps = {},
-  requestAmountBtc?: string,
-): Promise<'opened' | 'copied'> {
-  const { uri } = buildPayUri(endpointIdentifier, payload, requestAmountBtc);
-  return openBuiltUri(uri, deps);
 }
 
 export async function openBuiltUri(

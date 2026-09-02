@@ -340,6 +340,10 @@ describe('payment reference validation', () => {
     expect(isValidPaymentReference('invoice\u0007ref')).toBe(false);
     expect(isValidPaymentReference('r'.repeat(256))).toBe(true);
     expect(isValidPaymentReference('r'.repeat(257))).toBe(false);
+    expect(isValidPaymentReference('pay\u202Eevil')).toBe(false);
+    expect(isValidPaymentReference('pay\u202Aevil')).toBe(false);
+    expect(isValidPaymentReference('pay\u2066evil')).toBe(false);
+    expect(isValidPaymentReference('pay\u2069evil')).toBe(false);
   });
 
   it('refuses to build a payment_request with an empty reference', () => {

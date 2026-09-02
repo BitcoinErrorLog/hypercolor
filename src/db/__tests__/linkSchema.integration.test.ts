@@ -80,7 +80,11 @@ import {
   TESTNET_BOLT11_HASH,
 } from '../../services/payments/__tests__/bolt11Vectors';
 import { OWNER_BACKUP_VERSION } from '../../services/backup/snapshot';
-import { OWN_INVOICE_HASH_BACKFILL_SCAN_FROM } from '../ownInvoiceHashes';
+import {
+  OWN_INVOICE_HASH_BACKFILL_META_KEY,
+  OWN_INVOICE_HASH_BACKFILL_SCAN_FROM,
+  OWN_INVOICE_HASH_REPAIR_RETRY_META_KEY,
+} from '../ownInvoiceHashes';
 import { openFileDb, openMemoryDb } from './betterSqliteAdapter';
 import { mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
@@ -1803,6 +1807,8 @@ describe('schema v16 — own invoice history and verified-hash unique index', ()
           firstSeenAt: 10,
           invoiceAmountMsat: '2000000000',
           invoiceExpiresAt: 99,
+          displayContext: null,
+          paymentRequestId: null,
         },
       ],
       attachments: [],
@@ -1816,10 +1822,9 @@ describe('schema v16 — own invoice history and verified-hash unique index', ()
     expect(restored?.invoiceExpiresAt).toBeNull();
   });
 
-  it('skips amount backfill when a v16 database has no own_invoice_hashes table', async () => {
+  it('creates own_invoice_hashes on a v16 database that never ran the v16 set', async () => {
     const db = openMemoryDb();
     db.executeSync('PRAGMA user_version = 16');
-    const debug = jest.spyOn(console, 'debug').mockImplementation(() => undefined);
     setDbForTests(db);
     await expect(runMigrations(db)).resolves.toBeUndefined();
     expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(16);
@@ -1827,11 +1832,37 @@ describe('schema v16 — own invoice history and verified-hash unique index', ()
       db.executeSync(
         "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'own_invoice_hashes'",
       ).rows,
-    ).toHaveLength(0);
-    expect(debug).toHaveBeenCalledWith(
-      '[db] skipped own_invoice_hashes amount backfill: table absent',
+    ).toHaveLength(1);
+  });
+
+  it('does not fail startup when own_invoice_hashes backfill throws', async () => {
+    const db = openMemoryDb();
+    setDbForTests(db);
+    await runMigrations(db);
+    db.executeSync('DELETE FROM schema_meta WHERE key = ?', [OWN_INVOICE_HASH_BACKFILL_META_KEY]);
+    const original = db.executeSync.bind(db);
+    db.executeSync = (query, params) => {
+      const sql = String(query);
+      if (sql.includes(OWN_INVOICE_HASH_BACKFILL_SCAN_FROM)) {
+        throw new Error('scan boom');
+      }
+      return original(query, params);
+    };
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    await expect(runMigrations(db)).resolves.toBeUndefined();
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(
+      CURRENT_SCHEMA_VERSION,
     );
-    debug.mockRestore();
+    expect(warn).toHaveBeenCalledWith(
+      '[db] own_invoice_hashes repair failed; will retry next launch',
+      'scan boom',
+    );
+    const retry =
+      db.executeSync(`SELECT value FROM schema_meta WHERE key = ?`, [
+        OWN_INVOICE_HASH_REPAIR_RETRY_META_KEY,
+      ]).rows ?? [];
+    expect(retry.length).toBe(1);
+    warn.mockRestore();
   });
 
   it('does not rescan own_invoice_hashes after the repair marker is set', async () => {

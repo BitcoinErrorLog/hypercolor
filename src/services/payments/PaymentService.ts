@@ -1,7 +1,6 @@
 import { v4 as uuidv4 } from 'uuid';
 import type { PubkyKey } from '../../types';
 import {
-  ENDPOINT_BITCOIN_P2TR,
   ENDPOINT_LIGHTNING_BOLT11,
   PAYKIT_PAYMENT_PROOF_KIND,
   PAYKIT_PAYMENT_REQUEST_KIND,
@@ -114,6 +113,20 @@ export const PaymentService = {
     });
     const stored = await StorageService.getPaymentRequest(owner, peer, paymentRequestId);
     if (!stored) throw new PaymentError('not-found', 'payment request missing after create');
+    if (stored.displayedPaymentHash) {
+      const lightningId =
+        endpointIds.find(id => schemeForEndpointIdentifier(id) === 'lightning') ??
+        endpointIds[0] ??
+        ENDPOINT_LIGHTNING_BOLT11;
+      await StorageService.recordOwnInvoiceDisplay({
+        ownerPubky: owner,
+        endpointIdentifier: lightningId,
+        paymentHash: stored.displayedPaymentHash,
+        context: 'request',
+        paymentRequestId,
+        firstSeenAt: sentAt,
+      });
+    }
     return stored;
   },
 
@@ -228,9 +241,30 @@ export const PaymentService = {
     peer: PubkyKey,
     paymentRequestId: string,
     paymentHash: string,
+    endpointIdentifier: string = ENDPOINT_LIGHTNING_BOLT11,
   ): Promise<void> {
     const owner = requireOwner();
     await StorageService.setDisplayedPaymentHash(owner, peer, paymentRequestId, paymentHash);
+    await StorageService.recordOwnInvoiceDisplay({
+      ownerPubky: owner,
+      endpointIdentifier,
+      paymentHash,
+      context: 'request',
+      paymentRequestId,
+      firstSeenAt: Date.now(),
+    });
+  },
+
+  async recordDisplayedTipInvoice(endpointIdentifier: string, paymentHash: string): Promise<void> {
+    const owner = requireOwner();
+    await StorageService.recordOwnInvoiceDisplay({
+      ownerPubky: owner,
+      endpointIdentifier,
+      paymentHash,
+      context: 'tip',
+      paymentRequestId: null,
+      firstSeenAt: Date.now(),
+    });
   },
 
   async setMyTipEndpoints(
@@ -475,8 +509,3 @@ function requireOwner(): PubkyKey {
   if (!owner) throw new PaymentError('validation', 'No local pubky');
   return owner;
 }
-
-export const DEFAULT_TIP_IDENTIFIERS = {
-  lightning: ENDPOINT_LIGHTNING_BOLT11,
-  onchain: ENDPOINT_BITCOIN_P2TR,
-} as const;

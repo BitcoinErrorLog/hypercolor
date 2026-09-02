@@ -1,4 +1,5 @@
 import { decode as decodeBolt11Raw } from 'light-bolt11-decoder';
+import { COPY } from '../copy/uxCopy';
 
 const MSAT_PER_BTC = 100_000_000_000n;
 const DEFAULT_EXPIRY_SECONDS = 3600;
@@ -95,9 +96,8 @@ export function decodeBolt11Invoice(invoice: string): DecodedBolt11Invoice {
   let decoded: ReturnType<typeof decodeBolt11Raw>;
   try {
     decoded = decodeBolt11Raw(invoice.toLowerCase());
-  } catch (err) {
-    const message = err instanceof Error ? err.message : 'bolt11 decode failed';
-    throw new Bolt11DecodeError(message);
+  } catch {
+    throw new Bolt11DecodeError(COPY.invoiceInvalid);
   }
 
   const amountValue = sectionValue(decoded.sections, 'amount');

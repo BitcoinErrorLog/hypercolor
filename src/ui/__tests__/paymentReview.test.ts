@@ -11,6 +11,7 @@ import {
   MAINNET_BOLT11_AMOUNTLESS,
   MAINNET_P2TR,
 } from '../../services/payments/__tests__/bolt11Vectors';
+import { formatPaymentDisplayText } from '../../utils/displaySanitize';
 import { PAYMENT_COMPOSE_DEFAULT_AMOUNT, mapPaymentReview } from '../paymentReview';
 import { shortPubky } from '../shortPubky';
 
@@ -61,7 +62,7 @@ describe('mapPaymentReview', () => {
     expect(view.recipientShortPubky).toBe(shortPubky(PEER));
     expect(view.amountText).toContain(MAINNET_BOLT11_20U_BTC);
     expect(view.invoiceAmountText).toContain(MAINNET_BOLT11_20U_BTC);
-    expect(view.referenceText).toBe('invoice-1');
+    expect(view.referenceText).toBe(formatPaymentDisplayText('invoice-1'));
     expect(view.uri).toMatch(/^lightning:/);
     expect(view.networkText).toBe(COPY.networkLightningMainnet);
     expect(view.primaryLabel).toBe(COPY.openWallet);
@@ -289,5 +290,37 @@ describe('mapPaymentReview', () => {
     expect(view.uri).toBeNull();
     expect(view.secondaryAction).toBeNull();
     expect(view.destinations).toHaveLength(0);
+  });
+
+  it('sanitizes a peer-supplied payment_reference in the Review sheet', () => {
+    const dest = endpoint();
+    const raw = 'pay \u202Eevil\u202C invoice';
+    const view = mapPaymentReview({
+      ...BASE,
+      requestAmountBtc: MAINNET_BOLT11_20U_BTC,
+      reference: raw,
+      endpoint: dest,
+      destinations: [dest],
+    });
+    expect(view.referenceText).toBe(formatPaymentDisplayText(raw));
+    expect(view.referenceText).not.toContain('\u202E');
+    expect(view.referenceText).not.toBe(raw);
+  });
+
+  it('maps an unreadable bolt11 to fixed copy in the error region', () => {
+    const dest = endpoint({
+      payload: 'lnbc1not-a-real-invoice',
+      invoiceAmount: null,
+      paymentHash: null,
+    });
+    const view = mapPaymentReview({
+      ...BASE,
+      requestAmountBtc: '0.001',
+      endpoint: dest,
+      destinations: [dest],
+    });
+    expect(view.errorText).toBe(COPY.invoiceInvalid);
+    expect(view.errorText).not.toMatch(/Not a proper/i);
+    expect(view.primaryEnabled).toBe(false);
   });
 });

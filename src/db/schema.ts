@@ -1,11 +1,13 @@
 /**
  * Schema v16 — owner invoice history + one verified preimage per hash.
  *
- * Bolt11 invoices are single-use, so the payee rotates the tip invoice after
- * every payment. Proof verification therefore cannot bind to one create-time
- * snapshot: it looks up `sha256(preimage)` in this owner-scoped history AND
- * requires the stored invoice amount to satisfy the request (see
- * `invoiceAmountRelation`).
+ * Proof verification binds to THIS request first: `sha256(preimage)` must
+ * equal `payment_requests.displayed_payment_hash` (recorded before wallet
+ * open). `own_invoice_hashes` supplies amount/expiry metadata for that hash.
+ * When no displayed hash was recorded, history may corroborate only an
+ * invoice whose `first_seen_at >= request.created_at` and that was not
+ * displayed for a different request or as a tip (`display_context = 'tip'`
+ * never corroborates a request).
  *
  * `invoice_amount_msat` is the bolt11 msat string, the sentinel `amountless`
  * (only after a valid amountless mainnet bolt11 decode), `unknown` (repair
@@ -16,7 +18,8 @@
  * mainnet bolt11 decode or a denormalized BTC decimal. Inserts never
  * overwrite a known millisatoshi string; a verified decode may replace
  * `amountless` / `unknown`. `first_seen_at` is the tip row's `updated_at`
- * at seed time.
+ * at seed time. `display_context` / `payment_request_id` start NULL and are
+ * written when an invoice is displayed for a request or a tip.
  *
  * Rows are not pruned. An invoice that expired at or before the request was
  * created cannot corroborate that request; later expiry is not a proof reject
@@ -30,22 +33,26 @@
  * The unique index is owner-scoped and not direction-scoped: one owner's
  * payer row and payee row cannot both be verified against the same hash.
  * That is the replay case it exists to catch (self-link or a peer republishing
- * the owner's invoice).
+ * the owner's invoice). A hash that verified a request cannot verify another.
  *
  * v16 collides with W2b's `group_fanout_outcomes` at merge. Do not renumber
  * here; parent rebase makes W2c v17 as an idempotent reconciliation migration.
+ * The v16 set and the in-branch repair are both `IF NOT EXISTS` so a
+ * W2b-stamped v16 database still gains this table without a version bump.
  */
-export const SCHEMA_V16_STATEMENTS: readonly string[] = [
-  `CREATE TABLE IF NOT EXISTS own_invoice_hashes (
+export const OWN_INVOICE_HASHES_CREATE_SQL = `CREATE TABLE IF NOT EXISTS own_invoice_hashes (
     owner_pubky           TEXT    NOT NULL,
     endpoint_identifier   TEXT    NOT NULL,
     payment_hash          TEXT    NOT NULL,
     first_seen_at         INTEGER NOT NULL,
     invoice_amount_msat   TEXT,
     invoice_expires_at    INTEGER,
+    display_context       TEXT,
+    payment_request_id    TEXT,
     PRIMARY KEY (owner_pubky, endpoint_identifier, payment_hash)
-  )`,
-  `INSERT OR IGNORE INTO own_invoice_hashes
+  )`;
+
+export const OWN_INVOICE_HASHES_SEED_SQL = `INSERT OR IGNORE INTO own_invoice_hashes
      (owner_pubky, endpoint_identifier, payment_hash, first_seen_at,
       invoice_amount_msat, invoice_expires_at)
    SELECT owner_pubky, identifier, payment_hash, updated_at,
@@ -53,8 +60,9 @@ export const SCHEMA_V16_STATEMENTS: readonly string[] = [
           invoice_expires_at
      FROM tip_endpoints
     WHERE owner_pubky = peer_pubky
-      AND payment_hash IS NOT NULL`,
-  `UPDATE payment_requests
+      AND payment_hash IS NOT NULL`;
+
+export const PAYMENT_REQUESTS_VERIFIED_HASH_DEDUP_SQL = `UPDATE payment_requests
       SET proof_verified = NULL
     WHERE rowid IN (
       SELECT rowid FROM (
@@ -74,10 +82,17 @@ export const SCHEMA_V16_STATEMENTS: readonly string[] = [
                 )
            )
       )
-    )`,
-  `CREATE UNIQUE INDEX IF NOT EXISTS idx_payment_requests_owner_verified_hash
+    )`;
+
+export const PAYMENT_REQUESTS_VERIFIED_HASH_INDEX_SQL = `CREATE UNIQUE INDEX IF NOT EXISTS idx_payment_requests_owner_verified_hash
      ON payment_requests(owner_pubky, displayed_payment_hash)
-     WHERE proof_verified = 1`,
+     WHERE proof_verified = 1`;
+
+export const SCHEMA_V16_STATEMENTS: readonly string[] = [
+  OWN_INVOICE_HASHES_CREATE_SQL,
+  OWN_INVOICE_HASHES_SEED_SQL,
+  PAYMENT_REQUESTS_VERIFIED_HASH_DEDUP_SQL,
+  PAYMENT_REQUESTS_VERIFIED_HASH_INDEX_SQL,
 ];
 
 /**

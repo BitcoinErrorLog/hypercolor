@@ -33,6 +33,7 @@ jest.mock('../../../services/payments/PaymentService', () => ({
     requestPayment: jest.fn(),
     sendTipList: jest.fn(),
     recordDisplayedInvoice: jest.fn(),
+    recordDisplayedTipInvoice: jest.fn(),
     listMatchingTipEndpoints: jest.fn(),
   },
 }));
