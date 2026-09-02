@@ -26,7 +26,7 @@ import {
 } from '../../types/payment';
 import { StorageService } from '../StorageService';
 import { validateTipEndpoint } from './endpointValidation';
-import { extractBolt11Preimage, verifyBolt11Preimage } from './proofVerify';
+import { extractBolt11Preimage, bolt11PreimagePaymentHash } from './proofVerify';
 
 export type PaymentInboundOutcome =
   | { action: 'applied'; request: PaymentRequestRecord | null }
@@ -413,18 +413,33 @@ async function applyProof(
   }
 
   const preimage = extractBolt11Preimage(decoded.proof);
-  const paymentHash = row.displayedPaymentHash;
   let proofVerified: boolean | null = null;
-  if (preimage && paymentHash) {
-    const reused = await StorageService.hasVerifiedPaymentHash(
-      input.ownerPubky,
-      paymentHash,
-      decoded.payment_request_id,
-    );
-    if (reused) {
-      proofVerified = false;
-    } else {
-      proofVerified = await verifyBolt11Preimage(preimage, paymentHash);
+  let rebindHash: string | undefined;
+  if (preimage) {
+    const h = await bolt11PreimagePaymentHash(preimage);
+    if (h !== null) {
+      if (h === row.displayedPaymentHash) {
+        proofVerified = true;
+      } else {
+        const inHistory = await StorageService.hasOwnInvoiceHash(
+          input.ownerPubky,
+          decoded.payment_endpoint_identifier,
+          h,
+        );
+        const reused = await StorageService.hasVerifiedPaymentHash(
+          input.ownerPubky,
+          h,
+          decoded.payment_request_id,
+        );
+        if (inHistory && !reused) {
+          proofVerified = true;
+          rebindHash = h;
+        } else if (reused) {
+          proofVerified = false;
+        } else {
+          proofVerified = null;
+        }
+      }
     }
   }
 
@@ -437,6 +452,7 @@ async function applyProof(
       status: 'proof_received',
       proofJson: JSON.stringify(decoded.proof),
       proofVerified,
+      ...(rebindHash ? { displayedPaymentHash: rebindHash } : {}),
     },
   );
   await markSeen(

@@ -140,6 +140,23 @@ describe('mapPaymentReview', () => {
     expect(view.errorText).toBeNull();
   });
 
+  it('keeps Open wallet when the invoice record failed after the wallet opened', () => {
+    const dest = endpoint();
+    const view = mapPaymentReview({
+      ...BASE,
+      requestAmountBtc: MAINNET_BOLT11_20U_BTC,
+      endpoint: dest,
+      destinations: [dest],
+      walletUnavailable: false,
+      recordFailed: true,
+    });
+    expect(view.primaryEnabled).toBe(true);
+    expect(view.primaryLabel).toBe(COPY.openWallet);
+    expect(view.primaryAction).toBe('open');
+    expect(view.warningText).toBe(COPY.invoiceNotRecorded);
+    expect(view.errorText).toBeNull();
+  });
+
   it('requires an explicit destination when more than one endpoint matches', () => {
     const first = endpoint();
     const second = endpoint({

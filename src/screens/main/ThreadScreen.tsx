@@ -102,6 +102,7 @@ export default function ThreadScreen({ route }: Props) {
   const [tipPickerOpen, setTipPickerOpen] = useState(false);
   const [review, setReview] = useState<PaymentReviewRequest | null>(null);
   const [walletUnavailable, setWalletUnavailable] = useState(false);
+  const [recordFailed, setRecordFailed] = useState(false);
   const [reviewHandoffError, setReviewHandoffError] = useState<string | null>(null);
   const [composerNotice, setComposerNotice] = useState<ComposerAttachNotice | null>(null);
   const [peerContact, setPeerContact] = useState<Contact | null>(null);
@@ -195,6 +196,7 @@ export default function ThreadScreen({ route }: Props) {
       tipPickerOpen={tipPickerOpen}
       review={review}
       walletUnavailable={walletUnavailable}
+      recordFailed={recordFailed}
       reviewHandoffError={reviewHandoffError}
       retryableEventIds={retryableEventIds}
       composerNotice={composerNotice}
@@ -300,6 +302,7 @@ export default function ThreadScreen({ route }: Props) {
       onCloseReview={() => {
         setReview(null);
         setWalletUnavailable(false);
+        setRecordFailed(false);
         setReviewHandoffError(null);
       }}
       onCloseTipPicker={() => setTipPickerOpen(false)}
@@ -320,14 +323,17 @@ export default function ThreadScreen({ route }: Props) {
                 PaymentService.recordDisplayedInvoice(peer, paymentRequestId, paymentHash),
             });
             setWalletUnavailable(result.walletUnavailable);
+            setRecordFailed(result.recordFailed);
             setReviewHandoffError(result.error);
             if (result.closeReview) {
               setReview(null);
               setWalletUnavailable(false);
+              setRecordFailed(false);
               setReviewHandoffError(null);
             }
           } catch (err) {
             setWalletUnavailable(true);
+            setRecordFailed(false);
             setReviewHandoffError(sanitizeError(err, COPY.couldNotOpenWallet).message);
           }
         })();
@@ -374,6 +380,7 @@ export function ThreadScreenContent({
   tipPickerOpen,
   review,
   walletUnavailable,
+  recordFailed,
   reviewHandoffError,
   retryableEventIds,
   composerNotice,
@@ -414,6 +421,7 @@ export function ThreadScreenContent({
   tipPickerOpen: boolean;
   review: PaymentReviewRequest | null;
   walletUnavailable: boolean;
+  recordFailed: boolean;
   reviewHandoffError: string | null;
   retryableEventIds: ReadonlySet<string>;
   composerNotice: ComposerAttachNotice | null;
@@ -589,7 +597,8 @@ export function ThreadScreenContent({
         nowMs,
         destinationsEmpty: review.destinations.length === 0,
         walletUnavailable,
-        handoffError: reviewHandoffError,
+        recordFailed,
+        handoffError: recordFailed ? null : reviewHandoffError,
       })
     : null;
 

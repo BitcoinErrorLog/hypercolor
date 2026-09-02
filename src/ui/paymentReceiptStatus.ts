@@ -36,7 +36,7 @@ export function formatPaymentReceipt(
       return { word: COPY.paymentPaid, note: null };
     }
     if (record.proofVerified === false) {
-      return { word: COPY.paymentFailed, note: COPY.proofNotVerified };
+      return { word: COPY.paymentRequested, note: COPY.proofAlreadyUsed };
     }
     return { word: COPY.paymentRequested, note: COPY.proofNotVerified };
   }

@@ -56,6 +56,7 @@ import type {
   PaymentRequestRecord,
   PaymentStatus,
   TipEndpointRecord,
+  OwnInvoiceHashRecord,
 } from '../types/payment';
 import { isPaykitPaymentKind } from '../types/payment';
 import { KeyStore } from './KeyStore';
@@ -1010,6 +1011,10 @@ export const StorageService = {
     const tipEndpoints = (
       db.executeSync(`SELECT * FROM tip_endpoints WHERE owner_pubky = ?`, [ownerPubky]).rows ?? []
     ).map(rowToTipEndpoint);
+    const ownInvoiceHashes = (
+      db.executeSync(`SELECT * FROM own_invoice_hashes WHERE owner_pubky = ?`, [ownerPubky]).rows ??
+      []
+    ).map(rowToOwnInvoiceHash);
     const attachments = (
       db.executeSync(`SELECT * FROM attachments WHERE owner_pubky = ?`, [ownerPubky]).rows ?? []
     )
@@ -1033,6 +1038,7 @@ export const StorageService = {
       groupMessages,
       paymentRequests,
       tipEndpoints,
+      ownInvoiceHashes,
       attachments,
     };
   },
@@ -1096,6 +1102,19 @@ export const StorageService = {
           tip.invoiceExpiresAt,
           tip.paymentHash,
         ],
+      );
+      if (tip.peerPubky === ownerPubky && tip.paymentHash) {
+        insertOwnInvoiceHash(db, ownerPubky, tip.identifier, tip.paymentHash, tip.updatedAt);
+      }
+    }
+    for (const hashRow of snapshot.ownInvoiceHashes ?? []) {
+      if (hashRow.ownerPubky !== ownerPubky) continue;
+      insertOwnInvoiceHash(
+        db,
+        ownerPubky,
+        hashRow.endpointIdentifier,
+        hashRow.paymentHash,
+        hashRow.firstSeenAt,
       );
     }
     for (const attachment of snapshot.attachments) {
@@ -1176,6 +1195,7 @@ export const StorageService = {
       db.executeSync('DELETE FROM attachments WHERE owner_pubky = ?', [ownerPubky]);
       db.executeSync('DELETE FROM payment_events WHERE owner_pubky = ?', [ownerPubky]);
       db.executeSync('DELETE FROM payment_requests WHERE owner_pubky = ?', [ownerPubky]);
+      db.executeSync('DELETE FROM own_invoice_hashes WHERE owner_pubky = ?', [ownerPubky]);
       db.executeSync('DELETE FROM tip_endpoints WHERE owner_pubky = ?', [ownerPubky]);
       db.executeSync('DELETE FROM group_deferred_events WHERE owner_pubky = ?', [ownerPubky]);
       db.executeSync('DELETE FROM group_seen_events WHERE owner_pubky = ?', [ownerPubky]);
@@ -2076,7 +2096,7 @@ export const StorageService = {
     patch: PaymentRequestPatch,
   ): Promise<boolean> {
     const db = await getDb();
-    return compareAndSetPaymentRequestRow(
+    return casPaymentRequestRow(
       db,
       ownerPubky,
       peerPubky,
@@ -2103,7 +2123,7 @@ export const StorageService = {
     const db = await getDb();
     try {
       transact(db, () => {
-        const applied = compareAndSetPaymentRequestRow(
+        const applied = casPaymentRequestRow(
           db,
           input.ownerPubky,
           input.peerPubky,
@@ -2230,6 +2250,21 @@ export const StorageService = {
     return (result.rows?.length ?? 0) > 0;
   },
 
+  async hasOwnInvoiceHash(
+    ownerPubky: PubkyKey,
+    endpointIdentifier: string,
+    paymentHash: string,
+  ): Promise<boolean> {
+    const db = await getDb();
+    const result = db.executeSync(
+      `SELECT 1 FROM own_invoice_hashes
+       WHERE owner_pubky = ? AND endpoint_identifier = ? AND payment_hash = ?
+       LIMIT 1`,
+      [ownerPubky, endpointIdentifier, paymentHash],
+    );
+    return (result.rows?.length ?? 0) > 0;
+  },
+
   async getTipEndpoint(
     ownerPubky: PubkyKey,
     peerPubky: PubkyKey,
@@ -2325,6 +2360,15 @@ export const StorageService = {
             endpoint.paymentHash ?? null,
           ],
         );
+        if (ownerPubky === peerPubky && endpoint.paymentHash) {
+          insertOwnInvoiceHash(
+            db,
+            ownerPubky,
+            endpoint.identifier,
+            endpoint.paymentHash,
+            updatedAt,
+          );
+        }
       }
     });
   },
@@ -2764,6 +2808,31 @@ function rowToTipEndpoint(row: any): TipEndpointRecord {
   };
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function rowToOwnInvoiceHash(row: any): OwnInvoiceHashRecord {
+  return {
+    ownerPubky: String(row.owner_pubky),
+    endpointIdentifier: String(row.endpoint_identifier),
+    paymentHash: String(row.payment_hash),
+    firstSeenAt: Number(row.first_seen_at),
+  };
+}
+
+function insertOwnInvoiceHash(
+  db: SqlExecutor,
+  ownerPubky: string,
+  endpointIdentifier: string,
+  paymentHash: string,
+  firstSeenAt: number,
+): void {
+  db.executeSync(
+    `INSERT OR IGNORE INTO own_invoice_hashes
+      (owner_pubky, endpoint_identifier, payment_hash, first_seen_at)
+     VALUES (?, ?, ?, ?)`,
+    [ownerPubky, endpointIdentifier, paymentHash, firstSeenAt],
+  );
+}
+
 class CasConflictError extends Error {
   constructor() {
     super('already transitioned');
@@ -2774,6 +2843,50 @@ class CasConflictError extends Error {
 function sqliteChanges(db: SqlExecutor): number {
   const result = db.executeSync('SELECT changes() AS n');
   return Number(result.rows?.[0]?.n ?? 0);
+}
+
+function isVerifiedHashUniqueError(err: unknown): boolean {
+  const code = typeof err === 'object' && err !== null && 'code' in err ? String(err.code) : '';
+  const message = err instanceof Error ? err.message : String(err);
+  if (/UNIQUE constraint failed/i.test(message)) return true;
+  return code === 'SQLITE_CONSTRAINT_UNIQUE' || /CONSTRAINT_UNIQUE/i.test(code);
+}
+
+function casPaymentRequestRow(
+  db: SqlExecutor,
+  ownerPubky: string,
+  peerPubky: string,
+  paymentRequestId: string,
+  expectedStatuses: readonly PaymentStatus[],
+  patch: PaymentRequestPatch,
+): boolean {
+  try {
+    return compareAndSetPaymentRequestRow(
+      db,
+      ownerPubky,
+      peerPubky,
+      paymentRequestId,
+      expectedStatuses,
+      patch,
+    );
+  } catch (err) {
+    if (!isVerifiedHashUniqueError(err) || patch.proofVerified !== true) throw err;
+    const replayPatch: PaymentRequestPatch = {
+      status: patch.status,
+      proofVerified: false,
+    };
+    if (patch.proofJson !== undefined) replayPatch.proofJson = patch.proofJson;
+    if (patch.reason !== undefined) replayPatch.reason = patch.reason;
+    if (patch.pendingEventId !== undefined) replayPatch.pendingEventId = patch.pendingEventId;
+    return compareAndSetPaymentRequestRow(
+      db,
+      ownerPubky,
+      peerPubky,
+      paymentRequestId,
+      expectedStatuses,
+      replayPatch,
+    );
+  }
 }
 
 function insertPaymentRequest(db: SqlExecutor, record: PaymentRequestRecord): void {

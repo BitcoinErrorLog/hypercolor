@@ -82,6 +82,7 @@ describe('continuePaymentReview', () => {
     expect(result).toEqual({
       closeReview: false,
       walletUnavailable: true,
+      recordFailed: false,
       error: COPY.couldNotOpenWallet,
     });
     expect(openUri).not.toHaveBeenCalled();
@@ -96,6 +97,7 @@ describe('continuePaymentReview', () => {
       recordDisplayedInvoice,
     });
     expect(result.closeReview).toBe(true);
+    expect(result.recordFailed).toBe(false);
     expect(recordDisplayedInvoice).toHaveBeenCalledWith(
       PEER,
       '11111111-1111-4111-8111-111111111111',
@@ -103,7 +105,7 @@ describe('continuePaymentReview', () => {
     );
   });
 
-  it('keeps Copy reachable when recordDisplayedInvoice rejects and still surfaces the error', async () => {
+  it('keeps Open wallet when recordDisplayedInvoice rejects after the wallet opened', async () => {
     const openUri = jest.fn().mockResolvedValue(undefined);
     const result = await continuePaymentReview(URI, review(), {
       canOpenURL: async () => true,
@@ -113,8 +115,9 @@ describe('continuePaymentReview', () => {
       },
     });
     expect(result.closeReview).toBe(false);
-    expect(result.walletUnavailable).toBe(true);
-    expect(result.error).toBe(COPY.couldNotOpenWallet);
+    expect(result.walletUnavailable).toBe(false);
+    expect(result.recordFailed).toBe(true);
+    expect(result.error).toBe(COPY.invoiceNotRecorded);
     expect(openUri).toHaveBeenCalledWith(URI);
   });
 
@@ -129,6 +132,7 @@ describe('continuePaymentReview', () => {
     });
     expect(result.closeReview).toBe(false);
     expect(result.walletUnavailable).toBe(true);
+    expect(result.recordFailed).toBe(false);
     expect(result.error).toBe(COPY.couldNotOpenWallet);
     expect(recordDisplayedInvoice).toHaveBeenCalled();
   });
@@ -139,6 +143,11 @@ describe('continuePaymentReview', () => {
       openUri: jest.fn(),
       recordDisplayedInvoice: jest.fn(),
     });
-    expect(result).toEqual({ closeReview: false, walletUnavailable: true, error: null });
+    expect(result).toEqual({
+      closeReview: false,
+      walletUnavailable: true,
+      recordFailed: false,
+      error: null,
+    });
   });
 });

@@ -19,6 +19,7 @@ jest.mock('../../StorageService', () => ({
     replaceTipEndpoints: jest.fn(),
     getTipEndpoint: jest.fn(),
     hasVerifiedPaymentHash: jest.fn(),
+    hasOwnInvoiceHash: jest.fn(),
   },
 }));
 
@@ -64,6 +65,7 @@ const mockedStorage = jest.mocked(StorageService);
 type Store = {
   requests: Map<string, PaymentRequestRecord>;
   events: Map<string, PaymentEventRecord>;
+  ownHashes: Set<string>;
 };
 
 function requestKey(owner: string, peer: string, id: string): string {
@@ -103,6 +105,23 @@ function installStore(store: Store): void {
       const existing = store.requests.get(key);
       if (!existing) return false;
       if (!expected.includes(existing.status)) return false;
+      let nextHash =
+        patch.displayedPaymentHash === undefined
+          ? existing.displayedPaymentHash
+          : patch.displayedPaymentHash;
+      let nextVerified =
+        patch.proofVerified === undefined ? existing.proofVerified : patch.proofVerified;
+      if (nextVerified === true && nextHash) {
+        for (const other of store.requests.values()) {
+          if (other.ownerPubky !== owner) continue;
+          if (other.paymentRequestId === id) continue;
+          if (other.displayedPaymentHash === nextHash && other.proofVerified === true) {
+            nextVerified = false;
+            nextHash = existing.displayedPaymentHash;
+            break;
+          }
+        }
+      }
       store.requests.set(key, {
         ...existing,
         status: patch.status,
@@ -110,12 +129,8 @@ function installStore(store: Store): void {
         reason: patch.reason === undefined ? existing.reason : patch.reason,
         pendingEventId:
           patch.pendingEventId === undefined ? existing.pendingEventId : patch.pendingEventId,
-        displayedPaymentHash:
-          patch.displayedPaymentHash === undefined
-            ? existing.displayedPaymentHash
-            : patch.displayedPaymentHash,
-        proofVerified:
-          patch.proofVerified === undefined ? existing.proofVerified : patch.proofVerified,
+        displayedPaymentHash: nextHash,
+        proofVerified: nextVerified,
         updatedAt: NOW,
       });
       return true;
@@ -131,6 +146,9 @@ function installStore(store: Store): void {
     }
     return false;
   });
+  mockedStorage.hasOwnInvoiceHash.mockImplementation(async (owner, identifier, hash) =>
+    store.ownHashes.has(`${owner}|${identifier}|${hash}`),
+  );
 }
 
 function sentRow(overrides: Partial<PaymentRequestRecord> = {}): PaymentRequestRecord {
@@ -171,7 +189,7 @@ describe('applyPaymentInbound authorization (S2)', () => {
 
   beforeEach(() => {
     jest.resetAllMocks();
-    store = { requests: new Map(), events: new Map() };
+    store = { requests: new Map(), events: new Map(), ownHashes: new Set() };
     installStore(store);
   });
 
@@ -479,24 +497,56 @@ describe('applyPaymentInbound authorization (S2)', () => {
     expect(store.requests.get(requestKey(OWNER, PEER_A, REQUEST_ID))?.proofVerified).toBe(true);
   });
 
-  it('leaves proofVerified null when the request has no bound hash after invoice rotation', async () => {
+  it('marks paid when a stale snapshot is rebound to a rotated own invoice', async () => {
     const preimage = 'ab'.repeat(32);
-    const oldHash = createHash('sha256').update(Buffer.from(preimage, 'hex')).digest('hex');
+    const rotatedHash = createHash('sha256').update(Buffer.from(preimage, 'hex')).digest('hex');
+    const staleHash = '11'.repeat(32);
+    store.requests.set(
+      requestKey(OWNER, PEER_A, REQUEST_ID),
+      sentRow({ status: 'accepted', displayedPaymentHash: staleHash }),
+    );
+    store.ownHashes.add(`${OWNER}|${ENDPOINT_LIGHTNING_BOLT11}|${rotatedHash}`);
+    const proof = buildPaymentProofEnvelope({
+      eventId: EVENT_PRF,
+      paymentRequestId: REQUEST_ID,
+      paymentReference: 'invoice-2026-0001',
+      paymentEndpointIdentifier: ENDPOINT_LIGHTNING_BOLT11,
+      proofData: preimage,
+    });
+    expect((await inbound(PEER_A, proof.json)).action).toBe('applied');
+    const row = store.requests.get(requestKey(OWNER, PEER_A, REQUEST_ID));
+    expect(row?.proofVerified).toBe(true);
+    expect(row?.displayedPaymentHash).toBe(rotatedHash);
+    expect(displayPaymentStatus(row!.status, row!.expiresAt, NOW, row)).toBe('verified');
+  });
+
+  it('marks paid when the snapshot is null and the preimage matches a later own invoice', async () => {
+    const preimage = 'cd'.repeat(32);
+    const laterHash = createHash('sha256').update(Buffer.from(preimage, 'hex')).digest('hex');
     store.requests.set(
       requestKey(OWNER, PEER_A, REQUEST_ID),
       sentRow({ status: 'accepted', displayedPaymentHash: null }),
     );
-    mockedStorage.getTipEndpoint.mockResolvedValue({
-      ownerPubky: OWNER,
-      peerPubky: OWNER,
-      identifier: ENDPOINT_LIGHTNING_BOLT11,
-      payload: MAINNET_BOLT11_20U,
-      updatedAt: NOW,
-      validationStatus: 'valid',
-      invoiceAmount: MAINNET_BOLT11_20U_BTC,
-      invoiceExpiresAt: null,
-      paymentHash: MAINNET_BOLT11_20U_HASH,
+    store.ownHashes.add(`${OWNER}|${ENDPOINT_LIGHTNING_BOLT11}|${laterHash}`);
+    const proof = buildPaymentProofEnvelope({
+      eventId: EVENT_PRF,
+      paymentRequestId: REQUEST_ID,
+      paymentReference: 'invoice-2026-0001',
+      paymentEndpointIdentifier: ENDPOINT_LIGHTNING_BOLT11,
+      proofData: preimage,
     });
+    expect((await inbound(PEER_A, proof.json)).action).toBe('applied');
+    const row = store.requests.get(requestKey(OWNER, PEER_A, REQUEST_ID));
+    expect(row?.proofVerified).toBe(true);
+    expect(row?.displayedPaymentHash).toBe(laterHash);
+  });
+
+  it('leaves proofVerified null for a preimage this owner never issued', async () => {
+    const preimage = 'ab'.repeat(32);
+    store.requests.set(
+      requestKey(OWNER, PEER_A, REQUEST_ID),
+      sentRow({ status: 'accepted', displayedPaymentHash: null }),
+    );
     const proof = buildPaymentProofEnvelope({
       eventId: EVENT_PRF,
       paymentRequestId: REQUEST_ID,
@@ -508,7 +558,6 @@ describe('applyPaymentInbound authorization (S2)', () => {
     const row = store.requests.get(requestKey(OWNER, PEER_A, REQUEST_ID));
     expect(row?.proofVerified).toBeNull();
     expect(row?.displayedPaymentHash).toBeNull();
-    expect(oldHash).not.toBe(MAINNET_BOLT11_20U_HASH);
     expect(displayPaymentStatus(row!.status, row!.expiresAt, NOW, row)).toBe('claimed');
   });
 

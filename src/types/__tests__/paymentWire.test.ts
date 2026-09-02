@@ -379,6 +379,9 @@ describe('amount validation', () => {
     expect(btcDecimalToSats('0.00001')).toBe(1000);
     expect(btcDecimalToSats('1')).toBe(100_000_000);
     expect(btcDecimalToSats('0.001')).toBe(100_000);
+    expect(btcDecimalToSats('21000000')).toBe(2_100_000_000_000_000);
+    expect(btcDecimalToSats('50000000')).toBeNull();
+    expect(btcDecimalToSats('21000000.00000001')).toBeNull();
   });
 
   it('accepts lenient inbound amounts and any asset on decode, emits remain strict', () => {

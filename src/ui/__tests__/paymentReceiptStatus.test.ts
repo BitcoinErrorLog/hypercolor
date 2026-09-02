@@ -48,7 +48,7 @@ describe('formatPaymentReceiptStatus', () => {
     ).toBe(COPY.paymentPaid);
     expect(
       formatPaymentReceiptStatus(record({ status: 'proof_received', proofVerified: false }), now),
-    ).toBe(COPY.paymentFailed);
+    ).toBe(COPY.paymentRequested);
     expect(
       formatPaymentReceiptStatus(record({ status: 'proof_received', proofVerified: null }), now),
     ).toBe(COPY.paymentRequested);
@@ -70,10 +70,61 @@ describe('formatPaymentReceiptStatus', () => {
     ).toEqual({ word: COPY.paymentPaid, note: null });
     expect(
       formatPaymentReceipt(record({ status: 'proof_received', proofVerified: false }), now),
-    ).toEqual({ word: COPY.paymentFailed, note: COPY.proofNotVerified });
+    ).toEqual({ word: COPY.paymentRequested, note: COPY.proofAlreadyUsed });
     expect(
       formatPaymentReceipt(record({ status: 'proof_received', proofVerified: null }), now),
     ).toEqual({ word: COPY.paymentRequested, note: COPY.proofNotVerified });
+  });
+
+  it('maps the four receipt words and the two proof notes', () => {
+    const now = 1_000_000;
+    const rows: Array<{
+      status: PaymentRequestRecord['status'];
+      extras?: Partial<PaymentRequestRecord>;
+      word: string;
+      note: string | null;
+    }> = [
+      { status: 'pending', word: COPY.paymentRequested, note: null },
+      { status: 'accepted', word: COPY.paymentRequested, note: null },
+      {
+        status: 'pending',
+        extras: { pendingEventId: 'queued' },
+        word: COPY.paymentRequested,
+        note: null,
+      },
+      {
+        status: 'proof_received',
+        extras: { proofVerified: true },
+        word: COPY.paymentPaid,
+        note: null,
+      },
+      {
+        status: 'proof_received',
+        extras: { proofVerified: null },
+        word: COPY.paymentRequested,
+        note: COPY.proofNotVerified,
+      },
+      {
+        status: 'proof_received',
+        extras: { proofVerified: false },
+        word: COPY.paymentRequested,
+        note: COPY.proofAlreadyUsed,
+      },
+      { status: 'rejected', word: COPY.paymentFailed, note: null },
+      { status: 'cancelled', word: COPY.paymentFailed, note: null },
+      {
+        status: 'pending',
+        extras: { expiresAt: now - 1 },
+        word: COPY.paymentExpired,
+        note: null,
+      },
+    ];
+    for (const row of rows) {
+      expect(formatPaymentReceipt(record({ status: row.status, ...row.extras }), now)).toEqual({
+        word: row.word,
+        note: row.note,
+      });
+    }
   });
 
   it('never emits delivered', () => {

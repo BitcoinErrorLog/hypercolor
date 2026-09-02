@@ -27,12 +27,12 @@ canvas, `#7c3aed` brand, hairline borders, 12px radius, operational copy. No reb
 Mobile has exactly four tabs. Web has exactly four primary nav links plus two conditional
 brand links (`Enable`, `Connect`), which is ≤5 primary destinations and mirrors mobile.
 
-| Slot | Mobile tab | Web nav link / route | Shell |
-| --- | --- | --- | --- |
-| 1 | `Chats` | `Chats` → `/chats/[[...conversationId]]` | master/detail |
-| 2 | `Channels` | `Channels` → `/channels/[[...id]]` | master/detail |
-| 3 | `Contacts` | `Contacts` → `/contacts/[[...pubky]]` | master/detail |
-| 4 | `Profile` | `Profile` → `/profile` | single pane |
+| Slot | Mobile tab | Web nav link / route                     | Shell         |
+| ---- | ---------- | ---------------------------------------- | ------------- |
+| 1    | `Chats`    | `Chats` → `/chats/[[...conversationId]]` | master/detail |
+| 2    | `Channels` | `Channels` → `/channels/[[...id]]`       | master/detail |
+| 3    | `Contacts` | `Contacts` → `/contacts/[[...pubky]]`    | master/detail |
+| 4    | `Profile`  | `Profile` → `/profile`                   | single pane   |
 
 Web removes three current nav entries: `Discover` (folds into Channels → Public),
 `Requests` (becomes a pinned row inside Chats), and `Settings` (reached from Profile, as on
@@ -44,35 +44,35 @@ Mobile tab registration that stays as-is: `src/navigation/MainTabs.tsx:34-53`.
 
 ### A.2 Screen homes — every screen in both inventories
 
-| Screen / route | Mobile home | Web home |
-| --- | --- | --- |
-| Welcome / Connect | `Auth` stack → `Welcome` (`src/screens/auth/WelcomeScreen.tsx`) | `/` (`src/components/welcome-page.tsx`) |
-| Awaiting Ring authorization | `Auth` stack → `AwaitingRingAuth` (`src/screens/auth/AwaitingRingAuthScreen.tsx`) | inline auth panel on `/` (`src/components/auth-url-panel.tsx`) |
-| Ring callback | deep link `hypercolor://ring-callback`, handled in `src/navigation/RootNavigator.tsx:92-103` (no screen) | `/ring-callback` (`src/components/ring-callback-page.tsx`), transient |
-| Enable Messaging | root stack modal-push `EnableMessaging` (`RootNavigator.tsx:157-161`) | `/enable` (`src/components/enable-page.tsx`) |
-| Chats list | tab 1 (`src/screens/main/ChatsScreen.tsx`) | `/chats` master pane |
-| Thread (DM) | root stack push `Thread` (`RootNavigator.tsx:132-136`) | `/chats/{conversationId}` detail pane |
-| Message requests | root stack push `MessageRequests` (`RootNavigator.tsx:147-151`), entered from the pinned Requests row in Chats | `/requests`, entered from the pinned Requests row in Chats |
-| Channels list | tab 2 (`src/screens/main/ChannelsScreen.tsx`), segmented Private \| Public | `/channels` master pane, segmented Private \| Public |
-| Channel / group view | root stack push `ChannelScreen` (`RootNavigator.tsx:137-141`) | `/channels/{id}` detail pane (`src/components/channel-view.tsx`) |
-| Public topic (tag channel) | not implemented on mobile — see §A.4 | Channels → Public mode; topic detail renders `src/components/tag-channel-view.tsx` |
-| Contacts list | tab 3 (`src/screens/main/ContactsScreen.tsx`) | `/contacts` master pane |
-| Contact detail | new detail screen, root stack push `ContactDetail` (§D.9) | `/contacts/{pubky}` detail pane (`src/components/contact-detail.tsx`) |
-| Add contact / search | root stack push `ContactSearch` (`RootNavigator.tsx:142-146`) | inline panel at top of `/contacts` master pane (`src/components/contacts-page.tsx:167-201`) |
-| Follows import consent | new sheet from Contacts (§D.8) | inline panel on `/contacts` (`src/components/follows-import-panel.tsx`) |
-| Profile | tab 4 (`src/screens/main/ProfileScreen.tsx`) | `/profile` |
-| Settings | root stack push `Settings` (`RootNavigator.tsx:152-156`), entered from Profile | `/settings`, entered from Profile |
-| Sign-out confirmation | sheet over Profile (§D.15) | sheet over `/profile` (§D.15) |
-| Backup / recovery gate | sheet over Settings (§D.13) | sheet over `/settings` (§D.13) |
-| Tip endpoint settings | Settings section (`src/components/TipEndpointsSettings.tsx`) | not present; hidden by design (§E) |
-| Payment compose | sheet from Thread composer action menu (`src/components/PaymentComposeSheet.tsx`) | not present; hidden by design (§E, decision 5) |
-| Payment review | new sheet from Thread (§D.12) | not present |
-| Composer action menu | new sheet from Thread and Channel composers (§D.11) | new sheet from `src/components/composer.tsx` (photo/file only) |
-| Tab-lock banner | n/a | app shell, above nav (`src/components/tab-lock-banner.tsx`) |
-| Session banner | app shell (new, §D.19) | app shell (`src/components/session-banner.tsx`) |
-| PWA update prompt | n/a | app shell (`src/components/pwa-register.tsx`), §D.20 |
-| Live proof / dev panels | Settings, `__DEV__` only (`src/screens/main/SettingsScreen.tsx:329-372`) | `/e2e/*` routes, excluded from nav by `site-nav.tsx:35` |
-| Debug signup panel | Auth stack, `__DEV__` only (`src/screens/auth/DebugSignupPanel.tsx`) | n/a |
+| Screen / route              | Mobile home                                                                                                    | Web home                                                                                    |
+| --------------------------- | -------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| Welcome / Connect           | `Auth` stack → `Welcome` (`src/screens/auth/WelcomeScreen.tsx`)                                                | `/` (`src/components/welcome-page.tsx`)                                                     |
+| Awaiting Ring authorization | `Auth` stack → `AwaitingRingAuth` (`src/screens/auth/AwaitingRingAuthScreen.tsx`)                              | inline auth panel on `/` (`src/components/auth-url-panel.tsx`)                              |
+| Ring callback               | deep link `hypercolor://ring-callback`, handled in `src/navigation/RootNavigator.tsx:92-103` (no screen)       | `/ring-callback` (`src/components/ring-callback-page.tsx`), transient                       |
+| Enable Messaging            | root stack modal-push `EnableMessaging` (`RootNavigator.tsx:157-161`)                                          | `/enable` (`src/components/enable-page.tsx`)                                                |
+| Chats list                  | tab 1 (`src/screens/main/ChatsScreen.tsx`)                                                                     | `/chats` master pane                                                                        |
+| Thread (DM)                 | root stack push `Thread` (`RootNavigator.tsx:132-136`)                                                         | `/chats/{conversationId}` detail pane                                                       |
+| Message requests            | root stack push `MessageRequests` (`RootNavigator.tsx:147-151`), entered from the pinned Requests row in Chats | `/requests`, entered from the pinned Requests row in Chats                                  |
+| Channels list               | tab 2 (`src/screens/main/ChannelsScreen.tsx`), segmented Private \| Public                                     | `/channels` master pane, segmented Private \| Public                                        |
+| Channel / group view        | root stack push `ChannelScreen` (`RootNavigator.tsx:137-141`)                                                  | `/channels/{id}` detail pane (`src/components/channel-view.tsx`)                            |
+| Public topic (tag channel)  | not implemented on mobile — see §A.4                                                                           | Channels → Public mode; topic detail renders `src/components/tag-channel-view.tsx`          |
+| Contacts list               | tab 3 (`src/screens/main/ContactsScreen.tsx`)                                                                  | `/contacts` master pane                                                                     |
+| Contact detail              | new detail screen, root stack push `ContactDetail` (§D.9)                                                      | `/contacts/{pubky}` detail pane (`src/components/contact-detail.tsx`)                       |
+| Add contact / search        | root stack push `ContactSearch` (`RootNavigator.tsx:142-146`)                                                  | inline panel at top of `/contacts` master pane (`src/components/contacts-page.tsx:167-201`) |
+| Follows import consent      | new sheet from Contacts (§D.8)                                                                                 | inline panel on `/contacts` (`src/components/follows-import-panel.tsx`)                     |
+| Profile                     | tab 4 (`src/screens/main/ProfileScreen.tsx`)                                                                   | `/profile`                                                                                  |
+| Settings                    | root stack push `Settings` (`RootNavigator.tsx:152-156`), entered from Profile                                 | `/settings`, entered from Profile                                                           |
+| Sign-out confirmation       | sheet over Profile (§D.15)                                                                                     | sheet over `/profile` (§D.15)                                                               |
+| Backup / recovery gate      | sheet over Settings (§D.13)                                                                                    | sheet over `/settings` (§D.13)                                                              |
+| Tip endpoint settings       | Settings section (`src/components/TipEndpointsSettings.tsx`)                                                   | not present; hidden by design (§E)                                                          |
+| Payment compose             | sheet from Thread composer action menu (`src/components/PaymentComposeSheet.tsx`)                              | not present; hidden by design (§E, decision 5)                                              |
+| Payment review              | new sheet from Thread (§D.12)                                                                                  | not present                                                                                 |
+| Composer action menu        | new sheet from Thread and Channel composers (§D.11)                                                            | new sheet from `src/components/composer.tsx` (photo/file only)                              |
+| Tab-lock banner             | n/a                                                                                                            | app shell, above nav (`src/components/tab-lock-banner.tsx`)                                 |
+| Session banner              | app shell (new, §D.19)                                                                                         | app shell (`src/components/session-banner.tsx`)                                             |
+| PWA update prompt           | n/a                                                                                                            | app shell (`src/components/pwa-register.tsx`), §D.20                                        |
+| Live proof / dev panels     | Settings, `__DEV__` only (`src/screens/main/SettingsScreen.tsx:329-372`)                                       | `/e2e/*` routes, excluded from nav by `site-nav.tsx:35`                                     |
+| Debug signup panel          | Auth stack, `__DEV__` only (`src/screens/auth/DebugSignupPanel.tsx`)                                           | n/a                                                                                         |
 
 ### A.3 Requests placement (ruling applied)
 
@@ -132,34 +132,34 @@ Two distinct Ring approvals. Never use one word for the other.
 - **Enable messaging** = grant the Paykit + Hypercolor write scopes and publish a receiver
   marker. Second Ring approval.
 
-| Canonical string | Where used | Current divergent strings |
-| --- | --- | --- |
-| `Connect with Pubky Ring` | Welcome primary button, web `Connect` nav link | mobile `Connect with pubky-ring` (`src/screens/auth/WelcomeScreen.tsx:62`, a11y label `:54`); web button label is already `Connect with Pubky Ring` in `src/components/enable-messaging-cta.tsx:14` but the nav link says `Connect` (`src/components/site-nav.tsx:75`) |
-| `Enable encrypted messaging` | Enable screen title, Settings row, CTA button | mobile title `Enable encrypted messaging` (`src/screens/main/EnableMessagingScreen.tsx:92`), Settings row `Enable encrypted messaging` (`src/screens/main/SettingsScreen.tsx:198`) — both already correct; web `/enable` title `Enable encrypted messaging` (`src/components/enable-page.tsx:35-36`) already correct; web nav shortcut says `Enable` (`src/components/site-nav.tsx:66`) — keep the short nav label, it is a link not a CTA |
-| `Approve the Paykit and Hypercolor write scopes in Pubky Ring.` | Enable screen body, Enable CTA hint | mobile `Approve Paykit + Hypercolor write access in Pubky Ring` (`src/components/EnableMessagingCta.tsx:13`); mobile Settings hint `Authorize Pubky Ring for Paykit links` (`src/screens/main/SettingsScreen.tsx:199`); web `Encrypted DMs and homeserver writes share one Paykit session. Approve /pub/paykit/:rw,/pub/hypercolor.app/v1/:rw in Pubky Ring.` (`src/components/enable-page.tsx:37-43`) — web keeps the scope string as secondary monospace detail below the canonical sentence |
-| `Pubky Ring` | every user-facing mention of the app | mobile `pubky-ring` in `src/screens/auth/WelcomeScreen.tsx:48`, `src/screens/auth/AwaitingRingAuthScreen.tsx:43`, `:45`, `src/screens/main/ProfileScreen.tsx:34`, `:35`, `:84`, `:123`, `:127`, `src/screens/main/SettingsScreen.tsx:214`, `src/screens/auth/WelcomeScreen.tsx:31` |
-| `paykit-connect URL` | the copyable authorization URL | mobile `Copy authorization URL` (`src/screens/main/EnableMessagingScreen.tsx:150-151`) — keep as the button label; web `Scan or copy the paykit-connect URL` (`src/components/welcome-page.tsx:39-40`) already correct |
+| Canonical string                                                | Where used                                     | Current divergent strings                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| --------------------------------------------------------------- | ---------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Connect with Pubky Ring`                                       | Welcome primary button, web `Connect` nav link | mobile `Connect with pubky-ring` (`src/screens/auth/WelcomeScreen.tsx:62`, a11y label `:54`); web button label is already `Connect with Pubky Ring` in `src/components/enable-messaging-cta.tsx:14` but the nav link says `Connect` (`src/components/site-nav.tsx:75`)                                                                                                                                                                                                                         |
+| `Enable encrypted messaging`                                    | Enable screen title, Settings row, CTA button  | mobile title `Enable encrypted messaging` (`src/screens/main/EnableMessagingScreen.tsx:92`), Settings row `Enable encrypted messaging` (`src/screens/main/SettingsScreen.tsx:198`) — both already correct; web `/enable` title `Enable encrypted messaging` (`src/components/enable-page.tsx:35-36`) already correct; web nav shortcut says `Enable` (`src/components/site-nav.tsx:66`) — keep the short nav label, it is a link not a CTA                                                     |
+| `Approve the Paykit and Hypercolor write scopes in Pubky Ring.` | Enable screen body, Enable CTA hint            | mobile `Approve Paykit + Hypercolor write access in Pubky Ring` (`src/components/EnableMessagingCta.tsx:13`); mobile Settings hint `Authorize Pubky Ring for Paykit links` (`src/screens/main/SettingsScreen.tsx:199`); web `Encrypted DMs and homeserver writes share one Paykit session. Approve /pub/paykit/:rw,/pub/hypercolor.app/v1/:rw in Pubky Ring.` (`src/components/enable-page.tsx:37-43`) — web keeps the scope string as secondary monospace detail below the canonical sentence |
+| `Pubky Ring`                                                    | every user-facing mention of the app           | mobile `pubky-ring` in `src/screens/auth/WelcomeScreen.tsx:48`, `src/screens/auth/AwaitingRingAuthScreen.tsx:43`, `:45`, `src/screens/main/ProfileScreen.tsx:34`, `:35`, `:84`, `:123`, `:127`, `src/screens/main/SettingsScreen.tsx:214`, `src/screens/auth/WelcomeScreen.tsx:31`                                                                                                                                                                                                             |
+| `paykit-connect URL`                                            | the copyable authorization URL                 | mobile `Copy authorization URL` (`src/screens/main/EnableMessagingScreen.tsx:150-151`) — keep as the button label; web `Scan or copy the paykit-connect URL` (`src/components/welcome-page.tsx:39-40`) already correct                                                                                                                                                                                                                                                                         |
 
 ### B.2 Room vocabulary
 
-| Canonical string | Meaning | Current divergent strings |
-| --- | --- | --- |
-| `Private group` | Encrypted Link group, member-capped at 50 (`src/flags/config.ts:39`) | mobile row meta `Private group` (`src/screens/main/ChannelsScreen.tsx:197`) and toggle `Private group` (`:248`) already correct; web `New private group` (`src/components/channels-page.tsx:125`) already correct |
-| `Public topic` | anything in Channels → Public mode | mobile row meta `Public channel` (`src/screens/main/ChannelsScreen.tsx:197`), toggle `Public` (`:254`), join modal title `Join public channel` (`:312`), empty hint `Create a private group or join a public channel.` (`:221`); web page title `Discover` (`src/components/discover-page.tsx:43`) |
-| `Chat` | a one-to-one DM | mobile empty state `No conversations yet.` (`src/screens/main/ChatsScreen.tsx:141`) → `No chats yet.` |
-| `Message requests` | the held-inbound queue | mobile `Message requests` (`src/screens/main/MessageRequestsScreen.tsx:165`) and web `Message requests` (`src/components/requests-page.tsx:71`) already correct; mobile Chats button label `Requests` (`src/screens/main/ChatsScreen.tsx:121`) and mobile Contacts label `Requests` (`src/screens/main/ContactsScreen.tsx:168`) become the pinned row label `Message requests` |
+| Canonical string   | Meaning                                                              | Current divergent strings                                                                                                                                                                                                                                                                                                                                                      |
+| ------------------ | -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `Private group`    | Encrypted Link group, member-capped at 50 (`src/flags/config.ts:39`) | mobile row meta `Private group` (`src/screens/main/ChannelsScreen.tsx:197`) and toggle `Private group` (`:248`) already correct; web `New private group` (`src/components/channels-page.tsx:125`) already correct                                                                                                                                                              |
+| `Public topic`     | anything in Channels → Public mode                                   | mobile row meta `Public channel` (`src/screens/main/ChannelsScreen.tsx:197`), toggle `Public` (`:254`), join modal title `Join public channel` (`:312`), empty hint `Create a private group or join a public channel.` (`:221`); web page title `Discover` (`src/components/discover-page.tsx:43`)                                                                             |
+| `Chat`             | a one-to-one DM                                                      | mobile empty state `No conversations yet.` (`src/screens/main/ChatsScreen.tsx:141`) → `No chats yet.`                                                                                                                                                                                                                                                                          |
+| `Message requests` | the held-inbound queue                                               | mobile `Message requests` (`src/screens/main/MessageRequestsScreen.tsx:165`) and web `Message requests` (`src/components/requests-page.tsx:71`) already correct; mobile Chats button label `Requests` (`src/screens/main/ChatsScreen.tsx:121`) and mobile Contacts label `Requests` (`src/screens/main/ContactsScreen.tsx:168`) become the pinned row label `Message requests` |
 
 ### B.3 Message status words
 
 Only four words may appear as an outbound message status. Inbound messages never show a
 status.
 
-| Canonical string | Condition |
-| --- | --- |
-| `Queued` | `deliveryState === 'sending'` — the item is in the retry queue or the Encrypted Link handshake has not completed |
-| `Sent` | `deliveryState === 'sent'` — the ciphertext was written to the peer's receiver |
-| `Failed` | `deliveryState === 'failed'` — with a `Retry` action |
-| *(no status)* | any inbound message, and any message in a public topic |
+| Canonical string | Condition                                                                                                        |
+| ---------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `Queued`         | `deliveryState === 'sending'` — the item is in the retry queue or the Encrypted Link handshake has not completed |
+| `Sent`           | `deliveryState === 'sent'` — the ciphertext was written to the peer's receiver                                   |
+| `Failed`         | `deliveryState === 'failed'` — with a `Retry` action                                                             |
+| _(no status)_    | any inbound message, and any message in a public topic                                                           |
 
 `delivered` and `read` must not render anywhere. `CHAT_RECEIPT_KIND` is reserved and
 unimplemented in both repos; showing those words claims knowledge the client does not have.
@@ -185,7 +185,7 @@ Screens that must show it, in this exact wording (placement per §D): Welcome/Co
 Awaiting Ring authorization, Enable Messaging (all phases), Profile identity block, Settings
 identity row, Sign-out confirmation.
 
-Backup and restore need a second, distinct line because a recovery code *is* a secret
+Backup and restore need a second, distinct line because a recovery code _is_ a secret
 Hypercolor generates, and reusing the custody line there would be misleading:
 
 > This code unlocks your local backup. It is not your identity key — Pubky Ring still holds that.
@@ -222,7 +222,7 @@ Current divergent strings:
 > ☐ I understand my follows are public, that importing does not hide them, and that messaging
 > someone may reveal I use Hypercolor.
 >
-> [Use my follows]  [Not now]
+> [Use my follows] [Not now]
 
 Two current strings are factually wrong and must be deleted, not reworded. Web
 `src/components/follows-import-panel.tsx:46` says `Inbound chats from people you follow may
@@ -239,19 +239,19 @@ Other current divergent strings:
 - web enable button `Use my pubky.app follows to recognise people`
   (`src/components/follows-import-panel.tsx:163`)
 - web checkbox `I understand follows are public, that import does not hide them, and that
-  messaging someone may reveal I use Hypercolor.`
+messaging someone may reveal I use Hypercolor.`
   (`src/components/follows-import-panel.tsx:129-130`)
 - web disable note `Import is off. Follow recognition was cleared. Inbound chats from those
-  follows need an explicit accept unless you added them or already have a conversation.`
+follows need an explicit accept unless you added them or already have a conversation.`
   (`src/components/follows-import-panel.tsx:106-108`)
 - web suggestion header `Suggestions from pubky.app follows` and subcopy `Not your contact
-  list. Add one to keep them. Hypercolor does not write a follow.`
+list. Add one to keep them. Hypercolor does not write a follow.`
   (`src/components/contacts-page.tsx:243-245`)
 - mobile: **no consent copy exists.** `ContactsScreen.handleRefresh` calls
   `ContactsService.importFollows` unconditionally on every pull-to-refresh
   (`src/screens/main/ContactsScreen.tsx:59`) and then `syncRelationships`, which reaches
   Nexus, with no opt-in. The only related string is the empty hint `Pull to import follows,
-  or add someone by pubky.` (`src/screens/main/ContactsScreen.tsx:192`).
+or add someone by pubky.` (`src/screens/main/ContactsScreen.tsx:192`).
 
 ### B.6 Public-graph warning
 
@@ -304,16 +304,16 @@ Current divergent strings (raw `err.message` rendered directly): web
 Eight states. Each has exactly one canonical label, one body line, one primary action, and at
 most one secondary action. The same eight render identically on both platforms.
 
-| State | Label | Body | Primary | Secondary | Mobile owner | Web owner |
-| --- | --- | --- | --- | --- | --- | --- |
-| No identity | `Not connected` | `Pubky Ring holds your key. Hypercolor never sees it.` | `Connect with Pubky Ring` | — | `useAuthStore.isAuthenticated === false` (`src/stores/authStore.ts`), gating `RootNavigator.tsx:129` | `SessionUiStatus.kind === 'no-identity'`, label at `src/lib/session-ui.ts:20-21`; `hasIdentity()` false at `:3-10` |
-| Needs enable | `Messaging not enabled` | `Approve the Paykit and Hypercolor write scopes in Pubky Ring.` | `Enable encrypted messaging` | `Not now` | `LinkEnableStatus === 'needs-enable'` (`src/services/link/LinkService.ts:135`, produced at `:244-246`) | `SessionUiStatus.kind === 'needs-enable'`, label `Identity adopted — enable messaging` at `src/lib/session-ui.ts:22-23` |
-| Waiting for Ring | `Waiting for Pubky Ring…` | `Approve the request in Pubky Ring, or scan the code on another device.` | `Open Pubky Ring` | `Copy authorization URL` | `EnableMessagingState.phase === 'authorizing'` (`src/screens/main/enableMessagingController.ts:85`), label `src/screens/main/EnableMessagingScreen.tsx:37-38` | `usePaykitConnect` pending; label `Waiting for Pubky Ring…` at `src/components/enable-page.tsx:60` |
-| Expired | `Authorization expired` | `The paykit-connect link is only valid for five minutes.` | `Generate new authorization` | `Cancel` | handoff TTL comment `src/services/PubkyRingAuthService.ts:73-74`; screen has no expired phase today — add one | `HANDOFF_TTL_MS` (`src/services/RingConnect.ts:11`), consumed at `src/hooks/usePaykitConnect.ts:97`; labels `src/components/welcome-page.tsx:59-61` and `src/components/enable-page.tsx:59` |
-| Denied | `Authorization declined` | `Pubky Ring did not grant the scopes Hypercolor asked for.` | `Try again` | `Cancel` | `EnableMessagingState.phase === 'error'` (`src/screens/main/enableMessagingController.ts:115`, `:138`) with the declined branch split out | web `enable-page.tsx:52-54` `Could not enable encrypted messaging`, split the declined branch out of the generic error |
-| Offline | `You are offline. Messages will send when you reconnect.` | *(label is the body; no second line)* | `Try again` | — | `LinkEnableStatus === 'session-offline'` (`src/services/link/LinkService.ts:243`); phase at `src/screens/main/enableMessagingController.ts:158` | `SessionUiStatus.kind === 'session-offline'` (`src/lib/session-ui.ts:24-25`), rendered by `src/components/session-banner.tsx:14-46` |
-| Revoked | `Access was revoked` | `Pubky Ring no longer grants Hypercolor write access. Your local history is untouched.` | `Enable encrypted messaging` | `Sign out` | derived: `getEnableStatus()` returns `needs-enable` after a previously published receiver exists (`src/services/link/LinkService.ts:245-247`) — the screen must distinguish "never enabled" from "was enabled, now not" | derived the same way from `getEnableStatus()` in `src/services/link/session.ts`, surfaced through `sessionStatusStore.setFromRestore` |
-| Enabled | `Encrypted messaging enabled` | `Ring approved the grant and this device published a receiver marker.` | `Open chats` | `Authorize again` | `LinkEnableStatus === 'enabled'` (`src/services/link/LinkService.ts:247`); phase `success` (`src/screens/main/enableMessagingController.ts:107`), label `src/screens/main/EnableMessagingScreen.tsx:39-40` | `SessionUiStatus.kind === 'enabled'` (`src/lib/session-ui.ts:28-29`); `isMessagingEnabled()` at `:12-14` |
+| State            | Label                                                     | Body                                                                                    | Primary                      | Secondary                | Mobile owner                                                                                                                                                                                                            | Web owner                                                                                                                                                                                   |
+| ---------------- | --------------------------------------------------------- | --------------------------------------------------------------------------------------- | ---------------------------- | ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| No identity      | `Not connected`                                           | `Pubky Ring holds your key. Hypercolor never sees it.`                                  | `Connect with Pubky Ring`    | —                        | `useAuthStore.isAuthenticated === false` (`src/stores/authStore.ts`), gating `RootNavigator.tsx:129`                                                                                                                    | `SessionUiStatus.kind === 'no-identity'`, label at `src/lib/session-ui.ts:20-21`; `hasIdentity()` false at `:3-10`                                                                          |
+| Needs enable     | `Messaging not enabled`                                   | `Approve the Paykit and Hypercolor write scopes in Pubky Ring.`                         | `Enable encrypted messaging` | `Not now`                | `LinkEnableStatus === 'needs-enable'` (`src/services/link/LinkService.ts:135`, produced at `:244-246`)                                                                                                                  | `SessionUiStatus.kind === 'needs-enable'`, label `Identity adopted — enable messaging` at `src/lib/session-ui.ts:22-23`                                                                     |
+| Waiting for Ring | `Waiting for Pubky Ring…`                                 | `Approve the request in Pubky Ring, or scan the code on another device.`                | `Open Pubky Ring`            | `Copy authorization URL` | `EnableMessagingState.phase === 'authorizing'` (`src/screens/main/enableMessagingController.ts:85`), label `src/screens/main/EnableMessagingScreen.tsx:37-38`                                                           | `usePaykitConnect` pending; label `Waiting for Pubky Ring…` at `src/components/enable-page.tsx:60`                                                                                          |
+| Expired          | `Authorization expired`                                   | `The paykit-connect link is only valid for five minutes.`                               | `Generate new authorization` | `Cancel`                 | handoff TTL comment `src/services/PubkyRingAuthService.ts:73-74`; screen has no expired phase today — add one                                                                                                           | `HANDOFF_TTL_MS` (`src/services/RingConnect.ts:11`), consumed at `src/hooks/usePaykitConnect.ts:97`; labels `src/components/welcome-page.tsx:59-61` and `src/components/enable-page.tsx:59` |
+| Denied           | `Authorization declined`                                  | `Pubky Ring did not grant the scopes Hypercolor asked for.`                             | `Try again`                  | `Cancel`                 | `EnableMessagingState.phase === 'error'` (`src/screens/main/enableMessagingController.ts:115`, `:138`) with the declined branch split out                                                                               | web `enable-page.tsx:52-54` `Could not enable encrypted messaging`, split the declined branch out of the generic error                                                                      |
+| Offline          | `You are offline. Messages will send when you reconnect.` | _(label is the body; no second line)_                                                   | `Try again`                  | —                        | `LinkEnableStatus === 'session-offline'` (`src/services/link/LinkService.ts:243`); phase at `src/screens/main/enableMessagingController.ts:158`                                                                         | `SessionUiStatus.kind === 'session-offline'` (`src/lib/session-ui.ts:24-25`), rendered by `src/components/session-banner.tsx:14-46`                                                         |
+| Revoked          | `Access was revoked`                                      | `Pubky Ring no longer grants Hypercolor write access. Your local history is untouched.` | `Enable encrypted messaging` | `Sign out`               | derived: `getEnableStatus()` returns `needs-enable` after a previously published receiver exists (`src/services/link/LinkService.ts:245-247`) — the screen must distinguish "never enabled" from "was enabled, now not" | derived the same way from `getEnableStatus()` in `src/services/link/session.ts`, surfaced through `sessionStatusStore.setFromRestore`                                                       |
+| Enabled          | `Encrypted messaging enabled`                             | `Ring approved the grant and this device published a receiver marker.`                  | `Open chats`                 | `Authorize again`        | `LinkEnableStatus === 'enabled'` (`src/services/link/LinkService.ts:247`); phase `success` (`src/screens/main/enableMessagingController.ts:107`), label `src/screens/main/EnableMessagingScreen.tsx:39-40`              | `SessionUiStatus.kind === 'enabled'` (`src/lib/session-ui.ts:28-29`); `isMessagingEnabled()` at `:12-14`                                                                                    |
 
 Two additional non-states exist in code and must never reach the user as a state label:
 
@@ -336,7 +336,7 @@ Acceptance criteria are written as observable statements. `AC` numbering is per 
 
 ### D.1 Welcome / Connect
 
-*Mobile `src/screens/auth/WelcomeScreen.tsx` · Web `/` `src/components/welcome-page.tsx`*
+_Mobile `src/screens/auth/WelcomeScreen.tsx` · Web `/` `src/components/welcome-page.tsx`_
 
 **Layout regions.** (1) Product name. (2) Custody line (§B.4). (3) One-line explanation of
 what Connect does. (4) Primary button. (5) Auth panel (QR + copyable URL) once a link exists.
@@ -362,6 +362,7 @@ exits the app. Web: none; there is no signed-in shell to return to.
   `src/components/welcome-page.tsx:70-80`).
 
 **AC.**
+
 1. The custody line (§B.4) is present verbatim before any button is pressed.
 2. No string on this screen contains `pubky-ring` in lowercase-hyphenated form.
 3. Pressing the primary button twice within the TTL does not create a second pending
@@ -371,7 +372,7 @@ exits the app. Web: none; there is no signed-in shell to return to.
 
 ### D.2 Awaiting Ring authorization
 
-*Mobile `src/screens/auth/AwaitingRingAuthScreen.tsx` · Web: inline panel on `/`*
+_Mobile `src/screens/auth/AwaitingRingAuthScreen.tsx` · Web: inline panel on `/`_
 
 **Layout regions.** (1) Back control. (2) Title `Waiting for Pubky Ring…`. (3) Body
 `Approve the request in Pubky Ring, or scan the code on another device.` (4) QR. (5) Primary
@@ -389,6 +390,7 @@ The Bitkit mention is removed: Bitkit is a wallet handoff boundary, not an autho
 naming it here is a wrong instruction.
 
 **AC.**
+
 1. Back is reachable with a ≥44pt target and cancels the pending authorization.
 2. After five minutes without approval the screen shows the Expired state and the QR is no
    longer rendered.
@@ -396,8 +398,8 @@ naming it here is a wrong instruction.
 
 ### D.3 Enable Messaging — all phases
 
-*Mobile `src/screens/main/EnableMessagingScreen.tsx` (+ `enableMessagingController.ts`) ·
-Web `/enable` `src/components/enable-page.tsx`*
+_Mobile `src/screens/main/EnableMessagingScreen.tsx` (+ `enableMessagingController.ts`) ·
+Web `/enable` `src/components/enable-page.tsx`_
 
 **Layout regions.** (1) Header with Back. (2) Title `Enable encrypted messaging`. (3) Body:
 canonical scope sentence (§B.1), with the literal scope string
@@ -406,16 +408,16 @@ block. (5) Phase content. (6) Custody line pinned at the bottom.
 
 **Phases.**
 
-| Phase | Status label | Phase content | Primary | Secondary |
-| --- | --- | --- | --- | --- |
-| Checking | `Checking messaging status…` | skeleton | — | — |
-| Needs enable | `Messaging not enabled` | scope explanation | `Enable encrypted messaging` | `Not now` |
-| Authorizing | `Waiting for Pubky Ring…` | QR + copyable URL | `Open Pubky Ring` | `Copy authorization URL` |
-| Expired | `Authorization expired` | expired copy | `Generate new authorization` | `Cancel` |
-| Denied | `Authorization declined` | declined copy | `Try again` | `Cancel` |
-| Offline | `Session offline` | offline copy | `Try again` | `Cancel` |
-| Unavailable | `Encrypted messaging is unavailable in this build.` | nothing | — | `Back` |
-| **Success** | `Encrypted messaging enabled` | see below | **`Open chats`** | `Done` |
+| Phase        | Status label                                        | Phase content     | Primary                      | Secondary                |
+| ------------ | --------------------------------------------------- | ----------------- | ---------------------------- | ------------------------ |
+| Checking     | `Checking messaging status…`                        | skeleton          | —                            | —                        |
+| Needs enable | `Messaging not enabled`                             | scope explanation | `Enable encrypted messaging` | `Not now`                |
+| Authorizing  | `Waiting for Pubky Ring…`                           | QR + copyable URL | `Open Pubky Ring`            | `Copy authorization URL` |
+| Expired      | `Authorization expired`                             | expired copy      | `Generate new authorization` | `Cancel`                 |
+| Denied       | `Authorization declined`                            | declined copy     | `Try again`                  | `Cancel`                 |
+| Offline      | `Session offline`                                   | offline copy      | `Try again`                  | `Cancel`                 |
+| Unavailable  | `Encrypted messaging is unavailable in this build.` | nothing           | —                            | `Back`                   |
+| **Success**  | `Encrypted messaging enabled`                       | see below         | **`Open chats`**             | `Done`                   |
 
 **Success surface (decision 4, resolves P0-1).** Full-height centred block:
 
@@ -453,6 +455,7 @@ visible, the screen re-runs `getEnableStatus()` before rendering:
 than only firing an `Alert`.
 
 **AC.**
+
 1. In the success phase a full-width `Open chats` button is present and is the only
    brand-filled control on screen.
 2. Tapping `Open chats` lands on the Chats tab and pressing back from there does not return
@@ -465,8 +468,8 @@ than only firing an `Alert`.
 
 ### D.4 Chats list
 
-*Mobile `src/screens/main/ChatsScreen.tsx` · Web `/chats` master pane
-`src/components/chats-page.tsx`*
+_Mobile `src/screens/main/ChatsScreen.tsx` · Web `/chats` master pane
+`src/components/chats-page.tsx`_
 
 **Content (decision 1). Chats lists one-to-one DMs only.** Private groups and public topics
 live in Channels. Web's `loadInboxRows` currently merges DMs and group channels
@@ -501,7 +504,7 @@ route; the detail pane carries its own Back (§D.18).
 
 - Loading: three skeleton rows.
 - Empty: title `No chats yet.` body `Add someone by pubky, then start a chat. Nobody can
-  message you first until you have talked before or you invite them.` Primary `Add a contact`.
+message you first until you have talked before or you invite them.` Primary `Add a contact`.
   Replaces `No conversations yet.` / `Search for a contact to start chatting.`
   (`src/screens/main/ChatsScreen.tsx:141-142`).
 - Needs enable: the `EnableMessagingCta` block, title `Messaging not enabled`, body
@@ -511,6 +514,7 @@ route; the detail pane carries its own Back (§D.18).
 - Error: `Could not load your chats.` with `Try again` and collapsed `Details`.
 
 **AC.**
+
 1. No private group and no public topic appears in the Chats list on either platform.
 2. The `Message requests` row is present when the list is empty and when it is populated.
 3. The badge count on the row and the badge count on the Chats tab/nav link are the same
@@ -520,8 +524,8 @@ route; the detail pane carries its own Back (§D.18).
 
 ### D.5 Thread (DM)
 
-*Mobile `src/screens/main/ThreadScreen.tsx` · Web `/chats/{id}`
-`src/components/thread-view.tsx`*
+_Mobile `src/screens/main/ThreadScreen.tsx` · Web `/chats/{id}`
+`src/components/thread-view.tsx`_
 
 **Layout regions.** (1) Header: Back, peer identity, overflow. (2) Message list. (3) Status
 banner slot. (4) Composer: action button, text input, send.
@@ -558,6 +562,7 @@ a send is in flight.
   (`src/components/ComposerAttachButton.tsx:34`).
 
 **AC.**
+
 1. `delivered` and `read` never render, for any message, in any locale.
 2. An inbound bubble renders no status text.
 3. With the network off, sending shows `Queued`; restoring the network transitions the same
@@ -567,8 +572,8 @@ a send is in flight.
 
 ### D.6 Message requests
 
-*Mobile `src/screens/main/MessageRequestsScreen.tsx` · Web `/requests`
-`src/components/requests-page.tsx`*
+_Mobile `src/screens/main/MessageRequestsScreen.tsx` · Web `/requests`
+`src/components/requests-page.tsx`_
 
 **Layout regions.** (1) Header with Back and title `Message requests`. (2) Explanatory
 paragraph. (3) Request list. (4) Invite block (always present, see below).
@@ -617,6 +622,7 @@ says so and gives the working alternative:
 - Offline: rows render read-only; `Accept` and `Decline` disabled with the banner above.
 
 **AC.**
+
 1. No inbound message body text renders on this screen before that request is accepted.
 2. The invite block is present in both the empty and the populated state.
 3. Accepting a request whose sender also has a held group invitation resolves both, and the
@@ -625,8 +631,8 @@ says so and gives the working alternative:
 
 ### D.7 Contacts — populated
 
-*Mobile `src/screens/main/ContactsScreen.tsx` · Web `/contacts`
-`src/components/contacts-page.tsx`*
+_Mobile `src/screens/main/ContactsScreen.tsx` · Web `/contacts`
+`src/components/contacts-page.tsx`_
 
 **Layout regions.** (1) Header: title `Contacts`, trailing `Add`. (2) Add/search panel (web
 inline, mobile pushed screen). (3) Contact list, sorted by relationship then trust
@@ -654,6 +660,7 @@ call with no opt-in. That is the defect §D.8 fixes.
 with the list rendered from local storage.
 
 **AC.**
+
 1. With follows import off, a pull-to-refresh performs no homeserver follows read and no Nexus
    request.
 2. A suggestion row is visually distinct from a contact row and is never counted in the
@@ -666,7 +673,7 @@ with the list rendered from local storage.
 
 - Title `No contacts yet.`
 - Body `Add someone by pubky, or use your public pubky.app follows to recognise people you
-  already know.`
+already know.`
 - Primary `Add someone by pubky`
 - Secondary `Use my follows`
 
@@ -690,14 +697,15 @@ clause (`:106-108`) is deleted per §B.5.
 
 - Import running: `Reading…` on the button, list unchanged.
 - Import result: `Imported {n} confirmed follows as suggestions.` or `No confirmed follows
-  yet.` (web current at `src/components/follows-import-panel.tsx:151-154`).
+yet.` (web current at `src/components/follows-import-panel.tsx:151-154`).
 - Import failed: `Could not read your follows.` with `Try again` and collapsed `Details`,
   replacing mobile's `Import failed: {message}` (`src/screens/main/ContactsScreen.tsx:61`).
 - Nexus fallback used: append `Read from the public index and re-checked against your
-  homeserver.`
+homeserver.`
 - Offline: `Use my follows` disabled with `You are offline.`
 
 **AC.**
+
 1. From a cold install with zero contacts, follows import is reachable in two taps
    (`Contacts` → `Use my follows`).
 2. No request to `/pub/pubky.app/follows/` and no Nexus request is issued until the consent
@@ -707,8 +715,8 @@ clause (`:106-108`) is deleted per §B.5.
 
 ### D.9 Contact detail
 
-*Mobile: new `ContactDetail` screen · Web `/contacts/{pubky}`
-`src/components/contact-detail.tsx`*
+_Mobile: new `ContactDetail` screen · Web `/contacts/{pubky}`
+`src/components/contact-detail.tsx`_
 
 Mobile has no contact detail today — a contact row goes straight to the thread — so the pubky,
 relationship, and trust explanation have no home. This screen is added on mobile and
@@ -735,6 +743,7 @@ from local storage with the payment block (mobile) collapsed and labelled `Unava
 offline`.
 
 **AC.**
+
 1. The full pubky is selectable and copyable on both platforms.
 2. Web's contact detail issues no Paykit receiver request.
 3. `Message` opens the thread and back from the thread returns to contact detail, not to the
@@ -742,8 +751,8 @@ offline`.
 
 ### D.10 Channels — Private / Public modes
 
-*Mobile `src/screens/main/ChannelsScreen.tsx` · Web `/channels`
-`src/components/channels-page.tsx` (+ folded `src/components/discover-page.tsx`)*
+_Mobile `src/screens/main/ChannelsScreen.tsx` · Web `/channels`
+`src/components/channels-page.tsx` (+ folded `src/components/discover-page.tsx`)_
 
 **Layout regions.** (1) Header: title `Channels`, trailing `+`. (2) Segmented control
 `Private` | `Public`. (3) Mode-specific banner. (4) List. (5) Create/join sheets.
@@ -779,6 +788,7 @@ placeholder `hypercolor://join-public?channel=…` (`:317`) stays.
 button dismisses them. Neither does today (`src/screens/main/ChannelsScreen.tsx:232`, `:309`).
 
 **AC.**
+
 1. Navigating to Channels issues no request to the public index; the index is only queried
    after `Load public topics` is pressed in Public mode.
 2. The Android hardware back button dismisses the create sheet and the join sheet.
@@ -789,12 +799,15 @@ button dismisses them. Neither does today (`src/screens/main/ChannelsScreen.tsx:
    explicit confirm. A deferred `hypercolor://join-public` link never writes membership until the
    user taps Join on the dismissible `Pending invite to public topic` affordance. Creating a public
    topic from the Channels `+` sheet is gated the same way. Posts and refresh from an open public
-   channel the user is viewing remain user-initiated actions on that channel.
+   channel the user is viewing remain user-initiated actions on that channel. A `join-public` tap
+   with no active identity stays in memory and is not persisted under the next sign-in; after auth
+   it appears as that same dismissible banner showing the channel and host, and Join is the confirm
+   that attaches it to the signed-in identity.
 
 ### D.11 Channel / group view and the composer action menu
 
-*Mobile `src/screens/main/ChannelScreen.tsx` · Web `src/components/channel-view.tsx`,
-`src/components/tag-channel-view.tsx`, `src/components/composer.tsx`*
+_Mobile `src/screens/main/ChannelScreen.tsx` · Web `src/components/channel-view.tsx`,
+`src/components/tag-channel-view.tsx`, `src/components/composer.tsx`_
 
 **Layout regions.** (1) Header: Back, channel name, member count, overflow. (2) Message list.
 (3) Composer. Drafts are capped at 1000 bytes including envelope overhead.
@@ -807,13 +820,13 @@ per-recipient state.
 **ComposerActionMenu (sheet).** Opened by the composer `+`. Items, in order, each with an icon
 and a label:
 
-| Item | Private DM | Private group | Public topic |
-| --- | --- | --- | --- |
-| `Photo` | yes | yes | yes |
-| `File` | yes | yes | yes |
-| `Request payment` | mobile only | no | no |
-| `Send a tip` | mobile only | no | no |
-| `Cancel` | yes | yes | yes |
+| Item              | Private DM  | Private group | Public topic |
+| ----------------- | ----------- | ------------- | ------------ |
+| `Photo`           | yes         | yes           | yes          |
+| `File`            | yes         | yes           | yes          |
+| `Request payment` | mobile only | no            | no           |
+| `Send a tip`      | mobile only | no            | no           |
+| `Cancel`          | yes         | yes           | yes          |
 
 Web's menu contains `Photo`, `File`, `Cancel` only (decision 5). The sheet replaces mobile's
 `Alert.alert('Attach', 'Choose a source', [...])`
@@ -826,6 +839,7 @@ above the composer, `Tip` and `Send my tip list`
 `Open settings` action rather than a bare alert.
 
 **AC.**
+
 1. A raw `deliveryState` enum value never renders as visible text.
 2. A public topic message shows no status text.
 3. Every composer action is reachable in one tap from the composer, and the sheet dismisses on
@@ -833,9 +847,9 @@ above the composer, `Tip` and `Send my tip list`
 
 ### D.12 Payment Review (mobile)
 
-*New sheet, mobile only. Replaces the inline destination picker in
+_New sheet, mobile only. Replaces the inline destination picker in
 `src/components/PaymentRequestBubble.tsx:118-178` and the direct `openPayUri` call in
-`src/components/ThreadTipBar.tsx:25-27`.*
+`src/components/ThreadTipBar.tsx:25-27`._
 
 A wallet handoff currently happens on a single tap: `Open wallet`
 (`src/components/PaymentRequestBubble.tsx:175`) and `Pay in wallet`
@@ -870,16 +884,28 @@ displayed invoice.
 primary.
 
 **AC.**
+
 1. No code path opens a `lightning:` or `bitcoin:` URI without this sheet having been
    displayed and confirmed.
 2. When the invoice amount differs from the requested amount, both numbers are visible in the
    same view before the wallet opens.
 3. Cancelling records no displayed invoice.
+4. In-thread payment receipts use exactly four words:
+   - `requested` — the request is still outstanding: `pending`, `accepted`, an in-flight send,
+     `proof_received` with `proofVerified === null` (cannot corroborate), or `proof_received`
+     with `proofVerified === false` (this preimage already verified another request).
+   - `paid` — `proof_received` and `proofVerified === true` (PaymentService verified `sha256(preimage)`
+     against this request's bound hash or the owner's invoice history for that endpoint).
+   - `expired` — proposal expiry has passed while the request is still `pending` or `accepted`.
+   - `failed` — the request itself ended in `rejected` or `cancelled`. Never used for an unverified
+     or replayed proof.
+     Secondary notes (not a fifth word): `Proof not verified` when `proofVerified === null` on
+     `proof_received`; `This proof was already used` when `proofVerified === false`.
 
 ### D.13 Backup / recovery-code gate
 
-*Mobile `src/screens/main/SettingsScreen.tsx:92-165` · Web `/settings`
-`src/components/settings-page.tsx:79-155`*
+_Mobile `src/screens/main/SettingsScreen.tsx:92-165` · Web `/settings`
+`src/components/settings-page.tsx:79-155`_
 
 **Layout regions.** (1) Section title `Encrypted backup`. (2) Explanation. (3) Recovery code
 block. (4) Confirmation gate. (5) Restore block.
@@ -914,6 +940,7 @@ with collapsed `Details`, replacing `src/components/settings-page.tsx:155`. Offl
 actions stay enabled — backup and restore are local.
 
 **AC.**
+
 1. A newly generated recovery code cannot leave the screen without either the checkbox
    confirmation or an explicit `Leave anyway`.
 2. The recovery code is never rendered inside a screenshot-friendly toast or an OS alert.
@@ -921,8 +948,8 @@ actions stay enabled — backup and restore are local.
 
 ### D.14 Profile
 
-*Mobile `src/screens/main/ProfileScreen.tsx` · Web `/profile`
-`src/components/profile-page.tsx`*
+_Mobile `src/screens/main/ProfileScreen.tsx` · Web `/profile`
+`src/components/profile-page.tsx`_
 
 **Layout regions.** (1) Identity block: avatar, display name, full pubky with `Copy`. (2)
 Custody line (§B.4). (3) Session status row rendering the §C state with its action. (4)
@@ -936,13 +963,14 @@ per §C. The danger button `Disconnect pubky-ring`
 (`src/screens/main/ProfileScreen.tsx:127`, a11y label `:123`) becomes `Sign out`.
 
 **AC.**
+
 1. Profile is the only route to Settings on both platforms.
 2. The session status row shows the same label as the app-level banner for the same state.
 
 ### D.15 Sign-out confirmation
 
-*Sheet over Profile on both platforms. Mobile replaces the `Alert.alert` in `handleSignOut`
-(`src/screens/main/ProfileScreen.tsx:32-48`).*
+_Sheet over Profile on both platforms. Mobile replaces the `Alert.alert` in `handleSignOut`
+(`src/screens/main/ProfileScreen.tsx:32-48`)._
 
 **Canonical copy.**
 
@@ -965,14 +993,15 @@ access. You will need to re-authorize with pubky-ring to use the app.` (`:35`) �
 body states what is revoked but not what is deleted, which is the part the user cannot undo.
 
 **AC.**
+
 1. The sheet enumerates local deletion and Ring retention in two separate sentences.
 2. `Cancel` is the default-focused control.
 3. Signing out returns to Welcome with no residual conversation visible.
 
 ### D.16 Settings
 
-*Mobile `src/screens/main/SettingsScreen.tsx` · Web `/settings`
-`src/components/settings-page.tsx`*
+_Mobile `src/screens/main/SettingsScreen.tsx` · Web `/settings`
+`src/components/settings-page.tsx`_
 
 **Section order.** (1) Identity (pubky, custody line). (2) Messaging (`Enable encrypted
 messaging` row showing the §C state). (3) Encrypted backup (§D.13). (4) Payments — mobile
@@ -987,12 +1016,13 @@ hint becomes the canonical scope sentence (§B.1). `Keys managed by pubky-ring` 
 becomes the custody line.
 
 **AC.**
+
 1. The Developer section does not render in a production build on either platform.
 2. The messaging row label matches the §C label for the current state exactly.
 
 ### D.17 Web — responsive navigation
 
-*`src/components/site-nav.tsx`, app shell*
+_`src/components/site-nav.tsx`, app shell_
 
 At `≥md` the four primary links render as a horizontal row with the conditional `Enable` /
 `Connect` link trailing in brand colour. At `<md` they render as a fixed bottom bar with icon
@@ -1002,6 +1032,7 @@ current implementation is a wrapping `flex` of seven text links
 affordance beyond an underline.
 
 **AC.**
+
 1. At 375px the primary navigation occupies one row and every target is ≥44×44px.
 2. Exactly four primary links render, plus at most one conditional brand link.
 3. The active destination is distinguishable without relying on colour alone.
@@ -1017,13 +1048,14 @@ panes render with the master hidden (`hidden md:block`, e.g.
 has no way back except browser chrome — which a standalone-display PWA does not have.
 
 **AC.**
+
 1. At 375px, every detail pane has a visible Back control that returns to its list route.
 2. Loading a detail route directly as the first navigation still shows a working Back.
 3. At `≥md` no Back control renders in a detail pane.
 
 ### D.19 Session banner (both platforms)
 
-*Web `src/components/session-banner.tsx` · Mobile: new app-shell component*
+_Web `src/components/session-banner.tsx` · Mobile: new app-shell component_
 
 Renders only for the Offline and Revoked states (§C). Role `status`. One line of text plus one
 action. It is not dismissible — the condition, not the user, ends it.
@@ -1033,6 +1065,7 @@ Web currently renders for `session-offline` and `unknown`
 the banner condition per §C. Mobile has no banner and gains one above the tab content.
 
 **AC.**
+
 1. Turning the network off shows the banner within one poll interval on both platforms.
 2. The banner never renders while the session state is merely being checked.
 3. `Try again` re-runs the session restore and clears the banner on success.
@@ -1049,6 +1082,7 @@ a non-blocking bar: `A new version is ready.` with `Reload`. Never auto-reload: 
 reload during composition loses the draft.
 
 **AC.**
+
 1. The tab-lock banner uses a statement plus an imperative action, not a question.
 2. A waiting service worker never activates without an explicit `Reload`.
 3. Both bars render above the primary navigation and below any session banner.
@@ -1059,26 +1093,26 @@ reload during composition loses the draft.
 
 ### E.1 Features currently Settings-only, hidden, or harness-only
 
-| Feature | Current exposure | Ruling | Path after this contract |
-| --- | --- | --- | --- |
-| Enable messaging | mobile Settings row + inline CTAs (`src/screens/main/SettingsScreen.tsx:193-199`) | expose | 1 tap from Chats (pinned CTA) and from Thread; Settings row retained as a secondary path |
-| Message requests | mobile: buttons in two different screens; web: nav link | expose, single canonical path | 1 tap from Chats (pinned row), plus a badge visible from every destination (§A.3) |
-| Follows import | mobile: pull-to-refresh only, no consent; web: inline panel | expose + gate | 2 taps: `Contacts` → `Use my follows` → consent (§D.8) |
-| Contact detail | mobile: none | expose | 1 tap from a Contacts row (§D.9) |
-| Public topics | mobile: `Join`/`+` in Channels header; web: separate `/discover` nav link | expose as a mode | 1 tap: `Channels` → `Public` (§A.4) |
-| Tip endpoints (own) | mobile Settings (`src/components/TipEndpointsSettings.tsx`) | keep Settings-only | Configuring your own receive destinations is setup, not an in-conversation action. It stays a Settings section; the conversation-side action (`Send my tip list`, `src/components/ThreadTipBar.tsx:67`) moves into the composer action menu (§D.11), which is 1 tap from the composer. |
-| Payment request (mobile) | Thread, via `PaymentComposeSheet` | expose | 1 tap: composer `+` → `Request payment` (§D.11) |
-| Tip (mobile) | Thread chips above composer | expose | 1 tap: composer `+` → `Send a tip` (§D.11), then Payment Review (§D.12) |
-| Payments (web) | harness-only (`/e2e/payments-harness`, `src/services/payments/paymentsHarness.ts`) | **hidden by design** | See decision 5 below. |
-| Peer payment methods (web) | read-only block on contact detail (`src/components/contact-detail.tsx:124-126`) | **removed** | Its own subtitle says the app cannot send payments; it is a pay affordance that does not pay, and it costs a network read per contact open. |
-| Attachment send | mobile OS alert; web composer | expose | composer action menu (§D.11) |
-| Backup / restore | Settings section on both | keep Settings-only | Backup is account maintenance, not a task. It gains the gate in §D.13 and a prompt from the Sign-out sheet (§D.15), which is where a user actually needs it. |
-| BLE mesh | mobile Settings toggle, quarantined (`src/screens/main/SettingsScreen.tsx:78`) | **hidden by design** | Quarantined transport. It stays a labelled Experimental toggle in Settings with no promotion anywhere else. |
-| Telemetry toggle | mobile Settings (`:179`) | keep Settings-only | Standard privacy control location. |
-| Live proof panel | mobile Settings, `__DEV__` (`:329-372`) | **hidden by design** | Developer tooling. Must be compiled out of production, not merely hidden. |
-| Debug signup panel | mobile Auth, `__DEV__` (`src/screens/auth/DebugSignupPanel.tsx`) | **hidden by design** | Same. Its `Pubky Ring.` string (`:90`) needs no change since it never ships. |
-| E2E harness routes | web `/e2e/*`, excluded from nav (`src/components/site-nav.tsx:35`) | **hidden by design** | Test surface. Excluded from the sitemap and from any prefetch. |
-| `hypercolor://join-public` deep link | mobile, handled in `src/navigation/RootNavigator.tsx:75-91` | keep | Invite links must keep working; it now lands in Channels → Public. |
+| Feature                              | Current exposure                                                                   | Ruling                        | Path after this contract                                                                                                                                                                                                                                                               |
+| ------------------------------------ | ---------------------------------------------------------------------------------- | ----------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Enable messaging                     | mobile Settings row + inline CTAs (`src/screens/main/SettingsScreen.tsx:193-199`)  | expose                        | 1 tap from Chats (pinned CTA) and from Thread; Settings row retained as a secondary path                                                                                                                                                                                               |
+| Message requests                     | mobile: buttons in two different screens; web: nav link                            | expose, single canonical path | 1 tap from Chats (pinned row), plus a badge visible from every destination (§A.3)                                                                                                                                                                                                      |
+| Follows import                       | mobile: pull-to-refresh only, no consent; web: inline panel                        | expose + gate                 | 2 taps: `Contacts` → `Use my follows` → consent (§D.8)                                                                                                                                                                                                                                 |
+| Contact detail                       | mobile: none                                                                       | expose                        | 1 tap from a Contacts row (§D.9)                                                                                                                                                                                                                                                       |
+| Public topics                        | mobile: `Join`/`+` in Channels header; web: separate `/discover` nav link          | expose as a mode              | 1 tap: `Channels` → `Public` (§A.4)                                                                                                                                                                                                                                                    |
+| Tip endpoints (own)                  | mobile Settings (`src/components/TipEndpointsSettings.tsx`)                        | keep Settings-only            | Configuring your own receive destinations is setup, not an in-conversation action. It stays a Settings section; the conversation-side action (`Send my tip list`, `src/components/ThreadTipBar.tsx:67`) moves into the composer action menu (§D.11), which is 1 tap from the composer. |
+| Payment request (mobile)             | Thread, via `PaymentComposeSheet`                                                  | expose                        | 1 tap: composer `+` → `Request payment` (§D.11)                                                                                                                                                                                                                                        |
+| Tip (mobile)                         | Thread chips above composer                                                        | expose                        | 1 tap: composer `+` → `Send a tip` (§D.11), then Payment Review (§D.12)                                                                                                                                                                                                                |
+| Payments (web)                       | harness-only (`/e2e/payments-harness`, `src/services/payments/paymentsHarness.ts`) | **hidden by design**          | See decision 5 below.                                                                                                                                                                                                                                                                  |
+| Peer payment methods (web)           | read-only block on contact detail (`src/components/contact-detail.tsx:124-126`)    | **removed**                   | Its own subtitle says the app cannot send payments; it is a pay affordance that does not pay, and it costs a network read per contact open.                                                                                                                                            |
+| Attachment send                      | mobile OS alert; web composer                                                      | expose                        | composer action menu (§D.11)                                                                                                                                                                                                                                                           |
+| Backup / restore                     | Settings section on both                                                           | keep Settings-only            | Backup is account maintenance, not a task. It gains the gate in §D.13 and a prompt from the Sign-out sheet (§D.15), which is where a user actually needs it.                                                                                                                           |
+| BLE mesh                             | mobile Settings toggle, quarantined (`src/screens/main/SettingsScreen.tsx:78`)     | **hidden by design**          | Quarantined transport. It stays a labelled Experimental toggle in Settings with no promotion anywhere else.                                                                                                                                                                            |
+| Telemetry toggle                     | mobile Settings (`:179`)                                                           | keep Settings-only            | Standard privacy control location.                                                                                                                                                                                                                                                     |
+| Live proof panel                     | mobile Settings, `__DEV__` (`:329-372`)                                            | **hidden by design**          | Developer tooling. Must be compiled out of production, not merely hidden.                                                                                                                                                                                                              |
+| Debug signup panel                   | mobile Auth, `__DEV__` (`src/screens/auth/DebugSignupPanel.tsx`)                   | **hidden by design**          | Same. Its `Pubky Ring.` string (`:90`) needs no change since it never ships.                                                                                                                                                                                                           |
+| E2E harness routes                   | web `/e2e/*`, excluded from nav (`src/components/site-nav.tsx:35`)                 | **hidden by design**          | Test surface. Excluded from the sitemap and from any prefetch.                                                                                                                                                                                                                         |
+| `hypercolor://join-public` deep link | mobile, handled in `src/navigation/RootNavigator.tsx:75-91`                        | keep                          | Invite links must keep working; it now lands in Channels → Public.                                                                                                                                                                                                                     |
 
 ### E.2 Decision 5 in full — web payments
 
@@ -1102,7 +1136,7 @@ the displayed-invoice record — implemented in `src/services/payments/PaymentSe
 `src/services/payments/walletHandoff.ts`. Shipping a URI-only web flow would be a second,
 mobile-incompatible payment path: a web user could open a wallet for a request that mobile
 still considers pending, with no cancel and no proof. The existing web harness
-(`src/services/payments/paymentsHarness.ts`) covers Paykit *endpoint listing*, not payment
+(`src/services/payments/paymentsHarness.ts`) covers Paykit _endpoint listing_, not payment
 requests, so there is nothing to promote from it. Hiding is reversible in one wave; a divergent
 money path is not.
 
@@ -1110,21 +1144,21 @@ money path is not.
 
 Implementers re-verify zero callers workspace-wide before deleting anything marked remove.
 
-| Candidate | Repo | Ruling |
-| --- | --- | --- |
-| `lucide-react` dependency (unused) | web | **Remove.** The icon set the design-system wave needs is decided in §F; an unused icon dependency in a static export is shipped weight. |
-| Leftover default Next.js SVGs in `public/` | web | **Remove.** Not referenced by any component and not part of the PWA icon set. |
-| `/discover` route components after the fold-in | web | **Keep.** `src/components/discover-page.tsx` and `src/components/tag-channel-view.tsx` become the Public mode of Channels; only the route wrapper becomes a redirect. |
-| `Requests` nav entry | web | **Remove** from `LINKS` (`src/components/site-nav.tsx:16`); the `/requests` route and page stay. |
-| `sessionStatusLabel` `unknown` branch | web | **Keep.** Still used by the loading skeleton path; only the banner stops rendering it. |
-| Mobile Contacts `Requests` button and its handler | mobile | **Remove** (`src/screens/main/ContactsScreen.tsx:163-168`, `onRequests` prop at `:111`, `:121`, `:88`). |
-| `WOT_AUTO_ACCEPT_TRUST_THRESHOLD` | mobile (`src/flags/config.ts:29`) | **Keep.** Its own comment records that it is retained so existing overrides are not dead; removing it would break stored config. It must not influence any UI copy. |
-| `formatDeliveryState` `delivered` / `read` branches | mobile (`src/screens/main/ThreadScreen.tsx:464-467`) | **Remove the branches, keep the function.** The enum values stay in storage; the formatter maps them to `Sent`. |
-| `deliveryLabel` `delivered` / `read` branches | web (`src/components/message-bubble.tsx:21-24`) | **Remove the branches, keep the function.** Same reason. |
-| `ThreadTipBar` chips | mobile (`src/components/ThreadTipBar.tsx:60-69`) | **Keep the component, remove the chip row.** Its endpoint list becomes the `Send a tip` sheet content (§D.11). |
-| `PaymentRequestBubble` inline destination picker | mobile (`:118-178`) | **Remove.** Superseded by the Payment Review sheet (§D.12); the bubble keeps only the card and the action that opens Review. |
-| `ComposerAttachButton` `Alert.alert` source chooser | mobile (`:43-75`) | **Remove.** Superseded by the composer action menu (§D.11); the upload logic in `send` is kept. |
-| `paymentsHarness.ts` | web | **Keep.** It backs `/e2e/payments-harness`, which is a live test surface. |
+| Candidate                                           | Repo                                                 | Ruling                                                                                                                                                                |
+| --------------------------------------------------- | ---------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `lucide-react` dependency (unused)                  | web                                                  | **Remove.** The icon set the design-system wave needs is decided in §F; an unused icon dependency in a static export is shipped weight.                               |
+| Leftover default Next.js SVGs in `public/`          | web                                                  | **Remove.** Not referenced by any component and not part of the PWA icon set.                                                                                         |
+| `/discover` route components after the fold-in      | web                                                  | **Keep.** `src/components/discover-page.tsx` and `src/components/tag-channel-view.tsx` become the Public mode of Channels; only the route wrapper becomes a redirect. |
+| `Requests` nav entry                                | web                                                  | **Remove** from `LINKS` (`src/components/site-nav.tsx:16`); the `/requests` route and page stay.                                                                      |
+| `sessionStatusLabel` `unknown` branch               | web                                                  | **Keep.** Still used by the loading skeleton path; only the banner stops rendering it.                                                                                |
+| Mobile Contacts `Requests` button and its handler   | mobile                                               | **Remove** (`src/screens/main/ContactsScreen.tsx:163-168`, `onRequests` prop at `:111`, `:121`, `:88`).                                                               |
+| `WOT_AUTO_ACCEPT_TRUST_THRESHOLD`                   | mobile (`src/flags/config.ts:29`)                    | **Keep.** Its own comment records that it is retained so existing overrides are not dead; removing it would break stored config. It must not influence any UI copy.   |
+| `formatDeliveryState` `delivered` / `read` branches | mobile (`src/screens/main/ThreadScreen.tsx:464-467`) | **Remove the branches, keep the function.** The enum values stay in storage; the formatter maps them to `Sent`.                                                       |
+| `deliveryLabel` `delivered` / `read` branches       | web (`src/components/message-bubble.tsx:21-24`)      | **Remove the branches, keep the function.** Same reason.                                                                                                              |
+| `ThreadTipBar` chips                                | mobile (`src/components/ThreadTipBar.tsx:60-69`)     | **Keep the component, remove the chip row.** Its endpoint list becomes the `Send a tip` sheet content (§D.11).                                                        |
+| `PaymentRequestBubble` inline destination picker    | mobile (`:118-178`)                                  | **Remove.** Superseded by the Payment Review sheet (§D.12); the bubble keeps only the card and the action that opens Review.                                          |
+| `ComposerAttachButton` `Alert.alert` source chooser | mobile (`:43-75`)                                    | **Remove.** Superseded by the composer action menu (§D.11); the upload logic in `send` is kept.                                                                       |
+| `paymentsHarness.ts`                                | web                                                  | **Keep.** It backs `/e2e/payments-harness`, which is a live test surface.                                                                                             |
 
 ---
 
@@ -1132,22 +1166,22 @@ Implementers re-verify zero callers workspace-wide before deleting anything mark
 
 Every primitive below has at least one consuming screen in this contract.
 
-| Primitive | Consumers |
-| --- | --- |
-| `Button` (brand / outline / text / destructive; ≥44pt target; disabled and busy states) | every screen in §D |
-| `ListRow` (avatar slot, title, subtitle, meta, trailing slot, chevron) | Chats (§D.4), Requests (§D.6), Contacts (§D.7), Channels (§D.10), Settings (§D.16), Profile (§D.14) |
-| `PageHeader` (Back slot, title, trailing action slot) | Thread (§D.5), Requests (§D.6), Contact detail (§D.9), Channel view (§D.11), Settings (§D.16), Enable (§D.3), web detail panes (§D.18) |
-| `EmptyState` (title, body, primary action, optional secondary) | Chats (§D.4), Contacts (§D.8), Requests (§D.6), Channels both modes (§D.10), Thread (§D.5) |
-| `StatusBanner` (`role="status"`, label, single action, non-dismissible) | app shell both platforms (§D.19), tab lock (§D.20), PWA update (§D.20), public-graph warning (§B.6) |
-| `AuthQrPanel` (QR, copyable URL, TTL countdown, expired swap) | Welcome (§D.1), Awaiting Ring (§D.2), Enable authorizing phase (§D.3) |
-| `Sheet` (backdrop dismiss, `onRequestClose` / Escape, focus trap, safe-area padding) | composer action menu (§D.11), Payment Review (§D.12), follows consent (§D.8), sign-out (§D.15), Channels create/join (§D.10), contact danger confirmations (§D.9) |
-| `ComposerActionMenu` (built on `Sheet`) | Thread (§D.5), Channel view (§D.11) |
-| `PaymentReview` (built on `Sheet`) | mobile Thread payment request and tip (§D.12) |
-| `RecoveryCodeGate` (chunked monospace code, copy, confirm checkbox, leave interception) | Settings backup (§D.13) |
-| `Badge` (numeric, capped display, zero renders nothing) | Chats tab / nav link and pinned requests row (§A.3), Channels unread |
-| `Avatar` (identicon fallback derived from pubky, initial fallback for named groups) | Chats (§D.4), Contacts (§D.7), Contact detail (§D.9), Requests (§D.6), Channels (§D.10), Thread header (§D.5), Profile (§D.14) |
-| `AttachmentBubble` (uploading, ready, failed + retry, unavailable-without-key) | Thread (§D.5), Channel view (§D.11) |
-| `MessageStatus` (the only place the four status words are produced) | Thread (§D.5), Channel view private groups (§D.11), `AttachmentBubble` |
+| Primitive                                                                               | Consumers                                                                                                                                                         |
+| --------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Button` (brand / outline / text / destructive; ≥44pt target; disabled and busy states) | every screen in §D                                                                                                                                                |
+| `ListRow` (avatar slot, title, subtitle, meta, trailing slot, chevron)                  | Chats (§D.4), Requests (§D.6), Contacts (§D.7), Channels (§D.10), Settings (§D.16), Profile (§D.14)                                                               |
+| `PageHeader` (Back slot, title, trailing action slot)                                   | Thread (§D.5), Requests (§D.6), Contact detail (§D.9), Channel view (§D.11), Settings (§D.16), Enable (§D.3), web detail panes (§D.18)                            |
+| `EmptyState` (title, body, primary action, optional secondary)                          | Chats (§D.4), Contacts (§D.8), Requests (§D.6), Channels both modes (§D.10), Thread (§D.5)                                                                        |
+| `StatusBanner` (`role="status"`, label, single action, non-dismissible)                 | app shell both platforms (§D.19), tab lock (§D.20), PWA update (§D.20), public-graph warning (§B.6)                                                               |
+| `AuthQrPanel` (QR, copyable URL, TTL countdown, expired swap)                           | Welcome (§D.1), Awaiting Ring (§D.2), Enable authorizing phase (§D.3)                                                                                             |
+| `Sheet` (backdrop dismiss, `onRequestClose` / Escape, focus trap, safe-area padding)    | composer action menu (§D.11), Payment Review (§D.12), follows consent (§D.8), sign-out (§D.15), Channels create/join (§D.10), contact danger confirmations (§D.9) |
+| `ComposerActionMenu` (built on `Sheet`)                                                 | Thread (§D.5), Channel view (§D.11)                                                                                                                               |
+| `PaymentReview` (built on `Sheet`)                                                      | mobile Thread payment request and tip (§D.12)                                                                                                                     |
+| `RecoveryCodeGate` (chunked monospace code, copy, confirm checkbox, leave interception) | Settings backup (§D.13)                                                                                                                                           |
+| `Badge` (numeric, capped display, zero renders nothing)                                 | Chats tab / nav link and pinned requests row (§A.3), Channels unread                                                                                              |
+| `Avatar` (identicon fallback derived from pubky, initial fallback for named groups)     | Chats (§D.4), Contacts (§D.7), Contact detail (§D.9), Requests (§D.6), Channels (§D.10), Thread header (§D.5), Profile (§D.14)                                    |
+| `AttachmentBubble` (uploading, ready, failed + retry, unavailable-without-key)          | Thread (§D.5), Channel view (§D.11)                                                                                                                               |
+| `MessageStatus` (the only place the four status words are produced)                     | Thread (§D.5), Channel view private groups (§D.11), `AttachmentBubble`                                                                                            |
 
 `PaymentNotice` — the read-only inbound payment bubble specified in §E.2 — is web-only and is
 built as a variant of `AttachmentBubble`'s non-actionable layout rather than as its own
@@ -1166,7 +1200,7 @@ Mobile implements Hypercolor public channels at `/pub/hypercolor.app/v1/public-c
 both under one `Public` mode with one honest substrate line each, because converging is a
 product and protocol decision, not a UX one. ADR 0002's own open question 1
 (`:321`) asks whether mobile ever wrote those objects — it did, and it still does.
-*Recommended default:* ship the divergence as specified, and schedule a follow-up wave that
+_Recommended default:_ ship the divergence as specified, and schedule a follow-up wave that
 either adds tag-channel reading to mobile (mobile's `NexusClient` currently serves only the
 follower/following graph, `src/flags/config.ts:7-12`) or writes a read-only importer for
 existing `public-channels/` objects. Do not silently strand data that mobile users have
@@ -1179,7 +1213,7 @@ Contacts already hydrate `displayName` from pubky.app profiles during follows im
 back to `shortPubky`. Showing a self-asserted public display name for someone the user has not
 added is an impersonation surface: anyone can set their pubky.app name to match a person the
 user trusts.
-*Recommended default:* show the display name only for contacts the user added or accepted;
+_Recommended default:_ show the display name only for contacts the user added or accepted;
 show `shortPubky` everywhere else, including in Message requests, with the display name as
 secondary text prefixed `claims to be`. Requests already resolves a name when a contact record
 exists (`src/components/requests-page.tsx:90-92`), so this is a rule change, not new data.
@@ -1188,6 +1222,6 @@ exists (`src/components/requests-page.tsx:90-92`), so this is a rule change, not
 §D.6 specifies `Copy my pubky` and `Share` as the honest workaround for the missing open inbox.
 A `hypercolor://` deep link would be friendlier but only works for someone who already has the
 app, and a web fallback URL would publish a Hypercolor-usage signal at a fixed address.
-*Recommended default:* share the bare pubky only. It works in every client, reveals nothing
+_Recommended default:_ share the bare pubky only. It works in every client, reveals nothing
 beyond the identity the user is already handing over, and does not create a new hosted
 endpoint that has to be maintained and privacy-reviewed.

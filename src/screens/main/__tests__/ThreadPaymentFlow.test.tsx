@@ -104,6 +104,7 @@ function props(
     tipPickerOpen: false,
     review: null,
     walletUnavailable: false,
+    recordFailed: false,
     reviewHandoffError: null,
     retryableEventIds: new Set<string>(),
     composerNotice: null,

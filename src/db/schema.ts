@@ -1,4 +1,60 @@
 /**
+ * Schema v16 — owner invoice history + one verified preimage per hash.
+ *
+ * Bolt11 invoices are single-use, so the payee rotates the tip invoice after
+ * every payment. Proof verification therefore cannot bind to one create-time
+ * snapshot: it looks up `sha256(preimage)` in this owner-scoped history.
+ *
+ * Seed copies current own tip hashes (`owner_pubky = peer_pubky`) so invoices
+ * already on disk are known. Inserts are `OR IGNORE` (primary key is the
+ * triple). `first_seen_at` is the tip row's `updated_at` at seed time.
+ *
+ * Duplicate `proof_verified = 1` rows that share `(owner_pubky,
+ * displayed_payment_hash)` are reduced before the unique index: the earliest
+ * `created_at` (lowest `rowid` on ties) stays verified; the others have
+ * `proof_verified` set to NULL (cannot corroborate — not replay).
+ */
+export const SCHEMA_V16_STATEMENTS: readonly string[] = [
+  `CREATE TABLE IF NOT EXISTS own_invoice_hashes (
+    owner_pubky           TEXT    NOT NULL,
+    endpoint_identifier   TEXT    NOT NULL,
+    payment_hash          TEXT    NOT NULL,
+    first_seen_at         INTEGER NOT NULL,
+    PRIMARY KEY (owner_pubky, endpoint_identifier, payment_hash)
+  )`,
+  `INSERT OR IGNORE INTO own_invoice_hashes
+     (owner_pubky, endpoint_identifier, payment_hash, first_seen_at)
+   SELECT owner_pubky, identifier, payment_hash, updated_at
+     FROM tip_endpoints
+    WHERE owner_pubky = peer_pubky
+      AND payment_hash IS NOT NULL`,
+  `UPDATE payment_requests
+      SET proof_verified = NULL
+    WHERE rowid IN (
+      SELECT rowid FROM (
+        SELECT p.rowid AS rowid
+          FROM payment_requests AS p
+         WHERE p.proof_verified = 1
+           AND p.displayed_payment_hash IS NOT NULL
+           AND EXISTS (
+             SELECT 1
+               FROM payment_requests AS o
+              WHERE o.owner_pubky = p.owner_pubky
+                AND o.displayed_payment_hash = p.displayed_payment_hash
+                AND o.proof_verified = 1
+                AND (
+                  o.created_at < p.created_at
+                  OR (o.created_at = p.created_at AND o.rowid < p.rowid)
+                )
+           )
+      )
+    )`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_payment_requests_owner_verified_hash
+     ON payment_requests(owner_pubky, displayed_payment_hash)
+     WHERE proof_verified = 1`,
+];
+
+/**
  * Schema v15 — move the handshake advance budget off the `links` row.
  *
  * v14 put `pending_advances` / `next_advance_at` on `links`, which is deleted

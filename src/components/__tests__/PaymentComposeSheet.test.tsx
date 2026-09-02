@@ -2,6 +2,7 @@ import React from 'react';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import { PaymentComposeSheet, paymentComposeError } from '../PaymentComposeSheet';
 import { PAYMENT_REFERENCE_MAX_LEN } from '../../types/payment';
+import { amountSatsApprox } from '../../copy/uxCopy';
 
 async function render(element: React.ReactElement): Promise<ReactTestRenderer> {
   let tree!: ReactTestRenderer;
@@ -128,8 +129,10 @@ describe('PaymentComposeSheet', () => {
       tree.root.findByProps({ testID: 'paymentComposeAmount' }).props.onChangeText('0.001');
     });
     expect(tree.root.findByProps({ testID: 'paymentComposeSats' }).props.children).toBe(
-      '≈ 100000 sats',
+      amountSatsApprox(100_000),
     );
+    expect(amountSatsApprox(100_000, 'en-US')).toBe('100,000 sats');
+    expect(amountSatsApprox(100_000, 'en-US')).not.toMatch(/≈/);
     await unmount(tree);
   });
 });

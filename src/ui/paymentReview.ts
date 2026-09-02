@@ -28,6 +28,7 @@ export type PaymentReviewInput = {
   nowMs: number;
   destinationsEmpty: boolean;
   walletUnavailable: boolean;
+  recordFailed?: boolean;
   handoffError?: string | null;
 };
 
@@ -146,13 +147,15 @@ export function mapPaymentReview(input: PaymentReviewInput): PaymentReviewView {
     errorText = handoffError;
   }
 
-  const warningText = mismatch
-    ? invoiceAmountMismatchWarning(invoiceAmount ?? '', input.requestAmountBtc)
-    : input.walletUnavailable
-      ? COPY.noWalletForLink
-      : handoff && handoff.ok
-        ? (handoff.warning ?? null)
-        : null;
+  const warningText = input.recordFailed
+    ? COPY.invoiceNotRecorded
+    : mismatch
+      ? invoiceAmountMismatchWarning(invoiceAmount ?? '', input.requestAmountBtc)
+      : input.walletUnavailable
+        ? COPY.noWalletForLink
+        : handoff && handoff.ok
+          ? (handoff.warning ?? null)
+          : null;
 
   const primaryEnabled =
     !input.destinationsEmpty &&

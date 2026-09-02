@@ -261,6 +261,13 @@ export interface TipEndpointRecord {
   paymentHash: string | null;
 }
 
+export interface OwnInvoiceHashRecord {
+  ownerPubky: string;
+  endpointIdentifier: string;
+  paymentHash: string;
+  firstSeenAt: number;
+}
+
 export class PaymentError extends Error {
   readonly code:
     | 'validation'
@@ -420,9 +427,14 @@ export function btcDecimalToSats(value: string): number | null {
   const fracRaw = parts[1] ?? '';
   if (fracRaw.length > 8 && /[1-9]/.test(fracRaw.slice(8))) return null;
   const frac = (fracRaw + '00000000').slice(0, 8);
-  const sats = Number(whole) * 100_000_000 + Number(frac);
-  if (!Number.isSafeInteger(sats) || sats < 0) return null;
-  return sats;
+  if (!/^\d+$/.test(whole) || !/^\d+$/.test(frac)) return null;
+  const sats = BigInt(whole) * 100_000_000n + BigInt(frac);
+  if (sats < 0n) return null;
+  const maxSats = BigInt(PAYMENT_BTC_MAX) * 100_000_000n;
+  if (sats > maxSats) return null;
+  const asNumber = Number(sats);
+  if (!Number.isSafeInteger(asNumber)) return null;
+  return asNumber;
 }
 
 export function serializedPaymentBytes(value: unknown): number {

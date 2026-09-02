@@ -182,6 +182,10 @@ export const COPY = {
   paymentExpired: 'expired',
   paymentFailed: 'failed',
   proofNotVerified: 'Proof not verified',
+  proofAlreadyUsed: 'This proof was already used',
+  paymentSending: 'Sending…',
+  invoiceNotRecorded:
+    'Your wallet opened, but this invoice was not recorded on this device. Proof verification here may not work — the receipt stays requested until a matching proof can be verified.',
   networkBitcoinMainnet: 'Bitcoin mainnet',
   networkLightningMainnet: 'Lightning on Bitcoin mainnet',
   networkLightningRegtest: 'Lightning on Bitcoin regtest',
@@ -190,6 +194,10 @@ export const COPY = {
   encryptedBackup: 'Encrypted backup',
   myTipEndpoints: 'My tip endpoints',
 } as const;
+
+export function pendingInviteChannelHost(channelId: string, hostLabel: string): string {
+  return `Channel ${channelId} hosted by ${hostLabel}`;
+}
 
 export function publicGraphWarning(): string {
   return `${COPY.publicGraphWarningTitle} — ${COPY.publicGraphWarningBody}`;
@@ -211,8 +219,9 @@ export function paymentNetworkLabel(
   return null;
 }
 
-export function amountSatsApprox(sats: number): string {
-  return `≈ ${sats} sats`;
+export function amountSatsApprox(sats: number, locale?: string): string {
+  const grouped = new Intl.NumberFormat(locale, { maximumFractionDigits: 0 }).format(sats);
+  return `${grouped} sats`;
 }
 
 export function messageByteCountLabel(used: number, cap: number): string {

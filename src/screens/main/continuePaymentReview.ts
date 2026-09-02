@@ -6,6 +6,7 @@ import { sanitizeError } from '../../ui/sanitizedError';
 export type ContinuePaymentReviewResult = {
   closeReview: boolean;
   walletUnavailable: boolean;
+  recordFailed: boolean;
   error: string | null;
 };
 
@@ -40,11 +41,12 @@ export async function continuePaymentReview(
     return {
       closeReview: false,
       walletUnavailable: true,
+      recordFailed: false,
       error: sanitizeError(err, fallback).message,
     };
   }
   if (!canOpen) {
-    return { closeReview: false, walletUnavailable: true, error: null };
+    return { closeReview: false, walletUnavailable: true, recordFailed: false, error: null };
   }
 
   let recordError: string | null = null;
@@ -74,12 +76,18 @@ export async function continuePaymentReview(
     return {
       closeReview: false,
       walletUnavailable: true,
+      recordFailed: false,
       error: recordError ?? sanitizeError(err, fallback).message,
     };
   }
 
   if (recordError) {
-    return { closeReview: false, walletUnavailable: true, error: recordError };
+    return {
+      closeReview: false,
+      walletUnavailable: false,
+      recordFailed: true,
+      error: COPY.invoiceNotRecorded,
+    };
   }
-  return { closeReview: true, walletUnavailable: false, error: null };
+  return { closeReview: true, walletUnavailable: false, recordFailed: false, error: null };
 }
