@@ -212,7 +212,7 @@ export function ContactDetailView({
       <ConfirmSheet
         visible={blockOpen}
         title="Block this pubky?"
-        body="They are removed from Contacts and Suggestions on this device. Existing chats stay. Follows import will skip them."
+        body="They are removed from Contacts. The Encrypted Link is closed, so they cannot deliver messages to your inbox. One-to-one messages with them are deleted on this device. Follows import will skip them."
         confirmLabel="Block"
         destructive
         onDismiss={() => setBlockOpen(false)}

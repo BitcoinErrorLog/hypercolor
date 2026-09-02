@@ -8,7 +8,9 @@ import type { TrustExplanation } from '../../../services/TrustEngine';
 import { TrustEngine } from '../../../services/TrustEngine';
 import { StorageService } from '../../../services/StorageService';
 import { PaymentService } from '../../../services/payments/PaymentService';
+import { LinkService } from '../../../services/link/LinkService';
 import { FollowsImportSettings } from '../../../services/contacts/followsImportSettings';
+import { blockPeer } from '../../../services/contacts/blockPeer';
 import { useAuthStore } from '../../../stores/authStore';
 import { useContactStore } from '../../../stores/contactStore';
 import { copyText } from '../../../utils/copyText';
@@ -19,7 +21,13 @@ export { ContactDetailView, linkStateLabel } from './ContactDetailView';
 export function ContactDetailContainer({ pubky, onBack }: { pubky: string; onBack: () => void }) {
   const nav = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
   const ownerPubky = useAuthStore(s => s.pubky);
-  const stored = useContactStore(s => s.contacts[pubky]);
+  const stored = useContactStore(s => {
+    const row = s.contacts[pubky];
+    if (!row || !ownerPubky) return undefined;
+    if (s.ownerPubky !== ownerPubky) return undefined;
+    if (row.ownerPubky !== ownerPubky) return undefined;
+    return row;
+  });
   const removeContact = useContactStore(s => s.removeContact);
   const [contact, setContact] = useState<Contact | null>(stored ?? null);
   const [loading, setLoading] = useState(!stored);
@@ -40,7 +48,7 @@ export function ContactDetailContainer({ pubky, onBack }: { pubky: string; onBac
     setLoadErrorDetails(null);
     try {
       const row = stored ?? (await StorageService.getContact(pubky, ownerPubky));
-      if (!row) {
+      if (!row || row.ownerPubky !== ownerPubky) {
         setContact(null);
         setLoadError('Could not load this contact.');
         return;
@@ -97,10 +105,23 @@ export function ContactDetailContainer({ pubky, onBack }: { pubky: string; onBac
       }}
       onBlock={() => {
         if (!ownerPubky) return;
-        FollowsImportSettings.block(ownerPubky, pubky);
-        void StorageService.deleteContact(ownerPubky, pubky);
-        removeContact(pubky);
-        onBack();
+        void (async () => {
+          try {
+            await blockPeer({
+              ownerPubky,
+              peerPubky: pubky,
+              persistBlock: (owner, peer) => FollowsImportSettings.block(owner, peer),
+              declineMessageRequest: peer => LinkService.declineMessageRequest(peer),
+              deleteContact: (owner, peer) => StorageService.deleteContact(owner, peer),
+            });
+            removeContact(pubky);
+            AccessibilityInfo.announceForAccessibility('Pubky blocked');
+            onBack();
+          } catch (err) {
+            setLoadError('Could not block this pubky.');
+            setLoadErrorDetails(err instanceof Error ? err.message : String(err));
+          }
+        })();
       }}
       onRemove={() => {
         if (!ownerPubky) return;
@@ -112,6 +133,10 @@ export function ContactDetailContainer({ pubky, onBack }: { pubky: string; onBac
   );
 }
 
+/**
+ * Root-stack screen. Parent merge must register this on RootNavigator as
+ * `<Stack.Screen name="ContactDetail" ...>` — this branch must not edit that file.
+ */
 export default function ContactDetailScreen() {
   const nav = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
   const route = useRoute<RouteProp<RootStackParamList, 'ContactDetail'>>();
