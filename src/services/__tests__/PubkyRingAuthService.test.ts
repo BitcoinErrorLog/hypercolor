@@ -53,6 +53,7 @@ import {
   resolvePendingEphemeralSk,
   ExpiredDelegationError,
   StaleDelegationRequestError,
+  isExpiredDelegationError,
 } from '../PubkyRingAuthService';
 import { RING_GRANT_CAPABILITIES } from '../../types/link';
 import { pubkyZ32ToHex } from '../../utils/pubkyId';
@@ -527,5 +528,81 @@ describe('handleRingCallback z32 owner pubky', () => {
     mockPersistedHandoffExpiresAt = unexpired;
     const result = await handleRingCallback(ringCallbackUrl(RING_PUBKY_Z32));
     expect(result).toEqual({ pubky: RING_PUBKY_Z32, homeserver: RING_HOMESERVER_Z32 });
+  });
+
+  it('still completes a legacy raw-hex handoff with no persisted TTL', async () => {
+    const sk = await resolvePendingEphemeralSk();
+    await cancelPendingDelegation();
+    mockPersistedHandoffSk = sk;
+    mockPersistedHandoffExpiresAt = null;
+    const result = await handleRingCallback(ringCallbackUrl(RING_PUBKY_Z32));
+    expect(result).toEqual({ pubky: RING_PUBKY_Z32, homeserver: RING_HOMESERVER_Z32 });
+  });
+
+  it('fails closed when a Keychain read error hides the handoff TTL', async () => {
+    const sk = await resolvePendingEphemeralSk();
+    await cancelPendingDelegation();
+    mockPersistedHandoffSk = sk;
+    mockPersistedHandoffExpiresAt = Date.now() + ENABLE_AUTH_TTL_MS;
+    let reads = 0;
+    mockGetPendingRingHandoff.mockImplementation(async () => {
+      reads += 1;
+      if (reads === 1) return sk;
+      throw new Error('keystore unavailable');
+    });
+    jest.mocked(KeyStore.setAppKeypair).mockClear();
+    const expired = await handleRingCallback(ringCallbackUrl(RING_PUBKY_Z32)).then(
+      () => {
+        throw new Error('expected expiry');
+      },
+      err => err,
+    );
+    expect(isExpiredDelegationError(expired)).toBe(true);
+    expect(KeyStore.setAppKeypair).not.toHaveBeenCalled();
+    expect(rnGet).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when the persisted expiresAt cannot be read', async () => {
+    const sk = await resolvePendingEphemeralSk();
+    await cancelPendingDelegation();
+    mockPersistedHandoffSk = sk;
+    mockGetPendingRingHandoffExpiresAt.mockRejectedValue(new Error('keystore unavailable'));
+    jest.mocked(KeyStore.setAppKeypair).mockClear();
+    await expect(handleRingCallback(ringCallbackUrl(RING_PUBKY_Z32))).rejects.toBeInstanceOf(
+      ExpiredDelegationError,
+    );
+    expect(KeyStore.setAppKeypair).not.toHaveBeenCalled();
+    expect(mockPersistedHandoffSk).toBeNull();
+  });
+
+  it('does not clear a newer generation handoff when KeyStore read fails', async () => {
+    const setAppGate = deferred<void>();
+    const setAppStarted = deferred<void>();
+    jest.mocked(KeyStore.setAppKeypair).mockImplementation(async () => {
+      setAppStarted.resolve();
+      await setAppGate.promise;
+    });
+    const callback = handleRingCallback(ringCallbackUrl(RING_PUBKY_Z32));
+    await setAppStarted.promise;
+
+    (x25519GenerateKeypair as jest.Mock).mockResolvedValue({
+      secretKey: 'sk-b',
+      publicKey: 'pk-b',
+    });
+    const next = await requestDelegation('hypercolor-b');
+    expect(await resolvePendingEphemeralSk()).toBe('sk-b');
+
+    mockGetPendingRingHandoff.mockImplementation(async () => {
+      throw new Error('keystore unavailable');
+    });
+
+    setAppGate.resolve();
+    await expect(callback).resolves.toEqual({
+      pubky: RING_PUBKY_Z32,
+      homeserver: RING_HOMESERVER_Z32,
+    });
+    expect(await resolvePendingEphemeralSk()).toBe('sk-b');
+    expect(getPendingDelegationSnapshot()?.url).toBe(next.url);
+    expect(mockPersistedHandoffSk).toBe('sk-b');
   });
 });

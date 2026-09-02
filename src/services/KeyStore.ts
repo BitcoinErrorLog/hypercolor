@@ -275,7 +275,7 @@ function parsePendingRingHandoff(password: string): PendingRingHandoffRecord | n
       const expiresAt =
         typeof parsed.expiresAt === 'number' && Number.isFinite(parsed.expiresAt)
           ? parsed.expiresAt
-          : null;
+          : 0;
       return { ephemeralSkHex: parsed.ephemeralSkHex, expiresAt };
     }
   } catch {

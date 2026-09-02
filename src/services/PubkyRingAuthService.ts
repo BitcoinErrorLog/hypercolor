@@ -114,7 +114,7 @@ async function discardOwnWrite(myGen: number, ephemeralSkHex: string): Promise<v
   } catch {
     readFailed = true;
   }
-  if (readFailed || persisted === ephemeralSkHex) {
+  if (shouldClearHandoff(readFailed, persisted, ephemeralSkHex)) {
     try {
       await KeyStore.clearPendingRingHandoff();
     } catch {
@@ -134,7 +134,7 @@ async function clearMatchingHandoff(ephemeralSkHex: string): Promise<void> {
     } catch {
       readFailed = true;
     }
-    if (readFailed || persisted === ephemeralSkHex) {
+    if (shouldClearHandoff(readFailed, persisted, ephemeralSkHex)) {
       try {
         await KeyStore.clearPendingRingHandoff();
       } catch {
@@ -149,6 +149,16 @@ async function clearMatchingHandoff(ephemeralSkHex: string): Promise<void> {
   await work;
 }
 
+function shouldClearHandoff(
+  readFailed: boolean,
+  persisted: string | null,
+  ephemeralSkHex: string,
+): boolean {
+  if (persisted === ephemeralSkHex) return true;
+  if (!readFailed) return false;
+  return _pending == null || _pending.ephemeralSkHex === ephemeralSkHex;
+}
+
 async function pendingHandoffExpiresAt(ephemeralSkHex: string): Promise<number | null> {
   if (_pending?.ephemeralSkHex === ephemeralSkHex) {
     return _pending.startedAt + ENABLE_AUTH_TTL_MS;
@@ -156,9 +166,13 @@ async function pendingHandoffExpiresAt(ephemeralSkHex: string): Promise<number |
   try {
     const persisted = await KeyStore.getPendingRingHandoff();
     if (persisted !== ephemeralSkHex) return null;
-    return await KeyStore.getPendingRingHandoffExpiresAt();
+    try {
+      return await KeyStore.getPendingRingHandoffExpiresAt();
+    } catch {
+      return 0;
+    }
   } catch {
-    return null;
+    return 0;
   }
 }
 
