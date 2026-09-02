@@ -1,5 +1,5 @@
 import { COPY } from '../../copy/uxCopy';
-import { sessionUiFromEnableStatus, sessionUiModel } from '../sessionUi';
+import { isBannerSessionKind, sessionUiFromEnableStatus, sessionUiModel } from '../sessionUi';
 
 describe('sessionUiFromEnableStatus', () => {
   it('maps the enumerated session kinds', () => {
@@ -67,5 +67,23 @@ describe('sessionUiModel', () => {
     );
     expect(sessionUiModel('unavailable').label).toBe(COPY.messagingUnavailable);
     expect(sessionUiModel('unavailable').label).not.toBe('Native module missing');
+    expect(sessionUiModel('keystore-unavailable')).toEqual(
+      expect.objectContaining({
+        label: COPY.keystoreUnavailable,
+        body: COPY.keystoreUnavailableBody,
+        primary: null,
+        secondary: null,
+      }),
+    );
+  });
+});
+
+describe('isBannerSessionKind', () => {
+  it('treats keystore-unavailable as a non-action banner', () => {
+    expect(isBannerSessionKind('keystore-unavailable')).toBe(true);
+    expect(isBannerSessionKind('offline')).toBe(true);
+    expect(isBannerSessionKind('revoked')).toBe(true);
+    expect(isBannerSessionKind('enabled')).toBe(false);
+    expect(isBannerSessionKind('needs-enable')).toBe(false);
   });
 });

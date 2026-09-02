@@ -7,6 +7,7 @@ import { useAuthStore } from './authStore';
  * Paykit homeserver session — that comes from `LinkService.enable()`.
  */
 export async function hydratePersistedAuth(): Promise<boolean> {
+  if (!KeyStore.isInitialized()) return false;
   if (!(await KeyStore.hasPersistedSession())) return false;
   const pubky = KeyStore.getPubky();
   const homeserver = KeyStore.getHomeserver();

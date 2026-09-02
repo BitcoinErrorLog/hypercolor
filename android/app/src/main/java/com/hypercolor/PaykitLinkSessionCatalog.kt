@@ -21,9 +21,31 @@ internal interface PaykitLinkSessionCatalog {
     fun clearQuarantine(alias: String)
 }
 
+internal object PaykitLinkProcessIdentity {
+    /**
+     * Per OS-process nonce. Generated once when the class is loaded;
+     * JS runtime reloads in this process reuse it.
+     */
+    val TOKEN: String = newToken()
+
+    private fun newToken(): String {
+        val bytes = ByteArray(16)
+        java.security.SecureRandom().nextBytes(bytes)
+        val hex = CharArray(bytes.size * 2)
+        val alphabet = "0123456789abcdef"
+        for (i in bytes.indices) {
+            val b = bytes[i].toInt() and 0xff
+            hex[i * 2] = alphabet[b ushr 4]
+            hex[i * 2 + 1] = alphabet[b and 0x0f]
+        }
+        return String(hex)
+    }
+}
+
 internal data class PaykitLinkQuarantineRecord(
     val bootCounter: Long,
     val quarantinedAtMs: Long,
+    val processToken: String,
 )
 
 internal object PaykitLinkSessionKeys {
@@ -61,15 +83,22 @@ internal object PaykitLinkSessionKeys {
     }
 
     fun formatQuarantine(record: PaykitLinkQuarantineRecord): String {
-        return "${record.bootCounter}:${record.quarantinedAtMs}"
+        return "${record.bootCounter}:${record.quarantinedAtMs}:${record.processToken}"
     }
 
     fun parseQuarantine(raw: String): PaykitLinkQuarantineRecord? {
-        val sep = raw.indexOf(':')
-        if (sep <= 0) return null
-        val boot = raw.substring(0, sep).toLongOrNull() ?: return null
-        val at = raw.substring(sep + 1).toLongOrNull() ?: return null
-        return PaykitLinkQuarantineRecord(boot, at)
+        val first = raw.indexOf(':')
+        if (first <= 0) return null
+        val rest = raw.substring(first + 1)
+        val second = rest.indexOf(':')
+        val boot = raw.substring(0, first).toLongOrNull() ?: return null
+        if (second < 0) {
+            val at = rest.toLongOrNull() ?: return null
+            return PaykitLinkQuarantineRecord(boot, at, "")
+        }
+        val at = rest.substring(0, second).toLongOrNull() ?: return null
+        val token = rest.substring(second + 1)
+        return PaykitLinkQuarantineRecord(boot, at, token)
     }
 }
 
@@ -136,16 +165,21 @@ internal object PaykitLinkDurableReconcile {
      * First keystore-ready boot records [PaykitLinkQuarantineRecord] (not
      * in the bearer) and leaves the bearer in place; [session] still
      * refuses unknown aliases from JS. A subsequent keystore-ready boot
-     * that still does not name the alias deletes it. KeyStore naming the
-     * alias at any point clears quarantine. In-flight aliases
-     * (reserved/awaiting have no alias yet; pending/adopting do) are
-     * excluded.
+     * in a **different OS process** that still does not name the alias
+     * deletes it. Same-process sightings (JS reload) do not count.
+     * A legacy two-field record (empty process token) is rewritten as a
+     * first sighting so an upgrade cannot convert quarantine into a delete.
+     * KeyStore naming the alias at any point clears quarantine. In-flight
+     * aliases (reserved/awaiting have no alias yet; pending/adopting do)
+     * are excluded.
      */
     fun quarantineAction(
         ownedByKeyStore: Boolean,
         inFlight: Boolean,
         existingQuarantineBoot: Long?,
         currentBoot: Long,
+        existingProcessToken: String?,
+        currentProcessToken: String,
     ): PaykitLinkQuarantineAction {
         if (inFlight) return PaykitLinkQuarantineAction.SkipInFlight
         if (ownedByKeyStore) {
@@ -156,7 +190,11 @@ internal object PaykitLinkDurableReconcile {
             }
         }
         if (existingQuarantineBoot == null) return PaykitLinkQuarantineAction.FirstSighting
-        if (existingQuarantineBoot < currentBoot) return PaykitLinkQuarantineAction.SubsequentDelete
+        val recorded = existingProcessToken.orEmpty()
+        if (recorded.isEmpty()) return PaykitLinkQuarantineAction.FirstSighting
+        if (existingQuarantineBoot < currentBoot && recorded != currentProcessToken) {
+            return PaykitLinkQuarantineAction.SubsequentDelete
+        }
         return PaykitLinkQuarantineAction.None
     }
 
@@ -165,6 +203,7 @@ internal object PaykitLinkDurableReconcile {
         knownAliases: Set<String>,
         inFlightAliases: Set<String>,
         nowMs: Long,
+        processToken: String,
         evict: (String) -> Unit,
     ): PaykitLinkReconcileResult {
         val boot = store.getBootCounter() + 1L
@@ -182,6 +221,8 @@ internal object PaykitLinkDurableReconcile {
                 inFlight = alias in pending || alias in inFlightAliases,
                 existingQuarantineBoot = existing?.bootCounter,
                 currentBoot = boot,
+                existingProcessToken = existing?.processToken,
+                currentProcessToken = processToken,
             )
             if (action == PaykitLinkQuarantineAction.ClearOwned) {
                 store.clearQuarantine(alias)
@@ -198,6 +239,8 @@ internal object PaykitLinkDurableReconcile {
                 inFlight = inFlight,
                 existingQuarantineBoot = existing?.bootCounter,
                 currentBoot = boot,
+                existingProcessToken = existing?.processToken,
+                currentProcessToken = processToken,
             )
             when (action) {
                 PaykitLinkQuarantineAction.SkipInFlight -> skipped.add(alias)
@@ -208,7 +251,10 @@ internal object PaykitLinkDurableReconcile {
                     }
                 }
                 PaykitLinkQuarantineAction.FirstSighting -> {
-                    store.putQuarantine(alias, PaykitLinkQuarantineRecord(boot, nowMs))
+                    store.putQuarantine(
+                        alias,
+                        PaykitLinkQuarantineRecord(boot, nowMs, processToken),
+                    )
                     quarantined.add(alias)
                 }
                 PaykitLinkQuarantineAction.SubsequentDelete -> {

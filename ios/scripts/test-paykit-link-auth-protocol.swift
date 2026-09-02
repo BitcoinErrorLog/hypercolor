@@ -46,7 +46,8 @@ enum PaykitLinkAuthProtocolTests {
         testReconcileDeathWindows()
         testQuarantineTwoSighting()
         testQuarantineInFlightAndOwnedClear()
-        fputs("PaykitLinkAuthProtocol: 7 checks passed\n", stdout)
+        testProcessTokenGatesSecondSighting()
+        fputs("PaykitLinkAuthProtocol: 8 checks passed\n", stdout)
     }
 
     static func testKeyNamespacing() {
@@ -219,13 +220,40 @@ enum PaykitLinkAuthProtocolTests {
 
         expect(pendingAliases.contains(pending), "death before adopt still pending")
 
+        let encoded = PaykitLinkAuthProtocol.encodeQuarantine(
+            PaykitLinkAuthProtocol.QuarantineRecord(
+                bootCounter: 1,
+                quarantinedAtMs: 99,
+                processToken: "tok-a"
+            )
+        )
+        expect(
+            PaykitLinkAuthProtocol.parseQuarantine(encoded)
+                == PaykitLinkAuthProtocol.QuarantineRecord(
+                    bootCounter: 1,
+                    quarantinedAtMs: 99,
+                    processToken: "tok-a"
+                ),
+            "quarantine record round-trips"
+        )
+        expect(
+            PaykitLinkAuthProtocol.parseQuarantine("1:99")
+                == PaykitLinkAuthProtocol.QuarantineRecord(
+                    bootCounter: 1,
+                    quarantinedAtMs: 99,
+                    processToken: ""
+                ),
+            "legacy two-field quarantine parses with empty process token"
+        )
+
         let first = PaykitLinkAuthProtocol.reconcileDecisions(
             sessionAliases: sessionAliases,
             pendingAliases: pendingAliases,
             inFlightAliases: [],
             knownAliases: [],
             quarantines: [:],
-            currentBoot: 1
+            currentBoot: 1,
+            currentProcessToken: "tok-a"
         )
         let firstByAlias = Dictionary(uniqueKeysWithValues: first.map { ($0.alias, $0.action) })
         expect(firstByAlias[orphan] == .firstSighting, "first unowned sighting quarantines")
@@ -233,22 +261,14 @@ enum PaykitLinkAuthProtocolTests {
         expect(firstByAlias[pending] == .skipInFlight, "pending excluded from adopted reconcile")
         expect(!first.contains(where: { $0.action == .subsequentDelete }), "first boot does not delete")
 
-        let encoded = PaykitLinkAuthProtocol.encodeQuarantine(
-            PaykitLinkAuthProtocol.QuarantineRecord(bootCounter: 1, quarantinedAtMs: 99)
-        )
-        expect(
-            PaykitLinkAuthProtocol.parseQuarantine(encoded)
-                == PaykitLinkAuthProtocol.QuarantineRecord(bootCounter: 1, quarantinedAtMs: 99),
-            "quarantine record round-trips"
-        )
-
         let normal = PaykitLinkAuthProtocol.reconcileDecisions(
             sessionAliases: [kept],
             pendingAliases: [],
             inFlightAliases: [],
             knownAliases: [kept],
             quarantines: [:],
-            currentBoot: 1
+            currentBoot: 1,
+            currentProcessToken: "tok-a"
         )
         expect(normal.isEmpty, "owned alias: no quarantine and no delete")
     }
@@ -259,7 +279,9 @@ enum PaykitLinkAuthProtocolTests {
                 ownedByKeyStore: false,
                 inFlight: false,
                 existingQuarantineBoot: nil,
-                currentBoot: 1
+                currentBoot: 1,
+                existingProcessToken: nil,
+                currentProcessToken: "tok-a"
             ) == .firstSighting,
             "first sighting"
         )
@@ -268,9 +290,22 @@ enum PaykitLinkAuthProtocolTests {
                 ownedByKeyStore: false,
                 inFlight: false,
                 existingQuarantineBoot: 1,
-                currentBoot: 2
+                currentBoot: 2,
+                existingProcessToken: "tok-a",
+                currentProcessToken: "tok-b"
             ) == .subsequentDelete,
-            "second consecutive boot deletes"
+            "second consecutive boot in a new process deletes"
+        )
+        expect(
+            PaykitLinkAuthProtocol.quarantineAction(
+                ownedByKeyStore: false,
+                inFlight: false,
+                existingQuarantineBoot: 1,
+                currentBoot: 2,
+                existingProcessToken: "tok-a",
+                currentProcessToken: "tok-a"
+            ) == .none,
+            "same process token does not delete"
         )
         expect(
             PaykitLinkAuthProtocol.nextBootCounter(1) == 2,
@@ -281,8 +316,15 @@ enum PaykitLinkAuthProtocolTests {
             pendingAliases: [],
             inFlightAliases: [],
             knownAliases: [],
-            quarantines: ["orphan": 1],
-            currentBoot: 2
+            quarantines: [
+                "orphan": PaykitLinkAuthProtocol.QuarantineRecord(
+                    bootCounter: 1,
+                    quarantinedAtMs: 1,
+                    processToken: "tok-a"
+                )
+            ],
+            currentBoot: 2,
+            currentProcessToken: "tok-b"
         )
         expect(second == [PaykitLinkAuthProtocol.ReconcileDecision(alias: "orphan", action: .subsequentDelete)],
                "second boot decision is delete")
@@ -294,7 +336,9 @@ enum PaykitLinkAuthProtocolTests {
                 ownedByKeyStore: false,
                 inFlight: true,
                 existingQuarantineBoot: nil,
-                currentBoot: 1
+                currentBoot: 1,
+                existingProcessToken: nil,
+                currentProcessToken: "tok-a"
             ) == .skipInFlight,
             "in-flight excluded"
         )
@@ -303,7 +347,9 @@ enum PaykitLinkAuthProtocolTests {
                 ownedByKeyStore: true,
                 inFlight: false,
                 existingQuarantineBoot: 1,
-                currentBoot: 2
+                currentBoot: 2,
+                existingProcessToken: "tok-a",
+                currentProcessToken: "tok-b"
             ) == .clearOwned,
             "owned clears quarantine"
         )
@@ -313,7 +359,8 @@ enum PaykitLinkAuthProtocolTests {
             inFlightAliases: ["inflight"],
             knownAliases: [],
             quarantines: [:],
-            currentBoot: 1
+            currentBoot: 1,
+            currentProcessToken: "tok-a"
         )
         expect(
             skipped == [PaykitLinkAuthProtocol.ReconcileDecision(alias: "inflight", action: .skipInFlight)],
@@ -324,8 +371,15 @@ enum PaykitLinkAuthProtocolTests {
             pendingAliases: [],
             inFlightAliases: [],
             knownAliases: ["kept"],
-            quarantines: ["kept": 1],
-            currentBoot: 2
+            quarantines: [
+                "kept": PaykitLinkAuthProtocol.QuarantineRecord(
+                    bootCounter: 1,
+                    quarantinedAtMs: 1,
+                    processToken: "tok-a"
+                )
+            ],
+            currentBoot: 2,
+            currentProcessToken: "tok-b"
         )
         expect(
             cleared == [PaykitLinkAuthProtocol.ReconcileDecision(alias: "kept", action: .clearOwned)],
@@ -337,9 +391,71 @@ enum PaykitLinkAuthProtocolTests {
             inFlightAliases: [],
             knownAliases: ["kept"],
             quarantines: [:],
-            currentBoot: 1
+            currentBoot: 1,
+            currentProcessToken: "tok-a"
         )
         expect(ownedNoPrior.isEmpty, "owned with no quarantine is a no-op")
+    }
+
+    static func testProcessTokenGatesSecondSighting() {
+        let sameProcess = PaykitLinkAuthProtocol.reconcileDecisions(
+            sessionAliases: ["orphan"],
+            pendingAliases: [],
+            inFlightAliases: [],
+            knownAliases: [],
+            quarantines: [
+                "orphan": PaykitLinkAuthProtocol.QuarantineRecord(
+                    bootCounter: 1,
+                    quarantinedAtMs: 1,
+                    processToken: "tok-a"
+                )
+            ],
+            currentBoot: 2,
+            currentProcessToken: "tok-a"
+        )
+        expect(sameProcess.isEmpty, "same OS process cannot produce a second sighting")
+        let newProcess = PaykitLinkAuthProtocol.reconcileDecisions(
+            sessionAliases: ["orphan"],
+            pendingAliases: [],
+            inFlightAliases: [],
+            knownAliases: [],
+            quarantines: [
+                "orphan": PaykitLinkAuthProtocol.QuarantineRecord(
+                    bootCounter: 1,
+                    quarantinedAtMs: 1,
+                    processToken: "tok-a"
+                )
+            ],
+            currentBoot: 2,
+            currentProcessToken: "tok-b"
+        )
+        expect(
+            newProcess == [PaykitLinkAuthProtocol.ReconcileDecision(alias: "orphan", action: .subsequentDelete)],
+            "new OS process deletes after quarantine"
+        )
+        let legacyEmpty = PaykitLinkAuthProtocol.reconcileDecisions(
+            sessionAliases: ["orphan"],
+            pendingAliases: [],
+            inFlightAliases: [],
+            knownAliases: [],
+            quarantines: [
+                "orphan": PaykitLinkAuthProtocol.QuarantineRecord(
+                    bootCounter: 1,
+                    quarantinedAtMs: 1,
+                    processToken: ""
+                )
+            ],
+            currentBoot: 2,
+            currentProcessToken: "tok-a"
+        )
+        expect(
+            legacyEmpty == [PaykitLinkAuthProtocol.ReconcileDecision(alias: "orphan", action: .firstSighting)],
+            "legacy empty process token rewrites instead of deleting"
+        )
+        expect(
+            PaykitLinkAuthProtocol.parseQuarantine("3:99")?.processToken == "",
+            "legacy two-field quarantine parses as empty process token"
+        )
     }
 
     static func expect(_ condition: Bool, _ message: String) {

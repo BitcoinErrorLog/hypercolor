@@ -33,20 +33,20 @@ function SessionBannerHost() {
   const nav = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
   if (!sessionBannerVisible(kind)) return null;
   const model = sessionUiModel(kind);
-  return (
-    <StatusBanner
-      testID="appSessionBanner"
-      label={model.label}
-      actionLabel={kind === 'offline' ? COPY.tryAgain : COPY.enableEncryptedMessaging}
-      onAction={() => {
-        if (kind === 'offline') {
-          void retryOffline();
-          return;
-        }
-        nav.navigate('EnableMessaging');
-      }}
-    />
-  );
+  const actionProps =
+    kind === 'keystore-unavailable'
+      ? {}
+      : {
+          actionLabel: kind === 'offline' ? COPY.tryAgain : COPY.enableEncryptedMessaging,
+          onAction: () => {
+            if (kind === 'offline') {
+              void retryOffline();
+              return;
+            }
+            nav.navigate('EnableMessaging');
+          },
+        };
+  return <StatusBanner testID="appSessionBanner" label={model.label} {...actionProps} />;
 }
 
 export function MainTabs() {

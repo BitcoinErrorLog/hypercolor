@@ -732,6 +732,7 @@ export const LinkService = {
    * Intended call site: app startup / foreground (see file header).
    */
   async recoverPendingSends(): Promise<void> {
+    if (!KeyStore.isInitialized()) return;
     await reconcilePaymentPendingSends();
     const items = await StorageService.listDeliveryQueue();
     for (const item of items) {

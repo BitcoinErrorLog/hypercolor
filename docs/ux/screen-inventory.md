@@ -29,7 +29,7 @@ Dev-only overlay (not a route): `E2eSignupHud` (`src/navigation/E2eSignupHud.tsx
 
 | Surface | File | Params | Enter | Exit | Android Back | iOS header back |
 |---|---|---|---|---|---|---|
-| App keystore splash | `App.tsx` (`!ready` → `ActivityIndicator`) | none | Cold start until `KeyStore.initKeyStore` + `hydratePersistedAuth` **or** 4000 ms fail-open timer | `setReady(true)` only (timer or init). No button | No navigator yet; OS Back may background the activity | None |
+| App keystore splash | `App.tsx` (`!ready` → `ActivityIndicator`) | none | Cold start until `KeyStore.initKeyStore` + `hydratePersistedAuth` **or** 4000 ms fail-open timer / splash Continue | `setReady(true)` only (timer, init, or Continue). AppState listener is registered only after `initKeyStore()` resolves. If KeyStore is still not ready, session status is `keystore-unavailable` (non-destructive banner; no secret reads) | No navigator yet; OS Back may background the activity | None |
 | Navigation linking fallback | `RootNavigator.tsx` `LoadingFallback` | none | `NavigationContainer` `fallback` while linking resolves | Container ready | Same as splash | None |
 
 ## Auth stack

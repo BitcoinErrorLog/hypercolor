@@ -574,7 +574,7 @@ describe('LinkService', () => {
       expect(mockedNative.reconcileAdoptedSessions).toHaveBeenCalledWith(null);
     });
 
-    it('does not boot-reconcile when KeyStore is the unencrypted placeholder or timed out', async () => {
+    it('does not boot-reconcile when KeyStore is not ready', async () => {
       resetLinkServiceHarnessState();
       mockedNative.reconcileAdoptedSessions.mockClear();
       mockedKeyStore.isInitialized.mockReturnValue(false);
@@ -2008,6 +2008,15 @@ describe('LinkService', () => {
   });
 
   describe('drainRetries / recoverPendingSends', () => {
+    it('recoverPendingSends is a no-op when KeyStore is not ready', async () => {
+      mockedKeyStore.getPubky.mockClear();
+      mockedStorage.listDeliveryQueue.mockClear();
+      mockedKeyStore.isInitialized.mockReturnValue(false);
+      await LinkService.recoverPendingSends();
+      expect(mockedKeyStore.getPubky).not.toHaveBeenCalled();
+      expect(mockedStorage.listDeliveryQueue).not.toHaveBeenCalled();
+    });
+
     const linkItem: DeliveryQueueItem = {
       id: 'q-link',
       messageId: EVENT_ID,

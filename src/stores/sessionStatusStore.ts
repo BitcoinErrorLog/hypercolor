@@ -1,5 +1,6 @@
 import { AppState } from 'react-native';
 import { create } from 'zustand';
+import { KeyStore } from '../services/KeyStore';
 import { LinkService, type LinkEnableStatus } from '../services/link/LinkService';
 import { StorageService } from '../services/StorageService';
 import { useAuthStore } from './authStore';
@@ -21,6 +22,7 @@ interface SessionStatusState {
   lastError: SanitizedError | null;
   refresh: () => Promise<void>;
   retryOffline: () => Promise<void>;
+  markKeystoreUnavailable: () => void;
   setPendingRequestCount: (count: number) => void;
   setGroupUnreadCount: (count: number) => void;
 }
@@ -36,6 +38,10 @@ export function resetSessionStatusReceiverEvidence(): void {
 }
 
 async function runRefresh(): Promise<void> {
+  if (!KeyStore.isInitialized()) {
+    useSessionStatusStore.getState().markKeystoreUnavailable();
+    return;
+  }
   const gen = ++refreshGeneration;
   const { isAuthenticated, pubky } = useAuthStore.getState();
   if (!isAuthenticated || !pubky) {
@@ -114,6 +120,10 @@ export const useSessionStatusStore = create<SessionStatusState>(set => ({
   },
 
   retryOffline: async () => {
+    if (!KeyStore.isInitialized()) {
+      useSessionStatusStore.getState().markKeystoreUnavailable();
+      return;
+    }
     try {
       await LinkService.restorePersistedSession();
     } catch {
@@ -121,6 +131,14 @@ export const useSessionStatusStore = create<SessionStatusState>(set => ({
     }
     await useSessionStatusStore.getState().refresh();
   },
+
+  markKeystoreUnavailable: () =>
+    set({
+      kind: 'keystore-unavailable',
+      enableStatus: null,
+      lastError: null,
+      refreshing: false,
+    }),
 }));
 
 export function sessionBannerVisible(kind: SessionUiKind): boolean {

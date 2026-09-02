@@ -124,6 +124,17 @@ class AuthFlowCancelRegistryTest {
         val ready = first as AuthFlowAwaitStart.Ready
         assertTrue(registry.markAwaiting("flow-a", ready.lease))
         assertTrue(registry.startAwait("flow-a") is AuthFlowAwaitStart.AlreadyAwaiting)
+        assertFalse(registry.markAwaiting("flow-a", ready.lease))
+    }
+
+    @Test
+    fun markAwaitingRequiresReservedPhase() {
+        val registry = AuthFlowCancelRegistry<String>()
+        registry.put("flow-a", "auth-flow")
+        val ready = registry.startAwait("flow-a") as AuthFlowAwaitStart.Ready
+        assertTrue(ready.lease > 0)
+        assertTrue(registry.markAwaiting("flow-a", ready.lease))
+        assertFalse(registry.markAwaiting("flow-a", ready.lease))
     }
 
     @Test

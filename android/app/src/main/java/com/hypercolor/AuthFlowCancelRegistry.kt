@@ -164,7 +164,10 @@ internal class AuthFlowCancelRegistry<T> {
                 return AuthFlowAwaitStart.Cancelled(lease)
             }
             val slot = slots[id] ?: return AuthFlowAwaitStart.Missing
-            if (slot.phase != Phase.Idle || slot.lease != null) {
+            if (slot.phase == Phase.Awaiting || slot.phase == Phase.Reserved || slot.lease != null) {
+                return AuthFlowAwaitStart.AlreadyAwaiting
+            }
+            if (slot.phase != Phase.Idle) {
                 return AuthFlowAwaitStart.AlreadyAwaiting
             }
             val lease = allocLeaseLocked()
@@ -180,7 +183,10 @@ internal class AuthFlowCancelRegistry<T> {
             if (slot.lease != lease) {
                 return false
             }
-            if (slot.phase == Phase.Idle) {
+            if (slot.phase == Phase.Awaiting) {
+                return false
+            }
+            if (slot.phase != Phase.Reserved) {
                 return false
             }
             slot.phase = Phase.Awaiting

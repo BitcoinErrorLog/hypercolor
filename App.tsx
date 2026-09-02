@@ -21,6 +21,7 @@ import { loadMainTabIconFont } from './src/navigation/tabBarIcons';
 import { KeyStore } from './src/services/KeyStore';
 import { LinkService, startLinkRetryDrain } from './src/services/link/LinkService';
 import { hydratePersistedAuth } from './src/stores/hydrateAuthSession';
+import { useSessionStatusStore } from './src/stores/sessionStatusStore';
 import { ReduceMotionProvider } from './src/ui/reduceMotion';
 
 if (__DEV__) {
@@ -82,6 +83,10 @@ export default function App() {
     // Foreground notification strategy: see docs/NOTIFICATIONS.md.
     // AppState 'active' restarts the retry drain and syncs the Encrypted-Link inbox.
     const recoverAndDrain = async () => {
+      if (!KeyStore.isInitialized()) {
+        console.warn('[App] keystore unavailable');
+        return;
+      }
       try {
         await LinkService.restorePersistedSession();
       } catch {
@@ -100,6 +105,10 @@ export default function App() {
 
     const onAppState = (state: AppStateStatus) => {
       if (disposed) return;
+      if (!KeyStore.isInitialized()) {
+        console.warn('[App] keystore unavailable');
+        return;
+      }
       if (state === 'active') {
         stopDrain?.();
         stopDrain = startLinkRetryDrain();
@@ -110,8 +119,17 @@ export default function App() {
       }
     };
 
+    const markKeystoreUnavailableIfNeeded = () => {
+      if (!KeyStore.isInitialized()) {
+        useSessionStatusStore.getState().markKeystoreUnavailable();
+      }
+    };
+
     const markReady = () => {
-      if (!disposed && myEpoch === initEpochRef.current) setReady(true);
+      if (!disposed && myEpoch === initEpochRef.current) {
+        markKeystoreUnavailableIfNeeded();
+        setReady(true);
+      }
     };
     const iconFontReady = loadMainTabIconFont().catch(err => {
       console.warn('[App] tab icon font failed to load:', err);
@@ -125,6 +143,7 @@ export default function App() {
     const continueTimer = setTimeout(() => {
       if (!disposed) setAllowContinue(true);
     }, 4000);
+    let appStateSub: { remove: () => void } | undefined;
     KeyStore.initKeyStore()
       .then(async () => {
         try {
@@ -141,6 +160,10 @@ export default function App() {
         if (disposed || myEpoch !== initEpochRef.current) return;
         void recoverAndDrain();
         stopDrain = startLinkRetryDrain();
+        appStateSub = AppState.addEventListener('change', onAppState);
+        if (KeyStore.isInitialized()) {
+          void useSessionStatusStore.getState().refresh();
+        }
         afterIconFont(markReady);
       })
       .catch(() => afterIconFont(markReady))
@@ -150,7 +173,6 @@ export default function App() {
       startE2eClipboardChannel();
     }
 
-    const sub = AppState.addEventListener('change', onAppState);
     const linkingSub = __DEV__
       ? Linking.addEventListener('url', ({ url }: { url: string }) => {
           void handleE2eDeepLink(url);
@@ -165,7 +187,7 @@ export default function App() {
       disposed = true;
       clearTimeout(readyTimer);
       clearTimeout(continueTimer);
-      sub.remove();
+      appStateSub?.remove();
       linkingSub?.remove();
       stopDrain?.();
     };
@@ -182,6 +204,9 @@ export default function App() {
             accessibilityLabel="Continue"
             onPress={() => {
               initEpochRef.current += 1;
+              if (!KeyStore.isInitialized()) {
+                useSessionStatusStore.getState().markKeystoreUnavailable();
+              }
               setReady(true);
             }}
             style={styles.splashContinue}

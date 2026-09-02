@@ -60,10 +60,23 @@ class PaykitLinkModule: NSObject, RCTInvalidating {
     /// removes an alias; invalidate/sweep delete still-pending ones.
     private var pendingSessionAliases = Set<String>()
     /// Aliases inside `adoptAuthSession` after the in-memory pending set drops.
+    /// Mutated only under `pendingIoLock` so reconcile can snapshot it with
+    /// durable pending in one IO critical section.
     private var adoptingAliases = Set<String>()
     private var sweptDurablePending = false
     /// Serializes pending Keychain I/O. Never held together with `lock`.
     private let pendingIoLock = NSLock()
+    /// Per OS-process nonce. JS reloads in this process reuse it.
+    private static let reconcileProcessToken: String = {
+        var bytes = [UInt8](repeating: 0, count: 16)
+        let status = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
+        if status == errSecSuccess {
+            return bytes.map { String(format: "%02x", $0) }.joined()
+        }
+        let pid = UInt32(bitPattern: ProcessInfo.processInfo.processIdentifier)
+        let nanos = UInt64((ProcessInfo.processInfo.systemUptime * 1_000_000_000).rounded())
+        return String(format: "%08x%016llx", pid, nanos)
+    }()
 
     /// Kotlin `AuthFlowCancelRegistry` cancelled map: `null` lease = no owner.
     private enum CancelledTombstone {
@@ -363,9 +376,9 @@ class PaykitLinkModule: NSObject, RCTInvalidating {
         runAsync(resolve, reject) {
             self.sweepDurablePendingIfNeeded()
             let alias = try Self.requireText(sessionAlias, name: "sessionAlias")
-            self.lock.withLock { self.adoptingAliases.insert(alias) }
+            self.pendingIoLock.withLock { self.adoptingAliases.insert(alias) }
             defer {
-                self.lock.withLock { _ = self.adoptingAliases.remove(alias) }
+                self.pendingIoLock.withLock { _ = self.adoptingAliases.remove(alias) }
             }
             try self.lock.withLock {
                 if self.bridgeTornDown {
@@ -402,11 +415,9 @@ class PaykitLinkModule: NSObject, RCTInvalidating {
             if let named = Self.optionalText(knownSessionAlias) {
                 known.insert(named)
             }
-            let inFlight = self.lock.withLock {
-                self.pendingSessionAliases.union(self.adoptingAliases)
-            }
             var toEvict: [String] = []
             try self.pendingIoLock.withLock {
+                let inFlight = self.adoptingAliases
                 let sessionAliases = try PaykitLinkStore.listSessionAliases()
                 let pending = Set(try PaykitLinkStore.listPendingSessionAliases())
                 let current = try Self.loadBootCounter()
@@ -415,14 +426,14 @@ class PaykitLinkModule: NSObject, RCTInvalidating {
                     String(boot),
                     account: PaykitLinkAuthProtocol.bootCounterAccount
                 )
-                var quarantines: [String: UInt64] = [:]
+                var quarantines: [String: PaykitLinkAuthProtocol.QuarantineRecord] = [:]
                 for alias in Set(sessionAliases).union(known) {
                     if let raw = try PaykitLinkStore.getString(
                         account: PaykitLinkAuthProtocol.quarantineAccount(alias)
                     ),
                        let parsed = PaykitLinkAuthProtocol.parseQuarantine(raw)
                     {
-                        quarantines[alias] = parsed.bootCounter
+                        quarantines[alias] = parsed
                     }
                 }
                 let decisions = PaykitLinkAuthProtocol.reconcileDecisions(
@@ -431,7 +442,8 @@ class PaykitLinkModule: NSObject, RCTInvalidating {
                     inFlightAliases: inFlight.union(pending),
                     knownAliases: known,
                     quarantines: quarantines,
-                    currentBoot: boot
+                    currentBoot: boot,
+                    currentProcessToken: Self.reconcileProcessToken
                 )
                 let nowMs = UInt64(Date().timeIntervalSince1970 * 1000)
                 for decision in decisions {
@@ -445,7 +457,8 @@ class PaykitLinkModule: NSObject, RCTInvalidating {
                     case .firstSighting:
                         let record = PaykitLinkAuthProtocol.QuarantineRecord(
                             bootCounter: boot,
-                            quarantinedAtMs: nowMs
+                            quarantinedAtMs: nowMs,
+                            processToken: Self.reconcileProcessToken
                         )
                         try PaykitLinkStore.put(
                             PaykitLinkAuthProtocol.encodeQuarantine(record),
@@ -499,6 +512,7 @@ class PaykitLinkModule: NSObject, RCTInvalidating {
             try self.pendingIoLock.withLock {
                 try PaykitLinkStore.delete(account: PaykitLinkStore.sessionAccount(alias))
                 try PaykitLinkStore.delete(account: PaykitLinkStore.pendingAccount(alias))
+                try PaykitLinkStore.delete(account: PaykitLinkAuthProtocol.quarantineAccount(alias))
             }
             return NSNull()
         }

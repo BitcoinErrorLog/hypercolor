@@ -1,3 +1,5 @@
+import { hkdf } from '@noble/hashes/hkdf';
+import { sha256 } from '@noble/hashes/sha2';
 import * as Keychain from 'react-native-keychain';
 import { createMMKV, type MMKV } from 'react-native-mmkv';
 
@@ -13,10 +15,15 @@ import { createMMKV, type MMKV } from 'react-native-mmkv';
  *   - X25519 transport keypair (for Noise sessions)
  *   - AppCert (cert_body + sig proving delegation from root)
  *
- * Non-sensitive (encrypted MMKV):
+ * Encrypted MMKV (never opened without a 16-byte derived key):
  *   - pubky (root Ed25519 public key, z-base32)
  *   - homeserver URL
  *   - session_secret
+ *   - link_session alias
+ *
+ * Readiness is a positive canary on the encrypted instance, not the
+ * absence of a throw: `react-native-mmkv` `getString` returns `undefined`
+ * for both missing and undecryptable values.
  */
 
 // ─── Keychain service identifiers ────────────────────────────────────────────
@@ -42,22 +49,172 @@ const PUBKY_KEY = 'pubky';
 const HOMESERVER_KEY = 'homeserver';
 const SESSION_SECRET_KEY = 'session_secret';
 const LINK_SESSION_KEY = 'link_session';
-
+const MMKV_CANARY_KEY = 'keystore.canary';
+const MMKV_CANARY_VALUE = 'hypercolor-keystore-ready-v1';
+const MMKV_HKDF_INFO = 'hypercolor-keystore-mmkv-v1';
+const MMKV_KEY_BYTE_LENGTH = 16;
+const MMKV_SECRET_HEX_LENGTH = 64;
+const STORE_ID_LEGACY = 'hypercolor-keystore';
+const STORE_ID_CURRENT = 'hypercolor-keystore-v2';
 const MMKV_KEY_SERVICE = 'hypercolor-mmkv-encryption-key';
+const MMKV_GENERATION_SERVICE = 'hypercolor-mmkv-store-generation';
+const MMKV_GENERATION_V2 = 'v2-hkdf';
+
 let _store: MMKV | null = null;
 let _mmkvKeyPromise: Promise<void> | null = null;
-/** True only after `initKeyStore()` installed the encrypted MMKV instance. */
+/** True only after encrypted init verified the canary on the instance we hold. */
 let _initialized = false;
 
+export const KEYSTORE_NOT_READY_CODE = 'KeyStoreNotReady' as const;
+
+export class KeyStoreNotReady extends Error {
+  readonly code = KEYSTORE_NOT_READY_CODE;
+  constructor(operation: string) {
+    super(`KeyStore.${operation}: encrypted store is not ready`);
+    this.name = 'KeyStoreNotReady';
+  }
+}
+
+export function isKeyStoreNotReady(err: unknown): err is KeyStoreNotReady {
+  return err instanceof KeyStoreNotReady;
+}
+
+function hexToBytes32(hex: string): Uint8Array {
+  if (hex.length !== MMKV_SECRET_HEX_LENGTH || !/^[0-9a-f]+$/i.test(hex)) {
+    throw new Error('KeyStore: MMKV secret must be 32-byte hex');
+  }
+  const out = new Uint8Array(32);
+  for (let i = 0; i < 32; i++) {
+    out[i] = Number.parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+  }
+  return out;
+}
+
+function bytesToLatin1(bytes: Uint8Array): string {
+  let out = '';
+  for (let i = 0; i < bytes.length; i++) {
+    out += String.fromCharCode(bytes[i]!);
+  }
+  return out;
+}
+
 /**
- * Derives a device-specific MMKV encryption key from the OS keychain.
- * Generated once per device install and persisted in the keychain.
+ * 16-byte MMKV encryption key derived from the 32-byte keychain secret.
+ * `react-native-mmkv` uses at most 16 bytes; a 64-char hex string was
+ * silently truncated to 16 ASCII chars (~64 bits). HKDF-SHA256 mixes the
+ * full secret into 16 bytes. The JS string is 16 latin-1 code units so
+ * the call-site length equals the library maximum.
  */
-async function getOrCreateMmkvKey(): Promise<string> {
+function deriveMmkvEncryptionKey(secretHex: string): string {
+  const ikm = hexToBytes32(secretHex);
+  const keyBytes = hkdf(sha256, ikm, undefined, MMKV_HKDF_INFO, MMKV_KEY_BYTE_LENGTH);
+  const key = bytesToLatin1(keyBytes);
+  assertMmkvEncryptionKeyLength(key);
+  return key;
+}
+
+/** First 16 chars of the stored hex — the key MMKV actually used before HKDF. */
+function legacyTruncatedMmkvKey(secretHex: string): string {
+  if (secretHex.length < MMKV_KEY_BYTE_LENGTH) {
+    throw new Error('KeyStore: legacy MMKV key is shorter than 16 bytes');
+  }
+  const truncated = secretHex.slice(0, MMKV_KEY_BYTE_LENGTH);
+  assertMmkvEncryptionKeyLength(truncated);
+  return truncated;
+}
+
+function assertMmkvEncryptionKeyLength(key: string): void {
+  if (key.length !== MMKV_KEY_BYTE_LENGTH) {
+    throw new Error('KeyStore: MMKV encryptionKey must be exactly 16 bytes');
+  }
+}
+
+function openMmkv(id: string, encryptionKey: string): MMKV {
+  assertMmkvEncryptionKeyLength(encryptionKey);
+  return createMMKV({ id, encryptionKey });
+}
+
+function readCanary(instance: MMKV): string | undefined {
+  try {
+    return instance.getString(MMKV_CANARY_KEY);
+  } catch {
+    return undefined;
+  }
+}
+
+function canaryIsVerified(instance: MMKV): boolean {
+  return readCanary(instance) === MMKV_CANARY_VALUE;
+}
+
+function installCanary(instance: MMKV): boolean {
+  const existing = readCanary(instance);
+  if (existing === MMKV_CANARY_VALUE) return true;
+  if (existing !== undefined) return false;
+  try {
+    instance.set(MMKV_CANARY_KEY, MMKV_CANARY_VALUE);
+  } catch {
+    return false;
+  }
+  return canaryIsVerified(instance);
+}
+
+function snapshotStringEntries(instance: MMKV): Map<string, string> | null {
+  let keys: string[];
+  try {
+    keys = instance.getAllKeys();
+  } catch {
+    return null;
+  }
+  const out = new Map<string, string>();
+  for (const key of keys) {
+    let value: string | undefined;
+    try {
+      value = instance.getString(key);
+    } catch {
+      return null;
+    }
+    if (value === undefined) return null;
+    out.set(key, value);
+  }
+  return out;
+}
+
+function copyAndVerify(entries: Map<string, string>, dest: MMKV): boolean {
+  try {
+    for (const [key, value] of entries) {
+      dest.set(key, value);
+    }
+    for (const [key, value] of entries) {
+      if (dest.getString(key) !== value) return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function readStoreGeneration(): Promise<string | null> {
+  const existing = await Keychain.getGenericPassword({ service: MMKV_GENERATION_SERVICE });
+  if (existing === false) return null;
+  return existing.password;
+}
+
+async function markStoreGenerationV2(): Promise<void> {
+  await Keychain.setGenericPassword(KEYCHAIN_USERNAME, MMKV_GENERATION_V2, {
+    service: MMKV_GENERATION_SERVICE,
+    accessible: Keychain.ACCESSIBLE.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
+  });
+}
+
+/**
+ * Derives a device-specific MMKV encryption secret from the OS keychain.
+ * Generated once per device install and persisted in the keychain as 32-byte hex.
+ * The MMKV `encryptionKey` is HKDF-derived from this secret, never the hex itself.
+ */
+async function getOrCreateMmkvSecretHex(): Promise<string> {
   const existing = await Keychain.getGenericPassword({ service: MMKV_KEY_SERVICE });
   if (existing !== false) return existing.password;
 
-  // Generate a random 32-byte key, store it in the keychain.
   // Fail closed: `index.js` polyfills react-native-get-random-values, so a
   // missing CSPRNG means the runtime is broken — never fall back to
   // Math.random() for key material.
@@ -79,58 +236,130 @@ async function getOrCreateMmkvKey(): Promise<string> {
   return keyHex;
 }
 
-function store(): MMKV {
-  if (!_store) {
-    // Synchronous creation with a temporary key — the real key is loaded lazily.
-    // MMKV requires a synchronous constructor, so we use a deterministic
-    // placeholder that gets replaced on first async access. In practice,
-    // the async init in `initKeyStore()` should be called at app start.
-    _store = createMMKV({ id: 'hypercolor-keystore' });
+/**
+ * Open the encrypted store. Prefer the HKDF-keyed v2 id. One-time migration
+ * copies the legacy truncated-key store only after every key (and the
+ * canary) round-trips. Migration failure keeps the legacy store readable.
+ */
+async function openEncryptedStore(secretHex: string): Promise<MMKV> {
+  const derivedKey = deriveMmkvEncryptionKey(secretHex);
+  const current = openMmkv(STORE_ID_CURRENT, derivedKey);
+  const generation = await readStoreGeneration();
+
+  if (generation === MMKV_GENERATION_V2) {
+    if (!installCanary(current)) {
+      throw new KeyStoreNotReady('initKeyStore');
+    }
+    return current;
+  }
+
+  const legacy = openMmkv(STORE_ID_LEGACY, legacyTruncatedMmkvKey(secretHex));
+  const legacySnap = snapshotStringEntries(legacy);
+
+  if (canaryIsVerified(current)) {
+    await markStoreGenerationV2();
+    try {
+      legacy.clearAll();
+    } catch {
+      // Current store is source of truth; leftover legacy must not block.
+    }
+    return current;
+  }
+
+  if (legacySnap === null) {
+    // Listed keys that do not decrypt: not empty. Fail closed.
+    throw new KeyStoreNotReady('initKeyStore');
+  }
+
+  if (legacySnap.size > 0) {
+    const copied = copyAndVerify(legacySnap, current);
+    if (copied && installCanary(current)) {
+      let verified = canaryIsVerified(current);
+      for (const [key, value] of legacySnap) {
+        if (current.getString(key) !== value) verified = false;
+      }
+      if (verified) {
+        await markStoreGenerationV2();
+        try {
+          legacy.clearAll();
+        } catch {
+          // Current store is source of truth.
+        }
+        return current;
+      }
+    }
+    if (!installCanary(legacy)) {
+      throw new KeyStoreNotReady('initKeyStore');
+    }
+    return legacy;
+  }
+
+  if (!installCanary(current)) {
+    throw new KeyStoreNotReady('initKeyStore');
+  }
+  await markStoreGenerationV2();
+  return current;
+}
+
+function requireStore(operation: string): MMKV {
+  if (!_initialized || !_store || !canaryIsVerified(_store)) {
+    throw new KeyStoreNotReady(operation);
   }
   return _store;
 }
 
 /**
  * Must be called once at app start (before any KeyStore reads).
- * Loads the device-specific MMKV encryption key from the keychain.
+ * Loads the device-specific MMKV encryption secret from the keychain,
+ * opens the encrypted instance, and verifies the canary. Never creates
+ * an unencrypted placeholder.
  */
 export async function initKeyStore(): Promise<void> {
-  if (_initialized) return;
+  if (_initialized && _store && canaryIsVerified(_store)) return;
   if (!_mmkvKeyPromise) {
     _mmkvKeyPromise = (async () => {
-      const key = await getOrCreateMmkvKey();
-      _store = createMMKV({ id: 'hypercolor-keystore', encryptionKey: key });
+      const secretHex = await getOrCreateMmkvSecretHex();
+      const instance = await openEncryptedStore(secretHex);
+      if (!canaryIsVerified(instance)) {
+        throw new KeyStoreNotReady('initKeyStore');
+      }
+      _store = instance;
       _initialized = true;
     })();
   }
   try {
     await _mmkvKeyPromise;
+    if (!_initialized || !_store || !canaryIsVerified(_store)) {
+      throw new KeyStoreNotReady('initKeyStore');
+    }
   } catch (err) {
     _mmkvKeyPromise = null;
     _initialized = false;
+    _store = null;
     throw err;
   }
 }
 
 /**
- * True only after a successful {@link initKeyStore}. False for the
- * unencrypted placeholder `store()` creates, a hang/timeout that never
- * resolved init, or a rejected init. Do not infer this from a `null`
- * `getLinkSession()` read — empty and unreadable are different.
+ * True only when the encrypted instance is held and the canary reads back
+ * exactly. False before init, after a failed/hung init, and when the
+ * store is present but undecryptable (`getString` → `undefined`).
  */
 export function isInitialized(): boolean {
-  return _initialized;
+  return _initialized && _store !== null && canaryIsVerified(_store);
 }
 
 export type LinkSessionRead = { ok: true; alias: string | null } | { ok: false };
 
 /**
  * Distinguishes "encrypted store readable and empty" from "not
- * initialised / unreadable". Never infers readiness from `null`.
+ * initialised / unreadable". Requires the canary in this process.
+ * Never infers readiness from `null`.
  */
 export function readLinkSession(): LinkSessionRead {
-  if (!_initialized || !_store) return { ok: false };
+  if (!isInitialized() || !_store) return { ok: false };
   try {
+    if (!canaryIsVerified(_store)) return { ok: false };
     const value = _store.getString(LINK_SESSION_KEY);
     return { ok: true, alias: value ?? null };
   } catch {
@@ -252,40 +481,37 @@ export async function getAppCert(): Promise<AppCert | null> {
 // ─── Pubky public key (sync, MMKV — not sensitive, it's a public key) ────────
 
 export function setPubky(pubky: string): void {
-  store().set(PUBKY_KEY, pubky);
+  requireStore('setPubky').set(PUBKY_KEY, pubky);
 }
 
 export function getPubky(): string | null {
-  return store().getString(PUBKY_KEY) ?? null;
+  return requireStore('getPubky').getString(PUBKY_KEY) ?? null;
 }
 
 // ─── Homeserver (sync, MMKV) ──────────────────────────────────────────────────
 
 export function setHomeserver(homeserver: string): void {
-  store().set(HOMESERVER_KEY, homeserver);
+  requireStore('setHomeserver').set(HOMESERVER_KEY, homeserver);
 }
 
 export function getHomeserver(): string | null {
-  return store().getString(HOMESERVER_KEY) ?? null;
+  return requireStore('getHomeserver').getString(HOMESERVER_KEY) ?? null;
 }
 
 // ─── Session secret (sync, MMKV — session token only, not a key) ─────────────
 
 export function setSessionSecret(sessionSecret: string): void {
-  store().set(SESSION_SECRET_KEY, sessionSecret);
+  requireStore('setSessionSecret').set(SESSION_SECRET_KEY, sessionSecret);
 }
 
 export function getSessionSecret(): string | null {
-  return store().getString(SESSION_SECRET_KEY) ?? null;
+  return requireStore('getSessionSecret').getString(SESSION_SECRET_KEY) ?? null;
 }
 
 // ─── Link session alias (sync, MMKV — opaque native handle, not a bearer) ────
 
 export function setLinkSession(sessionAlias: string): void {
-  if (!_initialized) {
-    throw new Error('KeyStore.setLinkSession: encrypted store is not initialized');
-  }
-  store().set(LINK_SESSION_KEY, sessionAlias);
+  requireStore('setLinkSession').set(LINK_SESSION_KEY, sessionAlias);
 }
 
 export function getLinkSession(): string | null {
@@ -295,8 +521,8 @@ export function getLinkSession(): string | null {
 }
 
 export function deleteLinkSession(): void {
-  if (!_initialized) return;
-  store().remove(LINK_SESSION_KEY);
+  if (!isInitialized()) return;
+  requireStore('deleteLinkSession').remove(LINK_SESSION_KEY);
 }
 
 /**
@@ -307,7 +533,7 @@ export function deleteLinkSession(): void {
 export function deleteLinkSessionIfAlias(alias: string): boolean {
   const read = readLinkSession();
   if (!read.ok || read.alias !== alias) return false;
-  store().remove(LINK_SESSION_KEY);
+  requireStore('deleteLinkSessionIfAlias').remove(LINK_SESSION_KEY);
   return true;
 }
 
@@ -416,18 +642,24 @@ function attachmentIndexKey(ownerPubky: string): string {
 
 function readAttachmentServiceIndex(ownerPubky: string): string[] {
   try {
-    const raw = store().getString(attachmentIndexKey(ownerPubky));
+    const raw = requireStore('readAttachmentServiceIndex').getString(
+      attachmentIndexKey(ownerPubky),
+    );
     if (!raw) return [];
     const parsed = JSON.parse(raw) as unknown;
     if (!Array.isArray(parsed)) return [];
     return parsed.filter((item): item is string => typeof item === 'string');
-  } catch {
+  } catch (err) {
+    if (isKeyStoreNotReady(err)) throw err;
     return [];
   }
 }
 
 function writeAttachmentServiceIndex(ownerPubky: string, services: readonly string[]): void {
-  store().set(attachmentIndexKey(ownerPubky), JSON.stringify([...new Set(services)]));
+  requireStore('writeAttachmentServiceIndex').set(
+    attachmentIndexKey(ownerPubky),
+    JSON.stringify([...new Set(services)]),
+  );
 }
 
 function rememberAttachmentService(ownerPubky: string, service: string): void {
@@ -455,6 +687,7 @@ export async function setAttachmentSecret(
   eventId: string,
   material: AttachmentSecretMaterial,
 ): Promise<void> {
+  requireStore('setAttachmentSecret');
   const service = attachmentKeyService(ownerPubky, senderPubky, eventId);
   const payload = JSON.stringify(material);
   try {
@@ -464,7 +697,7 @@ export async function setAttachmentSecret(
     });
   } catch (err) {
     if (!__DEV__ || !isUnsignedSimKeychainError(err)) throw err;
-    store().set(debugAttachmentStoreKey(service), payload);
+    requireStore('setAttachmentSecret').set(debugAttachmentStoreKey(service), payload);
   }
   rememberAttachmentService(ownerPubky, service);
 }
@@ -484,7 +717,7 @@ export async function getAttachmentSecret(
     // Unsigned-sim keychain miss — try the DEBUG fallback below.
   }
   if (__DEV__) {
-    const raw = store().getString(debugAttachmentStoreKey(service));
+    const raw = requireStore('getAttachmentSecret').getString(debugAttachmentStoreKey(service));
     if (raw) {
       return JSON.parse(raw) as AttachmentSecretMaterial;
     }
@@ -496,13 +729,14 @@ export async function deleteAttachmentSecretByService(
   ownerPubky: string,
   service: string,
 ): Promise<boolean> {
+  requireStore('deleteAttachmentSecretByService');
   try {
     await Keychain.resetGenericPassword({ service });
   } catch {
     if (!__DEV__) return false;
   }
   if (__DEV__) {
-    store().remove(debugAttachmentStoreKey(service));
+    requireStore('deleteAttachmentSecretByService').remove(debugAttachmentStoreKey(service));
   }
   forgetAttachmentService(ownerPubky, service);
   return true;
@@ -548,7 +782,7 @@ export async function clearAttachmentSecretsForOwner(ownerPubky: string): Promis
     if (!ok) failed.push(service);
   }
   if (failed.length === 0) {
-    store().remove(attachmentIndexKey(ownerPubky));
+    requireStore('clearAttachmentSecretsForOwner').remove(attachmentIndexKey(ownerPubky));
   }
   return failed;
 }
@@ -556,8 +790,9 @@ export async function clearAttachmentSecretsForOwner(ownerPubky: string): Promis
 // ─── Session / cert validity ──────────────────────────────────────────────────
 
 export async function hasPersistedSession(): Promise<boolean> {
+  if (!isInitialized()) return false;
   const appKey = await getAppKeypair();
-  return appKey !== null && store().contains(PUBKY_KEY);
+  return appKey !== null && requireStore('hasPersistedSession').contains(PUBKY_KEY);
 }
 
 /**
@@ -574,7 +809,13 @@ export async function isAppCertValid(): Promise<boolean> {
 // ─── Clear all ────────────────────────────────────────────────────────────────
 
 export async function clear(): Promise<void> {
-  const owner = getPubky();
+  const mmkv = requireStore('clear');
+  let owner: string | null = null;
+  try {
+    owner = mmkv.getString(PUBKY_KEY) ?? null;
+  } catch {
+    owner = null;
+  }
   if (owner) {
     await clearAttachmentSecretsForOwner(owner);
   }
@@ -587,12 +828,12 @@ export async function clear(): Promise<void> {
     Keychain.resetGenericPassword({ service: RING_PENDING_SERVICE }),
   ]);
   if (owner) {
-    store().remove(attachmentIndexKey(owner));
+    mmkv.remove(attachmentIndexKey(owner));
   }
-  store().remove(PUBKY_KEY);
-  store().remove(HOMESERVER_KEY);
-  store().remove(SESSION_SECRET_KEY);
-  store().remove(LINK_SESSION_KEY);
+  mmkv.remove(PUBKY_KEY);
+  mmkv.remove(HOMESERVER_KEY);
+  mmkv.remove(SESSION_SECRET_KEY);
+  mmkv.remove(LINK_SESSION_KEY);
 }
 
 export const KeyStore = {
@@ -600,6 +841,8 @@ export const KeyStore = {
   initKeyStore,
   isInitialized,
   readLinkSession,
+  KeyStoreNotReady,
+  isKeyStoreNotReady,
   // App keypair (delegated Ed25519)
   setAppKeypair,
   getAppKeypair,

@@ -54,6 +54,8 @@ export const COPY = {
   encryptedMessagingEnabledBody:
     'Ring approved the grant and this device published a receiver marker.',
   messagingUnavailable: 'Encrypted messaging is unavailable in this build.',
+  keystoreUnavailable: 'Encrypted storage is not ready on this device.',
+  keystoreUnavailableBody: 'Messaging is paused. Local history is untouched.',
   notConnected: 'Not connected',
 
   preparingPaykitConnect: 'Preparing paykit-connect…',

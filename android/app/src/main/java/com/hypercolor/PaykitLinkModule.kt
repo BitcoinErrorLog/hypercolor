@@ -323,6 +323,7 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
                     known,
                     inFlight,
                     System.currentTimeMillis(),
+                    PaykitLinkProcessIdentity.TOKEN,
                 ) { sessions.remove(it) }
             }
             promise.resolve(null)

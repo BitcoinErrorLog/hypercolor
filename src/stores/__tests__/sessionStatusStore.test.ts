@@ -1,4 +1,5 @@
 import { COPY } from '../../copy/uxCopy';
+import { KeyStore } from '../../services/KeyStore';
 import { LinkService } from '../../services/link/LinkService';
 import { StorageService } from '../../services/StorageService';
 import { resetSessionStatusReceiverEvidence, useSessionStatusStore } from '../sessionStatusStore';
@@ -12,6 +13,12 @@ jest.mock('../../services/link/LinkService', () => ({
   LinkService: {
     getEnableStatus: jest.fn(),
     restorePersistedSession: jest.fn(),
+  },
+}));
+
+jest.mock('../../services/KeyStore', () => ({
+  KeyStore: {
+    isInitialized: jest.fn(() => true),
   },
 }));
 
@@ -65,6 +72,7 @@ describe('sessionStatusStore', () => {
     (StorageService.getLinkReceiver as jest.Mock).mockResolvedValue({ markerPublished: true });
     (StorageService.countPendingMessageRequests as jest.Mock).mockResolvedValue(0);
     (StorageService.countUnreadGroupMessages as jest.Mock).mockResolvedValue(0);
+    (KeyStore.isInitialized as jest.Mock).mockReturnValue(true);
   });
 
   it('retries restore instead of routing to Enable', async () => {
@@ -169,5 +177,22 @@ describe('sessionStatusStore', () => {
     expect(useSessionStatusStore.getState().kind).toBe('needs-enable');
     expect(useSessionStatusStore.getState().kind).not.toBe('revoked');
     expect(useSessionStatusStore.getState().enableStatus).toBe('needs-enable');
+  });
+
+  it('surfaces keystore-unavailable without reading enable status', async () => {
+    (KeyStore.isInitialized as jest.Mock).mockReturnValue(false);
+    await useSessionStatusStore.getState().refresh();
+    expect(useSessionStatusStore.getState().kind).toBe('keystore-unavailable');
+    expect(LinkService.getEnableStatus).not.toHaveBeenCalled();
+    useSessionStatusStore.getState().markKeystoreUnavailable();
+    expect(useSessionStatusStore.getState().kind).toBe('keystore-unavailable');
+  });
+
+  it('retryOffline is a no-op when the keystore is not ready', async () => {
+    (KeyStore.isInitialized as jest.Mock).mockReturnValue(false);
+    await useSessionStatusStore.getState().retryOffline();
+    expect(LinkService.restorePersistedSession).not.toHaveBeenCalled();
+    expect(LinkService.getEnableStatus).not.toHaveBeenCalled();
+    expect(useSessionStatusStore.getState().kind).toBe('keystore-unavailable');
   });
 });

@@ -66,18 +66,21 @@ enum PaykitLinkAuthProtocol {
     struct QuarantineRecord: Equatable {
         var bootCounter: UInt64
         var quarantinedAtMs: UInt64
+        var processToken: String
     }
 
     static func encodeQuarantine(_ record: QuarantineRecord) -> String {
-        "\(record.bootCounter):\(record.quarantinedAtMs)"
+        "\(record.bootCounter):\(record.quarantinedAtMs):\(record.processToken)"
     }
 
     static func parseQuarantine(_ raw: String) -> QuarantineRecord? {
-        guard let sep = raw.firstIndex(of: ":") else { return nil }
-        let bootRaw = String(raw[..<sep])
-        let atRaw = String(raw[raw.index(after: sep)...])
-        guard let boot = UInt64(bootRaw), let at = UInt64(atRaw) else { return nil }
-        return QuarantineRecord(bootCounter: boot, quarantinedAtMs: at)
+        let parts = raw.split(separator: ":", maxSplits: 2, omittingEmptySubsequences: false)
+        guard parts.count >= 2,
+              let boot = UInt64(parts[0]),
+              let at = UInt64(parts[1])
+        else { return nil }
+        let token = parts.count >= 3 ? String(parts[2]) : ""
+        return QuarantineRecord(bootCounter: boot, quarantinedAtMs: at, processToken: token)
     }
 
     enum QuarantineAction: Equatable {
@@ -95,18 +98,30 @@ enum PaykitLinkAuthProtocol {
 
     /// Reserved/awaiting flows have no session alias until persist.
     /// Pending (durable or in-memory) and adopting aliases are in-flight.
+    /// Two-sighting quarantine. Second sighting deletes only when the boot
+    /// counter advanced *and* the process token differs from the recorded
+    /// sighting — a JS reload in one OS process cannot produce a delete.
+    /// A legacy two-field record (empty process token) is rewritten as a
+    /// first sighting so an upgrade cannot convert quarantine into a delete.
     static func quarantineAction(
         ownedByKeyStore: Bool,
         inFlight: Bool,
         existingQuarantineBoot: UInt64?,
-        currentBoot: UInt64
+        currentBoot: UInt64,
+        existingProcessToken: String?,
+        currentProcessToken: String
     ) -> QuarantineAction {
         if inFlight { return .skipInFlight }
         if ownedByKeyStore {
             return existingQuarantineBoot == nil ? .none : .clearOwned
         }
         if existingQuarantineBoot == nil { return .firstSighting }
-        if let seen = existingQuarantineBoot, seen < currentBoot {
+        let recorded = existingProcessToken ?? ""
+        if recorded.isEmpty { return .firstSighting }
+        if let seen = existingQuarantineBoot,
+           seen < currentBoot,
+           recorded != currentProcessToken
+        {
             return .subsequentDelete
         }
         return .none
@@ -121,18 +136,22 @@ enum PaykitLinkAuthProtocol {
         pendingAliases: Set<String>,
         inFlightAliases: Set<String>,
         knownAliases: Set<String>,
-        quarantines: [String: UInt64],
-        currentBoot: UInt64
+        quarantines: [String: QuarantineRecord],
+        currentBoot: UInt64,
+        currentProcessToken: String
     ) -> [ReconcileDecision] {
         var decisions: [ReconcileDecision] = []
         var seen = Set<String>()
         for alias in knownAliases {
             let inFlight = pendingAliases.contains(alias) || inFlightAliases.contains(alias)
+            let existing = quarantines[alias]
             let action = quarantineAction(
                 ownedByKeyStore: true,
                 inFlight: inFlight,
-                existingQuarantineBoot: quarantines[alias],
-                currentBoot: currentBoot
+                existingQuarantineBoot: existing?.bootCounter,
+                currentBoot: currentBoot,
+                existingProcessToken: existing?.processToken,
+                currentProcessToken: currentProcessToken
             )
             if action == .clearOwned {
                 decisions.append(ReconcileDecision(alias: alias, action: action))
@@ -142,11 +161,14 @@ enum PaykitLinkAuthProtocol {
         for alias in sessionAliases {
             if seen.contains(alias) { continue }
             let inFlight = pendingAliases.contains(alias) || inFlightAliases.contains(alias)
+            let existing = quarantines[alias]
             let action = quarantineAction(
                 ownedByKeyStore: knownAliases.contains(alias),
                 inFlight: inFlight,
-                existingQuarantineBoot: quarantines[alias],
-                currentBoot: currentBoot
+                existingQuarantineBoot: existing?.bootCounter,
+                currentBoot: currentBoot,
+                existingProcessToken: existing?.processToken,
+                currentProcessToken: currentProcessToken
             )
             if action != .none {
                 decisions.append(ReconcileDecision(alias: alias, action: action))

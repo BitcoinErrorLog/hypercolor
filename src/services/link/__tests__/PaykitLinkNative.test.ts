@@ -111,6 +111,8 @@ describe('PaykitLinkNative contract', () => {
     const app = readFileSync(join(__dirname, '../../../../App.tsx'), 'utf8');
     expect(app).toContain('reconcileAdoptedSessionsAtBoot');
     expect(app).toMatch(/initKeyStore\(\)[\s\S]*reconcileAdoptedSessionsAtBoot/);
+    expect(app).toMatch(/initKeyStore\(\)[\s\S]*addEventListener\('change', onAppState\)/);
+    expect(app).toContain("console.warn('[App] keystore unavailable')");
     expect(app).toMatch(/state === 'active'[\s\S]*recoverAndDrain\(\)/);
     const recoverStart = app.indexOf('const recoverAndDrain');
     const recoverEnd = app.indexOf('const onAppState');

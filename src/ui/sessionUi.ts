@@ -10,7 +10,8 @@ export type SessionUiKind =
   | 'offline'
   | 'revoked'
   | 'enabled'
-  | 'unavailable';
+  | 'unavailable'
+  | 'keystore-unavailable';
 
 export type SessionUiModel = {
   kind: SessionUiKind;
@@ -108,9 +109,19 @@ export function sessionUiModel(kind: SessionUiKind): SessionUiModel {
         primary: null,
         secondary: COPY.back,
       };
+    case 'keystore-unavailable':
+      return {
+        kind,
+        label: COPY.keystoreUnavailable,
+        body: COPY.keystoreUnavailableBody,
+        primary: null,
+        secondary: null,
+      };
   }
 }
 
-export function isBannerSessionKind(kind: SessionUiKind): kind is 'offline' | 'revoked' {
-  return kind === 'offline' || kind === 'revoked';
+export function isBannerSessionKind(
+  kind: SessionUiKind,
+): kind is 'offline' | 'revoked' | 'keystore-unavailable' {
+  return kind === 'offline' || kind === 'revoked' || kind === 'keystore-unavailable';
 }

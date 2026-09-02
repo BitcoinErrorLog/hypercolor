@@ -6,6 +6,27 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class PaykitLinkDurableReconcileTest {
+    companion object {
+        private const val TOKEN_A = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        private const val TOKEN_B = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    }
+
+    private fun reconcile(
+        store: InMemoryPaykitLinkSessionStore,
+        knownAliases: Set<String> = emptySet(),
+        inFlightAliases: Set<String> = emptySet(),
+        nowMs: Long = 1L,
+        processToken: String = TOKEN_A,
+        evict: (String) -> Unit = {},
+    ) = PaykitLinkDurableReconcile.reconcileUnreferencedAdopted(
+        store,
+        knownAliases,
+        inFlightAliases,
+        nowMs,
+        processToken,
+        evict,
+    )
+
     @Test
     fun sessionKeysParsePendingAndSessionPrefixes() {
         val alias = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
@@ -111,7 +132,7 @@ class PaykitLinkDurableReconcileTest {
         assertTrue(store.hasSessionBearer("orphan"))
         assertFalse(store.hasPendingMarker("orphan"))
 
-        val result = PaykitLinkDurableReconcile.reconcileUnreferencedAdopted(
+        val result = reconcile(
             store,
             knownAliases = emptySet(),
             inFlightAliases = emptySet(),
@@ -124,7 +145,7 @@ class PaykitLinkDurableReconcileTest {
         assertEquals(mapOf("orphan" to "token"), store.bearers)
         assertEquals(mapOf("orphan" to "token"), sessions)
         assertEquals(
-            PaykitLinkQuarantineRecord(1L, 1_700_000_000_000L),
+            PaykitLinkQuarantineRecord(1L, 1_700_000_000_000L, TOKEN_A),
             store.getQuarantine("orphan"),
         )
     }
@@ -136,17 +157,19 @@ class PaykitLinkDurableReconcileTest {
         store.putPendingSession("orphan", "token")
         store.clearPendingMarker("orphan")
 
-        PaykitLinkDurableReconcile.reconcileUnreferencedAdopted(
+        reconcile(
             store,
             knownAliases = emptySet(),
             inFlightAliases = emptySet(),
             nowMs = 1L,
+            processToken = TOKEN_A,
         ) { sessions.remove(it) }
-        val second = PaykitLinkDurableReconcile.reconcileUnreferencedAdopted(
+        val second = reconcile(
             store,
             knownAliases = emptySet(),
             inFlightAliases = emptySet(),
             nowMs = 2L,
+            processToken = TOKEN_B,
         ) { sessions.remove(it) }
 
         assertEquals(2L, second.bootCounter)
@@ -163,7 +186,7 @@ class PaykitLinkDurableReconcileTest {
         store.putPendingSession("kept", "token")
         store.clearPendingMarker("kept")
 
-        PaykitLinkDurableReconcile.reconcileUnreferencedAdopted(
+        reconcile(
             store,
             knownAliases = emptySet(),
             inFlightAliases = emptySet(),
@@ -171,7 +194,7 @@ class PaykitLinkDurableReconcileTest {
         ) {}
         assertTrue(store.getQuarantine("kept") != null)
 
-        val owned = PaykitLinkDurableReconcile.reconcileUnreferencedAdopted(
+        val owned = reconcile(
             store,
             knownAliases = setOf("kept"),
             inFlightAliases = emptySet(),
@@ -181,7 +204,7 @@ class PaykitLinkDurableReconcileTest {
         assertEquals(null, store.getQuarantine("kept"))
         assertEquals(mapOf("kept" to "token"), store.bearers)
 
-        val again = PaykitLinkDurableReconcile.reconcileUnreferencedAdopted(
+        val again = reconcile(
             store,
             knownAliases = emptySet(),
             inFlightAliases = emptySet(),
@@ -200,7 +223,7 @@ class PaykitLinkDurableReconcileTest {
         val registry = AuthFlowCancelRegistry<String>()
         registry.registerPending("inflight")
 
-        val result = PaykitLinkDurableReconcile.reconcileUnreferencedAdopted(
+        val result = reconcile(
             store,
             knownAliases = emptySet(),
             inFlightAliases = registry.inFlightSessionAliases(),
@@ -217,7 +240,7 @@ class PaykitLinkDurableReconcileTest {
     fun durablePendingIsExcludedEvenWhenNotInInFlightSet() {
         val store = InMemoryPaykitLinkSessionStore()
         store.putPendingSession("inflight", "token")
-        val collected = PaykitLinkDurableReconcile.reconcileUnreferencedAdopted(
+        val collected = reconcile(
             store,
             knownAliases = emptySet(),
             inFlightAliases = emptySet(),
@@ -238,7 +261,7 @@ class PaykitLinkDurableReconcileTest {
 
         val pendingSwept = PaykitLinkDurableReconcile.sweepPendingLeftovers(store) { sessions.remove(it) }
         assertTrue(pendingSwept.isEmpty())
-        val collected = PaykitLinkDurableReconcile.reconcileUnreferencedAdopted(
+        val collected = reconcile(
             store,
             knownAliases = setOf("kept"),
             inFlightAliases = emptySet(),
@@ -256,27 +279,39 @@ class PaykitLinkDurableReconcileTest {
     fun quarantineActionMatchesTwoSightingProtocol() {
         assertEquals(
             PaykitLinkQuarantineAction.SkipInFlight,
-            PaykitLinkDurableReconcile.quarantineAction(false, true, null, 1L),
+            PaykitLinkDurableReconcile.quarantineAction(false, true, null, 1L, null, TOKEN_A),
         )
         assertEquals(
             PaykitLinkQuarantineAction.FirstSighting,
-            PaykitLinkDurableReconcile.quarantineAction(false, false, null, 1L),
+            PaykitLinkDurableReconcile.quarantineAction(false, false, null, 1L, null, TOKEN_A),
         )
         assertEquals(
             PaykitLinkQuarantineAction.SubsequentDelete,
-            PaykitLinkDurableReconcile.quarantineAction(false, false, 1L, 2L),
+            PaykitLinkDurableReconcile.quarantineAction(false, false, 1L, 2L, TOKEN_A, TOKEN_B),
+        )
+        assertEquals(
+            PaykitLinkQuarantineAction.None,
+            PaykitLinkDurableReconcile.quarantineAction(false, false, 1L, 2L, TOKEN_A, TOKEN_A),
         )
         assertEquals(
             PaykitLinkQuarantineAction.ClearOwned,
-            PaykitLinkDurableReconcile.quarantineAction(true, false, 1L, 2L),
+            PaykitLinkDurableReconcile.quarantineAction(true, false, 1L, 2L, TOKEN_A, TOKEN_B),
         )
         assertEquals(
             PaykitLinkQuarantineAction.None,
-            PaykitLinkDurableReconcile.quarantineAction(true, false, null, 2L),
+            PaykitLinkDurableReconcile.quarantineAction(true, false, null, 2L, null, TOKEN_A),
         )
         assertEquals(
             PaykitLinkQuarantineAction.None,
-            PaykitLinkDurableReconcile.quarantineAction(false, false, 2L, 2L),
+            PaykitLinkDurableReconcile.quarantineAction(false, false, 2L, 2L, TOKEN_A, TOKEN_B),
+        )
+        assertEquals(
+            PaykitLinkQuarantineAction.FirstSighting,
+            PaykitLinkDurableReconcile.quarantineAction(false, false, 1L, 2L, "", TOKEN_A),
+        )
+        assertEquals(
+            PaykitLinkQuarantineAction.FirstSighting,
+            PaykitLinkDurableReconcile.quarantineAction(false, false, 1L, 2L, null, TOKEN_A),
         )
     }
 
@@ -285,19 +320,81 @@ class PaykitLinkDurableReconcileTest {
         val store = InMemoryPaykitLinkSessionStore()
         store.putPendingSession("orphan", "token")
         store.clearPendingMarker("orphan")
-        PaykitLinkDurableReconcile.reconcileUnreferencedAdopted(
+        reconcile(
             store,
             emptySet(),
             emptySet(),
             10L,
         ) {}
         assertEquals(1L, store.getBootCounter())
-        PaykitLinkDurableReconcile.reconcileUnreferencedAdopted(
+        reconcile(
             store,
             emptySet(),
             emptySet(),
             11L,
         ) {}
         assertEquals(2L, store.getBootCounter())
+    }
+
+    @Test
+    fun sameProcessTokenDoesNotDeleteOnSecondReconcilePass() {
+        val store = InMemoryPaykitLinkSessionStore()
+        store.putPendingSession("orphan", "token")
+        store.clearPendingMarker("orphan")
+        reconcile(store, processToken = TOKEN_A) {}
+        val second = reconcile(store, nowMs = 2L, processToken = TOKEN_A) {}
+        assertEquals(2L, second.bootCounter)
+        assertTrue(second.deleted.isEmpty())
+        assertTrue(store.hasSessionBearer("orphan"))
+        assertEquals(TOKEN_A, store.getQuarantine("orphan")?.processToken)
+    }
+
+    @Test
+    fun differentProcessTokenDeletesOnSecondSighting() {
+        val store = InMemoryPaykitLinkSessionStore()
+        store.putPendingSession("orphan", "token")
+        store.clearPendingMarker("orphan")
+        reconcile(store, processToken = TOKEN_A) {}
+        val second = reconcile(store, nowMs = 2L, processToken = TOKEN_B) {}
+        assertEquals(listOf("orphan"), second.deleted)
+        assertTrue(store.bearers.isEmpty())
+    }
+
+    @Test
+    fun parseQuarantineAcceptsLegacyTwoFieldRecords() {
+        val legacy = PaykitLinkSessionKeys.parseQuarantine("3:99")
+        assertEquals(PaykitLinkQuarantineRecord(3L, 99L, ""), legacy)
+        val encoded = PaykitLinkSessionKeys.formatQuarantine(
+            PaykitLinkQuarantineRecord(3L, 99L, TOKEN_A),
+        )
+        assertEquals(
+            PaykitLinkQuarantineRecord(3L, 99L, TOKEN_A),
+            PaykitLinkSessionKeys.parseQuarantine(encoded),
+        )
+    }
+
+    @Test
+    fun processTokenIs128BitHexAndStableInProcess() {
+        val token = PaykitLinkProcessIdentity.TOKEN
+        assertEquals(32, token.length)
+        assertTrue(token.matches(Regex("[0-9a-f]{32}")))
+        assertEquals(token, PaykitLinkProcessIdentity.TOKEN)
+    }
+
+    @Test
+    fun legacyEmptyProcessTokenRewritesInsteadOfDeleting() {
+        val store = InMemoryPaykitLinkSessionStore()
+        store.putPendingSession("orphan", "token")
+        store.clearPendingMarker("orphan")
+        store.putQuarantine("orphan", PaykitLinkQuarantineRecord(1L, 99L, ""))
+        store.setBootCounter(1L)
+        val result = reconcile(store, nowMs = 100L, processToken = TOKEN_A) {}
+        assertTrue(result.deleted.isEmpty())
+        assertEquals(listOf("orphan"), result.quarantined)
+        assertEquals(
+            PaykitLinkQuarantineRecord(2L, 100L, TOKEN_A),
+            store.getQuarantine("orphan"),
+        )
+        assertTrue(store.hasSessionBearer("orphan"))
     }
 }
