@@ -42,6 +42,18 @@ describe('sanitizeError', () => {
     expect(sanitized.details).toBeNull();
   });
 
+  it('does not surface owner-changed, deny-unavailable, or not-sendable internals', () => {
+    for (const code of ['owner-changed', 'deny-unavailable', 'not-sendable'] as const) {
+      const sanitized = sanitizeError(
+        new LinkSendError(code, `LinkService.sendDm ${code} ${SAMPLE_PUBKY}`),
+        CONTACTS_COPY.couldNotSendMessage,
+      );
+      expect(sanitized.category).toBe('unknown');
+      expect(sanitized.message).toBe(CONTACTS_COPY.couldNotSendMessage);
+      expect(sanitized.details).toBeNull();
+    }
+  });
+
   it('never surfaces an internal sendDm template or a raw pubky', () => {
     const err = new Error(
       `LinkService.sendDm: cannot send to ${SAMPLE_PUBKY} — link status is 'queued'`,

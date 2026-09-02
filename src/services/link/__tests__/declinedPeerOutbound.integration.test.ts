@@ -125,10 +125,12 @@ async function seedMessaging(): Promise<void> {
 }
 
 describe('declined peer outbound (real LinkService + storage)', () => {
+  let db: ReturnType<typeof openMemoryDb> | null = null;
+
   beforeEach(async () => {
     FollowsImportSettings.resetForTests();
     resetLinkServiceHarnessState();
-    const db = openMemoryDb();
+    db = openMemoryDb();
     setDbForTests(db);
     await runMigrations(db);
     jest.spyOn(Date, 'now').mockReturnValue(NOW);
@@ -161,6 +163,8 @@ describe('declined peer outbound (real LinkService + storage)', () => {
   afterEach(() => {
     FollowsImportSettings.resetForTests();
     resetLinkServiceHarnessState();
+    db?.close();
+    db = null;
     setDbForTests(null);
     jest.restoreAllMocks();
   });
@@ -261,7 +265,7 @@ describe('declined peer outbound (real LinkService + storage)', () => {
   });
 
   it('denies ensureLinkWith and sendDm for a blocked peer', async () => {
-    FollowsImportSettings.block(OWNER, PEER);
+    await FollowsImportSettings.block(OWNER, PEER);
     mockedNative.restoreLink.mockClear();
 
     await expect(LinkService.ensureLinkWith(PEER)).resolves.toBe('error');
@@ -316,7 +320,7 @@ describe('declined peer outbound (real LinkService + storage)', () => {
         createdAt: NOW,
       },
     });
-    FollowsImportSettings.block(OWNER, PEER);
+    await FollowsImportSettings.block(OWNER, PEER);
     mockedNative.sendPrivateMessageJson.mockClear();
 
     await LinkService.drainRetries();
@@ -347,6 +351,16 @@ describe('declined peer outbound (real LinkService + storage)', () => {
       editedAt: null,
       deleted: false,
     });
+    await StorageService.upsertGroupFanoutOutcome({
+      ownerPubky: OWNER,
+      channelId: CHANNEL_ID,
+      eventId,
+      senderPubky: OWNER,
+      recipientPubky: PEER,
+      status: 'pending',
+      reason: null,
+      updatedAt: NOW,
+    });
     await StorageService.enqueue({
       id: 'q-group-real',
       messageId: eventId,
@@ -365,7 +379,7 @@ describe('declined peer outbound (real LinkService + storage)', () => {
       nextRetryAt: NOW,
       createdAt: NOW,
     });
-    FollowsImportSettings.block(OWNER, PEER);
+    await FollowsImportSettings.block(OWNER, PEER);
     mockedNative.sendPrivateMessageJson.mockClear();
 
     await LinkService.drainRetries();
@@ -433,7 +447,7 @@ describe('declined peer outbound (real LinkService + storage)', () => {
       await seedPeer(PEER_B);
       await seedPeer(PEER_C);
       await LinkService.signinWithSecret('signin-secret-hex');
-      FollowsImportSettings.block(OWNER, PEER);
+      await FollowsImportSettings.block(OWNER, PEER);
 
       await StorageService.saveGroupMessage({
         ownerPubky: OWNER,
@@ -455,6 +469,16 @@ describe('declined peer outbound (real LinkService + storage)', () => {
       });
       for (let i = 0; i < order.length; i += 1) {
         const peer = order[i]!;
+        await StorageService.upsertGroupFanoutOutcome({
+          ownerPubky: OWNER,
+          channelId: CHANNEL_ID,
+          eventId,
+          senderPubky: OWNER,
+          recipientPubky: peer,
+          status: 'pending',
+          reason: null,
+          updatedAt: NOW,
+        });
         await StorageService.enqueue({
           id: `q-mix-${i}`,
           messageId: eventId,
@@ -481,12 +505,193 @@ describe('declined peer outbound (real LinkService + storage)', () => {
         OWNER,
         eventId,
       );
-      return formatGroupFanoutAggregate(outcomes);
+      const label = formatGroupFanoutAggregate(outcomes);
+      db.close();
+      setDbForTests(null);
+      return label;
     }
 
     const blockedFirst = await runDrain([PEER, PEER_B, PEER_C]);
     const blockedLast = await runDrain([PEER_B, PEER_C, PEER]);
     expect(blockedFirst).toBe(blockedLast);
     expect(blockedFirst).toBe('Sent to 2 of 3');
+  });
+
+  it('labels immediate success plus a queued blocked recipient as Sent to 1 of 2', async () => {
+    const PEER_B = 'kyp7qac797z86bngq9g3ajqbrsgsb3tibayndqi6fe4cqi3gb6ry';
+    const eventId = '00000000-0000-4000-8000-00000000ffff';
+    await StorageService.upsertLink({
+      ownerPubky: OWNER,
+      peerPubky: PEER_B,
+      role: 'initiator',
+      status: 'established',
+      snapshot: 'est-b',
+      remoteNoisePublicKey: 'noise-b',
+      localReceiverPath: LINK_RECEIVER_PATH,
+      remoteReceiverPath: LINK_RECEIVER_PATH,
+      consecutiveFailures: 0,
+    });
+    await FollowsImportSettings.block(OWNER, PEER);
+    const ts = NOW;
+    await StorageService.persistGroupSendIntent({
+      message: {
+        ownerPubky: OWNER,
+        channelId: CHANNEL_ID,
+        eventId,
+        senderPubky: OWNER,
+        kind: GROUP_MESSAGE_KIND,
+        body: 'hi',
+        rawJson: '{}',
+        sentAt: ts,
+        receivedAt: null,
+        deliveryState: 'sending',
+        replyToEventId: null,
+        replyToAuthorPubky: null,
+        targetEventId: null,
+        targetAuthorPubky: null,
+        editedAt: null,
+        deleted: false,
+      },
+      queueItems: [
+        {
+          id: 'q-imm-b',
+          messageId: eventId,
+          recipientPubky: PEER_B,
+          payload: JSON.stringify({
+            type: LINK_GROUP_FANOUT_PAYLOAD_TYPE,
+            ownerPubky: OWNER,
+            peerPubky: PEER_B,
+            senderPubky: OWNER,
+            kind: GROUP_MESSAGE_KIND,
+            eventId,
+            channelId: CHANNEL_ID,
+            rawJson: '{}',
+          }),
+          attempts: 0,
+          nextRetryAt: ts,
+          createdAt: ts,
+        },
+        {
+          id: 'q-imm-blocked',
+          messageId: eventId,
+          recipientPubky: PEER,
+          payload: JSON.stringify({
+            type: LINK_GROUP_FANOUT_PAYLOAD_TYPE,
+            ownerPubky: OWNER,
+            peerPubky: PEER,
+            senderPubky: OWNER,
+            kind: GROUP_MESSAGE_KIND,
+            eventId,
+            channelId: CHANNEL_ID,
+            rawJson: '{}',
+          }),
+          attempts: 0,
+          nextRetryAt: ts,
+          createdAt: ts,
+        },
+      ],
+    });
+    mockedNative.sendPrivateMessageJson.mockResolvedValue({ snapshot: 'est-out' });
+    await expect(
+      LinkService.sendPersistedLinkJson({
+        peerPubky: PEER_B,
+        queueId: 'q-imm-b',
+        kind: GROUP_MESSAGE_KIND,
+        eventId,
+        rawJson: '{}',
+        channelId: CHANNEL_ID,
+      }),
+    ).resolves.toBe('sent');
+    await LinkService.drainRetries();
+    const outcomes = await StorageService.getGroupFanoutAggregate(
+      OWNER,
+      CHANNEL_ID,
+      OWNER,
+      eventId,
+    );
+    expect(formatGroupFanoutAggregate(outcomes)).toBe('Sent to 1 of 2');
+  });
+
+  it('labels immediate-success-only fan-out as Sent', async () => {
+    const PEER_B = 'kyp7qac797z86bngq9g3ajqbrsgsb3tibayndqi6fe4cqi3gb6ry';
+    const eventId = '00000000-0000-4000-8000-00000000aaaa';
+    await StorageService.upsertLink({
+      ownerPubky: OWNER,
+      peerPubky: PEER_B,
+      role: 'initiator',
+      status: 'established',
+      snapshot: 'est-b',
+      remoteNoisePublicKey: 'noise-b',
+      localReceiverPath: LINK_RECEIVER_PATH,
+      remoteReceiverPath: LINK_RECEIVER_PATH,
+      consecutiveFailures: 0,
+    });
+    const ts = NOW;
+    await StorageService.persistGroupSendIntent({
+      message: {
+        ownerPubky: OWNER,
+        channelId: CHANNEL_ID,
+        eventId,
+        senderPubky: OWNER,
+        kind: GROUP_MESSAGE_KIND,
+        body: 'hi',
+        rawJson: '{}',
+        sentAt: ts,
+        receivedAt: null,
+        deliveryState: 'sending',
+        replyToEventId: null,
+        replyToAuthorPubky: null,
+        targetEventId: null,
+        targetAuthorPubky: null,
+        editedAt: null,
+        deleted: false,
+      },
+      queueItems: [PEER, PEER_B].map((peer, i) => ({
+        id: `q-all-${i}`,
+        messageId: eventId,
+        recipientPubky: peer,
+        payload: JSON.stringify({
+          type: LINK_GROUP_FANOUT_PAYLOAD_TYPE,
+          ownerPubky: OWNER,
+          peerPubky: peer,
+          senderPubky: OWNER,
+          kind: GROUP_MESSAGE_KIND,
+          eventId,
+          channelId: CHANNEL_ID,
+          rawJson: '{}',
+        }),
+        attempts: 0,
+        nextRetryAt: ts,
+        createdAt: ts,
+      })),
+    });
+    mockedNative.sendPrivateMessageJson.mockResolvedValue({ snapshot: 'est-out' });
+    await expect(
+      LinkService.sendPersistedLinkJson({
+        peerPubky: PEER,
+        queueId: 'q-all-0',
+        kind: GROUP_MESSAGE_KIND,
+        eventId,
+        rawJson: '{}',
+        channelId: CHANNEL_ID,
+      }),
+    ).resolves.toBe('sent');
+    await expect(
+      LinkService.sendPersistedLinkJson({
+        peerPubky: PEER_B,
+        queueId: 'q-all-1',
+        kind: GROUP_MESSAGE_KIND,
+        eventId,
+        rawJson: '{}',
+        channelId: CHANNEL_ID,
+      }),
+    ).resolves.toBe('sent');
+    const outcomes = await StorageService.getGroupFanoutAggregate(
+      OWNER,
+      CHANNEL_ID,
+      OWNER,
+      eventId,
+    );
+    expect(formatGroupFanoutAggregate(outcomes)).toBe('Sent');
   });
 });

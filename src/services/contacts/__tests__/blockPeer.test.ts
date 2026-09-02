@@ -84,6 +84,24 @@ describe('blockPeer', () => {
     });
     expect(blocked.has(PEER)).toBe(true);
   });
+
+  it('performs no cleanup when persistBlock throws', async () => {
+    const decline = jest.fn();
+    const del = jest.fn();
+    await expect(
+      blockPeer({
+        ownerPubky: OWNER,
+        peerPubky: PEER,
+        persistBlock: async () => {
+          throw new Error('sqlite locked');
+        },
+        declineMessageRequest: decline,
+        deleteContact: del,
+      }),
+    ).rejects.toThrow('sqlite locked');
+    expect(decline).not.toHaveBeenCalled();
+    expect(del).not.toHaveBeenCalled();
+  });
 });
 
 describe('unblockPeer', () => {

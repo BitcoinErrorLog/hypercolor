@@ -757,14 +757,27 @@ action, never a side effect of adding a pubky.
   contact) returns a blocked result and opens `This pubky is blocked. Unblock and add?`
   Decline keeps the block. Confirm persists the contact first, then lifts the deny and
   releases the terminal `declined` row. If persist fails, the deny remains.
-- **Fail-closed ordering.** Block: deny, then decline, then delete contact. Unblock: release
-  declined row, then drop the deny. Manual add of a blocked pubky: persist contact, then
-  unblock. Inbound and handshake establishment consult the deny at the Encrypted Link choke
-  point; queued payloads for a blocked peer are dropped as `Failed` (not delivered),
-  not retried. Group fan-out records a per-recipient terminal state; the group
-  message derives an aggregate from those states (`Sent`, `Sent to N of M`,
-  `Not delivered to {name} (blocked)`), never from drain order. A declined message
-  request is not a deny at this choke.
+- **Fail-closed ordering.** Block: durable SQLite deny (`blocked_peers`, owner+peer
+  primary key) commits first; decline and contact deletion run only after that write
+  succeeds. If the deny write fails, Block returns an error and no Encrypted Link,
+  messages, or contact row is deleted. Unblock: release declined row, then drop the
+  deny. Manual add of a blocked pubky: persist contact, then unblock. Deny state is
+  `denied`, `clear`, or `unavailable`. Read failure, malformed leftover MMKV, or a
+  missing cache is `unavailable`, never an empty set. Encrypted-Link inbound,
+  handshake, retry drain, mesh (when the peer pubky is known), and outbound send
+  fail closed on `denied` and `unavailable`. A leftover MMKV `blocked:{owner}` blob
+  is migrated once into SQLite; the MMKV key is deleted only after the SQL commit.
+  Queued payloads for a denied peer are dropped as `Failed` (not delivered), not
+  retried. Deny-unavailable defers the queue item instead of sending or destroying
+  it. Group fan-out seeds one `pending` outcome per recipient in the same
+  transaction as the send intent, then upserts that row in the same transaction
+  that advances the snapshot and deletes the queue item (or writes a terminal
+  failure). The Channel view labels an outbound private-group message from those
+  persisted rows (`Sent`, `Sent to N of M`, `Not delivered to {name} (blocked)`),
+  never from drain order or the coarse `group_messages.delivery_state` alone.
+  One-to-one DMs still use the coarse delivery word. A declined message
+  request is not a deny at this choke. User send pins the owner at start and
+  aborts with no persistence if that owner is no longer current after an await.
 - **Send to a blocked pubky.** The thread shows `You blocked this contact. Unblock
   to message them.` with `Unblock`. Send never surfaces an internal error string.
 - **Block sheet.** Names local deletion (contact row, Encrypted Link, one-to-one messages,

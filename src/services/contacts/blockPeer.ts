@@ -12,12 +12,13 @@ export type BlockPeerOutcome =
  * that write is terminal even if later cleanup fails. Decline (Encrypted
  * Link wipe + `message_requests.status = declined`) and contact deletion
  * are retryable. Callers must report cleanup-pending honestly rather than
- * "block failed" when the deny is already stored.
+ * "block failed" when the deny is already stored. If the durable deny
+ * write throws, no cleanup runs and the error propagates.
  */
 export async function blockPeer(input: {
   ownerPubky: PubkyKey;
   peerPubky: PubkyKey;
-  persistBlock: (ownerPubky: PubkyKey, peerPubky: PubkyKey) => void;
+  persistBlock: (ownerPubky: PubkyKey, peerPubky: PubkyKey) => void | Promise<void>;
   declineMessageRequest: (peerPubky: PubkyKey) => Promise<void>;
   deleteContact: (ownerPubky: PubkyKey, peerPubky: PubkyKey) => Promise<void>;
   persistCleanupPending?: (ownerPubky: PubkyKey, peerPubky: PubkyKey) => void;
@@ -27,7 +28,7 @@ export async function blockPeer(input: {
   if (!ownerPubky || !peerPubky) {
     throw new Error('Could not block this pubky.');
   }
-  input.persistBlock(ownerPubky, peerPubky);
+  await input.persistBlock(ownerPubky, peerPubky);
   try {
     await input.declineMessageRequest(peerPubky);
     await input.deleteContact(ownerPubky, peerPubky);
@@ -60,7 +61,7 @@ export async function blockPeer(input: {
 export async function unblockPeer(input: {
   ownerPubky: PubkyKey;
   peerPubky: PubkyKey;
-  persistUnblock: (ownerPubky: PubkyKey, peerPubky: PubkyKey) => void;
+  persistUnblock: (ownerPubky: PubkyKey, peerPubky: PubkyKey) => void | Promise<void>;
   releaseDeclinedRequest: (ownerPubky: PubkyKey, peerPubky: PubkyKey) => Promise<void>;
   clearCleanupPending?: (ownerPubky: PubkyKey, peerPubky: PubkyKey) => void;
 }): Promise<void> {
@@ -69,6 +70,6 @@ export async function unblockPeer(input: {
     throw new Error('Could not unblock this pubky.');
   }
   await input.releaseDeclinedRequest(ownerPubky, peerPubky);
-  input.persistUnblock(ownerPubky, peerPubky);
+  await input.persistUnblock(ownerPubky, peerPubky);
   input.clearCleanupPending?.(ownerPubky, peerPubky);
 }

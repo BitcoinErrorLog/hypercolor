@@ -1246,6 +1246,7 @@ export const StorageService = {
       db.executeSync('DELETE FROM payment_requests WHERE owner_pubky = ?', [ownerPubky]);
       db.executeSync('DELETE FROM tip_endpoints WHERE owner_pubky = ?', [ownerPubky]);
       db.executeSync('DELETE FROM group_fanout_outcomes WHERE owner_pubky = ?', [ownerPubky]);
+      db.executeSync('DELETE FROM blocked_peers WHERE owner_pubky = ?', [ownerPubky]);
       db.executeSync('DELETE FROM group_deferred_events WHERE owner_pubky = ?', [ownerPubky]);
       db.executeSync('DELETE FROM group_seen_events WHERE owner_pubky = ?', [ownerPubky]);
       db.executeSync('DELETE FROM group_messages WHERE owner_pubky = ?', [ownerPubky]);
@@ -2019,32 +2020,46 @@ export const StorageService = {
   },
 
   /**
-   * Atomic pre-fan-out persist: the group message row AND one retry item
-   * per recipient, before any native send.
+   * Atomic pre-fan-out persist: the group message row, one retry item per
+   * recipient, and one `pending` outcome per recipient, before any native send.
    */
   async persistGroupSendIntent(input: {
     message: GroupMessage;
     queueItems: DeliveryQueueItem[];
   }): Promise<void> {
     const db = await getDb();
+    const ts = now();
     transact(db, () => {
       insertGroupMessage(db, input.message);
       for (const item of input.queueItems) {
         insertQueueItem(db, item);
+        upsertFanoutOutcomeLocked(db, {
+          ownerPubky: input.message.ownerPubky,
+          channelId: input.message.channelId,
+          eventId: input.message.eventId,
+          senderPubky: input.message.senderPubky,
+          recipientPubky: item.recipientPubky,
+          status: 'pending',
+          reason: null,
+          updatedAt: ts,
+        });
       }
     });
   },
 
   /**
-   * Post-send persist for one fan-out recipient: advanced snapshot + dequeue.
-   * Does not rewrite `group_messages.delivery_state` (that is settled after
-   * the remaining queue for this event_id is empty).
+   * Post-send persist for one fan-out recipient: advanced snapshot, terminal
+   * `sent` outcome, dequeue, and aggregate settle — one transaction.
    */
   async finalizeGroupFanoutSend(input: {
     ownerPubky: PubkyKey;
     peerPubky: PubkyKey;
     snapshot: string;
     queueId: string;
+    channelId: string;
+    eventId: string;
+    senderPubky: PubkyKey;
+    kind: string;
   }): Promise<void> {
     const db = await getDb();
     const ts = now();
@@ -2055,7 +2070,51 @@ export const StorageService = {
          WHERE owner_pubky = ? AND peer_pubky = ?`,
         [input.snapshot, ts, input.ownerPubky, input.peerPubky],
       );
+      upsertFanoutOutcomeLocked(db, {
+        ownerPubky: input.ownerPubky,
+        channelId: input.channelId,
+        eventId: input.eventId,
+        senderPubky: input.senderPubky,
+        recipientPubky: input.peerPubky,
+        status: 'sent',
+        reason: null,
+        updatedAt: ts,
+      });
       db.executeSync('DELETE FROM delivery_queue WHERE id = ?', [input.queueId]);
+      settleGroupFanoutLocked(db, input, ts);
+    });
+  },
+
+  /**
+   * Permanent fan-out drop (denied or max-attempt): terminal outcome, aggregate
+   * settle, and queue delete in one transaction. A throw rolls all three back.
+   */
+  async completeGroupFanoutRecipient(input: {
+    ownerPubky: PubkyKey;
+    channelId: string;
+    eventId: string;
+    senderPubky: PubkyKey;
+    recipientPubky: PubkyKey;
+    status: 'sent' | 'failed';
+    reason: 'blocked' | null;
+    queueId: string;
+    kind: string;
+  }): Promise<void> {
+    const db = await getDb();
+    const ts = now();
+    transact(db, () => {
+      upsertFanoutOutcomeLocked(db, {
+        ownerPubky: input.ownerPubky,
+        channelId: input.channelId,
+        eventId: input.eventId,
+        senderPubky: input.senderPubky,
+        recipientPubky: input.recipientPubky,
+        status: input.status,
+        reason: input.reason,
+        updatedAt: ts,
+      });
+      db.executeSync('DELETE FROM delivery_queue WHERE id = ?', [input.queueId]);
+      settleGroupFanoutLocked(db, input, ts);
     });
   },
 
@@ -2075,25 +2134,7 @@ export const StorageService = {
 
   async upsertGroupFanoutOutcome(outcome: GroupFanoutOutcome): Promise<void> {
     const db = await getDb();
-    db.executeSync(
-      `INSERT INTO group_fanout_outcomes
-        (owner_pubky, channel_id, event_id, sender_pubky, recipient_pubky, status, reason, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT(owner_pubky, channel_id, event_id, sender_pubky, recipient_pubky) DO UPDATE SET
-         status = excluded.status,
-         reason = excluded.reason,
-         updated_at = excluded.updated_at`,
-      [
-        outcome.ownerPubky,
-        outcome.channelId,
-        outcome.eventId,
-        outcome.senderPubky,
-        outcome.recipientPubky,
-        outcome.status,
-        outcome.reason,
-        outcome.updatedAt,
-      ],
-    );
+    upsertFanoutOutcomeLocked(db, outcome);
   },
 
   async listGroupFanoutOutcomes(
@@ -2110,6 +2151,79 @@ export const StorageService = {
       [ownerPubky, channelId, senderPubky, eventId],
     );
     return (result.rows ?? []).map(rowToGroupFanoutOutcome);
+  },
+
+  async getGroupFanoutAggregate(
+    ownerPubky: PubkyKey,
+    channelId: string,
+    senderPubky: PubkyKey,
+    eventId: string,
+  ): Promise<GroupFanoutOutcome[]> {
+    return StorageService.listGroupFanoutOutcomes(ownerPubky, channelId, senderPubky, eventId);
+  },
+
+  async listGroupFanoutOutcomesForChannel(
+    ownerPubky: PubkyKey,
+    channelId: string,
+  ): Promise<GroupFanoutOutcome[]> {
+    const db = await getDb();
+    const result = db.executeSync(
+      `SELECT * FROM group_fanout_outcomes
+       WHERE owner_pubky = ? AND channel_id = ?
+       ORDER BY event_id ASC, recipient_pubky ASC`,
+      [ownerPubky, channelId],
+    );
+    return (result.rows ?? []).map(rowToGroupFanoutOutcome);
+  },
+
+  async insertBlockedPeer(ownerPubky: PubkyKey, peerPubky: PubkyKey): Promise<void> {
+    const db = await getDb();
+    db.executeSync(
+      `INSERT INTO blocked_peers (owner_pubky, peer_pubky, blocked_at)
+       VALUES (?, ?, ?)
+       ON CONFLICT(owner_pubky, peer_pubky) DO UPDATE SET blocked_at = excluded.blocked_at`,
+      [ownerPubky, peerPubky, now()],
+    );
+  },
+
+  async insertBlockedPeers(ownerPubky: PubkyKey, peerPubkys: readonly PubkyKey[]): Promise<void> {
+    const db = await getDb();
+    const ts = now();
+    transact(db, () => {
+      for (const peerPubky of peerPubkys) {
+        db.executeSync(
+          `INSERT OR IGNORE INTO blocked_peers (owner_pubky, peer_pubky, blocked_at)
+           VALUES (?, ?, ?)`,
+          [ownerPubky, peerPubky, ts],
+        );
+      }
+    });
+  },
+
+  async deleteBlockedPeer(ownerPubky: PubkyKey, peerPubky: PubkyKey): Promise<void> {
+    const db = await getDb();
+    db.executeSync('DELETE FROM blocked_peers WHERE owner_pubky = ? AND peer_pubky = ?', [
+      ownerPubky,
+      peerPubky,
+    ]);
+  },
+
+  async listBlockedPeers(ownerPubky: PubkyKey): Promise<PubkyKey[]> {
+    const db = await getDb();
+    const result = db.executeSync(
+      'SELECT peer_pubky FROM blocked_peers WHERE owner_pubky = ? ORDER BY peer_pubky ASC',
+      [ownerPubky],
+    );
+    return (result.rows ?? []).map(row => String(row.peer_pubky));
+  },
+
+  async hasBlockedPeer(ownerPubky: PubkyKey, peerPubky: PubkyKey): Promise<boolean> {
+    const db = await getDb();
+    const result = db.executeSync(
+      'SELECT 1 AS n FROM blocked_peers WHERE owner_pubky = ? AND peer_pubky = ? LIMIT 1',
+      [ownerPubky, peerPubky],
+    );
+    return (result.rows?.length ?? 0) > 0;
   },
 
   // ── Payments (M5) ─────────────────────────────────────────────────────────
@@ -2456,16 +2570,77 @@ function rowToQueueItem(row: any): DeliveryQueueItem {
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function rowToGroupFanoutOutcome(row: any): GroupFanoutOutcome {
+  const rawStatus = String(row.status);
+  const status: GroupFanoutOutcome['status'] =
+    rawStatus === 'failed' ? 'failed' : rawStatus === 'pending' ? 'pending' : 'sent';
   return {
     ownerPubky: row.owner_pubky,
     channelId: row.channel_id,
     eventId: row.event_id,
     senderPubky: row.sender_pubky,
     recipientPubky: row.recipient_pubky,
-    status: row.status === 'failed' ? 'failed' : 'sent',
+    status,
     reason: row.reason === 'blocked' ? 'blocked' : null,
     updatedAt: row.updated_at,
   };
+}
+
+function upsertFanoutOutcomeLocked(db: SqlExecutor, outcome: GroupFanoutOutcome): void {
+  db.executeSync(
+    `INSERT INTO group_fanout_outcomes
+      (owner_pubky, channel_id, event_id, sender_pubky, recipient_pubky, status, reason, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(owner_pubky, channel_id, event_id, sender_pubky, recipient_pubky) DO UPDATE SET
+       status = excluded.status,
+       reason = excluded.reason,
+       updated_at = excluded.updated_at`,
+    [
+      outcome.ownerPubky,
+      outcome.channelId,
+      outcome.eventId,
+      outcome.senderPubky,
+      outcome.recipientPubky,
+      outcome.status,
+      outcome.reason,
+      outcome.updatedAt,
+    ],
+  );
+}
+
+function settleGroupFanoutLocked(
+  db: SqlExecutor,
+  input: {
+    ownerPubky: PubkyKey;
+    channelId: string;
+    eventId: string;
+    senderPubky: PubkyKey;
+    kind: string;
+  },
+  ts: number,
+): void {
+  const result = db.executeSync(
+    `SELECT status FROM group_fanout_outcomes
+     WHERE owner_pubky = ? AND channel_id = ? AND sender_pubky = ? AND event_id = ?`,
+    [input.ownerPubky, input.channelId, input.senderPubky, input.eventId],
+  );
+  const rows = result.rows ?? [];
+  if (rows.length === 0) return;
+  if (rows.some(row => row.status !== 'sent' && row.status !== 'failed')) return;
+  const terminal = rows.every(row => row.status === 'failed') ? 'failed' : 'sent';
+  db.executeSync(
+    `UPDATE group_messages
+     SET delivery_state = ?, updated_at = ?
+     WHERE owner_pubky = ? AND channel_id = ? AND sender_pubky = ? AND event_id = ?`,
+    [terminal, ts, input.ownerPubky, input.channelId, input.senderPubky, input.eventId],
+  );
+  if (input.kind === CHAT_ATTACHMENT_KIND) {
+    db.executeSync(
+      `UPDATE attachments
+       SET delivery_state = ?, updated_at = ?
+       WHERE owner_pubky = ? AND sender_pubky = ? AND event_id = ?`,
+      [terminal, ts, input.ownerPubky, input.senderPubky, input.eventId],
+    );
+  }
 }
 
 function insertQueueItem(db: SqlExecutor, item: DeliveryQueueItem): void {

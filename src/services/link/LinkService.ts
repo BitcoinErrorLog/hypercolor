@@ -55,8 +55,9 @@ import { isPaykitPaymentKind } from '../../types/payment';
 import { shouldDropOversizedKnownInbound } from './inboundEnvelope';
 import { LinkSendError } from './LinkSendError';
 import { FollowsImportSettings } from '../contacts/followsImportSettings';
+import { opaquePeerId } from '../contacts/opaquePeerId';
 import { CONTACTS_COPY } from '../../ui/contacts/contactsCopy';
-import { groupDeliveryFromOutcomes } from '../../ui/groupFanoutStatus';
+import { stripSensitive } from '../../ui/sanitizedError';
 
 /**
  * LinkService — end-to-end-encrypted DMs over official Paykit Encrypted
@@ -181,7 +182,7 @@ type LiveHandle =
   | { status: 'established'; linkId: string }
   | { status: 'handshaking'; linkId: string; role: LinkRole };
 type SessionLookup = ActiveSession | { status: 'offline' } | null;
-type EnsureOutcome = LinkStatus | 'idle' | 'denied';
+type EnsureOutcome = LinkStatus | 'idle' | 'denied' | 'deny-unavailable';
 
 /**
  * Why we are touching a link. Two independent policies hang off this, and
@@ -442,10 +443,15 @@ export const LinkService = {
     return withQueue(peerPubky, async () => {
       try {
         const outcome = await ensureLinkLocked(peerPubky, 'user', false);
-        return outcome === 'idle' || outcome === 'denied' ? 'error' : outcome;
+        return outcome === 'idle' || outcome === 'denied' || outcome === 'deny-unavailable'
+          ? 'error'
+          : outcome;
       } catch (err) {
         if (isLinkNativeError(err) && err.code === 'unavailable') return 'native-missing';
-        console.warn(`[LinkService] ensureLinkWith failed for ${peerPubky}:`, errorMessage(err));
+        console.warn(
+          `[LinkService] ensureLinkWith failed peer=${opaquePeerId(peerPubky)}:`,
+          errorMessage(err),
+        );
         return 'error';
       }
     });
@@ -484,19 +490,22 @@ export const LinkService = {
    */
   async sendDm(peerPubky: PubkyKey, body: string): Promise<LinkMessage> {
     return withQueue(peerPubky, async () => {
-      await promoteUserOutboundRequest(peerPubky, 'before-link');
-      const outcome = await ensureLinkLocked(peerPubky, 'user', false);
-      assertLinkSendable(outcome, peerPubky, 'sendDm');
-      await promoteUserOutboundRequest(peerPubky, 'sendable');
+      const ownerAtStart = requireOwner();
+      await promoteUserOutboundRequest(peerPubky, 'before-link', ownerAtStart);
+      abortIfOwnerChanged(ownerAtStart);
+      const outcome = await ensureLinkLocked(peerPubky, 'user', false, ownerAtStart);
+      abortIfOwnerChanged(ownerAtStart);
+      assertLinkSendable(outcome, 'sendDm');
+      await promoteUserOutboundRequest(peerPubky, 'sendable', ownerAtStart);
+      abortIfOwnerChanged(ownerAtStart);
 
-      const ownerPubky = requireOwner();
       const { envelope, json } = buildChatMessageEnvelope({
         eventId: uuidv4(),
         sentAt: Date.now(),
         body,
       });
       return dispatchPreparedDm({
-        ownerPubky,
+        ownerPubky: ownerAtStart,
         peerPubky,
         outcome,
         kind: CHAT_MESSAGE_KIND,
@@ -521,12 +530,16 @@ export const LinkService = {
     sentAt: number;
   }): Promise<LinkMessage> {
     return withQueue(input.peerPubky, async () => {
-      await promoteUserOutboundRequest(input.peerPubky, 'before-link');
-      const outcome = await ensureLinkLocked(input.peerPubky, 'user', false);
-      assertLinkSendable(outcome, input.peerPubky, 'sendPreparedMessage');
-      await promoteUserOutboundRequest(input.peerPubky, 'sendable');
+      const ownerAtStart = requireOwner();
+      await promoteUserOutboundRequest(input.peerPubky, 'before-link', ownerAtStart);
+      abortIfOwnerChanged(ownerAtStart);
+      const outcome = await ensureLinkLocked(input.peerPubky, 'user', false, ownerAtStart);
+      abortIfOwnerChanged(ownerAtStart);
+      assertLinkSendable(outcome, 'sendPreparedMessage');
+      await promoteUserOutboundRequest(input.peerPubky, 'sendable', ownerAtStart);
+      abortIfOwnerChanged(ownerAtStart);
       return dispatchPreparedDm({
-        ownerPubky: requireOwner(),
+        ownerPubky: ownerAtStart,
         peerPubky: input.peerPubky,
         outcome,
         kind: input.kind,
@@ -559,10 +572,14 @@ export const LinkService = {
     rawJson: string;
   }): Promise<'sent' | 'queued'> {
     let outcome: EnsureOutcome;
+    const ownerAtStart = requireOwner();
     try {
-      await promoteUserOutboundRequest(input.peerPubky, 'before-link');
-      outcome = await ensureLinkLocked(input.peerPubky, 'user', false);
-    } catch {
+      await promoteUserOutboundRequest(input.peerPubky, 'before-link', ownerAtStart);
+      abortIfOwnerChanged(ownerAtStart);
+      outcome = await ensureLinkLocked(input.peerPubky, 'user', false, ownerAtStart);
+      abortIfOwnerChanged(ownerAtStart);
+    } catch (err) {
+      if (err instanceof LinkSendError && err.code === 'owner-changed') throw err;
       return 'queued';
     }
     if (
@@ -572,23 +589,25 @@ export const LinkService = {
     ) {
       return 'queued';
     }
-    await promoteUserOutboundRequest(input.peerPubky, 'sendable');
+    await promoteUserOutboundRequest(input.peerPubky, 'sendable', ownerAtStart);
+    abortIfOwnerChanged(ownerAtStart);
     if (outcome !== 'ready') return 'queued';
     try {
-      const ownerPubky = requireOwner();
-      const handle = requireEstablishedHandle(ownerPubky, input.peerPubky);
+      const handle = requireEstablishedHandle(ownerAtStart, input.peerPubky);
       const wireJson = await wireJsonForNativeSend(
         input.kind,
         input.rawJson,
-        ownerPubky,
-        ownerPubky,
+        ownerAtStart,
+        ownerAtStart,
         input.eventId,
       );
+      abortIfOwnerChanged(ownerAtStart);
       const { snapshot } = await PaykitLinkNative.sendPrivateMessageJson(handle, wireJson);
+      abortIfOwnerChanged(ownerAtStart);
       await StorageService.finalizeLinkSend({
-        ownerPubky,
+        ownerPubky: ownerAtStart,
         peerPubky: input.peerPubky,
-        senderPubky: ownerPubky,
+        senderPubky: ownerAtStart,
         kind: input.kind,
         eventId: input.eventId,
         snapshot,
@@ -596,8 +615,9 @@ export const LinkService = {
       });
       return 'sent';
     } catch (err) {
+      if (err instanceof LinkSendError && err.code === 'owner-changed') throw err;
       console.warn(
-        `[LinkService] Persisted send failed for ${input.peerPubky}:`,
+        `[LinkService] persisted-send-failed peer=${opaquePeerId(input.peerPubky)}:`,
         errorMessage(err),
       );
       return 'queued';
@@ -621,34 +641,43 @@ export const LinkService = {
   }): Promise<'sent' | 'queued'> {
     return withQueue(input.peerPubky, async () => {
       let outcome: EnsureOutcome;
+      const ownerAtStart = requireOwner();
       try {
-        outcome = await ensureLinkLocked(input.peerPubky, 'user', false);
+        outcome = await ensureLinkLocked(input.peerPubky, 'user', false, ownerAtStart);
+        abortIfOwnerChanged(ownerAtStart);
       } catch (err) {
+        if (err instanceof LinkSendError && err.code === 'owner-changed') throw err;
         if (isTransientLinkError(err)) return 'queued';
         return 'queued';
       }
       if (outcome !== 'ready') return 'queued';
       try {
-        const ownerPubky = requireOwner();
-        const handle = requireEstablishedHandle(ownerPubky, input.peerPubky);
+        const handle = requireEstablishedHandle(ownerAtStart, input.peerPubky);
         const wireJson = await wireJsonForNativeSend(
           input.kind,
           input.rawJson,
-          ownerPubky,
-          ownerPubky,
+          ownerAtStart,
+          ownerAtStart,
           input.eventId,
         );
+        abortIfOwnerChanged(ownerAtStart);
         const { snapshot } = await PaykitLinkNative.sendPrivateMessageJson(handle, wireJson);
+        abortIfOwnerChanged(ownerAtStart);
         await StorageService.finalizeGroupFanoutSend({
-          ownerPubky,
+          ownerPubky: ownerAtStart,
           peerPubky: input.peerPubky,
           snapshot,
           queueId: input.queueId,
+          channelId: input.channelId,
+          eventId: input.eventId,
+          senderPubky: ownerAtStart,
+          kind: input.kind,
         });
         return 'sent';
       } catch (err) {
+        if (err instanceof LinkSendError && err.code === 'owner-changed') throw err;
         console.warn(
-          `[LinkService] Group fan-out send failed for ${input.peerPubky}:`,
+          `[LinkService] group-fanout-send-failed peer=${opaquePeerId(input.peerPubky)}:`,
           errorMessage(err),
         );
         return 'queued';
@@ -743,7 +772,7 @@ export const LinkService = {
         );
       } catch (err) {
         console.warn(
-          `[LinkService] Handshake advance failed for ${link.peerPubky}:`,
+          `[LinkService] handshake-advance-failed peer=${opaquePeerId(link.peerPubky)}:`,
           errorMessage(err),
         );
       }
@@ -792,7 +821,10 @@ export const LinkService = {
         const batch = await withQueue(peerPubky, () => syncPeerLocked(peerPubky, ownerAtStart));
         received.push(...batch);
       } catch (err) {
-        console.warn(`[LinkService] Inbox sync failed for ${peerPubky}:`, errorMessage(err));
+        console.warn(
+          `[LinkService] inbox-sync-failed peer=${opaquePeerId(peerPubky)}:`,
+          errorMessage(err),
+        );
       }
     }
     try {
@@ -863,7 +895,11 @@ export const LinkService = {
   async acceptDeclinedRequest(peerPubky: PubkyKey): Promise<LinkMessage[]> {
     return withQueue(peerPubky, async () => {
       const ownerPubky = requireOwner();
-      if (FollowsImportSettings.isBlocked(ownerPubky, peerPubky)) {
+      const deny = await FollowsImportSettings.resolveDenyState(ownerPubky, peerPubky);
+      if (deny === 'unavailable') {
+        throw new LinkSendError('deny-unavailable', CONTACTS_COPY.couldNotSendMessage);
+      }
+      if (deny === 'denied') {
         throw new LinkSendError('denied', CONTACTS_COPY.deniedSendMessage);
       }
       const changed = await StorageService.acceptDeclinedMessageRequest(ownerPubky, peerPubky);
@@ -1138,25 +1174,21 @@ function isUnusableReceiverAliasError(err: unknown): boolean {
  * memory only ({@link syncPeerLocked}) until a user-initiated send or
  * {@link LinkService.acceptDeclinedRequest} promotes it to `accepted`.
  */
-function isPeerDenied(ownerPubky: PubkyKey, peerPubky: PubkyKey): boolean {
-  return FollowsImportSettings.isBlocked(ownerPubky, peerPubky);
-}
-
-/**
- * User-initiated request promotion. `before-link` is declined → accepted
- * only (sticky upsert cannot). `sendable` is pending → accepted after the
- * link is known to be sendable. Never called from inbound.
- */
 async function promoteUserOutboundRequest(
   peerPubky: PubkyKey,
   phase: 'before-link' | 'sendable',
+  ownerAtStart: PubkyKey,
 ): Promise<void> {
-  const ownerPubky = requireOwner();
-  if (FollowsImportSettings.isBlocked(ownerPubky, peerPubky)) return;
-  const existing = await StorageService.getMessageRequest(ownerPubky, peerPubky);
+  abortIfOwnerChanged(ownerAtStart);
+  const deny = await FollowsImportSettings.resolveDenyState(ownerAtStart, peerPubky);
+  abortIfOwnerChanged(ownerAtStart);
+  if (deny !== 'clear') return;
+  const existing = await StorageService.getMessageRequest(ownerAtStart, peerPubky);
+  abortIfOwnerChanged(ownerAtStart);
   if (phase === 'before-link') {
     if (existing?.status === 'declined') {
-      await StorageService.acceptDeclinedMessageRequest(ownerPubky, peerPubky);
+      await StorageService.acceptDeclinedMessageRequest(ownerAtStart, peerPubky);
+      abortIfOwnerChanged(ownerAtStart);
     }
     return;
   }
@@ -1166,12 +1198,12 @@ async function promoteUserOutboundRequest(
       status: 'accepted',
       updatedAt: Date.now(),
     });
+    abortIfOwnerChanged(ownerAtStart);
   }
 }
 
 function assertLinkSendable(
   outcome: EnsureOutcome,
-  peerPubky: PubkyKey,
   operation: 'sendDm' | 'sendPreparedMessage',
 ): void {
   if (
@@ -1184,8 +1216,12 @@ function assertLinkSendable(
   if (outcome === 'denied') {
     throw new LinkSendError('denied', CONTACTS_COPY.deniedSendMessage);
   }
-  throw new Error(
-    `LinkService.${operation}: cannot send to ${peerPubky} — link status is '${outcome}'`,
+  if (outcome === 'deny-unavailable') {
+    throw new LinkSendError('deny-unavailable', CONTACTS_COPY.couldNotSendMessage);
+  }
+  throw new LinkSendError(
+    'not-sendable',
+    `LinkService.${operation}: cannot send — link status is '${outcome}'`,
   );
 }
 
@@ -1207,16 +1243,25 @@ async function ensureLinkLocked(
   peerPubky: PubkyKey,
   intent: LinkIntent,
   alreadyRecovered: boolean,
+  expectedOwner?: PubkyKey,
 ): Promise<EnsureOutcome> {
   if (!PaykitLinkNative.isAvailable()) return 'native-missing';
 
   const lookup = await sessionOrRestore();
+  abortIfOwnerChanged(expectedOwner);
   if (lookup && 'status' in lookup && lookup.status === 'offline') return 'session-offline';
   if (!isActiveSession(lookup)) return 'needs-enable';
   const activeSession = lookup;
   const ownerPubky = activeSession.pubky;
-  if (isPeerDenied(ownerPubky, peerPubky)) return 'denied';
+  if (expectedOwner && ownerPubky !== expectedOwner) {
+    throw new LinkSendError('owner-changed', 'LinkService: owner changed during send');
+  }
+  const deny = await FollowsImportSettings.resolveDenyState(ownerPubky, peerPubky);
+  abortIfOwnerChanged(expectedOwner);
+  if (deny === 'denied') return 'denied';
+  if (deny === 'unavailable') return 'deny-unavailable';
   const receiver = await StorageService.getLinkReceiver(ownerPubky);
+  abortIfOwnerChanged(expectedOwner);
   if (!receiver?.markerPublished) return 'needs-enable';
   const localPath = assertValidReceiverPath(coerceReceiverPath(receiver.receiverPath));
 
@@ -1245,24 +1290,44 @@ async function ensureLinkLocked(
   }
 
   const stored = await StorageService.getLink(ownerPubky, peerPubky);
+  abortIfOwnerChanged(expectedOwner);
   if (stored?.status === 'established') {
-    return restoreEstablished(activeSession, receiver, stored, intent, alreadyRecovered);
+    const restored = await restoreEstablished(
+      activeSession,
+      receiver,
+      stored,
+      intent,
+      alreadyRecovered,
+    );
+    abortIfOwnerChanged(expectedOwner);
+    return restored;
   }
 
   if (intent !== 'user' && (await isHandshakeBudgetExhausted(ownerPubky, peerPubky))) {
+    abortIfOwnerChanged(expectedOwner);
     return 'idle';
   }
 
   if (stored?.status === 'handshaking') {
-    return restoreAndAdvanceHandshake(activeSession, receiver, stored, intent, alreadyRecovered);
+    const restored = await restoreAndAdvanceHandshake(
+      activeSession,
+      receiver,
+      stored,
+      intent,
+      alreadyRecovered,
+    );
+    abortIfOwnerChanged(expectedOwner);
+    return restored;
   }
 
   const marker = await PaykitLinkNative.getReceiverMarker(peerPubky, localPath);
+  abortIfOwnerChanged(expectedOwner);
   if (marker === null) return mayInitiate(intent) ? 'not-enrolled' : 'idle';
 
   let inbound: Extract<LinkProbeResult, { result: 'pending' | 'established' }> | null;
   try {
     inbound = await probeInbound(activeSession, receiver, ownerPubky, peerPubky, marker, localPath);
+    abortIfOwnerChanged(expectedOwner);
   } catch (err) {
     if (isLinkNativeError(err) && err.code === 'protocol') {
       await clearPeerOutboxBestEffort(
@@ -1583,8 +1648,8 @@ async function isHandshakeBudgetExhausted(
  */
 async function abandonUnestablishedLink(stored: LinkRecord): Promise<EnsureOutcome> {
   console.warn(
-    `[LinkService] Handshake with ${stored.peerPubky} unestablished after ` +
-      `${HANDSHAKE_PENDING_ADVANCE_LIMIT} steps; abandoning`,
+    `[LinkService] handshake-abandoned peer=${opaquePeerId(stored.peerPubky)} after ` +
+      `${HANDSHAKE_PENDING_ADVANCE_LIMIT} steps`,
   );
   await failQueuedSendsForPeer(stored.ownerPubky, stored.peerPubky);
   await wipeLinkState(stored);
@@ -1597,8 +1662,21 @@ async function failQueuedSendsForPeer(ownerPubky: PubkyKey, peerPubky: PubkyKey)
     const payload = parseRetryPayload(item.payload);
     if (!payload) continue;
     if (payload.ownerPubky !== ownerPubky || payload.peerPubky !== peerPubky) continue;
-    // Mark failed before dequeue so a throw cannot strand the row `sending`.
-    await markFailed(payload, 'sent', item.id);
+    if (payload.type === LINK_GROUP_FANOUT_PAYLOAD_TYPE) {
+      await StorageService.completeGroupFanoutRecipient({
+        ownerPubky: payload.ownerPubky,
+        channelId: payload.channelId,
+        eventId: payload.eventId,
+        senderPubky: payload.senderPubky,
+        recipientPubky: payload.peerPubky,
+        status: 'failed',
+        reason: null,
+        queueId: item.id,
+        kind: payload.kind,
+      });
+      continue;
+    }
+    await markFailed(payload);
     await StorageService.removeFromQueue(item.id);
   }
 }
@@ -1793,7 +1871,7 @@ async function handleLinkFailure(
   if (isLinkNativeError(err) && err.code === 'network') {
     if (established) {
       console.warn(
-        `[LinkService] Established link restore deferred for ${stored.peerPubky}:`,
+        `[LinkService] established-restore-deferred peer=${opaquePeerId(stored.peerPubky)}:`,
         errorMessage(err),
       );
       return 'ready';
@@ -1813,7 +1891,7 @@ async function handleLinkFailure(
 
   if (established) {
     console.warn(
-      `[LinkService] Established link step failed for ${stored.peerPubky}:`,
+      `[LinkService] established-step-failed peer=${opaquePeerId(stored.peerPubky)}:`,
       errorMessage(err),
     );
     return 'ready';
@@ -1826,7 +1904,10 @@ async function handleLinkFailure(
   if (failures >= HANDSHAKE_FAILURE_LIMIT) {
     return recoverWedgedLink(stored, intent, alreadyRecovered, err);
   }
-  console.warn(`[LinkService] Handshake step failed for ${stored.peerPubky}:`, errorMessage(err));
+  console.warn(
+    `[LinkService] handshake-step-failed peer=${opaquePeerId(stored.peerPubky)}:`,
+    errorMessage(err),
+  );
   return roleStatus(stored.role);
 }
 
@@ -1864,7 +1945,7 @@ async function recoverWedgedLink(
         marker.noisePublicKey !== stored.remoteNoisePublicKey
       ) {
         console.warn(
-          `[LinkService] Peer ${stored.peerPubky} re-enrolled (noise key changed); restarting handshake`,
+          `[LinkService] peer-re-enrolled peer=${opaquePeerId(stored.peerPubky)}; restarting handshake`,
         );
       }
     } catch {
@@ -1926,13 +2007,15 @@ async function collectInboxCandidates(ownerPubky: PubkyKey): Promise<PubkyKey[]>
   const seen = new Set<string>();
   const out: PubkyKey[] = [];
   for (const contact of contacts) {
-    if (FollowsImportSettings.isBlocked(ownerPubky, contact.pubky)) continue;
+    const deny = await FollowsImportSettings.resolveDenyState(ownerPubky, contact.pubky);
+    if (deny !== 'clear') continue;
     if (seen.has(contact.pubky)) continue;
     seen.add(contact.pubky);
     out.push(contact.pubky);
   }
   for (const link of links) {
-    if (FollowsImportSettings.isBlocked(ownerPubky, link.peerPubky)) continue;
+    const deny = await FollowsImportSettings.resolveDenyState(ownerPubky, link.peerPubky);
+    if (deny !== 'clear') continue;
     if (seen.has(link.peerPubky)) continue;
     seen.add(link.peerPubky);
     out.push(link.peerPubky);
@@ -1964,7 +2047,7 @@ async function persistInboundWithoutRouting(
   );
   if (dropped > 0) {
     console.warn(
-      `[LinkService] Settled ${dropped} excess held stream item(s) for ${peerPubky} over the per-peer unprocessed cap`,
+      `[LinkService] Settled ${dropped} excess held stream item(s) peer=${opaquePeerId(peerPubky)} over the per-peer unprocessed cap`,
     );
   }
   // Group fan-out is not a DM inbox item. WoT holds chat messages as a
@@ -2110,7 +2193,9 @@ function notifyInboxSynced(ownerPubky: PubkyKey): void {
 
 async function syncPeerLocked(peerPubky: PubkyKey, ownerPubky: PubkyKey): Promise<LinkMessage[]> {
   if (!isCurrentOwner(ownerPubky)) return [];
-  if (FollowsImportSettings.isBlocked(ownerPubky, peerPubky)) {
+  const deny = await FollowsImportSettings.resolveDenyState(ownerPubky, peerPubky);
+  if (deny === 'unavailable') return [];
+  if (deny === 'denied') {
     await rejectDeclinedInbound(ownerPubky, peerPubky);
     return [];
   }
@@ -2333,24 +2418,23 @@ async function deliverQueuedPayload(
 
     let outcome: EnsureOutcome;
     try {
-      outcome = await ensureLinkLocked(payload.peerPubky, 'queued', false);
+      outcome = await ensureLinkLocked(payload.peerPubky, 'queued', false, payload.ownerPubky);
     } catch (err) {
+      if (err instanceof LinkSendError && err.code === 'owner-changed') return;
       if (isTransientLinkError(err)) {
         await RetryQueue.defer(item.id, item.attempts);
         return;
       }
-      const dropped = await RetryQueue.recordFailure(item.id, item.attempts);
-      if (dropped) await markFailed(payload, 'sent', item.id);
+      await dropQueuedPayloadPermanently(item, payload);
       return;
     }
 
     if (outcome === 'denied') {
-      await markFailed(payload, 'failed', item.id);
-      await RetryQueue.recordSuccess(item.id);
+      await dropQueuedPayloadDenied(item, payload);
       return;
     }
 
-    if (outcome !== 'ready') {
+    if (outcome === 'deny-unavailable' || outcome !== 'ready') {
       await RetryQueue.defer(item.id, item.attempts);
       return;
     }
@@ -2364,16 +2448,20 @@ async function deliverQueuedPayload(
         payload.senderPubky,
         payload.eventId,
       );
+      abortIfOwnerChanged(payload.ownerPubky);
       const { snapshot } = await PaykitLinkNative.sendPrivateMessageJson(handle, wireJson);
+      abortIfOwnerChanged(payload.ownerPubky);
       if (payload.type === LINK_GROUP_FANOUT_PAYLOAD_TYPE) {
-        await recordGroupFanoutOutcome(payload, 'sent', null);
         await StorageService.finalizeGroupFanoutSend({
           ownerPubky: payload.ownerPubky,
           peerPubky: payload.peerPubky,
           snapshot,
           queueId: item.id,
+          channelId: payload.channelId,
+          eventId: payload.eventId,
+          senderPubky: payload.senderPubky,
+          kind: payload.kind,
         });
-        await settleGroupFanoutIfComplete(payload, item.id);
       } else {
         await StorageService.finalizeLinkSend({
           ownerPubky: payload.ownerPubky,
@@ -2387,12 +2475,12 @@ async function deliverQueuedPayload(
       }
       await RetryQueue.recordSuccess(item.id);
     } catch (err) {
+      if (err instanceof LinkSendError && err.code === 'owner-changed') return;
       if (isTransientLinkError(err)) {
         await RetryQueue.defer(item.id, item.attempts);
         return;
       }
-      const dropped = await RetryQueue.recordFailure(item.id, item.attempts);
-      if (dropped) await markFailed(payload, 'sent', item.id);
+      await dropQueuedPayloadPermanently(item, payload);
     }
   });
 }
@@ -2429,77 +2517,56 @@ async function markImmediateSendFailed(input: {
   }
 }
 
+async function dropQueuedPayloadDenied(
+  item: DeliveryQueueItem,
+  payload: AnyLinkRetryPayload,
+): Promise<void> {
+  if (payload.type === LINK_GROUP_FANOUT_PAYLOAD_TYPE) {
+    await StorageService.completeGroupFanoutRecipient({
+      ownerPubky: payload.ownerPubky,
+      channelId: payload.channelId,
+      eventId: payload.eventId,
+      senderPubky: payload.senderPubky,
+      recipientPubky: payload.peerPubky,
+      status: 'failed',
+      reason: 'blocked',
+      queueId: item.id,
+      kind: payload.kind,
+    });
+    return;
+  }
+  await markFailed(payload);
+  await RetryQueue.recordSuccess(item.id);
+}
+
+async function dropQueuedPayloadPermanently(
+  item: DeliveryQueueItem,
+  payload: AnyLinkRetryPayload,
+): Promise<void> {
+  if (payload.type === LINK_GROUP_FANOUT_PAYLOAD_TYPE && RetryQueue.wouldDrop(item.attempts)) {
+    await StorageService.completeGroupFanoutRecipient({
+      ownerPubky: payload.ownerPubky,
+      channelId: payload.channelId,
+      eventId: payload.eventId,
+      senderPubky: payload.senderPubky,
+      recipientPubky: payload.peerPubky,
+      status: 'failed',
+      reason: null,
+      queueId: item.id,
+      kind: payload.kind,
+    });
+    return;
+  }
+  const dropped = await RetryQueue.recordFailure(item.id, item.attempts);
+  if (dropped) await markFailed(payload);
+}
+
 function toSendError(err: unknown): Error {
   const native = toLinkNativeError(err);
   return new Error(native.message);
 }
 
-async function recordGroupFanoutOutcome(
-  payload: Extract<AnyLinkRetryPayload, { type: typeof LINK_GROUP_FANOUT_PAYLOAD_TYPE }>,
-  status: 'sent' | 'failed',
-  reason: 'blocked' | null,
-): Promise<void> {
-  await StorageService.upsertGroupFanoutOutcome({
-    ownerPubky: payload.ownerPubky,
-    channelId: payload.channelId,
-    eventId: payload.eventId,
-    senderPubky: payload.senderPubky,
-    recipientPubky: payload.peerPubky,
-    status,
-    reason,
-    updatedAt: Date.now(),
-  });
-}
-
-async function settleGroupFanoutIfComplete(
-  payload: Extract<AnyLinkRetryPayload, { type: typeof LINK_GROUP_FANOUT_PAYLOAD_TYPE }>,
-  excludeQueueId: string,
-): Promise<void> {
-  const remaining = await StorageService.countDeliveryQueueForMessage(
-    payload.eventId,
-    excludeQueueId,
-  );
-  if (remaining > 0) return;
-  const outcomes = await StorageService.listGroupFanoutOutcomes(
-    payload.ownerPubky,
-    payload.channelId,
-    payload.senderPubky,
-    payload.eventId,
-  );
-  const terminal = groupDeliveryFromOutcomes(outcomes);
-  await StorageService.updateGroupMessageDeliveryState(
-    payload.ownerPubky,
-    payload.channelId,
-    payload.senderPubky,
-    payload.eventId,
-    terminal,
-  );
-  if (payload.kind === CHAT_ATTACHMENT_KIND) {
-    await StorageService.updateAttachmentDelivery(
-      payload.ownerPubky,
-      payload.senderPubky,
-      payload.eventId,
-      terminal,
-    );
-  }
-}
-
-async function markFailed(
-  payload: AnyLinkRetryPayload,
-  groupTerminal: 'sent' | 'failed' = 'sent',
-  queueId?: string,
-): Promise<void> {
-  if (payload.type === LINK_GROUP_FANOUT_PAYLOAD_TYPE) {
-    await recordGroupFanoutOutcome(
-      payload,
-      'failed',
-      groupTerminal === 'failed' ? 'blocked' : null,
-    );
-    if (queueId) {
-      await settleGroupFanoutIfComplete(payload, queueId);
-    }
-    return;
-  }
+async function markFailed(payload: AnyLinkRetryPayload): Promise<void> {
   await StorageService.updateLinkMessageDeliveryState(
     payload.ownerPubky,
     payload.senderPubky,
@@ -2706,6 +2773,7 @@ async function dispatchPreparedDm(input: {
     deliveryState: 'sending',
   };
   const ts = Date.now();
+  abortIfOwnerChanged(input.ownerPubky);
   await StorageService.persistLinkSendIntent({
     message,
     queueItem: {
@@ -2732,7 +2800,9 @@ async function dispatchPreparedDm(input: {
       input.ownerPubky,
       input.eventId,
     );
+    abortIfOwnerChanged(input.ownerPubky);
     const { snapshot } = await PaykitLinkNative.sendPrivateMessageJson(handle, wireJson);
+    abortIfOwnerChanged(input.ownerPubky);
     await StorageService.finalizeLinkSend({
       ownerPubky: input.ownerPubky,
       peerPubky: input.peerPubky,
@@ -2744,7 +2814,10 @@ async function dispatchPreparedDm(input: {
     });
     return { ...message, deliveryState: 'sent' };
   } catch (err) {
-    console.warn(`[LinkService] Send failed for ${input.peerPubky}:`, errorMessage(err));
+    console.warn(
+      `[LinkService] send-failed peer=${opaquePeerId(input.peerPubky)}:`,
+      errorMessage(err),
+    );
     await markImmediateSendFailed({
       ownerPubky: input.ownerPubky,
       peerPubky: input.peerPubky,
@@ -2820,7 +2893,7 @@ function requireEstablishedHandle(ownerPubky: PubkyKey, peerPubky: PubkyKey): st
   if (!live || live.status !== 'established') {
     throw createLinkNativeError(
       'network',
-      `LinkService: missing established link handle for ${peerPubky}`,
+      `LinkService: missing established link handle peer=${opaquePeerId(peerPubky)}`,
     );
   }
   return live.linkId;
@@ -2857,9 +2930,20 @@ function linkKey(ownerPubky: PubkyKey, peerPubky: PubkyKey): string {
   return `${ownerPubky}:${peerPubky}`;
 }
 
+function abortIfOwnerChanged(expectedOwner?: PubkyKey): void {
+  if (!expectedOwner) return;
+  if (!isCurrentOwner(expectedOwner)) {
+    throw new LinkSendError('owner-changed', 'LinkService: owner changed during send');
+  }
+}
+
 function errorMessage(err: unknown): string {
-  if (isLinkNativeError(err)) return `[${err.code}] ${err.message}`;
-  return err instanceof Error ? err.message : String(err);
+  const raw = isLinkNativeError(err)
+    ? `[${err.code}] ${err.message}`
+    : err instanceof Error
+      ? err.message
+      : String(err);
+  return stripSensitive(raw);
 }
 
 async function closeQuietly(linkId: string): Promise<void> {

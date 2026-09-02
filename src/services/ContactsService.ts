@@ -44,6 +44,8 @@ export type ContactsServiceDeps = {
   /** GET a homeserver path. Used to re-check Nexus following ids. */
   get?: (url: string) => Promise<string | null>;
   isBlocked?: (ownerPubky: PubkyKey, pubky: PubkyKey) => boolean;
+  /** Fail-closed choke for import skip (denied or deny-state unavailable). */
+  isPeerDenied?: (ownerPubky: PubkyKey, pubky: PubkyKey) => boolean;
   /**
    * Lift deny + terminal declined after the user confirmed Unblock.
    * Called only after a successful contact persist (fail closed).
@@ -142,7 +144,9 @@ function skipFollowee(
   seen: Set<string>,
 ): boolean {
   if (!followee || followee === ownerPubky || seen.has(followee)) return true;
-  if (deps.isBlocked?.(ownerPubky, followee)) return true;
+  if (deps.isPeerDenied?.(ownerPubky, followee) ?? deps.isBlocked?.(ownerPubky, followee)) {
+    return true;
+  }
   return false;
 }
 
@@ -683,6 +687,7 @@ export const ContactsService = createContactsService({
   getHomeserver: pubky => PubkyService.getHomeserver(pubky),
   get: url => PubkyService.get(url),
   isBlocked: (owner, pubky) => FollowsImportSettings.isBlocked(owner, pubky),
+  isPeerDenied: (owner, pubky) => FollowsImportSettings.isPeerDenied(owner, pubky),
   onConfirmedUnblock: async (owner, pubky) => {
     // Lazy: createContactsService unit tests must not load LinkService.
     // eslint-disable-next-line @typescript-eslint/no-require-imports

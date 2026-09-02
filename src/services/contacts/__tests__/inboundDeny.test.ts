@@ -114,6 +114,11 @@ jest.mock('../../StorageService', () => ({
     hasGroupMessage: jest.fn(),
     updateGroupMessageDeliveryState: jest.fn(),
     updateAttachmentDelivery: jest.fn(),
+    completeGroupFanoutRecipient: jest.fn(),
+    listBlockedPeers: jest.fn(),
+    insertBlockedPeer: jest.fn(),
+    insertBlockedPeers: jest.fn(),
+    deleteBlockedPeer: jest.fn(),
   },
 }));
 
@@ -142,6 +147,7 @@ jest.mock('../../RetryQueue', () => ({
     recordFailure: jest.fn(),
     recordSuccess: jest.fn(),
     defer: jest.fn(),
+    wouldDrop: jest.fn((attempts: number) => attempts + 1 >= 10),
   },
 }));
 
@@ -232,6 +238,24 @@ describe('inbound deny is authoritative', () => {
     mockedStorage.listGroupFanoutOutcomes.mockResolvedValue([]);
     mockedStorage.getHandshakeBudget.mockResolvedValue(null);
     mockedRetryQueue.getDue.mockResolvedValue([]);
+    const denyRows = new Map<string, Set<string>>();
+    mockedStorage.insertBlockedPeer.mockImplementation(async (owner, peer) => {
+      const set = denyRows.get(owner) ?? new Set<string>();
+      set.add(peer);
+      denyRows.set(owner, set);
+    });
+    mockedStorage.insertBlockedPeers.mockImplementation(async (owner, peers) => {
+      const set = denyRows.get(owner) ?? new Set<string>();
+      for (const peer of peers) set.add(peer);
+      denyRows.set(owner, set);
+    });
+    mockedStorage.deleteBlockedPeer.mockImplementation(async (owner, peer) => {
+      denyRows.get(owner)?.delete(peer);
+    });
+    mockedStorage.listBlockedPeers.mockImplementation(async owner => [
+      ...(denyRows.get(owner) ?? []),
+    ]);
+    mockedStorage.completeGroupFanoutRecipient.mockResolvedValue(undefined);
 
     await LinkService.clearSession();
     await LinkService.signinWithSecret('signin-secret-hex');
@@ -243,7 +267,7 @@ describe('inbound deny is authoritative', () => {
   });
 
   it('omits a blocked peer from collectInboxCandidates even when the contact row remains', async () => {
-    FollowsImportSettings.block(OWNER, PEER);
+    await FollowsImportSettings.block(OWNER, PEER);
     mockedStorage.getAllContacts.mockResolvedValue([
       {
         pubky: PEER,
@@ -273,7 +297,7 @@ describe('inbound deny is authoritative', () => {
   });
 
   it('denies an explicit syncInbox(peers) probe when the owner deny list is set', async () => {
-    FollowsImportSettings.block(OWNER, PEER);
+    await FollowsImportSettings.block(OWNER, PEER);
     const received = await LinkService.syncInbox([PEER]);
     expect(received).toEqual([]);
     expect(mockedNative.probeInboundLink).not.toHaveBeenCalled();
@@ -370,7 +394,7 @@ describe('inbound deny is authoritative', () => {
       request = next;
     });
 
-    FollowsImportSettings.block(OWNER, PEER);
+    await FollowsImportSettings.block(OWNER, PEER);
     await expect(LinkService.syncInbox([PEER])).resolves.toEqual([]);
     expect(mockedNative.probeInboundLink).not.toHaveBeenCalled();
 
@@ -430,7 +454,7 @@ describe('inbound deny is authoritative', () => {
   });
 
   it('drops a queued payload to a blocked peer instead of delivering it', async () => {
-    FollowsImportSettings.block(OWNER, PEER);
+    await FollowsImportSettings.block(OWNER, PEER);
     const queueItem: DeliveryQueueItem = {
       id: 'q-blocked',
       messageId: 'evt-blocked',
@@ -482,7 +506,7 @@ describe('inbound deny is authoritative', () => {
   });
 
   it('finalizes group fan-out as failed when the last recipient is blocked', async () => {
-    FollowsImportSettings.block(OWNER, PEER);
+    await FollowsImportSettings.block(OWNER, PEER);
     const queueItem: DeliveryQueueItem = {
       id: 'q-group-blocked',
       messageId: 'evt-group-blocked',
@@ -510,16 +534,20 @@ describe('inbound deny is authoritative', () => {
     await LinkService.drainRetries();
 
     expect(mockedNative.sendPrivateMessageJson).not.toHaveBeenCalled();
-    expect(mockedRetryQueue.recordSuccess).toHaveBeenCalledWith('q-group-blocked');
+    expect(mockedStorage.completeGroupFanoutRecipient).toHaveBeenCalledWith({
+      ownerPubky: OWNER,
+      channelId: `${OWNER}:00000000-0000-4000-8000-00000000bbbb`,
+      eventId: 'evt-group-blocked',
+      senderPubky: OWNER,
+      recipientPubky: PEER,
+      status: 'failed',
+      reason: 'blocked',
+      queueId: 'q-group-blocked',
+      kind: GROUP_MESSAGE_KIND,
+    });
+    expect(mockedRetryQueue.recordSuccess).not.toHaveBeenCalled();
     expect(mockedRetryQueue.defer).not.toHaveBeenCalled();
     expect(mockedRetryQueue.recordFailure).not.toHaveBeenCalled();
-    expect(mockedStorage.updateGroupMessageDeliveryState).toHaveBeenCalledWith(
-      OWNER,
-      `${OWNER}:00000000-0000-4000-8000-00000000bbbb`,
-      OWNER,
-      'evt-group-blocked',
-      'failed',
-    );
   });
 
   it('stops remaining inbox probes when the owner switches mid-loop', async () => {

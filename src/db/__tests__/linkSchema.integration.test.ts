@@ -61,9 +61,35 @@ import {
 import { StorageService } from '../../services/StorageService';
 import { KeyStore } from '../../services/KeyStore';
 import { CHAT_MESSAGE_KIND, type HandshakeBudgetInput } from '../../types/link';
-import { GROUP_MEMBERSHIP_KIND } from '../../types/group';
+import { GROUP_MEMBERSHIP_KIND, GROUP_MESSAGE_KIND } from '../../types/group';
 import { EMPTY_PAYMENT_RECORD_EXTRAS } from '../../types/payment';
-import { openFileDb, openMemoryDb } from './betterSqliteAdapter';
+import { openFileDb as openFileDbRaw, openMemoryDb as openMemoryDbRaw } from './betterSqliteAdapter';
+
+const liveDbs: Array<{ close: () => void }> = [];
+
+function openMemoryDb(): ReturnType<typeof openMemoryDbRaw> {
+  const db = openMemoryDbRaw();
+  liveDbs.push(db);
+  return db;
+}
+
+function openFileDb(path: string): ReturnType<typeof openFileDbRaw> {
+  const db = openFileDbRaw(path);
+  liveDbs.push(db);
+  return db;
+}
+
+afterEach(() => {
+  for (const db of liveDbs) {
+    try {
+      db.close();
+    } catch {
+      // Already closed by the test.
+    }
+  }
+  liveDbs.length = 0;
+  setDbForTests(null);
+});
 import { mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { dirname, join } from 'path';
@@ -1514,12 +1540,23 @@ describe('link schema v15 — durable handshake abuse budget (real SQL)', () => 
 });
 
 describe('link schema v16 — per-recipient group fan-out outcomes (real SQL)', () => {
+  let openDbs: Array<{ close: () => void }> = [];
+
   afterEach(() => {
+    for (const db of openDbs) {
+      try {
+        db.close();
+      } catch {
+        // Already closed by the test.
+      }
+    }
+    openDbs = [];
     setDbForTests(null);
   });
 
   it('creates group_fanout_outcomes, persists mixed status, and wipes on clearAccountData', async () => {
     const db = openMemoryDb();
+    openDbs.push(db);
     setDbForTests(db);
     await runMigrations(db);
 
@@ -1572,13 +1609,126 @@ describe('link schema v16 — per-recipient group fan-out outcomes (real SQL)', 
     expect(ownerRows).toHaveLength(2);
     expect(ownerRows.map(row => row.status).sort()).toEqual(['failed', 'sent']);
 
+    await StorageService.insertBlockedPeer(OWNER, PEER);
+    expect(await StorageService.listBlockedPeers(OWNER)).toEqual([PEER]);
+
     await StorageService.clearAccountData(OWNER);
     expect(await StorageService.listGroupFanoutOutcomes(OWNER, channelId, OWNER, eventId)).toEqual(
       [],
     );
+    expect(await StorageService.listBlockedPeers(OWNER)).toEqual([]);
     expect(
       await StorageService.listGroupFanoutOutcomes(OTHER, channelId, OTHER, eventId),
     ).toHaveLength(1);
+  });
+
+  it('creates blocked_peers and survives a file-backed relaunch', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'hc-deny-'));
+    const path = join(dir, 'hypercolor.db');
+    try {
+      const first = openFileDb(path);
+      setDbForTests(first);
+      await runMigrations(first);
+      expect(
+        first.executeSync(
+          "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'blocked_peers'",
+        ).rows,
+      ).toHaveLength(1);
+      await StorageService.insertBlockedPeer(OWNER, PEER);
+      first.close();
+      setDbForTests(null);
+
+      const second = openFileDb(path);
+      setDbForTests(second);
+      await runMigrations(second);
+      expect(await StorageService.listBlockedPeers(OWNER)).toEqual([PEER]);
+      expect(await StorageService.hasBlockedPeer(OWNER, PEER)).toBe(true);
+      second.close();
+      setDbForTests(null);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('seeds pending outcomes with persistGroupSendIntent and rolls back a failed complete', async () => {
+    const db = openMemoryDb();
+    openDbs.push(db);
+    setDbForTests(db);
+    await runMigrations(db);
+    const channelId = `${OWNER}:00000000-0000-4000-8000-00000000bbbb`;
+    const eventId = '00000000-0000-4000-8000-00000000eeee';
+    await StorageService.persistGroupSendIntent({
+      message: {
+        ownerPubky: OWNER,
+        channelId,
+        eventId,
+        senderPubky: OWNER,
+        kind: GROUP_MESSAGE_KIND,
+        body: 'hi',
+        rawJson: '{}',
+        sentAt: 1,
+        receivedAt: null,
+        deliveryState: 'sending',
+        replyToEventId: null,
+        replyToAuthorPubky: null,
+        targetEventId: null,
+        targetAuthorPubky: null,
+        editedAt: null,
+        deleted: false,
+      },
+      queueItems: [
+        {
+          id: 'q-fan-1',
+          messageId: eventId,
+          recipientPubky: PEER,
+          payload: '{}',
+          attempts: 0,
+          nextRetryAt: 1,
+          createdAt: 1,
+        },
+        {
+          id: 'q-fan-2',
+          messageId: eventId,
+          recipientPubky: OTHER,
+          payload: '{}',
+          attempts: 0,
+          nextRetryAt: 1,
+          createdAt: 1,
+        },
+      ],
+    });
+    const seeded = await StorageService.getGroupFanoutAggregate(OWNER, channelId, OWNER, eventId);
+    expect(seeded).toHaveLength(2);
+    expect(seeded.every(row => row.status === 'pending')).toBe(true);
+
+    const orig = db.executeSync.bind(db);
+    db.executeSync = ((query: string, params?: unknown) => {
+      if (/^DELETE FROM delivery_queue WHERE id = \?/i.test(query.trim())) {
+        throw new Error('injected delete failure');
+      }
+      return orig(query, params as never);
+    }) as typeof db.executeSync;
+
+    await expect(
+      StorageService.completeGroupFanoutRecipient({
+        ownerPubky: OWNER,
+        channelId,
+        eventId,
+        senderPubky: OWNER,
+        recipientPubky: PEER,
+        status: 'failed',
+        reason: 'blocked',
+        queueId: 'q-fan-1',
+        kind: GROUP_MESSAGE_KIND,
+      }),
+    ).rejects.toThrow('injected delete failure');
+
+    db.executeSync = orig;
+    const after = await StorageService.getGroupFanoutAggregate(OWNER, channelId, OWNER, eventId);
+    expect(after.every(row => row.status === 'pending')).toBe(true);
+    expect(await StorageService.hasQueueItem('q-fan-1')).toBe(true);
+    expect(await StorageService.hasQueueItem('q-fan-2')).toBe(true);
+    db.close();
   });
 });
 

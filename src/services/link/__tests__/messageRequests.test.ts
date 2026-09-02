@@ -3,6 +3,7 @@ import { PaykitLinkNative } from '../PaykitLinkNative';
 import { StorageService } from '../../StorageService';
 import { KeyStore } from '../../KeyStore';
 import { RetryQueue } from '../../RetryQueue';
+import { FollowsImportSettings } from '../../contacts/followsImportSettings';
 import { LINK_RECEIVER_PATH, type LinkReceiver, type LinkRecord } from '../../../types/link';
 import { buildGroupMembershipEnvelope } from '../../../types/group';
 import type { Contact, MessageRequest } from '../../../types';
@@ -96,6 +97,9 @@ jest.mock('../../StorageService', () => ({
     deleteGroupDeferredForSender: jest.fn(),
     deleteGroupSeenEventsForSender: jest.fn(),
     setContactRelationshipFlags: jest.fn(),
+    listBlockedPeers: jest.fn(),
+    insertBlockedPeer: jest.fn(),
+    deleteBlockedPeer: jest.fn(),
   },
 }));
 
@@ -176,6 +180,7 @@ describe('LinkService message requests', () => {
   beforeEach(async () => {
     jest.resetAllMocks();
     jest.spyOn(Date, 'now').mockReturnValue(NOW);
+    FollowsImportSettings.resetForTests();
     mockedNative.isAvailable.mockReturnValue(true);
     mockedNative.signinWithSecret.mockResolvedValue({ sessionAlias: SESSION_ALIAS, pubky: OWNER });
     mockedNative.signOutSession.mockResolvedValue(undefined);
@@ -204,6 +209,8 @@ describe('LinkService message requests', () => {
     mockedStorage.getMessageRequest.mockResolvedValue(null);
     mockedStorage.acceptDeclinedMessageRequest.mockResolvedValue(false);
     mockedStorage.countLinkMessagesForPeer.mockResolvedValue(0);
+    mockedStorage.listBlockedPeers.mockResolvedValue([]);
+    mockedStorage.getHandshakeBudget.mockResolvedValue(null);
     mockedRetryQueue.getDue.mockResolvedValue([]);
 
     await LinkService.clearSession();

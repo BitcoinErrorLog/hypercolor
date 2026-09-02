@@ -72,15 +72,26 @@ const EVENT3 = '00000000-0000-4000-8000-000000000003';
 const NOW = 1_700_000_000_000;
 
 describe('GroupService', () => {
+  let db: ReturnType<typeof openMemoryDb> | null = null;
+
   beforeEach(async () => {
     jest.clearAllMocks();
     jest.spyOn(Date, 'now').mockReturnValue(NOW);
-    const db = openMemoryDb();
+    db = openMemoryDb();
     setDbForTests(db);
     await runMigrations(db);
     mockedKeyStore.getPubky.mockReturnValue(OWNER);
     mockedLink.sendPersistedLinkJson.mockImplementation(async input => {
-      await StorageService.removeFromQueue(input.queueId);
+      await StorageService.finalizeGroupFanoutSend({
+        ownerPubky: OWNER,
+        peerPubky: input.peerPubky,
+        snapshot: 'est-out',
+        queueId: input.queueId,
+        channelId: input.channelId,
+        eventId: input.eventId,
+        senderPubky: OWNER,
+        kind: input.kind,
+      });
       return 'sent';
     });
     mockedPubky.put.mockResolvedValue(undefined);
@@ -89,6 +100,8 @@ describe('GroupService', () => {
   });
 
   afterEach(() => {
+    db?.close();
+    db = null;
     setDbForTests(null);
     jest.restoreAllMocks();
   });

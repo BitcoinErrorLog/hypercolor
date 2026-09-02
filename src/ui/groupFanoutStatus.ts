@@ -20,9 +20,11 @@ export function formatGroupFanoutAggregate(
 ): string {
   const total = outcomes.length;
   const sent = outcomes.filter(row => row.status === 'sent').length;
-  if (total === 0 || sent === total) return COPY.sent;
+  const pending = outcomes.some(row => row.status === 'pending');
+  const allTerminal = !pending;
+  if (total === 0 || (allTerminal && sent === total)) return COPY.sent;
   const blockedFailed = outcomes.filter(row => row.status === 'failed' && row.reason === 'blocked');
-  if (sent === 0 && blockedFailed.length === 1) {
+  if (allTerminal && sent === 0 && blockedFailed.length === 1) {
     const peer = blockedFailed[0]!.recipientPubky;
     return notDeliveredBlocked(names.get(peer) ?? shortPubky(peer));
   }
@@ -33,6 +35,7 @@ export function groupDeliveryFromOutcomes(
   outcomes: readonly Pick<GroupFanoutOutcome, 'status'>[],
 ): 'sent' | 'failed' {
   if (outcomes.length === 0) return 'sent';
+  if (outcomes.some(row => row.status === 'pending')) return 'sent';
   if (outcomes.every(row => row.status === 'failed')) return 'failed';
   return 'sent';
 }

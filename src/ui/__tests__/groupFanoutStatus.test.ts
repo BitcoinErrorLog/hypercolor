@@ -52,4 +52,13 @@ describe('formatGroupFanoutAggregate', () => {
     expect(formatGroupFanoutAggregate(reversed)).toBe(sentToNofM(2, 3));
     expect(groupDeliveryFromOutcomes(mixed)).toBe(groupDeliveryFromOutcomes(reversed));
   });
+
+  it('counts pending rows in the expected recipient total', () => {
+    const mixed = [
+      { recipientPubky: ALICE, status: 'sent' as const, reason: null },
+      { recipientPubky: BOB, status: 'pending' as const, reason: null },
+    ];
+    expect(formatGroupFanoutAggregate(mixed)).toBe(sentToNofM(1, 2));
+    expect(groupDeliveryFromOutcomes(mixed)).toBe('sent');
+  });
 });

@@ -102,6 +102,13 @@ describe('RetryQueue', () => {
     });
   });
 
+  describe('wouldDrop', () => {
+    it('is true only when one more failure would permanently drop the item', () => {
+      expect(RetryQueue.wouldDrop(8)).toBe(false);
+      expect(RetryQueue.wouldDrop(9)).toBe(true);
+    });
+  });
+
   describe('defer', () => {
     it('reschedules next_retry_at without incrementing attempts', async () => {
       await RetryQueue.defer('q1', 2);

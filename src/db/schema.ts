@@ -1,9 +1,15 @@
 /**
- * Schema v16 — persist per-recipient private-group fan-out outcomes.
+ * Schema v16 — persist per-recipient private-group fan-out outcomes and the
+ * owner-scoped block deny list.
  *
  * Mixed drain used to finalize the whole `group_messages` row as `sent` or
  * `failed` depending on which recipient drained last. Outcomes survive
  * dequeue so the row can derive a stable aggregate.
+ *
+ * `blocked_peers` is the durable fail-closed deny list. A MMKV copy is
+ * migrated forward once (see FollowsImportSettings); this table is the
+ * source of truth afterwards. All statements are idempotent so a later
+ * W2c reconciliation can re-run them.
  */
 export const SCHEMA_V16_STATEMENTS: readonly string[] = [
   `CREATE TABLE IF NOT EXISTS group_fanout_outcomes (
@@ -19,6 +25,14 @@ export const SCHEMA_V16_STATEMENTS: readonly string[] = [
   )`,
   `CREATE INDEX IF NOT EXISTS idx_group_fanout_outcomes_event
     ON group_fanout_outcomes(owner_pubky, channel_id, sender_pubky, event_id)`,
+  `CREATE TABLE IF NOT EXISTS blocked_peers (
+    owner_pubky  TEXT NOT NULL,
+    peer_pubky   TEXT NOT NULL,
+    blocked_at   INTEGER NOT NULL,
+    PRIMARY KEY (owner_pubky, peer_pubky)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_blocked_peers_owner
+    ON blocked_peers(owner_pubky)`,
 ];
 
 /**

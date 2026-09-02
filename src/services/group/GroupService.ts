@@ -37,6 +37,7 @@ import { PubkyService } from '../PubkyService';
 import { LINK_GROUP_FANOUT_PAYLOAD_TYPE } from '../../types/group';
 import { LinkService } from '../link/LinkService';
 import { notifyGroupEvent } from './groupEvents';
+import { groupDeliveryFromOutcomes } from '../../ui/groupFanoutStatus';
 
 export { subscribeGroupEvents } from './groupEvents';
 export { PRIVATE_GROUP_MEMBER_CAP };
@@ -776,12 +777,11 @@ async function fanOutEnvelope(input: {
   }));
   await StorageService.persistGroupSendIntent({ message, queueItems });
 
-  let anySent = recipients.length === 0;
   for (let i = 0; i < recipients.length; i += 1) {
     const peerPubky = recipients[i]!;
     const queueItem = queueItems[i]!;
     try {
-      const result = await LinkService.sendPersistedLinkJson({
+      await LinkService.sendPersistedLinkJson({
         peerPubky,
         queueId: queueItem.id,
         kind: input.kind,
@@ -789,16 +789,21 @@ async function fanOutEnvelope(input: {
         rawJson: input.rawJson,
         channelId: input.channelId,
       });
-      if (result === 'sent') anySent = true;
     } catch {
       // Queue item stays; other members are still sent.
     }
   }
 
   const remaining = await StorageService.countDeliveryQueueForMessage(input.eventId);
-  const nextState =
-    remaining === 0 ? (anySent || recipients.length === 0 ? 'sent' : 'failed') : 'sending';
-  if (nextState !== 'sending') {
+  let nextState: GroupMessage['deliveryState'] = 'sending';
+  if (remaining === 0) {
+    const outcomes = await StorageService.getGroupFanoutAggregate(
+      input.ownerPubky,
+      input.channelId,
+      input.senderPubky,
+      input.eventId,
+    );
+    nextState = groupDeliveryFromOutcomes(outcomes);
     await StorageService.updateGroupMessageDeliveryState(
       input.ownerPubky,
       input.channelId,

@@ -415,8 +415,12 @@ export interface GroupMessage {
   deleted: boolean;
 }
 
-/** Terminal per-recipient outcome for a private-group fan-out send. */
-export type GroupFanoutStatus = 'sent' | 'failed';
+/**
+ * Per-recipient private-group fan-out row. `pending` is seeded atomically
+ * with the send intent so the expected recipient set is known before any
+ * native send. `sent` / `failed` are terminal.
+ */
+export type GroupFanoutStatus = 'pending' | 'sent' | 'failed';
 
 export interface GroupFanoutOutcome {
   ownerPubky: PubkyKey;

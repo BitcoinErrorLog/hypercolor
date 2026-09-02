@@ -3,6 +3,7 @@ import { PaykitLinkNative } from '../PaykitLinkNative';
 import { StorageService } from '../../StorageService';
 import { KeyStore } from '../../KeyStore';
 import { RetryQueue } from '../../RetryQueue';
+import { FollowsImportSettings } from '../../contacts/followsImportSettings';
 import { subscribeGroupEvents } from '../../group/groupEvents';
 import {
   CHAT_MESSAGE_KIND,
@@ -153,6 +154,9 @@ jest.mock('../../StorageService', () => ({
     upsertHandshakeBudget: jest.fn(),
     clearHandshakeBudget: jest.fn(),
     hasQueueItem: jest.fn(),
+    listBlockedPeers: jest.fn(),
+    insertBlockedPeer: jest.fn(),
+    deleteBlockedPeer: jest.fn(),
   },
 }));
 
@@ -289,6 +293,7 @@ function wireInMemoryStorage(): void {
   mockedStorage.upsertHandshakeBudget.mockResolvedValue(undefined);
   mockedStorage.clearHandshakeBudget.mockResolvedValue(undefined);
   mockedStorage.hasQueueItem.mockResolvedValue(false);
+  mockedStorage.listBlockedPeers.mockResolvedValue([]);
 
   mockedStorage.upsertLink.mockImplementation(async record => {
     db.links.set(record.peerPubky, { ...record, updatedAt: NOW });
@@ -475,6 +480,7 @@ describe('group accept gate', () => {
   beforeEach(async () => {
     jest.resetAllMocks();
     jest.spyOn(Date, 'now').mockReturnValue(NOW);
+    FollowsImportSettings.resetForTests();
     streamItemSeq = 0;
     db = {
       links: new Map(),
@@ -746,7 +752,7 @@ describe('group accept gate', () => {
         args =>
           typeof args[0] === 'string' &&
           args[0].includes('excess held stream item') &&
-          args[0].includes(PEER),
+          !args[0].includes(PEER),
       ),
     ).toBe(true);
 

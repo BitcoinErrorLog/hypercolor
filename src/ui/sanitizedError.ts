@@ -104,10 +104,17 @@ export function sanitizeError(
   err: unknown,
   fallback: string = COPY.couldNotStartAuthorization,
 ): SanitizedError {
-  if (err instanceof LinkSendError && err.code === 'denied') {
+  if (err instanceof LinkSendError) {
+    if (err.code === 'denied') {
+      return {
+        category: 'blocked-send',
+        message: CONTACTS_COPY.deniedSendMessage,
+        details: null,
+      };
+    }
     return {
-      category: 'blocked-send',
-      message: CONTACTS_COPY.deniedSendMessage,
+      category: 'unknown',
+      message: fallback,
       details: null,
     };
   }

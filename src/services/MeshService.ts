@@ -18,6 +18,7 @@ import {
 } from '../../modules/mesh-transport/src';
 import { KeyStore } from './KeyStore';
 import { StorageService } from './StorageService';
+import { FollowsImportSettings } from './contacts/followsImportSettings';
 import { FeatureFlags } from '../flags';
 import type { MeshPeer, PubkyKey } from '../types';
 
@@ -158,6 +159,7 @@ export const MeshService = {
    * Encrypts and sends an application payload to a BLE peer.
    */
   async sendToPeer(pubky: PubkyKey, payloadBase64: string): Promise<boolean> {
+    if (meshPeerChoked(pubky)) return false;
     const hash = truncatedSha256Hex(pubky);
     const state = peerStates.get(hash);
     if (!state || state.handshake !== 'established' || !state.managerId || !state.sessionId) {
@@ -262,6 +264,7 @@ async function onMessageReceived(event: MessageReceivedEvent): Promise<void> {
   const { pubkyHash, payloadBase64 } = event;
   const state = peerStates.get(pubkyHash);
   if (!state) return;
+  if (meshPeerChoked(state.pubky)) return;
 
   try {
     const { frameType, payload } = parseFrame(payloadBase64);
@@ -366,6 +369,7 @@ async function handleNoiseResponse(state: PeerState, responseHex: string): Promi
 
 async function handleAppMsg(state: PeerState, ciphertextHex: string): Promise<void> {
   if (state.handshake !== 'established' || !state.managerId || !state.sessionId) return;
+  if (meshPeerChoked(state.pubky)) return;
 
   const { plaintext: plaintextHex } = await decrypt(
     state.managerId,
@@ -426,6 +430,16 @@ function parseFrame(payloadBase64: string): { frameType: number; payload: string
 }
 
 // ─── Utilities ──────────────────────────────────────────────────────────────
+
+/**
+ * Fail-closed mesh choke. Cache miss / read failure is `unavailable`, not
+ * clear. Unknown owner or unidentified peer is left alone (cannot deny-check).
+ */
+function meshPeerChoked(peerPubky: string | undefined): boolean {
+  const owner = KeyStore.getPubky();
+  if (!owner || !peerPubky) return false;
+  return FollowsImportSettings.getDenyState(owner, peerPubky) !== 'clear';
+}
 
 /**
  * Produces a truncated hash of the pubky key for BLE peer identification.

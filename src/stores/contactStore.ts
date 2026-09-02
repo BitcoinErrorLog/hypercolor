@@ -105,4 +105,5 @@ useAuthStore.subscribe(state => {
   previousOwner = state.pubky;
   useContactStore.getState().reset();
   FollowsImportSettings.clearSessionMemory();
+  if (state.pubky) void FollowsImportSettings.hydrate(state.pubky);
 });
