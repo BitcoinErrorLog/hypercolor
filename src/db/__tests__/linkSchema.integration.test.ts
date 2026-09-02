@@ -67,6 +67,9 @@ import {
   openFileDb as openFileDbRaw,
   openMemoryDb as openMemoryDbRaw,
 } from './betterSqliteAdapter';
+import { mkdtempSync, rmSync } from 'fs';
+import { tmpdir } from 'os';
+import { dirname, join } from 'path';
 
 const liveDbs: Array<{ close: () => void }> = [];
 
@@ -93,9 +96,6 @@ afterEach(() => {
   liveDbs.length = 0;
   setDbForTests(null);
 });
-import { mkdtempSync, rmSync } from 'fs';
-import { tmpdir } from 'os';
-import { dirname, join } from 'path';
 
 const OWNER = 'a'.repeat(52);
 const PEER = 'z'.repeat(52);

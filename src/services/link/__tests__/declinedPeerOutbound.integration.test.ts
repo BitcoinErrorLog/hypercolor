@@ -86,6 +86,7 @@ import {
   LINK_RETRY_PAYLOAD_TYPE,
   LINK_GROUP_FANOUT_PAYLOAD_TYPE,
   resetLinkServiceHarnessState,
+  stopLinkRetryDrain,
 } from '../LinkService';
 import { PaykitLinkNative } from '../PaykitLinkNative';
 import { CHAT_MESSAGE_KIND, LINK_RECEIVER_PATH, buildDmConversationId } from '../../../types/link';
@@ -161,6 +162,7 @@ describe('declined peer outbound (real LinkService + storage)', () => {
   });
 
   afterEach(() => {
+    stopLinkRetryDrain();
     FollowsImportSettings.resetForTests();
     resetLinkServiceHarnessState();
     db?.close();

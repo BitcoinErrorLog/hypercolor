@@ -28,7 +28,14 @@ function adapt(db: Database.Database): TestDb {
   db.pragma('foreign_keys = ON');
   return {
     raw: db,
-    close: () => db.close(),
+    close: () => {
+      try {
+        db.pragma('wal_checkpoint(TRUNCATE)');
+      } catch {
+        // Closing anyway.
+      }
+      db.close();
+    },
     executeSync(query: string, params: SqlParams | SqlValue[] = []) {
       const sql = query.trim();
       if (/^(BEGIN|COMMIT|ROLLBACK)\b/i.test(sql)) {
