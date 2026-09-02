@@ -55,6 +55,9 @@ export type EnableMessagingController = {
   openRing: () => Promise<void>;
   copyAuthorizationUrl: () => void;
   cancel: () => void;
+  __testing: {
+    lateFlowDispositionSize: () => number;
+  };
 };
 
 /** Paykit emits this exact scheme. Only these URLs may be handed to the OS. */
@@ -140,11 +143,13 @@ export function createEnableMessagingController(
   function disposeLateFlow(myAttempt: number, nextFlow: LinkEnableFlow): void {
     const recorded = lateFlowDisposition.get(myAttempt);
     lateFlowDisposition.delete(myAttempt);
+    // Enabled: FGS stop only. cancel+drain would sign out the live session.
     if (recorded === 'release' || (recorded === undefined && state.phase === 'success')) {
       nextFlow.releaseKeepalive();
       return;
     }
     nextFlow.cancel();
+    void nextFlow.awaitEnabled().catch(() => undefined);
   }
 
   async function applyStatus(status: LinkEnableStatus): Promise<void> {
@@ -224,6 +229,7 @@ export function createEnableMessagingController(
         starting: false,
       });
     } catch (err) {
+      lateFlowDisposition.delete(myAttempt);
       if (!isCurrentAttempt(myAttempt)) return;
       if (state.phase === 'success' || state.phase === 'expired' || state.phase === 'denied') {
         return;
@@ -239,6 +245,7 @@ export function createEnableMessagingController(
         starting: false,
       });
     } finally {
+      lateFlowDisposition.delete(myAttempt);
       if (myAttempt === attempt && starting) {
         emit({ starting: false });
       }
@@ -346,6 +353,9 @@ export function createEnableMessagingController(
       flow?.cancel();
       flow = null;
       emit({ starting: false });
+    },
+    __testing: {
+      lateFlowDispositionSize: () => lateFlowDisposition.size,
     },
   };
 }

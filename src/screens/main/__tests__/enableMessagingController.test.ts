@@ -502,9 +502,41 @@ describe('enableMessagingController', () => {
     await stale;
     expect(firstFlow.cancel).toHaveBeenCalled();
     expect(firstFlow.releaseKeepalive).not.toHaveBeenCalled();
-    expect(firstFlow.awaitEnabled).not.toHaveBeenCalled();
+    expect(firstFlow.awaitEnabled).toHaveBeenCalled();
+    expect(controller.getState().authorizationUrl).not.toBe('pubkyauth://stale');
 
     await fresh;
+    expect(controller.getState().phase).toBe('success');
+    expect(controller.getState().starting).toBe(false);
+  });
+
+  it('reclaims lateFlowDisposition when AppState invalidates a rejecting enable()', async () => {
+    const pendingEnables: Array<ReturnType<typeof deferred<LinkEnableFlow>>> = [];
+    const enable = jest.fn().mockImplementation(() => {
+      const next = deferred<LinkEnableFlow>();
+      pendingEnables.push(next);
+      return next.promise;
+    });
+    const deps = makeDeps({ enable });
+    const controller = createEnableMessagingController(deps);
+    await controller.start();
+
+    for (let i = 0; i < 3; i += 1) {
+      const started = controller.beginAuth();
+      await flush();
+      expect(controller.getState().starting).toBe(true);
+      await controller.onAppActive();
+      expect(controller.getState().phase).toBe('needs-enable');
+      expect(controller.getState().starting).toBe(false);
+      pendingEnables[i]!.reject(new Error('enable failed'));
+      await started;
+    }
+
+    expect(controller.__testing.lateFlowDispositionSize()).toBe(0);
+
+    const freshFlow = authFlow();
+    enable.mockResolvedValueOnce(freshFlow);
+    await controller.beginAuth();
     expect(controller.getState().phase).toBe('success');
     expect(controller.getState().starting).toBe(false);
   });
