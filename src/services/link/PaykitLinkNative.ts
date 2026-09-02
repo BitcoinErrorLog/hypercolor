@@ -170,13 +170,17 @@ export interface PaykitLinkNativeApi {
   startAuthFlow(capabilities: string, relayUrl?: string): Promise<AuthFlowStart>;
   /**
    * Suspend until Ring approves `flowId`. Native admits one owner lease per
-   * live flow. A second call while that owner is reserved, awaiting, or still
-   * settling a cancellation is rejected (`validation` / "already awaiting") —
+   * live flow. A second call while that owner is reserved, awaiting, committing,
+   * or still settling a cancellation is rejected (`validation` / "already awaiting") —
    * there is no retry-in-place. Only that owner may prune cancellation or
    * surfaced state. Cancel-before-await rejects `auth_flow_cancelled` and that
    * caller is the owner who prunes the tombstone. Bridge/module invalidation
    * and coroutine-scope teardown reject `unavailable` (not
-   * `auth_flow_cancelled`) and never persist. After invalidation, a later
+   * `auth_flow_cancelled`) and never persist: persist + JS resolve are one
+   * lock-linearized commit while the owner slot is still teardown-visible as
+   * `committing(lease)`. If invalidation wins that race, native writes nothing
+   * and does not resolve. If the commit wins, teardown must not roll back the
+   * adopted session. After invalidation, a later
    * `startAuthFlow` / `awaitAuthApproval` / `cancelAuthFlow` rejects
    * `unavailable` immediately. After a failed, cancelled, torn-down, or
    * successful await the native flow is gone; start a new `startAuthFlow`
@@ -200,7 +204,11 @@ export interface PaykitLinkNativeApi {
    * `close()` the handle exactly once (the admitted owner closes; idle /
    * cancel-before-await close immediately), and rejects `auth_flow_cancelled`.
    * Module invalidation rejects `unavailable` instead — teardown is not a
-   * user cancel. Cancel-before-await rejects the later `awaitAuthApproval`
+   * user cancel. `clearAllNativeSecrets` (sign-out) cancels admitted owners
+   * the same way and also rejects `auth_flow_cancelled`: it is a user discard,
+   * not module teardown, so a later `startAuthFlow` still succeeds. Idle
+   * flows close immediately; owners close exactly once in their finally.
+   * Cancel-before-await rejects the later `awaitAuthApproval`
    * with `auth_flow_cancelled`. A duplicate await of a live owner is
    * `validation` / "already awaiting" and cannot consume the tombstone.
    * Unknown ids and a second cancel are no-ops. A flow whose approval was
@@ -239,6 +247,9 @@ export interface PaykitLinkNativeApi {
    * Noise secrets, session bearers, snapshot key, and attachment-key
    * Keychain items). Per-owner tagging is not stored natively, so this
    * wipes the entire app store. Used on sign-out / account switch.
+   * Live auth flows: idle handles close immediately; admitted owners are
+   * cancelled and close exactly once after FFI settles; in-flight
+   * `awaitAuthApproval` rejects `auth_flow_cancelled` and must not persist.
    */
   clearAllNativeSecrets(): Promise<void>;
   publishReceiverMarker(

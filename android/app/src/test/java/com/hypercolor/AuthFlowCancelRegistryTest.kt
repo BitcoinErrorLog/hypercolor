@@ -218,6 +218,56 @@ class AuthFlowCancelRegistryTest {
         assertFalse(registry.isCancelled("flow-a"))
     }
 
+    @Test
+    fun commitApprovalSkipsPersistWhenTornDown() {
+        val registry = AuthFlowCancelRegistry<String>()
+        registry.put("flow-a", "auth-flow")
+        val ready = registry.startAwait("flow-a") as AuthFlowAwaitStart.Ready
+        registry.markAwaiting("flow-a", ready.lease)
+        registry.teardown()
+        var persisted = 0
+        assertFalse(registry.commitApproval("flow-a", ready.lease) { persisted += 1 })
+        assertEquals(0, persisted)
+    }
+
+    @Test
+    fun teardownAfterCommitApprovalDoesNotUnwrite() {
+        val registry = AuthFlowCancelRegistry<String>()
+        registry.put("flow-a", "auth-flow")
+        val ready = registry.startAwait("flow-a") as AuthFlowAwaitStart.Ready
+        var persisted = 0
+        assertTrue(registry.commitApproval("flow-a", ready.lease) { persisted += 1 })
+        assertEquals(1, persisted)
+        assertTrue(registry.isSurfaced("flow-a"))
+        val snapshot = registry.teardown()
+        assertTrue(snapshot.idleFlows.isEmpty())
+        assertTrue(snapshot.ownerCancellables.isEmpty())
+        assertEquals(1, persisted)
+    }
+
+    @Test
+    fun drainLiveSplitsIdleFromAdmittedOwners() {
+        val registry = AuthFlowCancelRegistry<String>()
+        val cancellable = RecordingCancellable()
+        registry.put("idle", "idle-flow")
+        registry.put("owned", "owned-flow")
+        val ready = registry.startAwait("owned") as AuthFlowAwaitStart.Ready
+        registry.attachCancellable("owned", cancellable)
+        val snapshot = registry.drainLive()
+        assertEquals(listOf("idle-flow"), snapshot.idleFlows)
+        assertEquals(1, snapshot.ownerCancellables.size)
+        snapshot.ownerCancellables.forEach { it.cancel() }
+        assertTrue(cancellable.cancelled)
+        assertFalse(registry.isTornDown())
+        assertTrue(registry.isCancelled("owned"))
+        assertFalse(registry.markSurfaced("owned", ready.lease))
+        assertTrue(registry.startAwait("idle") is AuthFlowAwaitStart.Missing)
+        assertTrue(registry.startAwait("owned") is AuthFlowAwaitStart.AlreadyAwaiting)
+        assertNull(registry.finishAwait("owned", ready.lease))
+        assertFalse(registry.isCancelled("owned"))
+        assertTrue(registry.put("flow-b", "after-sign-out"))
+    }
+
     private class RecordingCancellable : AuthFlowCancellable {
         var cancelled: Boolean = false
         override fun cancel() {

@@ -18,23 +18,32 @@ package com.hypercolor
  * - idle: live flow, no owner
  * - reserved(lease): first await admitted, not yet in the FFI wait
  * - awaiting(lease): owner is inside `awaitApproval`
+ * - committing(lease): FFI returned; persist + JS resolve run while this
+ *   registry lock is held so teardown cannot interleave
  * - cancelled-with-owner: tombstone whose lease still belongs to the
  *   admitted owner (that owner alone may prune)
  * - cancelled-no-owner: cancel-before-await tombstone; the next await
  *   becomes the unique owner and may prune
- * - surfaced: approval handed to JS; cancel is a no-op
+ * - surfaced: persist + resolve completed; cancel is a no-op
  *
- * A second await while reserved, awaiting, or cancelled-with-owner is
- * [AuthFlowAwaitStart.AlreadyAwaiting] (`validation` / "already awaiting")
- * and must never call [finishAwait]. Post-FFI [markSurfaced] fails closed
- * on a tombstone so a cancelled owner cannot persist a session.
+ * A second await while reserved, awaiting, committing, or
+ * cancelled-with-owner is [AuthFlowAwaitStart.AlreadyAwaiting]
+ * (`validation` / "already awaiting") and must never call [finishAwait].
+ * Post-FFI [commitApproval] fails closed on torn-down / tombstone so a
+ * cancelled or invalidated owner cannot persist a session.
  *
- * [teardown] (module `invalidate`) is sticky [isTornDown]: reserved/awaiting
- * owners are cancelled **with their lease** so post-FFI fails closed and
- * never persists; owner metadata stays until that owner's [finishAwait].
- * Idle flows are returned for an immediate exact-once `close()`. Later
- * start/await/cancel observe [AuthFlowAwaitStart.Unavailable] /
- * [AuthFlowCancelKind.Unavailable] (`unavailable`, not `auth_flow_cancelled`).
+ * [teardown] (module `invalidate`) is sticky [isTornDown]: reserved/
+ * awaiting/committing owners are cancelled **with their lease** so
+ * post-FFI fails closed and never persists; owner metadata stays until
+ * that owner's [finishAwait]. Idle flows are returned for an immediate
+ * exact-once `close()`. Later start/await/cancel observe
+ * [AuthFlowAwaitStart.Unavailable] / [AuthFlowCancelKind.Unavailable]
+ * (`unavailable`, not `auth_flow_cancelled`).
+ *
+ * [drainLive] (`clearAllNativeSecrets`, user sign-out) is not sticky
+ * teardown. It returns the same idle/owner split as [teardown]: close idle
+ * immediately; cancel owners and let only their `finally` close. In-flight
+ * owners reject `auth_flow_cancelled` (user discard) and must not persist.
  */
 internal fun interface AuthFlowCancellable {
     fun cancel()
@@ -166,11 +175,22 @@ internal class AuthFlowCancelRegistry<T> {
     }
 
     /**
-     * @return false when [id] was cancelled or [lease] is not the owner, so
-     * the caller must drop the session and must not resolve JS.
+     * Linearized approval commit. The owner slot stays teardown-visible as
+     * [Phase.Committing] until [persist] returns. [persist] (encrypted prefs
+     * + `sessions` insert + JS resolve) runs **inside this lock**, so
+     * [teardown] is excluded for the whole write+resolve. Returns false when
+     * torn down, cancelled, or [lease] is not the owner: [persist] is not
+     * invoked, the caller must not resolve JS, and must reject `unavailable`
+     * if [isTornDown] else `auth_flow_cancelled`.
+     *
+     * If [persist] throws after a store write, the caller rolls back that
+     * alias; this method does not mark surfaced.
      */
-    fun markSurfaced(id: String, lease: Long): Boolean {
+    fun commitApproval(id: String, lease: Long, persist: () -> Unit): Boolean {
         synchronized(lock) {
+            if (tornDown) {
+                return false
+            }
             if (cancelled.containsKey(id)) {
                 return false
             }
@@ -178,11 +198,19 @@ internal class AuthFlowCancelRegistry<T> {
             if (slot.lease != lease) {
                 return false
             }
+            slot.phase = Phase.Committing
+            persist()
             surfaced[id] = lease
             slots.remove(id)
             return true
         }
     }
+
+    /**
+     * @return false when [id] was cancelled or [lease] is not the owner, so
+     * the caller must drop the session and must not resolve JS.
+     */
+    fun markSurfaced(id: String, lease: Long): Boolean = commitApproval(id, lease) {}
 
     fun cancel(id: String): AuthFlowCancelOutcome<T> {
         synchronized(lock) {
@@ -211,10 +239,15 @@ internal class AuthFlowCancelRegistry<T> {
     }
 
     /**
-     * Bridge/module invalidation. Idempotent. Marks reserved/awaiting owners
-     * cancelled with their lease (do not prune — [finishAwait] is owner-only),
-     * returns idle flows for immediate close, and detaches owner jobs to
-     * cancel **after** this lock is released.
+     * Bridge/module invalidation. Idempotent. Marks reserved/awaiting/
+     * committing owners cancelled with their lease (do not prune —
+     * [finishAwait] is owner-only), returns idle flows for immediate close,
+     * and detaches owner jobs to cancel **after** this lock is released.
+     *
+     * Persist+resolve run under this same lock via [commitApproval], so a
+     * commit that already adopted JS cannot be rolled back here: that slot
+     * is already in [surfaced] and absent from [slots]. A commit that has
+     * not yet taken the lock fails closed and never writes.
      */
     fun teardown(): AuthFlowTeardown<T> {
         synchronized(lock) {
@@ -222,20 +255,20 @@ internal class AuthFlowCancelRegistry<T> {
                 return AuthFlowTeardown(emptyList(), emptyList())
             }
             tornDown = true
-            val idle = ArrayList<T>()
-            val ownerCancellables = ArrayList<AuthFlowCancellable>()
-            val iterator = slots.entries.iterator()
-            while (iterator.hasNext()) {
-                val (id, slot) = iterator.next()
-                if (slot.lease != null) {
-                    cancelled[id] = slot.lease
-                    slot.cancellable?.let { ownerCancellables.add(it) }
-                } else {
-                    idle.add(slot.flow)
-                }
-                iterator.remove()
-            }
-            return AuthFlowTeardown(idle, ownerCancellables)
+            return drainOwnersLocked(tombstoneOwners = true, dropStaleTombstones = false)
+        }
+    }
+
+    /**
+     * Sign-out / [PaykitLinkModule.clearAllNativeSecrets]. Not sticky
+     * teardown: a later [put] still succeeds. Same idle/owner split as
+     * [teardown] — caller closes idle immediately and cancels owners so
+     * only [AuthFlowAwait] `finally` closes. Owners are tombstoned with
+     * their lease and reject `auth_flow_cancelled`.
+     */
+    fun drainLive(): AuthFlowTeardown<T> {
+        synchronized(lock) {
+            return drainOwnersLocked(tombstoneOwners = true, dropStaleTombstones = true)
         }
     }
 
@@ -272,14 +305,37 @@ internal class AuthFlowCancelRegistry<T> {
         }
     }
 
-    fun drainLive(): List<Pair<T, AuthFlowCancellable?>> {
-        synchronized(lock) {
-            val live = slots.values.map { it.flow to it.cancellable }
-            slots.clear()
-            cancelled.clear()
-            surfaced.clear()
-            return live
+    private fun drainOwnersLocked(
+        tombstoneOwners: Boolean,
+        dropStaleTombstones: Boolean,
+    ): AuthFlowTeardown<T> {
+        val idle = ArrayList<T>()
+        val ownerCancellables = ArrayList<AuthFlowCancellable>()
+        val ownerTombstones = HashMap<String, Long>()
+        val iterator = slots.entries.iterator()
+        while (iterator.hasNext()) {
+            val (id, slot) = iterator.next()
+            val lease = slot.lease
+            if (lease != null) {
+                if (tombstoneOwners) {
+                    ownerTombstones[id] = lease
+                }
+                slot.cancellable?.let { ownerCancellables.add(it) }
+            } else {
+                idle.add(slot.flow)
+            }
+            iterator.remove()
         }
+        if (dropStaleTombstones) {
+            cancelled.clear()
+        }
+        if (tombstoneOwners) {
+            for ((id, lease) in ownerTombstones) {
+                cancelled[id] = lease
+            }
+        }
+        surfaced.clear()
+        return AuthFlowTeardown(idle, ownerCancellables)
     }
 
     private fun allocLeaseLocked(): Long {
@@ -292,6 +348,7 @@ internal class AuthFlowCancelRegistry<T> {
         Idle,
         Reserved,
         Awaiting,
+        Committing,
     }
 
     private class Slot<T>(

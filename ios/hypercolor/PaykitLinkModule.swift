@@ -44,6 +44,9 @@ class PaykitLinkModule: NSObject, RCTInvalidating {
     private var reservedFlowIds = Set<String>()
     /// awaiting(lease): owner is inside the non-abortable FFI wait.
     private var awaitingFlowIds = Set<String>()
+    /// committing(lease): FFI returned; persist + JS resolve run while
+    /// `lock` is held so `teardownNativeAuthState` cannot interleave.
+    private var committingFlowIds = Set<String>()
     private var awaitLeases: [String: UInt64] = [:]
     private var awaitTasks: [String: Task<Void, Never>] = [:]
     private var leaseSeq: UInt64 = 0
@@ -138,13 +141,14 @@ class PaykitLinkModule: NSObject, RCTInvalidating {
         lock.lock()
         // Admission is atomic under this lock (Kotlin `startAwait`):
         // tornDown → unavailable; idle → reserved(lease); reserved/awaiting/
-        // cancelled-with-owner → validation "already awaiting";
+        // committing/cancelled-with-owner → validation "already awaiting";
         // cancelled-no-owner → this caller prunes and rejects
         // auth_flow_cancelled; missing/surfaced → validation. A task is
         // created only for an accepted owner. The task must not strongly
         // retain self across the non-abortable FFI wait: invalidate/deinit
         // has to mark cancelled-owner(lease) so post-FFI fails closed and
-        // never persistSession. Never overwrite awaitTasks[id].
+        // never persistSession. Persist+resolve are one lock-held commit
+        // (`completeApprovedAwait`). Never overwrite awaitTasks[id].
         if bridgeTornDown {
             lock.unlock()
             reject("unavailable", Self.staticMessage("unavailable"), nil)
@@ -180,6 +184,7 @@ class PaykitLinkModule: NSObject, RCTInvalidating {
         }
         if reservedFlowIds.contains(trimmed)
             || awaitingFlowIds.contains(trimmed)
+            || committingFlowIds.contains(trimmed)
             || awaitTasks[trimmed] != nil
             || awaitLeases[trimmed] != nil
         {
@@ -203,12 +208,12 @@ class PaykitLinkModule: NSObject, RCTInvalidating {
                 try Self.requireModule(self).enterAwaiting(id: id, lease: lease)
                 try Task.checkCancellation()
                 let session = try await flow.awaitApproval()
-                let value = try Self.requireModule(self).completeApprovedAwait(
+                try Self.requireModule(self).completeApprovedAwait(
                     id: id,
                     lease: lease,
-                    session: session
+                    session: session,
+                    resolve: resolve
                 )
-                resolve(value)
             } catch {
                 let mapped = self?.mapAwaitError(error) ?? PaykitLinkBridgeError(
                     code: "unavailable",
@@ -259,7 +264,9 @@ class PaykitLinkModule: NSObject, RCTInvalidating {
                         message: Self.staticMessage("unavailable")
                     )
                 }
-                if self.surfacedFlowIds.contains(id) {
+                if self.surfacedFlowIds.contains(id) || self.committingFlowIds.contains(id) {
+                    // Committing holds this lock during persist+resolve, so
+                    // this branch is the already-adopted case after unlock.
                     return nil
                 }
                 if self.cancelledFlowIds[id] != nil {
@@ -269,6 +276,7 @@ class PaykitLinkModule: NSObject, RCTInvalidating {
                 let hasOwner = self.awaitLeases[id] != nil
                     || self.reservedFlowIds.contains(id)
                     || self.awaitingFlowIds.contains(id)
+                    || self.committingFlowIds.contains(id)
                     || self.awaitTasks[id] != nil
                 if !hasFlow && !hasOwner {
                     return nil
@@ -281,6 +289,7 @@ class PaykitLinkModule: NSObject, RCTInvalidating {
                 self.flows.removeValue(forKey: id)
                 self.reservedFlowIds.remove(id)
                 self.awaitingFlowIds.remove(id)
+                self.committingFlowIds.remove(id)
                 return self.awaitTasks.removeValue(forKey: id)
             }
             task?.cancel()
@@ -357,21 +366,48 @@ class PaykitLinkModule: NSObject, RCTInvalidating {
         rejecter reject: @escaping RCTPromiseRejectBlock
     ) {
         runAsync(resolve, reject) {
+            // Sign-out: not sticky teardown. Mirror Android `drainLive`:
+            // close idle by dropping the last module ref (ARC); cancel
+            // admitted owners and let only the owner task's `defer`
+            // `finishAwait` release the UniFFI handle. In-flight await
+            // rejects `auth_flow_cancelled` (user discard) and must not
+            // persist. Already-adopted sessions are wiped with the store.
+            var idleFlows: [ChatAuthFlow] = []
+            var ownerTasks: [Task<Void, Never>] = []
             self.lock.withLock {
                 self.sessions.removeAll()
-                self.flows.removeAll()
-                self.cancelledFlowIds.removeAll()
-                self.surfacedFlowIds.removeAll()
-                self.reservedFlowIds.removeAll()
-                self.awaitingFlowIds.removeAll()
-                self.awaitLeases.removeAll()
-                for task in self.awaitTasks.values {
-                    task.cancel()
-                }
-                self.awaitTasks.removeAll()
                 self.handles.removeAll()
                 self.client = nil
+                self.surfacedFlowIds.removeAll()
+                let flowIds = Array(self.flows.keys)
+                for id in flowIds {
+                    if let lease = self.awaitLeases[id] {
+                        self.cancelledFlowIds[id] = .owner(lease)
+                        self.reservedFlowIds.remove(id)
+                        self.awaitingFlowIds.remove(id)
+                        self.committingFlowIds.remove(id)
+                        self.flows.removeValue(forKey: id)
+                        if let task = self.awaitTasks.removeValue(forKey: id) {
+                            ownerTasks.append(task)
+                        }
+                    } else {
+                        if let flow = self.flows.removeValue(forKey: id) {
+                            idleFlows.append(flow)
+                        }
+                    }
+                }
+                let stale = self.cancelledFlowIds.compactMap { id, tombstone -> String? in
+                    if case .noOwner = tombstone { return id }
+                    return nil
+                }
+                for id in stale {
+                    self.cancelledFlowIds.removeValue(forKey: id)
+                }
             }
+            for task in ownerTasks {
+                task.cancel()
+            }
+            withExtendedLifetime(idleFlows) {}
             try PaykitLinkStore.deleteAll()
             return NSNull()
         }
@@ -886,15 +922,20 @@ class PaykitLinkModule: NSObject, RCTInvalidating {
     // MARK: - Internals
 
     /// Teardown state machine (every mutation of flows / cancelled /
-    /// reserved / awaiting / leases / tasks / `bridgeTornDown` is under
-    /// `lock`; never `await` while holding it):
+    /// reserved / awaiting / committing / leases / tasks / `bridgeTornDown`
+    /// is under `lock`; never `await` while holding it):
     /// - live --invalidate/deinit--> tornDown (sticky)
-    /// - reserved/awaiting owners: cancelled-owner(lease); owner metadata
-    ///   stays until that owner's `finishAwait` (never persist)
+    /// - reserved/awaiting/committing owners: cancelled-owner(lease);
+    ///   owner metadata stays until that owner's `finishAwait` (never persist)
     /// - idle flows: dropped under lock, released after unlock (UniFFI close)
     /// - awaitTasks detached then cancelled **outside** the lock
     /// - in-flight owner rejects `unavailable` (not `auth_flow_cancelled`)
     /// - later start/await/cancel reject `unavailable` immediately
+    ///
+    /// Persist+resolve run under this same lock in `completeApprovedAwait`,
+    /// so a commit that already adopted JS cannot be rolled back here
+    /// (id is already in `surfacedFlowIds`, absent from `flows`). A commit
+    /// that has not yet taken the lock fails closed and never writes.
     private func teardownNativeAuthState() {
         lock.lock()
         let alreadyTornDown = bridgeTornDown
@@ -907,6 +948,7 @@ class PaykitLinkModule: NSObject, RCTInvalidating {
                 cancelledFlowIds[id] = .owner(lease)
                 reservedFlowIds.remove(id)
                 awaitingFlowIds.remove(id)
+                committingFlowIds.remove(id)
                 flows.removeValue(forKey: id)
             }
             idleFlows = Array(flows.values)
@@ -952,23 +994,41 @@ class PaykitLinkModule: NSObject, RCTInvalidating {
     private func completeApprovedAwait(
         id: String,
         lease: UInt64,
-        session: ChatSession
-    ) throws -> [String: String] {
+        session: ChatSession,
+        resolve: @escaping RCTPromiseResolveBlock
+    ) throws {
         try lock.withLock {
-            // Post-FFI fail-closed: tornDown / tombstone / lease mismatch
-            // ⇒ do not persist. Releasing `flow` when the owner task
-            // returns is the UniFFI close (deinit); Android calls
-            // ChatAuthFlow.close() at the same point, exactly once.
+            // Linearized with `teardownNativeAuthState` on this same lock
+            // (Kotlin `commitApproval`):
+            // 1. Fail closed if tornDown / tombstone / lease mismatch —
+            //    no Keychain write, no JS resolve.
+            // 2. Else awaiting(lease) → committing(lease). Slot stays
+            //    teardown-visible until persist+resolve return.
+            // 3. persistSessionLocked (Keychain + sessions[]) then
+            //    resolve(value) BEFORE unlock. Teardown waiting on this
+            //    lock either ran first (this throws unavailable) or runs
+            //    after (JS already adopted; teardown must not roll back).
+            // 4. Exact-once UniFFI close remains the owner task defer /
+            //    Android `finally` — not this method.
             if bridgeTornDown || cancelledFlowIds[id] != nil || awaitLeases[id] != lease {
                 throw failClosedAwaitErrorLocked()
             }
-            surfacedFlowIds.insert(id)
-            flows.removeValue(forKey: id)
-            reservedFlowIds.remove(id)
             awaitingFlowIds.remove(id)
+            reservedFlowIds.remove(id)
+            committingFlowIds.insert(id)
+            let value: [String: String]
+            do {
+                value = try persistSessionLocked(session)
+            } catch {
+                committingFlowIds.remove(id)
+                throw error
+            }
+            surfacedFlowIds.insert(id)
+            committingFlowIds.remove(id)
+            flows.removeValue(forKey: id)
             awaitTasks.removeValue(forKey: id)
+            resolve(value)
         }
-        return try persistSession(session)
     }
 
     private func mapAwaitError(_ error: Error) -> PaykitLinkBridgeError {
@@ -1001,6 +1061,7 @@ class PaykitLinkModule: NSObject, RCTInvalidating {
             surfacedFlowIds.remove(id)
             reservedFlowIds.remove(id)
             awaitingFlowIds.remove(id)
+            committingFlowIds.remove(id)
             awaitLeases.removeValue(forKey: id)
             awaitTasks.removeValue(forKey: id)
             flows.removeValue(forKey: id)
@@ -1038,13 +1099,35 @@ class PaykitLinkModule: NSObject, RCTInvalidating {
     }
 
     private func persistSession(_ session: ChatSession) throws -> [String: String] {
+        let prepared = try preparePersistedSession(session)
+        lock.withLock { sessions[prepared.alias] = session }
+        return prepared.value
+    }
+
+    /// Caller holds `lock`. Keychain write + in-memory insert. A thrown
+    /// Keychain put is rolled back before this returns; the committer
+    /// must not surface or resolve.
+    private func persistSessionLocked(_ session: ChatSession) throws -> [String: String] {
+        let prepared = try preparePersistedSession(session)
+        sessions[prepared.alias] = session
+        return prepared.value
+    }
+
+    private func preparePersistedSession(_ session: ChatSession) throws -> (alias: String, value: [String: String]) {
         let alias = UUID().uuidString.lowercased()
-        try PaykitLinkStore.put(session.exportSession(), account: PaykitLinkStore.sessionAccount(alias))
-        lock.withLock { sessions[alias] = session }
-        return [
-            "sessionAlias": alias,
-            "pubky": session.pubky(),
-        ]
+        do {
+            try PaykitLinkStore.put(session.exportSession(), account: PaykitLinkStore.sessionAccount(alias))
+        } catch {
+            try? PaykitLinkStore.delete(account: PaykitLinkStore.sessionAccount(alias))
+            throw error
+        }
+        return (
+            alias,
+            [
+                "sessionAlias": alias,
+                "pubky": session.pubky(),
+            ]
+        )
     }
 
     private func session(_ alias: String) async throws -> ChatSession {

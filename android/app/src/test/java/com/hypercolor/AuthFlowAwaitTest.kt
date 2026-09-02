@@ -292,6 +292,141 @@ class AuthFlowAwaitTest {
         assertTrue(registry.startAwait("flow-a") is AuthFlowAwaitStart.Unavailable)
     }
 
+    @Test
+    fun teardownAfterApprovalBeforePersistDoesNotWriteOrResolve() = runBlocking {
+        val flow = FakeAuthFlow()
+        val registry = AuthFlowCancelRegistry<FakeAuthFlow>()
+        val store = FakeSessionStore()
+        val resolves = AtomicInteger(0)
+        val rejects = mutableListOf<String>()
+        assertTrue(registry.put("flow-a", flow))
+        flow.complete("session-token")
+        val enteredCommit = CompletableDeferred<Unit>()
+        val releaseCommit = CompletableDeferred<Unit>()
+        val settled = CompletableDeferred<Throwable?>()
+        launch {
+            try {
+                executeAtBridge(
+                    flows = registry,
+                    id = "flow-a",
+                    awaitFfi = { flow.awaitApproval() },
+                    closeFlow = { it?.close() },
+                    persist = { token ->
+                        store.write(token)
+                        resolves.incrementAndGet()
+                    },
+                    onBeforeCommit = {
+                        enteredCommit.complete(Unit)
+                        withContext(NonCancellable) { releaseCommit.await() }
+                    },
+                )
+                withContext(NonCancellable) { settled.complete(null) }
+            } catch (error: Throwable) {
+                if (error is AuthFlowBridgeReject) {
+                    rejects.add(error.code)
+                }
+                withContext(NonCancellable) { settled.complete(error) }
+            }
+        }
+        enteredCommit.await()
+        assertTrue(store.writes.isEmpty())
+        assertEquals(0, resolves.get())
+        val snapshot = registry.teardown()
+        snapshot.ownerCancellables.forEach { it.cancel() }
+        snapshot.idleFlows.forEach { it.close() }
+        assertEquals(0, flow.closeCount.get())
+        releaseCommit.complete(Unit)
+        val err = settled.await() as AuthFlowBridgeReject
+        assertEquals("unavailable", err.code)
+        assertEquals(AuthFlowAwait.UNAVAILABLE_MESSAGE, err.message)
+        assertEquals(listOf("unavailable"), rejects)
+        assertTrue(store.writes.isEmpty())
+        assertEquals(0, resolves.get())
+        assertEquals(1, flow.closeCount.get())
+        assertTrue(registry.startAwait("flow-a") is AuthFlowAwaitStart.Unavailable)
+    }
+
+    @Test
+    fun commitWinsThenTeardownDoesNotRollbackAdoptedSession() = runBlocking {
+        val flow = FakeAuthFlow()
+        val registry = AuthFlowCancelRegistry<FakeAuthFlow>()
+        val store = FakeSessionStore()
+        val resolves = AtomicInteger(0)
+        assertTrue(registry.put("flow-a", flow))
+        flow.complete("session-token")
+        val session = executeAtBridge(
+            flows = registry,
+            id = "flow-a",
+            awaitFfi = { flow.awaitApproval() },
+            closeFlow = { it?.close() },
+            persist = { token ->
+                store.write(token)
+                resolves.incrementAndGet()
+            },
+        )
+        assertEquals("session-token", session)
+        assertEquals(listOf("session-token"), store.writes)
+        assertEquals(1, resolves.get())
+        assertEquals(1, flow.closeCount.get())
+        val snapshot = registry.teardown()
+        snapshot.ownerCancellables.forEach { it.cancel() }
+        snapshot.idleFlows.forEach { it.close() }
+        assertEquals(listOf("session-token"), store.writes)
+        assertEquals(1, resolves.get())
+        assertEquals(1, flow.closeCount.get())
+        assertTrue(registry.isTornDown())
+        assertTrue(registry.startAwait("flow-a") is AuthFlowAwaitStart.Unavailable)
+    }
+
+    @Test
+    fun clearAllDuringAdmittedAwaitClosesOnceAndRejectsCancelled() = runBlocking {
+        val flow = FakeAuthFlow()
+        val registry = AuthFlowCancelRegistry<FakeAuthFlow>()
+        val store = FakeSessionStore()
+        val resolves = AtomicInteger(0)
+        assertTrue(registry.put("flow-a", flow))
+        val enteredFfi = CompletableDeferred<Unit>()
+        val settled = CompletableDeferred<Throwable?>()
+        launch {
+            try {
+                executeAtBridge(
+                    flows = registry,
+                    id = "flow-a",
+                    awaitFfi = {
+                        enteredFfi.complete(Unit)
+                        flow.awaitApproval()
+                    },
+                    closeFlow = { it?.close() },
+                    persist = { token ->
+                        store.write(token)
+                        resolves.incrementAndGet()
+                    },
+                )
+                withContext(NonCancellable) { settled.complete(null) }
+            } catch (error: Throwable) {
+                withContext(NonCancellable) { settled.complete(error) }
+            }
+        }
+        enteredFfi.await()
+        val snapshot = registry.drainLive()
+        assertTrue(snapshot.idleFlows.isEmpty())
+        assertEquals(1, snapshot.ownerCancellables.size)
+        snapshot.ownerCancellables.forEach { it.cancel() }
+        snapshot.idleFlows.forEach { it.close() }
+        assertEquals(0, flow.closeCount.get())
+        assertFalse(registry.isTornDown())
+        assertTrue(registry.isCancelled("flow-a"))
+        flow.complete("session-must-not-persist")
+        val err = settled.await() as AuthFlowBridgeReject
+        assertEquals("auth_flow_cancelled", err.code)
+        assertEquals(AuthFlowAwait.CANCELLED_MESSAGE, err.message)
+        assertTrue(store.writes.isEmpty())
+        assertEquals(0, resolves.get())
+        assertEquals(1, flow.closeCount.get())
+        assertFalse(registry.isCancelled("flow-a"))
+        assertTrue(registry.startAwait("flow-a") is AuthFlowAwaitStart.Missing)
+    }
+
     /**
      * Mirrors [PaykitLinkModule] launch mapping: registry cancel stays
      * `auth_flow_cancelled`; unrelated coroutine cancellation is `unavailable`.
@@ -301,6 +436,8 @@ class AuthFlowAwaitTest {
         id: String,
         awaitFfi: suspend (T) -> S,
         closeFlow: (T?) -> Unit,
+        persist: (S) -> Unit = {},
+        onBeforeCommit: suspend () -> Unit = {},
     ): S {
         return try {
             AuthFlowAwait.execute(
@@ -308,6 +445,8 @@ class AuthFlowAwaitTest {
                 id = id,
                 awaitFfi = awaitFfi,
                 closeFlow = closeFlow,
+                persist = persist,
+                onBeforeCommit = onBeforeCommit,
             )
         } catch (error: Throwable) {
             if (error is AuthFlowBridgeReject) {
@@ -317,6 +456,14 @@ class AuthFlowAwaitTest {
                 throw AuthFlowBridgeReject("unavailable", AuthFlowAwait.UNAVAILABLE_MESSAGE)
             }
             throw error
+        }
+    }
+
+    private class FakeSessionStore {
+        val writes = mutableListOf<String>()
+
+        fun write(token: String) {
+            writes.add(token)
         }
     }
 

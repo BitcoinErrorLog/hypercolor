@@ -85,8 +85,11 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
 
     override fun invalidate() {
         // Teardown first so in-flight NonCancellable FFI cannot persist.
-        // Owner jobs are cancelled after the lock; idle flows close here;
-        // admitted owners close exactly once in AuthFlowAwait.finally.
+        // Persist+resolve run under the registry lock (committing); this
+        // call waits for that lock, so a finished commit is already adopted
+        // and is not rolled back. Owner jobs are cancelled after the lock;
+        // idle flows close here; admitted owners close exactly once in
+        // AuthFlowAwait.finally.
         val snapshot = flows.teardown()
         for (cancellable in snapshot.ownerCancellables) {
             cancellable.cancel()
@@ -154,7 +157,7 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
     fun awaitAuthApproval(flowId: String, promise: Promise) {
         launch(promise) {
             val id = requireText(flowId, "flowId")
-            val session = try {
+            try {
                 AuthFlowAwait.execute(
                     flows = flows,
                     id = id,
@@ -163,13 +166,13 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
                         // Exact-once owner close after the FFI path settles.
                         closeAuthFlow(handle)
                     },
+                    persist = { session -> persistSession(session, promise) },
                     onOwnerStart = { startAuthKeepalive(id) },
                     onOwnerFinish = { releaseAuthKeepalive(id) },
                 )
             } catch (error: AuthFlowBridgeReject) {
                 throw PaykitLinkBridgeError(error.code, error.message)
             }
-            persistSession(session, promise)
         }
     }
 
@@ -273,9 +276,15 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
     fun clearAllNativeSecrets(promise: Promise) {
         launch(promise) {
             sessions.clear()
-            for ((flow, cancellable) in flows.drainLive()) {
-                cancellable?.cancel()
-                closeAuthFlow(flow)
+            // Sign-out: same idle/owner split as invalidate(). Close idle
+            // now; cancel admitted owners and let only AuthFlowAwait.finally
+            // close. Owners reject auth_flow_cancelled and must not persist.
+            val snapshot = flows.drainLive()
+            for (cancellable in snapshot.ownerCancellables) {
+                cancellable.cancel()
+            }
+            for (idle in snapshot.idleFlows) {
+                closeAuthFlow(idle)
             }
             handles.clear()
             keepalive.releaseAll()
@@ -789,11 +798,18 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
 
     private fun persistSession(session: ChatSession, promise: Promise) {
         val alias = UUID.randomUUID().toString()
-        store.putString(PaykitLinkStore.sessionKey(alias), session.exportSession())
+        val key = PaykitLinkStore.sessionKey(alias)
+        store.putString(key, session.exportSession())
         sessions[alias] = session
-        resolveMap(promise) {
-            putString("sessionAlias", alias)
-            putString("pubky", session.pubky())
+        try {
+            resolveMap(promise) {
+                putString("sessionAlias", alias)
+                putString("pubky", session.pubky())
+            }
+        } catch (error: Throwable) {
+            sessions.remove(alias)
+            store.delete(key)
+            throw error
         }
     }
 
