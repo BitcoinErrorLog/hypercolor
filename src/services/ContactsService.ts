@@ -5,6 +5,7 @@ import { createNexusClient, type NexusClientApi, type NexusResult } from './Nexu
 import { PubkyService, type HomeserverListResult } from './PubkyService';
 import { StorageService } from './StorageService';
 import { FollowsImportSettings } from './contacts/followsImportSettings';
+import { unblockPeer } from './contacts/blockPeer';
 
 /**
  * pubky.app follows directory, verified against pubky-app-specs
@@ -42,7 +43,8 @@ export type ContactsServiceDeps = {
   /** GET a homeserver path. Used to re-check Nexus following ids. */
   get?: (url: string) => Promise<string | null>;
   isBlocked?: (ownerPubky: PubkyKey, pubky: PubkyKey) => boolean;
-  onManualAdd?: (ownerPubky: PubkyKey, pubky: PubkyKey) => void;
+  /** Unblock + clear terminal declined state when the user re-adds a pubky. */
+  onManualAdd?: (ownerPubky: PubkyKey, pubky: PubkyKey) => void | Promise<void>;
   /** Authoritative consent lookup. Fail closed when omitted. */
   isFollowsImportEnabled: (ownerPubky: PubkyKey) => boolean;
   setFollowsImportEnabled: (ownerPubky: PubkyKey, enabled: boolean) => void;
@@ -112,21 +114,17 @@ function withOwnerLock<T>(
   return next;
 }
 
-async function persistFollowees(
-  deps: ContactsServiceDeps,
-  ownerPubky: PubkyKey,
-  followees: PubkyKey[],
-): Promise<void> {
-  await mapPool(followees, PROFILE_HYDRATE_CONCURRENCY, async followee => {
-    const existing = await deps.storage.getContact(followee, ownerPubky);
-    const profile = await deps.getProfile(followee);
-    const contact = mergeContact(ownerPubky, followee, existing, {
-      isFollowing: true,
-      profile,
-    });
-    await deps.storage.upsertContact(contact);
-  });
+function cancelledNexusPage(): NexusResult<PubkyKey[]> {
+  return { ok: false, kind: 'http', status: null, message: IMPORT_OFF_MESSAGE };
 }
+
+const CONSENT_OFF_RELATIONSHIPS: SyncRelationshipsResult = {
+  following: 0,
+  followers: 0,
+  friends: 0,
+  nexusReachable: false,
+  nexusError: IMPORT_OFF_MESSAGE,
+};
 
 function skipFollowee(
   deps: ContactsServiceDeps,
@@ -157,16 +155,62 @@ export function createContactsService(deps: ContactsServiceDeps) {
     return consentOn(deps, ownerPubky) && currentGeneration(ownerPubky) === generation;
   }
 
+  function stillFetching(ownerPubky: PubkyKey, generation: number): () => boolean {
+    return () => writeStillValid(ownerPubky, generation);
+  }
+
+  function guardedNexusPage(
+    ownerPubky: PubkyKey,
+    generation: number,
+    fetchPage: (query: { skip: number; limit: number }) => Promise<NexusResult<PubkyKey[]>>,
+  ): (query: { skip: number; limit: number }) => Promise<NexusResult<PubkyKey[]>> {
+    return query => {
+      if (!writeStillValid(ownerPubky, generation)) {
+        return Promise.resolve(cancelledNexusPage());
+      }
+      return fetchPage(query);
+    };
+  }
+
+  async function hydrateFollowees(
+    ownerPubky: PubkyKey,
+    generation: number,
+    followees: PubkyKey[],
+  ): Promise<Contact[] | null> {
+    const hydrated: Contact[] = [];
+    await mapPool(followees, PROFILE_HYDRATE_CONCURRENCY, async followee => {
+      if (!writeStillValid(ownerPubky, generation)) return;
+      const existing = await deps.storage.getContact(followee, ownerPubky);
+      if (!writeStillValid(ownerPubky, generation)) return;
+      const profile = await deps.getProfile(followee);
+      if (!writeStillValid(ownerPubky, generation)) return;
+      hydrated.push(
+        mergeContact(ownerPubky, followee, existing, {
+          isFollowing: true,
+          profile,
+        }),
+      );
+    });
+    if (!writeStillValid(ownerPubky, generation)) return null;
+    return hydrated;
+  }
+
   async function persistIfCurrent(
     ownerPubky: PubkyKey,
     generation: number,
     followees: PubkyKey[],
     reconcile: boolean,
   ): Promise<boolean> {
+    const hydrated = await hydrateFollowees(ownerPubky, generation, followees);
+    if (hydrated === null) return false;
     return withOwnerLock(ownerLocks, ownerPubky, async () => {
       if (!writeStillValid(ownerPubky, generation)) return false;
-      await persistFollowees(deps, ownerPubky, followees);
+      for (const contact of hydrated) {
+        if (!writeStillValid(ownerPubky, generation)) return false;
+        await deps.storage.upsertContact(contact);
+      }
       if (reconcile && deps.storage.reconcileFollowSuggestions) {
+        if (!writeStillValid(ownerPubky, generation)) return false;
         await deps.storage.reconcileFollowSuggestions(ownerPubky, followees);
       }
       return writeStillValid(ownerPubky, generation);
@@ -251,9 +295,20 @@ export function createContactsService(deps: ContactsServiceDeps) {
         };
       }
 
-      const followingResult = await collectAllPages(query =>
-        deps.nexus.following(ownerPubky, query),
+      const still = stillFetching(ownerPubky, generation);
+      const followingResult = await collectAllPages(
+        guardedNexusPage(ownerPubky, generation, query => deps.nexus.following(ownerPubky, query)),
+        still,
       );
+      if (!writeStillValid(ownerPubky, generation)) {
+        return {
+          ok: false,
+          imported: 0,
+          followees: [],
+          message: IMPORT_OFF_MESSAGE,
+          usedNexusFallback: false,
+        };
+      }
       if (followingResult.error !== null) {
         return {
           ok: false,
@@ -343,80 +398,113 @@ export function createContactsService(deps: ContactsServiceDeps) {
 
     async syncRelationships(ownerPubky: PubkyKey): Promise<SyncRelationshipsResult> {
       if (!consentOn(deps, ownerPubky)) {
+        return { ...CONSENT_OFF_RELATIONSHIPS };
+      }
+      const generation = currentGeneration(ownerPubky);
+      const still = stillFetching(ownerPubky, generation);
+
+      const followingResult = await collectAllPages(
+        guardedNexusPage(ownerPubky, generation, query => deps.nexus.following(ownerPubky, query)),
+        still,
+      );
+      if (!writeStillValid(ownerPubky, generation)) {
+        return { ...CONSENT_OFF_RELATIONSHIPS };
+      }
+      if (followingResult.error !== null) {
         return {
-          following: 0,
+          following: followingResult.ids.length,
           followers: 0,
           friends: 0,
           nexusReachable: false,
-          nexusError: IMPORT_OFF_MESSAGE,
+          nexusError: followingResult.error,
         };
       }
-      const [followingResult, followersResult, friendsResult] = await Promise.all([
-        collectAllPages(query => deps.nexus.following(ownerPubky, query)),
-        collectAllPages(query => deps.nexus.followers(ownerPubky, query)),
-        collectAllPages(query => deps.nexus.friends(ownerPubky, query)),
-      ]);
 
-      const nexusError =
-        followingResult.error ?? followersResult.error ?? friendsResult.error ?? null;
-      if (nexusError !== null) {
+      const followersResult = await collectAllPages(
+        guardedNexusPage(ownerPubky, generation, query => deps.nexus.followers(ownerPubky, query)),
+        still,
+      );
+      if (!writeStillValid(ownerPubky, generation)) {
+        return { ...CONSENT_OFF_RELATIONSHIPS };
+      }
+      if (followersResult.error !== null) {
+        return {
+          following: followingResult.ids.length,
+          followers: followersResult.ids.length,
+          friends: 0,
+          nexusReachable: false,
+          nexusError: followersResult.error,
+        };
+      }
+
+      const friendsResult = await collectAllPages(
+        guardedNexusPage(ownerPubky, generation, query => deps.nexus.friends(ownerPubky, query)),
+        still,
+      );
+      if (!writeStillValid(ownerPubky, generation)) {
+        return { ...CONSENT_OFF_RELATIONSHIPS };
+      }
+      if (friendsResult.error !== null) {
         return {
           following: followingResult.ids.length,
           followers: followersResult.ids.length,
           friends: friendsResult.ids.length,
           nexusReachable: false,
-          nexusError,
-        };
-      }
-
-      if (!consentOn(deps, ownerPubky)) {
-        return {
-          following: 0,
-          followers: 0,
-          friends: 0,
-          nexusReachable: false,
-          nexusError: IMPORT_OFF_MESSAGE,
+          nexusError: friendsResult.error,
         };
       }
 
       const following = new Set(followingResult.ids);
       const followers = new Set(followersResult.ids);
       const friends = new Set(friendsResult.ids);
-      const existingRows = await deps.storage.getAllContacts(ownerPubky);
-      const everyone = new Set<PubkyKey>([
-        ...followingResult.ids,
-        ...followersResult.ids,
-        ...friendsResult.ids,
-        ...existingRows.map(row => row.pubky),
-      ]);
       const followingAuthoritative = followingResult.authoritative;
 
-      await mapPool([...everyone], PROFILE_HYDRATE_CONCURRENCY, async peer => {
-        const existing = await deps.storage.getContact(peer, ownerPubky);
-        const isFollowing = followingAuthoritative
-          ? following.has(peer) || friends.has(peer)
-          : following.has(peer) || friends.has(peer) || (existing?.isFollowing ?? false);
-        const isFollower = followers.has(peer) || friends.has(peer);
-        const isMutual = friends.has(peer) || (isFollowing && isFollower);
-        const contact = mergeContact(ownerPubky, peer, existing, {
-          isFollowing,
-          isFollower,
-          isMutual,
+      const wrote = await withOwnerLock(ownerLocks, ownerPubky, async () => {
+        if (!writeStillValid(ownerPubky, generation)) return false;
+        const existingRows = await deps.storage.getAllContacts(ownerPubky);
+        if (!writeStillValid(ownerPubky, generation)) return false;
+        const everyone = new Set<PubkyKey>([
+          ...followingResult.ids,
+          ...followersResult.ids,
+          ...friendsResult.ids,
+          ...existingRows.map(row => row.pubky),
+        ]);
+
+        await mapPool([...everyone], PROFILE_HYDRATE_CONCURRENCY, async peer => {
+          if (!writeStillValid(ownerPubky, generation)) return;
+          const existing = await deps.storage.getContact(peer, ownerPubky);
+          if (!writeStillValid(ownerPubky, generation)) return;
+          const isFollowing = followingAuthoritative
+            ? following.has(peer) || friends.has(peer)
+            : following.has(peer) || friends.has(peer) || (existing?.isFollowing ?? false);
+          const isFollower = followers.has(peer) || friends.has(peer);
+          const isMutual = friends.has(peer) || (isFollowing && isFollower);
+          const contact = mergeContact(ownerPubky, peer, existing, {
+            isFollowing,
+            isFollower,
+            isMutual,
+          });
+          await deps.storage.upsertContact(contact);
+          if (!writeStillValid(ownerPubky, generation)) return;
+          await deps.storage.setContactRelationshipFlags(ownerPubky, peer, {
+            isFollowing,
+            isFollower,
+            isMutual,
+          });
         });
-        await deps.storage.upsertContact(contact);
-        await deps.storage.setContactRelationshipFlags(ownerPubky, peer, {
-          isFollowing,
-          isFollower,
-          isMutual,
-        });
+        return writeStillValid(ownerPubky, generation);
       });
+
+      if (!wrote) {
+        return { ...CONSENT_OFF_RELATIONSHIPS };
+      }
 
       return {
         following: following.size,
         followers: followers.size,
         friends: friends.size,
-        nexusReachable: nexusError === null,
-        nexusError,
+        nexusReachable: true,
+        nexusError: null,
       };
     },
 
@@ -459,8 +547,10 @@ export function createContactsService(deps: ContactsServiceDeps) {
           homeserver,
           profile,
         });
+        if (deps.onManualAdd) {
+          await deps.onManualAdd(ownerPubky, pubky);
+        }
         await deps.storage.upsertContact(contact);
-        deps.onManualAdd?.(ownerPubky, pubky);
         return { ok: true, contact };
       } catch (err) {
         return {
@@ -515,10 +605,14 @@ function mergeContact(
 
 async function collectAllPages(
   fetchPage: (query: { skip: number; limit: number }) => Promise<NexusResult<PubkyKey[]>>,
+  shouldFetch: () => boolean,
 ): Promise<{ ids: PubkyKey[]; error: string | null; authoritative: boolean }> {
   const ids: PubkyKey[] = [];
   let skip = 0;
   for (;;) {
+    if (!shouldFetch()) {
+      return { ids, error: IMPORT_OFF_MESSAGE, authoritative: false };
+    }
     const page = await fetchPage({ skip, limit: DEFAULT_PAGE });
     if (!page.ok) {
       if (page.kind === 'http' && page.status === 404) {
@@ -564,7 +658,17 @@ export const ContactsService = createContactsService({
   getHomeserver: pubky => PubkyService.getHomeserver(pubky),
   get: url => PubkyService.get(url),
   isBlocked: (owner, pubky) => FollowsImportSettings.isBlocked(owner, pubky),
-  onManualAdd: (owner, pubky) => FollowsImportSettings.unblock(owner, pubky),
+  onManualAdd: async (owner, pubky) => {
+    // Lazy: createContactsService unit tests must not load LinkService.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { LinkService } = require('./link/LinkService') as typeof import('./link/LinkService');
+    await unblockPeer({
+      ownerPubky: owner,
+      peerPubky: pubky,
+      persistUnblock: (o, p) => FollowsImportSettings.unblock(o, p),
+      releaseDeclinedRequest: (o, p) => LinkService.releaseDeclinedRequest(o, p),
+    });
+  },
   isFollowsImportEnabled: owner => FollowsImportSettings.getFollowsImportEnabled(owner),
   setFollowsImportEnabled: (owner, enabled) =>
     FollowsImportSettings.setFollowsImportEnabled(owner, enabled),

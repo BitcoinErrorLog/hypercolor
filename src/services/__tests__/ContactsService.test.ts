@@ -797,3 +797,156 @@ describe('ContactsService authoritative follows refresh', () => {
     expect(storage.reconcileFollowSuggestions).not.toHaveBeenCalled();
   });
 });
+
+describe('ContactsService mid-flight consent revocation', () => {
+  function fullPage(prefix: string): PubkyKey[] {
+    return Array.from({ length: 200 }, (_, i) => `${prefix}${i}`.padEnd(52, 'a') as PubkyKey);
+  }
+
+  it('stops Nexus page 2, followers, friends, and writes after revoke during following page 1', async () => {
+    let releasePage1!: () => void;
+    const page1Held = new Promise<void>(resolve => {
+      releasePage1 = resolve;
+    });
+    let markPage1!: () => void;
+    const page1Seen = new Promise<void>(resolve => {
+      markPage1 = resolve;
+    });
+    let enabled = true;
+    const storage = makeStorage();
+    const nexus = makeNexus({
+      following: jest.fn(async (_owner: PubkyKey, query?: { skip?: number }) => {
+        if ((query?.skip ?? 0) === 0) {
+          markPage1();
+          await page1Held;
+          return ok(fullPage('f'));
+        }
+        return ok([ALICE]);
+      }),
+      followers: jest.fn(async () => ok([BOB])),
+      friends: jest.fn(async () => ok([CARA])),
+    });
+    const { service } = baseDeps({
+      storage,
+      nexus,
+      isFollowsImportEnabled: () => enabled,
+      setFollowsImportEnabled: () => {
+        enabled = false;
+      },
+    });
+
+    const syncP = service.syncRelationships(OWNER);
+    await page1Seen;
+    await service.stopUsingFollows(OWNER);
+    releasePage1();
+    const result = await syncP;
+
+    expect(result).toEqual({
+      following: 0,
+      followers: 0,
+      friends: 0,
+      nexusReachable: false,
+      nexusError: 'Follows import is off.',
+    });
+    expect(nexus.following).toHaveBeenCalledTimes(1);
+    expect(nexus.followers).not.toHaveBeenCalled();
+    expect(nexus.friends).not.toHaveBeenCalled();
+    expect(storage.upsertContact).not.toHaveBeenCalled();
+    expect(storage.setContactRelationshipFlags).not.toHaveBeenCalled();
+  });
+
+  it('does not request Nexus following page 2 after revoke during fallback import', async () => {
+    let releasePage1!: () => void;
+    const page1Held = new Promise<void>(resolve => {
+      releasePage1 = resolve;
+    });
+    let markPage1!: () => void;
+    const page1Seen = new Promise<void>(resolve => {
+      markPage1 = resolve;
+    });
+    let enabled = true;
+    const get = jest.fn(async () => '{"created_at":1}');
+    const nexus = makeNexus({
+      following: jest.fn(async (_owner: PubkyKey, query?: { skip?: number }) => {
+        if ((query?.skip ?? 0) === 0) {
+          markPage1();
+          await page1Held;
+          return ok(fullPage('n'));
+        }
+        return ok([ALICE]);
+      }),
+    });
+    const { service, storage } = baseDeps({
+      list: async () => ({ ok: false, message: 'homeserver timeout' }),
+      get,
+      nexus,
+      isFollowsImportEnabled: () => enabled,
+      setFollowsImportEnabled: () => {
+        enabled = false;
+      },
+    });
+
+    const importP = service.importFollowsWithNexusFallback(OWNER);
+    await page1Seen;
+    await service.stopUsingFollows(OWNER);
+    releasePage1();
+    const result = await importP;
+
+    expect(result.ok).toBe(false);
+    expect(nexus.following).toHaveBeenCalledTimes(1);
+    expect(get).not.toHaveBeenCalled();
+    expect(storage.upsertContact).not.toHaveBeenCalled();
+  });
+
+  it('completes stopUsingFollows while profile hydration is stalled', async () => {
+    let markProfile!: () => void;
+    const profileStarted = new Promise<void>(resolve => {
+      markProfile = resolve;
+    });
+    let enabled = true;
+    const { service, storage } = baseDeps({
+      list: async () => ({
+        ok: true as const,
+        urls: [`pubky://${OWNER}/pub/pubky.app/follows/${ALICE}`],
+      }),
+      getProfile: async () => {
+        markProfile();
+        await new Promise<never>(() => undefined);
+        return null;
+      },
+      isFollowsImportEnabled: () => enabled,
+      setFollowsImportEnabled: () => {
+        enabled = false;
+      },
+    });
+
+    const importP = service.importFollows(OWNER);
+    await profileStarted;
+    await Promise.race([
+      service.stopUsingFollows(OWNER),
+      new Promise<never>((_resolve, reject) => {
+        setTimeout(() => reject(new Error('stopUsingFollows hung on profile hydration')), 1000);
+      }),
+    ]);
+    expect(enabled).toBe(false);
+    expect(storage.rows.get(ALICE)).toBeUndefined();
+    void importP;
+  });
+
+  it('calls onManualAdd before inserting a re-added contact', async () => {
+    const order: string[] = [];
+    const onManualAdd = jest.fn(async () => {
+      order.push('unblock');
+    });
+    const storage = makeStorage();
+    storage.upsertContact = jest.fn(async (c: Contact) => {
+      order.push('upsert');
+      storage.rows.set(c.pubky, c);
+    });
+    const { service } = baseDeps({ storage, onManualAdd });
+    const result = await service.addManualContact(OWNER, ALICE);
+    expect(result.ok).toBe(true);
+    expect(onManualAdd).toHaveBeenCalledWith(OWNER, ALICE);
+    expect(order).toEqual(['unblock', 'upsert']);
+  });
+});
