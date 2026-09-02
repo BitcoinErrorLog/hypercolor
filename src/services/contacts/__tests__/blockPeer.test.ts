@@ -87,7 +87,7 @@ describe('blockPeer', () => {
 });
 
 describe('unblockPeer', () => {
-  it('removes the deny then releases the declined request', async () => {
+  it('releases the declined row before dropping the deny', async () => {
     const order: string[] = [];
     const blocked = new Set<string>([PEER]);
     await unblockPeer({
@@ -101,7 +101,24 @@ describe('unblockPeer', () => {
         order.push('release');
       },
     });
-    expect(order).toEqual(['unblock', 'release']);
+    expect(order).toEqual(['release', 'unblock']);
     expect(blocked.has(PEER)).toBe(false);
+  });
+
+  it('keeps the deny when releasing the declined row throws', async () => {
+    const blocked = new Set<string>([PEER]);
+    await expect(
+      unblockPeer({
+        ownerPubky: OWNER,
+        peerPubky: PEER,
+        persistUnblock: (_owner, peer) => {
+          blocked.delete(peer);
+        },
+        releaseDeclinedRequest: async () => {
+          throw new Error('sqlite locked');
+        },
+      }),
+    ).rejects.toThrow('sqlite locked');
+    expect(blocked.has(PEER)).toBe(true);
   });
 });

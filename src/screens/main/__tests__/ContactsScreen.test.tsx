@@ -218,4 +218,23 @@ describe('ContactsScreenContent', () => {
       tree.unmount();
     });
   });
+
+  it('shows a leftover blocked contact as Blocked · cleanup pending', async () => {
+    const leftover = contact({ pubky: ALICE, displayName: 'Alice' });
+    const tree = await render(
+      <ContactsScreenContent
+        {...contentProps({
+          contacts: [leftover],
+          blockState: { [ALICE]: 'cleanup-pending' },
+        })}
+      />,
+    );
+    expect(treeHasText(tree, 'Blocked · cleanup pending')).toBe(true);
+    expect(tree.root.findAllByProps({ testID: 'contactRowBlockedState' }).length).toBeGreaterThan(
+      0,
+    );
+    await act(async () => {
+      tree.unmount();
+    });
+  });
 });

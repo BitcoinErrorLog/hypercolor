@@ -728,11 +728,34 @@ send payments.` — a block whose own subtitle says it cannot be acted on, which
 network read on every contact open. It is deleted from web rather than reworded.
 
 **Danger block.** `Block` and `Remove contact`, each behind a confirmation sheet naming what is
-deleted locally.
+deleted locally. `Block` is fail-closed and inbound-authoritative: the owner-scoped deny is
+persisted first; leftover Encrypted Link cleanup is retryable. Unblock is an explicit user
+action, never a side effect of adding a pubky.
+
+**Block / Unblock contract.**
+
+- **Blocked.** Contact detail (and the search/add flow for that pubky) shows `Blocked` and an
+  `Unblock` action. Message and Block are hidden. The Unblock confirmation body is: `They can
+  send you a message request again. No chats, encrypted link, or contact data is restored.`
+- **Blocked · cleanup pending.** A leftover contact row stays in the list with that label after
+  a Block whose decline/delete failed. Contact detail shows the same label, `Retry` (finishes
+  cleanup while the deny stays), and `Unblock`. Navigating away and back keeps Retry — cleanup
+  pending is persisted per owner, not component state.
+- **Unblock and add.** Pasting a blocked pubky does not lift the deny. Search (and Add as
+  contact) returns a blocked result and opens `This pubky is blocked. Unblock and add?`
+  Decline keeps the block. Confirm persists the contact first, then lifts the deny and
+  releases the terminal `declined` row. If persist fails, the deny remains.
+- **Fail-closed ordering.** Block: deny, then decline, then delete contact. Unblock: release
+  declined row, then drop the deny. Manual add of a blocked pubky: persist contact, then
+  unblock. Inbound and handshake establishment consult the deny at the Encrypted Link choke
+  point; queued payloads for a blocked peer are dropped, not delivered.
+- **Block sheet.** Names local deletion (contact row, Encrypted Link, one-to-one messages,
+  follows-import skip) and states that Unblock is a separate action — adding the pubky again
+  does not lift the block.
 
 **States.** Loading skeleton; `Could not load this contact.` with `Try again`; Offline renders
 from local storage with the payment block (mobile) collapsed and labelled `Unavailable
-offline`.
+offline`; `Blocked`; `Blocked · cleanup pending` with `Retry`.
 
 **AC.**
 1. The full pubky is selectable and copyable on both platforms.

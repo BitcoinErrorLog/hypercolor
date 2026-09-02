@@ -11,6 +11,8 @@ import { TrustEngine } from '../../services/TrustEngine';
 import { FollowsImportSettings } from '../../services/contacts/followsImportSettings';
 import { contactsForOwner } from '../../services/contacts/contactOwnerScope';
 import type { ImportFollowsRefreshResult } from '../../services/ContactsService';
+import { ConfirmSheet } from '../../ui/contacts/ConfirmSheet';
+import { CONTACTS_COPY } from '../../ui/contacts/contactsCopy';
 import { partitionContacts } from '../../ui/contacts/relationshipBadge';
 import { ContactDetailContainer } from './contacts/ContactDetailScreen';
 import { pullToRefreshFollows } from './contacts/contactsActions';
@@ -76,6 +78,7 @@ export default function ContactsScreen() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loadErrorDetails, setLoadErrorDetails] = useState<string | null>(null);
   const [offline, setOffline] = useState(false);
+  const [unblockAndAddPubky, setUnblockAndAddPubky] = useState<string | null>(null);
 
   const loadLocal = useCallback(async () => {
     const owner = useAuthStore.getState().pubky;
@@ -200,62 +203,99 @@ export default function ContactsScreen() {
     }
   }, [loadLocal]);
 
+  const handleAddSuggestion = useCallback(
+    (pubky: string, confirmUnblock = false) => {
+      const owner = useAuthStore.getState().pubky;
+      if (!owner) return;
+      void ContactsService.addManualContact(
+        owner,
+        pubky,
+        confirmUnblock ? { confirmUnblock: true } : undefined,
+      ).then(result => {
+        if (useAuthStore.getState().pubky !== owner) return;
+        if (!result.ok) {
+          if (result.reason === 'blocked') setUnblockAndAddPubky(pubky);
+          return;
+        }
+        upsertContact(result.contact);
+        openContactDetail(result.contact.pubky);
+      });
+    },
+    [openContactDetail, upsertContact],
+  );
+
   if (detailPubky) {
     return <ContactDetailContainer pubky={detailPubky} onBack={closeContactDetail} />;
   }
 
   const sorted = sortContactsForDisplay(storeContacts);
   const { contacts, suggestions } = partitionContacts(sorted);
+  const blockState: Record<string, 'blocked' | 'cleanup-pending'> = {};
+  if (ownerPubky) {
+    for (const row of sorted) {
+      if (!FollowsImportSettings.isBlocked(ownerPubky, row.pubky)) continue;
+      blockState[row.pubky] = FollowsImportSettings.isBlockCleanupPending(ownerPubky, row.pubky)
+        ? 'cleanup-pending'
+        : 'blocked';
+    }
+  }
 
   return (
-    <ContactsScreenContent
-      contacts={contacts}
-      suggestions={followsImportEnabled ? suggestions : []}
-      followsImportEnabled={followsImportEnabled}
-      refreshing={refreshing}
-      importing={importing}
-      consentOpen={consentOpen}
-      importStatus={importStatus}
-      importError={importError}
-      importErrorDetails={importErrorDetails}
-      usedNexusFallback={usedNexusFallback}
-      loadError={loadError}
-      loadErrorDetails={loadErrorDetails}
-      offline={offline}
-      onRefresh={() => {
-        void handleRefresh();
-      }}
-      onAdd={() => nav.navigate('ContactSearch')}
-      onOpenContact={openContactDetail}
-      onUseFollows={() => setConsentOpen(true)}
-      onConsentConfirm={() => {
-        handleConfirmConsent();
-      }}
-      onConsentDismiss={() => setConsentOpen(false)}
-      onRefreshFollows={() => {
-        void runImport();
-      }}
-      onStopFollows={() => {
-        void handleStopFollows();
-      }}
-      onAddSuggestion={pubky => {
-        const owner = useAuthStore.getState().pubky;
-        if (!owner) return;
-        void ContactsService.addManualContact(owner, pubky).then(result => {
-          if (useAuthStore.getState().pubky !== owner) return;
-          if (result.ok) {
-            upsertContact(result.contact);
-            openContactDetail(result.contact.pubky);
-          }
-        });
-      }}
-      onRetryLoad={() => {
-        void loadLocal();
-      }}
-      onRetryImport={() => {
-        void runImport();
-      }}
-    />
+    <>
+      <ContactsScreenContent
+        contacts={contacts}
+        suggestions={followsImportEnabled ? suggestions : []}
+        followsImportEnabled={followsImportEnabled}
+        blockState={blockState}
+        refreshing={refreshing}
+        importing={importing}
+        consentOpen={consentOpen}
+        importStatus={importStatus}
+        importError={importError}
+        importErrorDetails={importErrorDetails}
+        usedNexusFallback={usedNexusFallback}
+        loadError={loadError}
+        loadErrorDetails={loadErrorDetails}
+        offline={offline}
+        onRefresh={() => {
+          void handleRefresh();
+        }}
+        onAdd={() => nav.navigate('ContactSearch')}
+        onOpenContact={openContactDetail}
+        onUseFollows={() => setConsentOpen(true)}
+        onConsentConfirm={() => {
+          handleConfirmConsent();
+        }}
+        onConsentDismiss={() => setConsentOpen(false)}
+        onRefreshFollows={() => {
+          void runImport();
+        }}
+        onStopFollows={() => {
+          void handleStopFollows();
+        }}
+        onAddSuggestion={pubky => {
+          handleAddSuggestion(pubky);
+        }}
+        onRetryLoad={() => {
+          void loadLocal();
+        }}
+        onRetryImport={() => {
+          void runImport();
+        }}
+      />
+      <ConfirmSheet
+        visible={unblockAndAddPubky !== null}
+        title={CONTACTS_COPY.unblockAndAddTitle}
+        body={CONTACTS_COPY.unblockBody}
+        confirmLabel={CONTACTS_COPY.unblockAndAddConfirm}
+        onDismiss={() => setUnblockAndAddPubky(null)}
+        onConfirm={() => {
+          const target = unblockAndAddPubky;
+          setUnblockAndAddPubky(null);
+          if (target) handleAddSuggestion(target, true);
+        }}
+      />
+    </>
   );
 }
 

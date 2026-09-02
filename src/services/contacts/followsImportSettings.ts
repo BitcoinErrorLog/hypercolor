@@ -14,9 +14,11 @@ import type { PubkyKey } from '../../types';
  */
 const FLAG_PREFIX = 'followsImportEnabled:';
 const BLOCKED_PREFIX = 'blocked:';
+const CLEANUP_PENDING_PREFIX = 'blockCleanupPending:';
 
 const memEnabled = new Map<string, boolean>();
 const memBlocked = new Map<string, Set<string>>();
+const memCleanupPending = new Map<string, Set<string>>();
 const listeners = new Set<() => void>();
 
 let mmkvStore: {
@@ -95,6 +97,35 @@ function writeBlocked(ownerPubky: PubkyKey, blocked: Set<string>): void {
   notify();
 }
 
+function readCleanupPending(ownerPubky: PubkyKey): Set<string> {
+  const cached = memCleanupPending.get(ownerPubky);
+  if (cached) return cached;
+  let next = new Set<string>();
+  try {
+    const raw = storage()?.getString(`${CLEANUP_PENDING_PREFIX}${ownerPubky}`);
+    if (raw) {
+      const parsed: unknown = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        next = new Set(parsed.filter((item): item is string => typeof item === 'string'));
+      }
+    }
+  } catch {
+    next = new Set<string>();
+  }
+  memCleanupPending.set(ownerPubky, next);
+  return next;
+}
+
+function writeCleanupPending(ownerPubky: PubkyKey, pending: Set<string>): void {
+  memCleanupPending.set(ownerPubky, pending);
+  try {
+    storage()?.set(`${CLEANUP_PENDING_PREFIX}${ownerPubky}`, JSON.stringify([...pending]));
+  } catch {
+    // Memory remains the source of truth for this session.
+  }
+  notify();
+}
+
 export const FollowsImportSettings = {
   getFollowsImportEnabled(ownerPubky: PubkyKey): boolean {
     if (!ownerPubky) return false;
@@ -125,6 +156,25 @@ export const FollowsImportSettings = {
     writeBlocked(ownerPubky, blocked);
   },
 
+  isBlockCleanupPending(ownerPubky: PubkyKey, pubky: PubkyKey): boolean {
+    if (!ownerPubky || !pubky) return false;
+    return readCleanupPending(ownerPubky).has(pubky);
+  },
+
+  markBlockCleanupPending(ownerPubky: PubkyKey, pubky: PubkyKey): void {
+    if (!ownerPubky || !pubky) return;
+    const pending = new Set(readCleanupPending(ownerPubky));
+    pending.add(pubky);
+    writeCleanupPending(ownerPubky, pending);
+  },
+
+  clearBlockCleanupPending(ownerPubky: PubkyKey, pubky: PubkyKey): void {
+    if (!ownerPubky || !pubky) return;
+    const pending = new Set(readCleanupPending(ownerPubky));
+    pending.delete(pubky);
+    writeCleanupPending(ownerPubky, pending);
+  },
+
   /**
    * Drop in-memory caches so the next lookup re-reads persistence (or
    * defaults off). Does not wipe MMKV — reconnecting the same owner
@@ -133,6 +183,7 @@ export const FollowsImportSettings = {
   clearSessionMemory(): void {
     memEnabled.clear();
     memBlocked.clear();
+    memCleanupPending.clear();
     notify();
   },
 
@@ -147,6 +198,7 @@ export const FollowsImportSettings = {
   resetForTests(): void {
     memEnabled.clear();
     memBlocked.clear();
+    memCleanupPending.clear();
     listeners.clear();
   },
 };

@@ -1,5 +1,6 @@
 import type {
   AddContactResult,
+  AddManualContactOptions,
   ImportFollowsRefreshResult,
 } from '../../../services/ContactsService';
 import type { PubkyKey } from '../../../types';
@@ -30,10 +31,18 @@ export function afterManualContactAdded(pubky: PubkyKey): {
 export async function submitManualContact(args: {
   ownerPubky: PubkyKey | null;
   pubky: string;
-  addManualContact: (owner: PubkyKey, pubky: string) => Promise<AddContactResult>;
+  addManualContact: (
+    owner: PubkyKey,
+    pubky: string,
+    options?: AddManualContactOptions,
+  ) => Promise<AddContactResult>;
+  confirmUnblock?: boolean;
 }): Promise<AddContactResult> {
   if (!args.ownerPubky) {
     return { ok: false, reason: 'error', message: 'Could not add that contact.' };
+  }
+  if (args.confirmUnblock === true) {
+    return args.addManualContact(args.ownerPubky, args.pubky, { confirmUnblock: true });
   }
   return args.addManualContact(args.ownerPubky, args.pubky);
 }

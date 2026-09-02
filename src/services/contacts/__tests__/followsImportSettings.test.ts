@@ -33,6 +33,15 @@ describe('FollowsImportSettings', () => {
     expect(FollowsImportSettings.isBlocked(OWNER, PEER)).toBe(false);
   });
 
+  it('persists cleanup-pending per owner until cleared', () => {
+    expect(FollowsImportSettings.isBlockCleanupPending(OWNER, PEER)).toBe(false);
+    FollowsImportSettings.markBlockCleanupPending(OWNER, PEER);
+    expect(FollowsImportSettings.isBlockCleanupPending(OWNER, PEER)).toBe(true);
+    expect(FollowsImportSettings.isBlockCleanupPending(OWNER_B, PEER)).toBe(false);
+    FollowsImportSettings.clearBlockCleanupPending(OWNER, PEER);
+    expect(FollowsImportSettings.isBlockCleanupPending(OWNER, PEER)).toBe(false);
+  });
+
   it('fail-closes consent lookups after session memory is cleared', () => {
     FollowsImportSettings.setFollowsImportEnabled(OWNER, true);
     FollowsImportSettings.clearSessionMemory();

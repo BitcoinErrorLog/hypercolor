@@ -83,6 +83,30 @@ describe('submitManualContact / afterManualContactAdded', () => {
     expect(addManualContact).toHaveBeenCalledWith(OWNER, ALICE);
   });
 
+  it('forwards confirmUnblock when the user confirmed Unblock and add', async () => {
+    const addManualContact = jest.fn(async () => ({
+      ok: true as const,
+      contact: {
+        pubky: ALICE,
+        ownerPubky: OWNER,
+        trustScore: 0,
+        isFollowing: false,
+        isFollower: false,
+        isMutual: false,
+        addedManually: true,
+        firstSeenAt: 1,
+      },
+    }));
+    const result = await submitManualContact({
+      ownerPubky: OWNER,
+      pubky: ALICE,
+      confirmUnblock: true,
+      addManualContact,
+    });
+    expect(result.ok).toBe(true);
+    expect(addManualContact).toHaveBeenCalledWith(OWNER, ALICE, { confirmUnblock: true });
+  });
+
   it('lands on contact detail after a successful add', async () => {
     const landing = afterManualContactAdded(ALICE);
     expect(landing.detailPubky).toBe(ALICE);

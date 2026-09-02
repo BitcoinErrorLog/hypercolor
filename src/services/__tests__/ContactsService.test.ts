@@ -898,6 +898,34 @@ describe('ContactsService mid-flight consent revocation', () => {
     expect(storage.upsertContact).not.toHaveBeenCalled();
   });
 
+  it('stops follow-document GETs when generation is bumped mid-loop', async () => {
+    let enabled = true;
+    let stop = async (): Promise<void> => undefined;
+    const get = jest.fn(async (url: string) => {
+      if (url.includes(ALICE)) await stop();
+      return '{"created_at":1}';
+    });
+    const nexus = makeNexus({
+      following: jest.fn(async () => ok([ALICE, BOB, CARA])),
+    });
+    const { service } = baseDeps({
+      list: async () => ({ ok: false, message: 'homeserver timeout' }),
+      get,
+      nexus,
+      isFollowsImportEnabled: () => enabled,
+      setFollowsImportEnabled: () => {
+        enabled = false;
+      },
+    });
+    stop = () => service.stopUsingFollows(OWNER);
+
+    const result = await service.importFollowsWithNexusFallback(OWNER);
+    expect(result.ok).toBe(false);
+    expect(get).toHaveBeenCalledTimes(1);
+    expect(get.mock.calls.some(call => String(call[0]).includes(BOB))).toBe(false);
+    expect(get.mock.calls.some(call => String(call[0]).includes(CARA))).toBe(false);
+  });
+
   it('completes stopUsingFollows while profile hydration is stalled', async () => {
     let markProfile!: () => void;
     const profileStarted = new Promise<void>(resolve => {
@@ -933,9 +961,9 @@ describe('ContactsService mid-flight consent revocation', () => {
     void importP;
   });
 
-  it('calls onManualAdd before inserting a re-added contact', async () => {
+  it('persists the contact before lifting the deny on confirmed unblock-and-add', async () => {
     const order: string[] = [];
-    const onManualAdd = jest.fn(async () => {
+    const onConfirmedUnblock = jest.fn(async () => {
       order.push('unblock');
     });
     const storage = makeStorage();
@@ -943,10 +971,60 @@ describe('ContactsService mid-flight consent revocation', () => {
       order.push('upsert');
       storage.rows.set(c.pubky, c);
     });
-    const { service } = baseDeps({ storage, onManualAdd });
-    const result = await service.addManualContact(OWNER, ALICE);
+    const { service } = baseDeps({
+      storage,
+      isBlocked: () => true,
+      onConfirmedUnblock,
+    });
+    const result = await service.addManualContact(OWNER, ALICE, { confirmUnblock: true });
     expect(result.ok).toBe(true);
-    expect(onManualAdd).toHaveBeenCalledWith(OWNER, ALICE);
-    expect(order).toEqual(['unblock', 'upsert']);
+    expect(onConfirmedUnblock).toHaveBeenCalledWith(OWNER, ALICE);
+    expect(order).toEqual(['upsert', 'unblock']);
+  });
+
+  it('does not lift the deny when confirmed unblock-and-add fails to persist', async () => {
+    const blocked = new Set<string>([ALICE]);
+    const declined = new Set<string>([ALICE]);
+    const onConfirmedUnblock = jest.fn(async () => {
+      blocked.delete(ALICE);
+      declined.delete(ALICE);
+    });
+    const storage = makeStorage();
+    storage.upsertContact = jest.fn(async (_c: Contact): Promise<void> => {
+      throw new Error('sqlite locked');
+    });
+    const { service } = baseDeps({
+      storage,
+      isBlocked: () => blocked.has(ALICE),
+      onConfirmedUnblock,
+    });
+    const result = await service.addManualContact(OWNER, ALICE, { confirmUnblock: true });
+    expect(result).toEqual(
+      expect.objectContaining({
+        ok: false,
+        reason: 'error',
+        message: 'Could not add that contact.',
+      }),
+    );
+    expect(onConfirmedUnblock).not.toHaveBeenCalled();
+    expect(blocked.has(ALICE)).toBe(true);
+    expect(declined.has(ALICE)).toBe(true);
+  });
+
+  it('refuses to add a blocked pubky until Unblock is confirmed', async () => {
+    const onConfirmedUnblock = jest.fn();
+    const storage = makeStorage();
+    const { service } = baseDeps({
+      storage,
+      isBlocked: () => true,
+      onConfirmedUnblock,
+    });
+    await expect(service.addManualContact(OWNER, ALICE)).resolves.toEqual({
+      ok: false,
+      reason: 'blocked',
+      message: 'This pubky is blocked.',
+    });
+    expect(onConfirmedUnblock).not.toHaveBeenCalled();
+    expect(storage.upsertContact).not.toHaveBeenCalled();
   });
 });

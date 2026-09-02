@@ -6,6 +6,7 @@ import { PubkyService, type HomeserverListResult } from './PubkyService';
 import { StorageService } from './StorageService';
 import { FollowsImportSettings } from './contacts/followsImportSettings';
 import { unblockPeer } from './contacts/blockPeer';
+import { CONTACTS_COPY } from '../ui/contacts/contactsCopy';
 
 /**
  * pubky.app follows directory, verified against pubky-app-specs
@@ -43,8 +44,11 @@ export type ContactsServiceDeps = {
   /** GET a homeserver path. Used to re-check Nexus following ids. */
   get?: (url: string) => Promise<string | null>;
   isBlocked?: (ownerPubky: PubkyKey, pubky: PubkyKey) => boolean;
-  /** Unblock + clear terminal declined state when the user re-adds a pubky. */
-  onManualAdd?: (ownerPubky: PubkyKey, pubky: PubkyKey) => void | Promise<void>;
+  /**
+   * Lift deny + terminal declined after the user confirmed Unblock.
+   * Called only after a successful contact persist (fail closed).
+   */
+  onConfirmedUnblock?: (ownerPubky: PubkyKey, pubky: PubkyKey) => void | Promise<void>;
   /** Authoritative consent lookup. Fail closed when omitted. */
   isFollowsImportEnabled: (ownerPubky: PubkyKey) => boolean;
   setFollowsImportEnabled: (ownerPubky: PubkyKey, enabled: boolean) => void;
@@ -76,11 +80,16 @@ export type SyncRelationshipsResult = {
   nexusError: string | null;
 };
 
+export type AddManualContactOptions = {
+  /** Set only after the Unblock-and-add confirmation sheet. */
+  confirmUnblock?: boolean;
+};
+
 export type AddContactResult =
   | { ok: true; contact: Contact }
   | {
       ok: false;
-      reason: 'invalid-pubky' | 'not-found' | 'duplicate' | 'self' | 'error';
+      reason: 'invalid-pubky' | 'not-found' | 'duplicate' | 'self' | 'error' | 'blocked';
       message: string;
       details?: string;
     };
@@ -325,7 +334,7 @@ export function createContactsService(deps: ContactsServiceDeps) {
         if (skipFollowee(deps, ownerPubky, candidate, seen)) continue;
         seen.add(candidate);
         if (!deps.get) continue;
-        if (!consentOn(deps, ownerPubky)) break;
+        if (!writeStillValid(ownerPubky, generation)) break;
         const document = await deps.get(followDocumentUrl(ownerPubky, candidate));
         if (document == null || document.length === 0) continue;
         confirmed.push(candidate);
@@ -508,7 +517,11 @@ export function createContactsService(deps: ContactsServiceDeps) {
       };
     },
 
-    async addManualContact(ownerPubky: PubkyKey, rawPubky: string): Promise<AddContactResult> {
+    async addManualContact(
+      ownerPubky: PubkyKey,
+      rawPubky: string,
+      options?: AddManualContactOptions,
+    ): Promise<AddContactResult> {
       const pubky = parsePubky(rawPubky);
       if (!pubky) {
         return {
@@ -524,14 +537,26 @@ export function createContactsService(deps: ContactsServiceDeps) {
           message: 'You cannot add your own pubky.',
         };
       }
+      const blocked = deps.isBlocked?.(ownerPubky, pubky) === true;
+      if (blocked && options?.confirmUnblock !== true) {
+        return {
+          ok: false,
+          reason: 'blocked',
+          message: CONTACTS_COPY.blockedAddMessage,
+        };
+      }
       try {
         const existing = await deps.storage.getContact(pubky, ownerPubky);
-        if (existing?.addedManually) {
+        if (existing?.addedManually && !blocked) {
           return {
             ok: false,
             reason: 'duplicate',
             message: 'This pubky is already in your contacts.',
           };
+        }
+        if (existing?.addedManually && blocked) {
+          await deps.onConfirmedUnblock?.(ownerPubky, pubky);
+          return { ok: true, contact: existing };
         }
         const homeserver = await deps.getHomeserver(pubky);
         if (!homeserver) {
@@ -547,10 +572,10 @@ export function createContactsService(deps: ContactsServiceDeps) {
           homeserver,
           profile,
         });
-        if (deps.onManualAdd) {
-          await deps.onManualAdd(ownerPubky, pubky);
-        }
         await deps.storage.upsertContact(contact);
+        if (blocked && options?.confirmUnblock === true) {
+          await deps.onConfirmedUnblock?.(ownerPubky, pubky);
+        }
         return { ok: true, contact };
       } catch (err) {
         return {
@@ -658,7 +683,7 @@ export const ContactsService = createContactsService({
   getHomeserver: pubky => PubkyService.getHomeserver(pubky),
   get: url => PubkyService.get(url),
   isBlocked: (owner, pubky) => FollowsImportSettings.isBlocked(owner, pubky),
-  onManualAdd: async (owner, pubky) => {
+  onConfirmedUnblock: async (owner, pubky) => {
     // Lazy: createContactsService unit tests must not load LinkService.
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { LinkService } = require('./link/LinkService') as typeof import('./link/LinkService');
@@ -667,6 +692,7 @@ export const ContactsService = createContactsService({
       peerPubky: pubky,
       persistUnblock: (o, p) => FollowsImportSettings.unblock(o, p),
       releaseDeclinedRequest: (o, p) => LinkService.releaseDeclinedRequest(o, p),
+      clearCleanupPending: (o, p) => FollowsImportSettings.clearBlockCleanupPending(o, p),
     });
   },
   isFollowsImportEnabled: owner => FollowsImportSettings.getFollowsImportEnabled(owner),

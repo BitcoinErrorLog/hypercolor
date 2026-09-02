@@ -1,12 +1,17 @@
-import { LinkService } from '../../link/LinkService';
+import { LinkService, LINK_RETRY_PAYLOAD_TYPE } from '../../link/LinkService';
 import { PaykitLinkNative } from '../../link/PaykitLinkNative';
 import { StorageService } from '../../StorageService';
 import { KeyStore } from '../../KeyStore';
 import { RetryQueue } from '../../RetryQueue';
 import { FollowsImportSettings } from '../followsImportSettings';
 import { blockPeer, unblockPeer } from '../blockPeer';
-import { LINK_RECEIVER_PATH, type LinkReceiver, type LinkRecord } from '../../../types/link';
-import type { MessageRequest } from '../../../types';
+import {
+  LINK_RECEIVER_PATH,
+  CHAT_MESSAGE_KIND,
+  type LinkReceiver,
+  type LinkRecord,
+} from '../../../types/link';
+import type { DeliveryQueueItem, MessageRequest } from '../../../types';
 
 jest.mock('../../link/PaykitLinkNative', () => ({
   PaykitLinkNative: {
@@ -96,6 +101,8 @@ jest.mock('../../StorageService', () => ({
     deleteGroupDeferredForSender: jest.fn(),
     deleteGroupSeenEventsForSender: jest.fn(),
     setContactRelationshipFlags: jest.fn(),
+    getDueHandshakingLinks: jest.fn(),
+    hasQueueItem: jest.fn(),
   },
 }));
 
@@ -198,6 +205,9 @@ describe('inbound deny is authoritative', () => {
     mockedStorage.getMessageRequest.mockResolvedValue(null);
     mockedStorage.deleteMessageRequest.mockResolvedValue(undefined);
     mockedStorage.countLinkMessagesForPeer.mockResolvedValue(0);
+    mockedStorage.getDueHandshakingLinks.mockResolvedValue([]);
+    mockedStorage.hasQueueItem.mockResolvedValue(true);
+    mockedStorage.getHandshakeBudget.mockResolvedValue(null);
     mockedRetryQueue.getDue.mockResolvedValue([]);
 
     await LinkService.clearSession();
@@ -209,8 +219,19 @@ describe('inbound deny is authoritative', () => {
     jest.restoreAllMocks();
   });
 
-  it('drops a blocked peer from collectInboxCandidates after contact and link cleanup', async () => {
+  it('omits a blocked peer from collectInboxCandidates even when the contact row remains', async () => {
+    FollowsImportSettings.block(OWNER, PEER);
     mockedStorage.getAllContacts.mockResolvedValue([
+      {
+        pubky: PEER,
+        ownerPubky: OWNER,
+        trustScore: 0,
+        isFollowing: false,
+        isFollower: false,
+        isMutual: false,
+        addedManually: true,
+        firstSeenAt: NOW,
+      },
       {
         pubky: OTHER,
         ownerPubky: OWNER,
@@ -294,7 +315,6 @@ describe('inbound deny is authoritative', () => {
     expect(outcome.cleanup).toBe('pending');
     expect(FollowsImportSettings.isBlocked(OWNER, PEER)).toBe(true);
 
-    mockedStorage.getLink.mockResolvedValue(null);
     mockedStorage.deleteLink.mockResolvedValue(undefined);
     mockedStorage.deleteLinkStreamItemsForPeer.mockResolvedValue(undefined);
     mockedStorage.deleteLinkMessagesForPeer.mockResolvedValue(undefined);
@@ -345,5 +365,106 @@ describe('inbound deny is authoritative', () => {
     expect(received).toEqual([]);
     expect(mockedNative.probeInboundLink).toHaveBeenCalled();
     expect(request?.status).toBe('pending');
+  });
+
+  it('does not advance a leftover handshaking link while cleanup is pending', async () => {
+    const leftover: LinkRecord = {
+      ...storedLink(),
+      status: 'handshaking',
+      role: 'responder',
+      snapshot: 'b-msg2',
+    };
+    mockedStorage.getLink.mockResolvedValue(leftover);
+    mockedStorage.deleteLink.mockRejectedValue(new Error('delete link failed'));
+    mockedStorage.getDueHandshakingLinks.mockResolvedValue([leftover]);
+
+    const outcome = await blockPeer({
+      ownerPubky: OWNER,
+      peerPubky: PEER,
+      persistBlock: (owner, peer) => FollowsImportSettings.block(owner, peer),
+      declineMessageRequest: peer => LinkService.declineMessageRequest(peer),
+      deleteContact: async () => undefined,
+    });
+    expect(outcome.cleanup).toBe('pending');
+    expect(FollowsImportSettings.isBlocked(OWNER, PEER)).toBe(true);
+    expect(await StorageService.getLink(OWNER, PEER)).toEqual(leftover);
+
+    mockedNative.restoreHandshake.mockClear();
+    mockedNative.advanceHandshake.mockClear();
+    mockedNative.probeInboundLink.mockClear();
+    mockedNative.initiateLink.mockClear();
+    mockedNative.getReceiverMarker.mockClear();
+    mockedNative.restoreLink.mockClear();
+
+    await LinkService.advancePendingLinks();
+
+    expect(mockedNative.restoreHandshake).not.toHaveBeenCalled();
+    expect(mockedNative.advanceHandshake).not.toHaveBeenCalled();
+    expect(mockedNative.probeInboundLink).not.toHaveBeenCalled();
+    expect(mockedNative.initiateLink).not.toHaveBeenCalled();
+    expect(mockedNative.getReceiverMarker).not.toHaveBeenCalled();
+    expect(mockedNative.restoreLink).not.toHaveBeenCalled();
+  });
+
+  it('drops a queued payload to a blocked peer instead of delivering it', async () => {
+    FollowsImportSettings.block(OWNER, PEER);
+    const queueItem: DeliveryQueueItem = {
+      id: 'q-blocked',
+      messageId: 'evt-blocked',
+      recipientPubky: PEER,
+      payload: JSON.stringify({
+        type: LINK_RETRY_PAYLOAD_TYPE,
+        ownerPubky: OWNER,
+        peerPubky: PEER,
+        senderPubky: OWNER,
+        kind: CHAT_MESSAGE_KIND,
+        eventId: 'evt-blocked',
+        rawJson: '{}',
+      }),
+      attempts: 0,
+      nextRetryAt: NOW,
+      createdAt: NOW,
+    };
+    mockedRetryQueue.getDue.mockResolvedValue([queueItem]);
+    mockedStorage.hasQueueItem.mockResolvedValue(true);
+    mockedStorage.getLinkMessage.mockResolvedValue({
+      ownerPubky: OWNER,
+      eventId: 'evt-blocked',
+      conversationId: `dm:${PEER}`,
+      peerPubky: PEER,
+      senderPubky: OWNER,
+      direction: 'sent',
+      kind: CHAT_MESSAGE_KIND,
+      rawJson: '{}',
+      body: 'hello',
+      sentAt: NOW,
+      receivedAt: null,
+      deliveryState: 'sending',
+    });
+    mockedNative.sendPrivateMessageJson.mockClear();
+
+    await LinkService.drainRetries();
+
+    expect(mockedNative.sendPrivateMessageJson).not.toHaveBeenCalled();
+    expect(mockedRetryQueue.recordSuccess).toHaveBeenCalledWith('q-blocked');
+    expect(mockedRetryQueue.defer).not.toHaveBeenCalled();
+    expect(mockedRetryQueue.recordFailure).not.toHaveBeenCalled();
+  });
+
+  it('stops remaining inbox probes when the owner switches mid-loop', async () => {
+    const OWNER_B = 'gcumbhd7sqit6nn457jxmrwqx9pyymqwamnarekgo3xppqo6a19o';
+    mockedNative.probeInboundLink.mockImplementation(async () => {
+      mockedNative.signinWithSecret.mockResolvedValue({
+        sessionAlias: 'session-b',
+        pubky: OWNER_B,
+      });
+      mockedKeyStore.getPubky.mockReturnValue(OWNER_B);
+      await LinkService.signinWithSecret('owner-b-secret');
+      return { result: 'established', linkId: 'inbound-switch', snapshot: 'est-in' };
+    });
+
+    await LinkService.syncInbox([PEER, OTHER]);
+
+    expect(mockedNative.probeInboundLink).toHaveBeenCalledTimes(1);
   });
 });

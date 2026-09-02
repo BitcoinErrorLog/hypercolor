@@ -178,7 +178,7 @@ type LiveHandle =
   | { status: 'established'; linkId: string }
   | { status: 'handshaking'; linkId: string; role: LinkRole };
 type SessionLookup = ActiveSession | { status: 'offline' } | null;
-type EnsureOutcome = LinkStatus | 'idle';
+type EnsureOutcome = LinkStatus | 'idle' | 'denied';
 
 /**
  * Why we are touching a link. Two independent policies hang off this, and
@@ -439,7 +439,7 @@ export const LinkService = {
     return withQueue(peerPubky, async () => {
       try {
         const outcome = await ensureLinkLocked(peerPubky, 'user', false);
-        return outcome === 'idle' ? 'error' : outcome;
+        return outcome === 'idle' || outcome === 'denied' ? 'error' : outcome;
       } catch (err) {
         if (isLinkNativeError(err) && err.code === 'unavailable') return 'native-missing';
         console.warn(`[LinkService] ensureLinkWith failed for ${peerPubky}:`, errorMessage(err));
@@ -817,12 +817,13 @@ export const LinkService = {
    * lands as a pending MESSAGE REQUEST until explicitly accepted.
    */
   async syncInbox(peers?: PubkyKey[]): Promise<LinkMessage[]> {
-    const ownerPubky = requireOwner();
-    const candidates = peers !== undefined ? peers : await collectInboxCandidates(ownerPubky);
+    const ownerAtStart = requireOwner();
+    const candidates = peers !== undefined ? peers : await collectInboxCandidates(ownerAtStart);
     const received: LinkMessage[] = [];
     for (const peerPubky of new Set(candidates)) {
+      if (!isCurrentOwner(ownerAtStart)) break;
       try {
-        const batch = await withQueue(peerPubky, () => syncPeerLocked(peerPubky));
+        const batch = await withQueue(peerPubky, () => syncPeerLocked(peerPubky, ownerAtStart));
         received.push(...batch);
       } catch (err) {
         console.warn(`[LinkService] Inbox sync failed for ${peerPubky}:`, errorMessage(err));
@@ -833,7 +834,7 @@ export const LinkService = {
     } catch (err) {
       console.warn('[LinkService] drainRetries after syncInbox failed:', errorMessage(err));
     }
-    notifyInboxSynced(ownerPubky);
+    notifyInboxSynced(ownerAtStart);
     return received;
   },
 
@@ -887,7 +888,7 @@ export const LinkService = {
         updatedAt: ts,
         status: 'accepted',
       });
-      return syncPeerLocked(peerPubky);
+      return syncPeerLocked(peerPubky, requireOwner());
     });
   },
 
@@ -1142,6 +1143,19 @@ function isUnusableReceiverAliasError(err: unknown): boolean {
 // ─── State machine internals ──────────────────────────────────────────────────
 
 /**
+ * Owner-scoped deny for Encrypted Link establishment. Every inbound and
+ * outbound path that creates or advances a link goes through
+ * {@link ensureLinkLocked}; this is the single choke so a leftover
+ * `handshaking` row after a failed block cannot be stepped by the ticker
+ * or used to deliver a queued payload.
+ */
+async function isPeerDenied(ownerPubky: PubkyKey, peerPubky: PubkyKey): Promise<boolean> {
+  if (FollowsImportSettings.isBlocked(ownerPubky, peerPubky)) return true;
+  const existingRequest = await StorageService.getMessageRequest(ownerPubky, peerPubky);
+  return existingRequest?.status === 'declined';
+}
+
+/**
  * Handshake abuse budget recovery policy, in one place so it cannot drift:
  *
  * A `user` intent clears the budget before any handshake work is dispatched, so
@@ -1167,6 +1181,7 @@ async function ensureLinkLocked(
   if (!isActiveSession(lookup)) return 'needs-enable';
   const activeSession = lookup;
   const ownerPubky = activeSession.pubky;
+  if (await isPeerDenied(ownerPubky, peerPubky)) return 'denied';
   const receiver = await StorageService.getLinkReceiver(ownerPubky);
   if (!receiver?.markerPublished) return 'needs-enable';
   const localPath = assertValidReceiverPath(coerceReceiverPath(receiver.receiverPath));
@@ -1878,11 +1893,13 @@ async function collectInboxCandidates(ownerPubky: PubkyKey): Promise<PubkyKey[]>
   const seen = new Set<string>();
   const out: PubkyKey[] = [];
   for (const contact of contacts) {
+    if (FollowsImportSettings.isBlocked(ownerPubky, contact.pubky)) continue;
     if (seen.has(contact.pubky)) continue;
     seen.add(contact.pubky);
     out.push(contact.pubky);
   }
   for (const link of links) {
+    if (FollowsImportSettings.isBlocked(ownerPubky, link.peerPubky)) continue;
     if (seen.has(link.peerPubky)) continue;
     seen.add(link.peerPubky);
     out.push(link.peerPubky);
@@ -2058,8 +2075,8 @@ function notifyInboxSynced(ownerPubky: PubkyKey): void {
   }
 }
 
-async function syncPeerLocked(peerPubky: PubkyKey): Promise<LinkMessage[]> {
-  const ownerPubky = requireOwner();
+async function syncPeerLocked(peerPubky: PubkyKey, ownerPubky: PubkyKey): Promise<LinkMessage[]> {
+  if (!isCurrentOwner(ownerPubky)) return [];
   if (FollowsImportSettings.isBlocked(ownerPubky, peerPubky)) {
     await rejectDeclinedInbound(ownerPubky, peerPubky);
     return [];
@@ -2288,6 +2305,11 @@ async function deliverQueuedPayload(
       }
       const dropped = await RetryQueue.recordFailure(item.id, item.attempts);
       if (dropped) await markFailed(payload);
+      return;
+    }
+
+    if (outcome === 'denied') {
+      await RetryQueue.recordSuccess(item.id);
       return;
     }
 

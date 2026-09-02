@@ -18,11 +18,13 @@ import {
   CONTACTS_BODY,
   CONTACTS_BRAND,
   CONTACTS_CANVAS,
+  CONTACTS_ERROR,
   CONTACTS_HAIRLINE,
   CONTACTS_MUTED,
   CONTACTS_RADIUS,
   MIN_TARGET,
 } from '../../../ui/contacts/tokens';
+import { CONTACTS_COPY } from '../../../ui/contacts/contactsCopy';
 import { contactPrimaryText, contactSecondaryText } from './contactIdentity';
 
 export const CONTACTS_EMPTY_TITLE = 'No contacts yet.';
@@ -43,6 +45,7 @@ export function ContactsScreenContent({
   contacts,
   suggestions,
   followsImportEnabled,
+  blockState = {},
   refreshing,
   importing,
   consentOpen,
@@ -68,6 +71,7 @@ export function ContactsScreenContent({
   contacts: Contact[];
   suggestions: Contact[];
   followsImportEnabled: boolean;
+  blockState?: Record<string, 'blocked' | 'cleanup-pending'>;
   refreshing: boolean;
   importing: boolean;
   consentOpen: boolean;
@@ -95,10 +99,11 @@ export function ContactsScreenContent({
       <ContactRow
         contact={item}
         followsImportEnabled={followsImportEnabled}
+        blockState={blockState[item.pubky]}
         onPress={() => onOpenContact(item.pubky)}
       />
     ),
-    [followsImportEnabled, onOpenContact],
+    [blockState, followsImportEnabled, onOpenContact],
   );
 
   const listHeader = (
@@ -186,6 +191,7 @@ export function ContactsScreenContent({
                 contact={item}
                 followsImportEnabled={followsImportEnabled}
                 suggestion
+                blockState={blockState[item.pubky]}
                 onPress={() => onOpenContact(item.pubky)}
               />
               <Pressable
@@ -300,16 +306,24 @@ function ContactRow({
   contact,
   followsImportEnabled,
   suggestion = false,
+  blockState,
   onPress,
 }: {
   contact: Contact;
   followsImportEnabled: boolean;
   suggestion?: boolean;
+  blockState?: 'blocked' | 'cleanup-pending' | undefined;
   onPress: () => void;
 }) {
   const primary = contactPrimaryText(contact);
   const secondary = contactSecondaryText(contact);
   const chips = relationshipChips(contact, followsImportEnabled);
+  const blockedLabel =
+    blockState === 'cleanup-pending'
+      ? CONTACTS_COPY.blockedCleanupPending
+      : blockState === 'blocked'
+        ? CONTACTS_COPY.blockedState
+        : null;
   return (
     <Pressable
       testID={suggestion ? 'suggestionContactRow' : 'contactRow'}
@@ -330,6 +344,11 @@ function ContactRow({
       <View style={styles.body}>
         <Text style={styles.name}>{primary}</Text>
         {secondary ? <Text style={styles.pubky}>{secondary}</Text> : null}
+        {blockedLabel ? (
+          <Text testID="contactRowBlockedState" style={styles.blockedState}>
+            {blockedLabel}
+          </Text>
+        ) : null}
         {chips.length > 0 ? (
           <View style={styles.badges}>
             {chips.map(badge => (
@@ -398,6 +417,7 @@ const styles = StyleSheet.create({
   body: { flex: 1, gap: 3 },
   name: { fontSize: 15, fontWeight: '600', color: CONTACTS_BODY },
   pubky: { fontSize: 13, color: CONTACTS_MUTED, fontFamily: 'monospace' },
+  blockedState: { fontSize: 13, color: CONTACTS_ERROR, fontWeight: '600' },
   badges: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 4 },
   badge: {
     backgroundColor: '#1f2937',
