@@ -106,4 +106,37 @@ describe('PaykitLinkNative contract', () => {
       /typeof PaykitLinkModule\.cancelAuthFlow !== 'function'[\s\S]*return Promise\.resolve\(\)/,
     );
   });
+
+  it('does not run boot reconcile from AppState active', () => {
+    const app = readFileSync(join(__dirname, '../../../../App.tsx'), 'utf8');
+    expect(app).toContain('reconcileAdoptedSessionsAtBoot');
+    expect(app).toMatch(/initKeyStore\(\)[\s\S]*reconcileAdoptedSessionsAtBoot/);
+    expect(app).toMatch(/state === 'active'[\s\S]*recoverAndDrain\(\)/);
+    const recoverStart = app.indexOf('const recoverAndDrain');
+    const recoverEnd = app.indexOf('const onAppState');
+    expect(recoverStart).toBeGreaterThan(-1);
+    expect(recoverEnd).toBeGreaterThan(recoverStart);
+    const recover = app.slice(recoverStart, recoverEnd);
+    expect(recover).toContain('restorePersistedSession');
+    expect(recover).not.toContain('reconcileAdoptedSessionsAtBoot');
+    expect(recover).not.toContain('reconcileAdoptedSessions');
+  });
+
+  it('gates the unavailable restore fallback and adoptHarnessSession on __DEV__', () => {
+    const link = readFileSync(join(__dirname, '../LinkService.ts'), 'utf8');
+    expect(link).toMatch(
+      /if \(__DEV__ && isLinkNativeError\(err\) && err\.code === 'unavailable'\)/,
+    );
+    expect(link).toMatch(
+      /if \(!__DEV__\) \{[\s\S]*adoptHarnessSession is disabled in release builds/,
+    );
+    expect(link).toContain('deleteLinkSessionIfAlias');
+    const restoreStart = link.indexOf('async restorePersistedSession');
+    const bootStart = link.indexOf('async reconcileAdoptedSessionsAtBoot');
+    expect(restoreStart).toBeGreaterThan(-1);
+    expect(bootStart).toBeGreaterThan(restoreStart);
+    const restoreFn = link.slice(restoreStart, bootStart);
+    expect(restoreFn).not.toContain('reconcileNativeSessions');
+    expect(restoreFn).not.toContain('reconcileAdoptedSessions');
+  });
 });

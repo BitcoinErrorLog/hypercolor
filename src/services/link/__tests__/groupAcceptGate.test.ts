@@ -168,6 +168,9 @@ jest.mock('../../KeyStore', () => ({
     getLinkSession: jest.fn(),
     setLinkSession: jest.fn(),
     deleteLinkSession: jest.fn(),
+    deleteLinkSessionIfAlias: jest.fn(),
+    isInitialized: jest.fn(() => true),
+    readLinkSession: jest.fn(() => ({ ok: true, alias: null })),
     setAttachmentSecret: jest.fn(),
     deleteAttachmentSecrets: jest.fn(),
   },
@@ -509,6 +512,19 @@ describe('group accept gate', () => {
     });
     mockedNative.receivePrivateMessages.mockResolvedValue({ messages: [], snapshot: 'est-in' });
     mockedKeyStore.getPubky.mockReturnValue(OWNER);
+    mockedKeyStore.isInitialized.mockReturnValue(true);
+    mockedKeyStore.getLinkSession.mockReturnValue(null);
+    mockedKeyStore.setLinkSession.mockImplementation((alias: string) => {
+      mockedKeyStore.getLinkSession.mockReturnValue(alias);
+    });
+    mockedKeyStore.deleteLinkSession.mockImplementation(() => {
+      mockedKeyStore.getLinkSession.mockReturnValue(null);
+    });
+    mockedKeyStore.deleteLinkSessionIfAlias.mockImplementation((alias: string) => {
+      if (mockedKeyStore.getLinkSession() !== alias) return false;
+      mockedKeyStore.deleteLinkSession();
+      return true;
+    });
     mockedRetryQueue.getDue.mockResolvedValue([]);
     wireInMemoryStorage();
 

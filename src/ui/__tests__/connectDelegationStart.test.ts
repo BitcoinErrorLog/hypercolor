@@ -1,5 +1,6 @@
 import {
   finishConnectDelegation,
+  isConnectDelegationInFlight,
   resetConnectDelegationForTests,
   subscribeConnectDelegationIdle,
   tryBeginConnectDelegation,
@@ -13,10 +14,12 @@ describe('connectDelegationStart', () => {
   it('does not let Welcome focus release an in-flight Awaiting token', () => {
     const awaitingToken = tryBeginConnectDelegation();
     expect(awaitingToken).not.toBeNull();
+    expect(isConnectDelegationInFlight()).toBe(true);
     expect(tryBeginConnectDelegation()).toBeNull();
     finishConnectDelegation(-1);
     expect(tryBeginConnectDelegation()).toBeNull();
     finishConnectDelegation(awaitingToken as number);
+    expect(isConnectDelegationInFlight()).toBe(false);
     expect(tryBeginConnectDelegation()).not.toBeNull();
   });
 

@@ -45,7 +45,9 @@ const LINK_SESSION_KEY = 'link_session';
 
 const MMKV_KEY_SERVICE = 'hypercolor-mmkv-encryption-key';
 let _store: MMKV | null = null;
-let _mmkvKeyPromise: Promise<string> | null = null;
+let _mmkvKeyPromise: Promise<void> | null = null;
+/** True only after `initKeyStore()` installed the encrypted MMKV instance. */
+let _initialized = false;
 
 /**
  * Derives a device-specific MMKV encryption key from the OS keychain.
@@ -93,10 +95,47 @@ function store(): MMKV {
  * Loads the device-specific MMKV encryption key from the keychain.
  */
 export async function initKeyStore(): Promise<void> {
-  if (_mmkvKeyPromise) return _mmkvKeyPromise.then(() => {});
-  _mmkvKeyPromise = getOrCreateMmkvKey();
-  const key = await _mmkvKeyPromise;
-  _store = createMMKV({ id: 'hypercolor-keystore', encryptionKey: key });
+  if (_initialized) return;
+  if (!_mmkvKeyPromise) {
+    _mmkvKeyPromise = (async () => {
+      const key = await getOrCreateMmkvKey();
+      _store = createMMKV({ id: 'hypercolor-keystore', encryptionKey: key });
+      _initialized = true;
+    })();
+  }
+  try {
+    await _mmkvKeyPromise;
+  } catch (err) {
+    _mmkvKeyPromise = null;
+    _initialized = false;
+    throw err;
+  }
+}
+
+/**
+ * True only after a successful {@link initKeyStore}. False for the
+ * unencrypted placeholder `store()` creates, a hang/timeout that never
+ * resolved init, or a rejected init. Do not infer this from a `null`
+ * `getLinkSession()` read — empty and unreadable are different.
+ */
+export function isInitialized(): boolean {
+  return _initialized;
+}
+
+export type LinkSessionRead = { ok: true; alias: string | null } | { ok: false };
+
+/**
+ * Distinguishes "encrypted store readable and empty" from "not
+ * initialised / unreadable". Never infers readiness from `null`.
+ */
+export function readLinkSession(): LinkSessionRead {
+  if (!_initialized || !_store) return { ok: false };
+  try {
+    const value = _store.getString(LINK_SESSION_KEY);
+    return { ok: true, alias: value ?? null };
+  } catch {
+    return { ok: false };
+  }
 }
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -243,15 +282,33 @@ export function getSessionSecret(): string | null {
 // ─── Link session alias (sync, MMKV — opaque native handle, not a bearer) ────
 
 export function setLinkSession(sessionAlias: string): void {
+  if (!_initialized) {
+    throw new Error('KeyStore.setLinkSession: encrypted store is not initialized');
+  }
   store().set(LINK_SESSION_KEY, sessionAlias);
 }
 
 export function getLinkSession(): string | null {
-  return store().getString(LINK_SESSION_KEY) ?? null;
+  const read = readLinkSession();
+  if (!read.ok) return null;
+  return read.alias;
 }
 
 export function deleteLinkSession(): void {
+  if (!_initialized) return;
   store().remove(LINK_SESSION_KEY);
+}
+
+/**
+ * Compare-and-delete the link-session slot. Returns true only when the
+ * stored alias matched and was removed. A different working alias is left
+ * untouched.
+ */
+export function deleteLinkSessionIfAlias(alias: string): boolean {
+  const read = readLinkSession();
+  if (!read.ok || read.alias !== alias) return false;
+  store().remove(LINK_SESSION_KEY);
+  return true;
 }
 
 // ─── Pending Ring handoff (OS Keychain — survives process death) ─────────────
@@ -541,6 +598,8 @@ export async function clear(): Promise<void> {
 export const KeyStore = {
   // Initialization
   initKeyStore,
+  isInitialized,
+  readLinkSession,
   // App keypair (delegated Ed25519)
   setAppKeypair,
   getAppKeypair,
@@ -555,6 +614,7 @@ export const KeyStore = {
   setLinkSession,
   getLinkSession,
   deleteLinkSession,
+  deleteLinkSessionIfAlias,
   setPendingRingHandoff,
   getPendingRingHandoff,
   getPendingRingHandoffExpiresAt,

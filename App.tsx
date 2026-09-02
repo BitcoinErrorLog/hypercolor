@@ -127,6 +127,11 @@ export default function App() {
     }, 4000);
     KeyStore.initKeyStore()
       .then(async () => {
+        try {
+          await LinkService.reconcileAdoptedSessionsAtBoot();
+        } catch {
+          // Boot reconcile is fail-closed; never log aliases or store contents.
+        }
         if (disposed || myEpoch !== initEpochRef.current) return;
         try {
           await hydratePersistedAuth();

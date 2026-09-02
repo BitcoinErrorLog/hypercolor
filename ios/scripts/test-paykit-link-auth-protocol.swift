@@ -44,7 +44,9 @@ enum PaykitLinkAuthProtocolTests {
         testSessionLookup()
         testPersistMarkerFirstAndRollback()
         testReconcileDeathWindows()
-        fputs("PaykitLinkAuthProtocol: 5 checks passed\n", stdout)
+        testQuarantineTwoSighting()
+        testQuarantineInFlightAndOwnedClear()
+        fputs("PaykitLinkAuthProtocol: 7 checks passed\n", stdout)
     }
 
     static func testKeyNamespacing() {
@@ -57,10 +59,20 @@ enum PaykitLinkAuthProtocolTests {
             PaykitLinkAuthProtocol.pendingAccount(alias) == "session.pending.\(alias)",
             "pending account"
         )
+        expect(
+            PaykitLinkAuthProtocol.quarantineAccount(alias) == "reconcile.quarantine.\(alias)",
+            "quarantine account is not the bearer"
+        )
+        expect(
+            PaykitLinkAuthProtocol.bootCounterAccount == "reconcile.boot",
+            "boot counter account"
+        )
         let accounts = [
             PaykitLinkAuthProtocol.sessionAccount(alias),
             PaykitLinkAuthProtocol.pendingAccount(alias),
             PaykitLinkAuthProtocol.sessionAccount("other"),
+            PaykitLinkAuthProtocol.quarantineAccount(alias),
+            PaykitLinkAuthProtocol.bootCounterAccount,
             "receiver.\(alias)",
         ]
         expect(
@@ -69,11 +81,16 @@ enum PaykitLinkAuthProtocolTests {
         )
         expect(
             PaykitLinkAuthProtocol.sessionAliases(fromAccounts: accounts) == [alias, "other"],
-            "session parse skips pending keys"
+            "session parse skips pending and reconcile keys"
         )
         expect(
             PaykitLinkAuthProtocol.sessionAlias(fromAccount: "session.pending.x") == nil,
             "pending key is not a session alias"
+        )
+        expect(
+            PaykitLinkAuthProtocol.quarantineAlias(fromAccount: PaykitLinkAuthProtocol.quarantineAccount(alias))
+                == alias,
+            "quarantine parse"
         )
     }
 
@@ -200,30 +217,129 @@ enum PaykitLinkAuthProtocolTests {
         let sessionAliases = PaykitLinkAuthProtocol.sessionAliases(fromAccounts: accounts)
         let pendingAliases = Set(PaykitLinkAuthProtocol.pendingAliases(fromAccounts: accounts))
 
-        // Death before adopt: marker+bearer, KeyStore empty → pending sweep
-        // collects; reconcile excludes pending.
         expect(pendingAliases.contains(pending), "death before adopt still pending")
-        let afterPendingSweep = pendingAliases
-        expect(afterPendingSweep.contains(pending), "pending leftover listed for sweep")
 
-        // Death between marker-delete and KeyStore write: bearer, no marker,
-        // KeyStore empty → boot reconcile collects.
-        let collected = PaykitLinkAuthProtocol.orphanAdoptedAliases(
+        let first = PaykitLinkAuthProtocol.reconcileDecisions(
             sessionAliases: sessionAliases,
             pendingAliases: pendingAliases,
-            knownAliases: []
+            inFlightAliases: [],
+            knownAliases: [],
+            quarantines: [:],
+            currentBoot: 1
         )
-        expect(collected.contains(orphan), "marker-less orphan collected")
-        expect(!collected.contains(pending), "pending excluded from adopted reconcile")
-        expect(collected.contains(kept), "unowned adopted also collected")
+        let firstByAlias = Dictionary(uniqueKeysWithValues: first.map { ($0.alias, $0.action) })
+        expect(firstByAlias[orphan] == .firstSighting, "first unowned sighting quarantines")
+        expect(firstByAlias[kept] == .firstSighting, "unowned adopted quarantined, not deleted")
+        expect(firstByAlias[pending] == .skipInFlight, "pending excluded from adopted reconcile")
+        expect(!first.contains(where: { $0.action == .subsequentDelete }), "first boot does not delete")
 
-        // Normal path: KeyStore names the adopted alias → nothing collected.
-        let normal = PaykitLinkAuthProtocol.orphanAdoptedAliases(
+        let encoded = PaykitLinkAuthProtocol.encodeQuarantine(
+            PaykitLinkAuthProtocol.QuarantineRecord(bootCounter: 1, quarantinedAtMs: 99)
+        )
+        expect(
+            PaykitLinkAuthProtocol.parseQuarantine(encoded)
+                == PaykitLinkAuthProtocol.QuarantineRecord(bootCounter: 1, quarantinedAtMs: 99),
+            "quarantine record round-trips"
+        )
+
+        let normal = PaykitLinkAuthProtocol.reconcileDecisions(
             sessionAliases: [kept],
             pendingAliases: [],
-            knownAliases: [kept]
+            inFlightAliases: [],
+            knownAliases: [kept],
+            quarantines: [:],
+            currentBoot: 1
         )
-        expect(normal.isEmpty, "normal path collects nothing")
+        expect(normal.isEmpty, "owned alias: no quarantine and no delete")
+    }
+
+    static func testQuarantineTwoSighting() {
+        expect(
+            PaykitLinkAuthProtocol.quarantineAction(
+                ownedByKeyStore: false,
+                inFlight: false,
+                existingQuarantineBoot: nil,
+                currentBoot: 1
+            ) == .firstSighting,
+            "first sighting"
+        )
+        expect(
+            PaykitLinkAuthProtocol.quarantineAction(
+                ownedByKeyStore: false,
+                inFlight: false,
+                existingQuarantineBoot: 1,
+                currentBoot: 2
+            ) == .subsequentDelete,
+            "second consecutive boot deletes"
+        )
+        expect(
+            PaykitLinkAuthProtocol.nextBootCounter(1) == 2,
+            "boot counter increments"
+        )
+        let second = PaykitLinkAuthProtocol.reconcileDecisions(
+            sessionAliases: ["orphan"],
+            pendingAliases: [],
+            inFlightAliases: [],
+            knownAliases: [],
+            quarantines: ["orphan": 1],
+            currentBoot: 2
+        )
+        expect(second == [PaykitLinkAuthProtocol.ReconcileDecision(alias: "orphan", action: .subsequentDelete)],
+               "second boot decision is delete")
+    }
+
+    static func testQuarantineInFlightAndOwnedClear() {
+        expect(
+            PaykitLinkAuthProtocol.quarantineAction(
+                ownedByKeyStore: false,
+                inFlight: true,
+                existingQuarantineBoot: nil,
+                currentBoot: 1
+            ) == .skipInFlight,
+            "in-flight excluded"
+        )
+        expect(
+            PaykitLinkAuthProtocol.quarantineAction(
+                ownedByKeyStore: true,
+                inFlight: false,
+                existingQuarantineBoot: 1,
+                currentBoot: 2
+            ) == .clearOwned,
+            "owned clears quarantine"
+        )
+        let skipped = PaykitLinkAuthProtocol.reconcileDecisions(
+            sessionAliases: ["inflight"],
+            pendingAliases: [],
+            inFlightAliases: ["inflight"],
+            knownAliases: [],
+            quarantines: [:],
+            currentBoot: 1
+        )
+        expect(
+            skipped == [PaykitLinkAuthProtocol.ReconcileDecision(alias: "inflight", action: .skipInFlight)],
+            "in-flight decision"
+        )
+        let cleared = PaykitLinkAuthProtocol.reconcileDecisions(
+            sessionAliases: ["kept"],
+            pendingAliases: [],
+            inFlightAliases: [],
+            knownAliases: ["kept"],
+            quarantines: ["kept": 1],
+            currentBoot: 2
+        )
+        expect(
+            cleared == [PaykitLinkAuthProtocol.ReconcileDecision(alias: "kept", action: .clearOwned)],
+            "owned-in-between clears"
+        )
+        let ownedNoPrior = PaykitLinkAuthProtocol.reconcileDecisions(
+            sessionAliases: ["kept"],
+            pendingAliases: [],
+            inFlightAliases: [],
+            knownAliases: ["kept"],
+            quarantines: [:],
+            currentBoot: 1
+        )
+        expect(ownedNoPrior.isEmpty, "owned with no quarantine is a no-op")
     }
 
     static func expect(_ condition: Bool, _ message: String) {

@@ -130,6 +130,14 @@ internal class AuthFlowCancelRegistry<T> {
 
     fun isPending(alias: String): Boolean = synchronized(lock) { pendingAliases.contains(alias) }
 
+    /**
+     * Session aliases that are still in-flight: pending (after persist,
+     * before adopt). Reserved/awaiting auth flows have no session alias
+     * until [beginPending]; after that they are in this set. Adopting is
+     * tracked by the module, not this registry.
+     */
+    fun inFlightSessionAliases(): Set<String> = synchronized(lock) { pendingAliases.toSet() }
+
     fun abandon(id: String): T? {
         synchronized(lock) {
             return slots.remove(id)?.flow

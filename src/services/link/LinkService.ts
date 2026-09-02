@@ -12,6 +12,7 @@ import { StorageService } from '../StorageService';
 import { KeyStore } from '../KeyStore';
 import { parsePubkyOwner, resolveHomeserverOrigin } from '../homeserverOrigin';
 import { RetryQueue } from '../RetryQueue';
+import { isConnectDelegationInFlight } from '../../ui/connectDelegationStart';
 import {
   RING_GRANT_CAPABILITIES,
   formatAuthFlowCapabilities,
@@ -210,6 +211,20 @@ let drainTimer: ReturnType<typeof setInterval> | null = null;
 let tickInFlight = false;
 let drainInFlight: Promise<void> | null = null;
 const inboxSyncListeners = new Set<(ownerPubky: PubkyKey) => void>();
+/** In-flight enable / persistThenAdopt / Connect generations. */
+let authCommitGenerations = 0;
+/** Latch: native boot reconcile runs at most once per JS process. */
+let bootReconcileDone = false;
+
+function beginAuthCommitGeneration(): () => void {
+  authCommitGenerations += 1;
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    authCommitGenerations -= 1;
+  };
+}
 
 export const LinkService = {
   // ── Session ───────────────────────────────────────────────────────────────
@@ -239,13 +254,17 @@ export const LinkService = {
     } catch {
       // Cleanup journal is best-effort; session restore still proceeds.
     }
-    try {
-      await reconcileNativeSessions();
-    } catch {
-      // Reconcile is best-effort; restore still proceeds.
-    }
     const lookup = await sessionOrRestore();
     return isActiveSession(lookup);
+  },
+
+  /**
+   * Once-per-process boot reconcile. Must run only after
+   * `initKeyStore()` has installed a real encrypted store — never from
+   * AppState `active`, never while enable/Connect is in flight.
+   */
+  async reconcileAdoptedSessionsAtBoot(): Promise<void> {
+    await reconcileNativeSessions();
   },
 
   hasSession(): boolean {
@@ -327,6 +346,12 @@ export const LinkService = {
    * other parties' live handles. Used to switch A/B/C on one process.
    */
   async adoptHarnessSession(sessionAlias: string, pubky: string): Promise<void> {
+    if (!__DEV__) {
+      throw createLinkNativeError(
+        'unavailable',
+        'adoptHarnessSession is disabled in release builds',
+      );
+    }
     const alias = sessionAlias.trim();
     const id = pubky.trim();
     if (alias.length === 0 || id.length === 0) {
@@ -365,57 +390,65 @@ export const LinkService = {
     if (!PaykitLinkNative.isAvailable()) {
       throw createLinkNativeError('unavailable', 'PaykitLinkModule native module is not available');
     }
-    const { flowId, authorizationUrl } = await PaykitLinkNative.startAuthFlow(
-      formatAuthFlowCapabilities(RING_GRANT_CAPABILITIES),
-    );
-    let cancelled = false;
-    const stopKeepalive = async () => {
-      try {
-        await PaykitLinkNative.stopAuthKeepalive(flowId);
-      } catch {
-        // Keepalive stop must not mask auth success, cancellation, or failure.
-      }
-    };
-    const cancelNativeFlow = async () => {
-      try {
-        await PaykitLinkNative.cancelAuthFlow(flowId);
-      } catch {
-        // Native cancel must not mask JS cancellation or a later enable().
-      }
-    };
-    return {
-      authorizationUrl,
-      cancel: () => {
-        cancelled = true;
-        void stopKeepalive();
-        void cancelNativeFlow();
-      },
-      releaseKeepalive: () => {
-        void stopKeepalive();
-      },
-      awaitEnabled: async () => {
+    const release = beginAuthCommitGeneration();
+    try {
+      const { flowId, authorizationUrl } = await PaykitLinkNative.startAuthFlow(
+        formatAuthFlowCapabilities(RING_GRANT_CAPABILITIES),
+      );
+      let cancelled = false;
+      const stopKeepalive = async () => {
         try {
-          if (cancelled) {
-            throw new Error('LinkService.enable: the messaging enable flow was cancelled');
-          }
-          const { sessionAlias, pubky } = await PaykitLinkNative.awaitAuthApproval(flowId);
-          if (cancelled) {
-            try {
-              await PaykitLinkNative.signOutSession(sessionAlias);
-            } catch {
-              // Detached flow: drop the unused session.
-            }
-            throw new Error('LinkService.enable: the messaging enable flow was cancelled');
-          }
-          await persistThenAdopt(sessionAlias);
-          KeyStore.setPubky(pubky);
-          session = { alias: sessionAlias, pubky };
-          return provisionReceiver(sessionAlias, pubky);
-        } finally {
-          await stopKeepalive();
+          await PaykitLinkNative.stopAuthKeepalive(flowId);
+        } catch {
+          // Keepalive stop must not mask auth success, cancellation, or failure.
         }
-      },
-    };
+      };
+      const cancelNativeFlow = async () => {
+        try {
+          await PaykitLinkNative.cancelAuthFlow(flowId);
+        } catch {
+          // Native cancel must not mask JS cancellation or a later enable().
+        }
+      };
+      return {
+        authorizationUrl,
+        cancel: () => {
+          cancelled = true;
+          release();
+          void stopKeepalive();
+          void cancelNativeFlow();
+        },
+        releaseKeepalive: () => {
+          void stopKeepalive();
+        },
+        awaitEnabled: async () => {
+          try {
+            if (cancelled) {
+              throw new Error('LinkService.enable: the messaging enable flow was cancelled');
+            }
+            const { sessionAlias, pubky } = await PaykitLinkNative.awaitAuthApproval(flowId);
+            if (cancelled) {
+              try {
+                await PaykitLinkNative.signOutSession(sessionAlias);
+              } catch {
+                // Detached flow: drop the unused session.
+              }
+              throw new Error('LinkService.enable: the messaging enable flow was cancelled');
+            }
+            await persistThenAdopt(sessionAlias);
+            KeyStore.setPubky(pubky);
+            session = { alias: sessionAlias, pubky };
+            return provisionReceiver(sessionAlias, pubky);
+          } finally {
+            release();
+            await stopKeepalive();
+          }
+        },
+      };
+    } catch (err) {
+      release();
+      throw err;
+    }
   },
 
   /**
@@ -1032,6 +1065,8 @@ export function resetLinkServiceHarnessState(): void {
   session = null;
   liveHandles.clear();
   queues.clear();
+  bootReconcileDone = false;
+  authCommitGenerations = 0;
 }
 
 // ─── Session internals ────────────────────────────────────────────────────────
@@ -1076,44 +1111,63 @@ function isActiveSession(lookup: SessionLookup): lookup is ActiveSession {
  * delete only). A valid bearer therefore cannot exist with neither a
  * pending marker nor a KeyStore reference.
  *
- * `adoptAuthSession` `unavailable` is the already-adopted / swept case.
- * Restore is consulted only then; `session()` refuses still-pending and
- * unknown aliases, so this cannot resurrect an orphan. Failure rolls
- * KeyStore back and signs the native alias out.
+ * Production enable/signin fail closed on `adoptAuthSession` `unavailable`
+ * (no silent restore). The restore fallback is `__DEV__`-only so a
+ * JS-only OTA against an older native binary cannot keep a KeyStore alias.
+ * Rollback is alias-scoped: never drop a different working alias.
  */
 async function persistThenAdopt(sessionAlias: string): Promise<void> {
-  KeyStore.setLinkSession(sessionAlias);
+  const release = beginAuthCommitGeneration();
   try {
-    await PaykitLinkNative.adoptAuthSession(sessionAlias);
-  } catch (err) {
-    if (isLinkNativeError(err) && err.code === 'unavailable') {
-      try {
-        await PaykitLinkNative.restoreSession(sessionAlias);
-        return;
-      } catch (restoreErr) {
-        KeyStore.deleteLinkSession();
-        try {
-          await PaykitLinkNative.signOutSession(sessionAlias);
-        } catch {
-          // Native may already have dropped the bearer.
-        }
-        throw restoreErr;
-      }
-    }
-    KeyStore.deleteLinkSession();
+    const previous = KeyStore.isInitialized() ? KeyStore.getLinkSession() : null;
+    KeyStore.setLinkSession(sessionAlias);
     try {
-      await PaykitLinkNative.signOutSession(sessionAlias);
-    } catch {
-      // Adopt failed: drop the unusable pending bearer.
+      await PaykitLinkNative.adoptAuthSession(sessionAlias);
+    } catch (err) {
+      if (__DEV__ && isLinkNativeError(err) && err.code === 'unavailable') {
+        try {
+          await PaykitLinkNative.restoreSession(sessionAlias);
+          return;
+        } catch (restoreErr) {
+          rollbackLinkSession(sessionAlias, previous);
+          try {
+            await PaykitLinkNative.signOutSession(sessionAlias);
+          } catch {
+            // Native may already have dropped the bearer.
+          }
+          throw restoreErr;
+        }
+      }
+      rollbackLinkSession(sessionAlias, previous);
+      try {
+        await PaykitLinkNative.signOutSession(sessionAlias);
+      } catch {
+        // Adopt failed: drop the unusable pending bearer.
+      }
+      throw err;
     }
-    throw err;
+  } finally {
+    release();
+  }
+}
+
+function rollbackLinkSession(sessionAlias: string, previous: string | null): void {
+  const deleted = KeyStore.deleteLinkSessionIfAlias(sessionAlias);
+  if (deleted && previous && previous !== sessionAlias) {
+    KeyStore.setLinkSession(previous);
   }
 }
 
 async function reconcileNativeSessions(): Promise<void> {
+  if (bootReconcileDone) return;
   if (!PaykitLinkNative.isAvailable()) return;
-  const known = KeyStore.getLinkSession();
-  await PaykitLinkNative.reconcileAdoptedSessions(known);
+  if (!KeyStore.isInitialized()) return;
+  if (authCommitGenerations > 0) return;
+  if (isConnectDelegationInFlight()) return;
+  const read = KeyStore.readLinkSession();
+  if (!read.ok) return;
+  bootReconcileDone = true;
+  await PaykitLinkNative.reconcileAdoptedSessions(read.alias);
 }
 
 // ─── Enable internals ─────────────────────────────────────────────────────────

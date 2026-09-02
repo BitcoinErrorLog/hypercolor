@@ -13,6 +13,10 @@ export function tryBeginConnectDelegation(): number | null {
   return owner;
 }
 
+export function isConnectDelegationInFlight(): boolean {
+  return owner != null;
+}
+
 export function finishConnectDelegation(token: number): void {
   if (owner === token) {
     owner = null;

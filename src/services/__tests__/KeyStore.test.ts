@@ -25,6 +25,7 @@ jest.mock('react-native-keychain', () => ({
 }));
 
 const mockCreateMMKVCalls: Array<{ id: string; encryptionKey?: string }> = [];
+const mockMmkvThrowOnGet = { current: false };
 
 jest.mock('react-native-mmkv', () => ({
   createMMKV: jest.fn((config: { id: string; encryptionKey?: string }) => {
@@ -34,7 +35,12 @@ jest.mock('react-native-mmkv', () => ({
       set: (key: string, value: string) => {
         data.set(key, value);
       },
-      getString: (key: string) => data.get(key),
+      getString: (key: string) => {
+        if (mockMmkvThrowOnGet.current) {
+          throw new Error('mmkv read failed');
+        }
+        return data.get(key);
+      },
       contains: (key: string) => data.has(key),
       remove: (key: string) => {
         data.delete(key);
@@ -71,6 +77,7 @@ describe('KeyStore MMKV encryption key', () => {
   beforeEach(() => {
     mockKeychainStore.clear();
     mockCreateMMKVCalls.length = 0;
+    mockMmkvThrowOnGet.current = false;
   });
 
   it('generates a 32-byte CSPRNG key, persists it in the keychain, and opens MMKV with it', async () => {
@@ -116,6 +123,7 @@ describe('KeyStore session and Ring pending', () => {
   beforeEach(() => {
     mockKeychainStore.clear();
     mockCreateMMKVCalls.length = 0;
+    mockMmkvThrowOnGet.current = false;
   });
 
   it('persists the pending Ring ephemeral SK and expiry in Keychain', async () => {
@@ -209,5 +217,61 @@ describe('KeyStore session and Ring pending', () => {
     await setAppKeypair({ secretKey: 'sk', publicKey: 'pk' });
     setPubky('pubky-owner');
     await expect(hasPersistedSession()).resolves.toBe(true);
+  });
+});
+
+describe('KeyStore link-session readiness', () => {
+  beforeEach(() => {
+    mockKeychainStore.clear();
+    mockCreateMMKVCalls.length = 0;
+    mockMmkvThrowOnGet.current = false;
+  });
+
+  it('isInitialized is false on the unencrypted placeholder and true only after init', async () => {
+    const ks = await freshKeyStore();
+    expect(ks.isInitialized()).toBe(false);
+    expect(ks.readLinkSession()).toEqual({ ok: false });
+    expect(ks.getLinkSession()).toBeNull();
+    expect(ks.deleteLinkSessionIfAlias('any')).toBe(false);
+    await expect(async () => ks.setLinkSession('alias-a')).rejects.toThrow(/not initialized/);
+
+    await ks.initKeyStore();
+    expect(ks.isInitialized()).toBe(true);
+    expect(ks.readLinkSession()).toEqual({ ok: true, alias: null });
+    expect(ks.getLinkSession()).toBeNull();
+  });
+
+  it('distinguishes empty from a readable alias and compare-and-deletes only a match', async () => {
+    const ks = await freshKeyStore();
+    await ks.initKeyStore();
+    ks.setLinkSession('alias-a');
+    expect(ks.readLinkSession()).toEqual({ ok: true, alias: 'alias-a' });
+    expect(ks.deleteLinkSessionIfAlias('alias-b')).toBe(false);
+    expect(ks.getLinkSession()).toBe('alias-a');
+    expect(ks.deleteLinkSessionIfAlias('alias-a')).toBe(true);
+    expect(ks.readLinkSession()).toEqual({ ok: true, alias: null });
+  });
+
+  it('treats a store read throw as unreadable, not empty', async () => {
+    const ks = await freshKeyStore();
+    await ks.initKeyStore();
+    ks.setLinkSession('alias-a');
+    mockMmkvThrowOnGet.current = true;
+    expect(ks.isInitialized()).toBe(true);
+    expect(ks.readLinkSession()).toEqual({ ok: false });
+    expect(ks.getLinkSession()).toBeNull();
+    expect(ks.deleteLinkSessionIfAlias('alias-a')).toBe(false);
+  });
+
+  it('stays uninitialized when init fails closed without a CSPRNG', async () => {
+    const restore = removeCsprng();
+    try {
+      const ks = await freshKeyStore();
+      await expect(ks.initKeyStore()).rejects.toThrow(/CSPRNG/);
+      expect(ks.isInitialized()).toBe(false);
+      expect(ks.readLinkSession()).toEqual({ ok: false });
+    } finally {
+      restore();
+    }
   });
 });

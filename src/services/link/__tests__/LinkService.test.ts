@@ -8,6 +8,7 @@ import {
   LINK_RETRY_TICK_PHASE_TIMEOUT_MS,
   LinkService,
   linkQueueEntryCountForTests,
+  resetLinkServiceHarnessState,
   startLinkRetryDrain,
 } from '../LinkService';
 import { PaykitLinkNative } from '../PaykitLinkNative';
@@ -36,6 +37,11 @@ import {
   ATTACHMENT_KEY_PLACEHOLDER,
   CHAT_ATTACHMENT_KIND,
 } from '../../../types/attachment';
+import {
+  finishConnectDelegation,
+  resetConnectDelegationForTests,
+  tryBeginConnectDelegation,
+} from '../../../ui/connectDelegationStart';
 
 jest.mock('../PaykitLinkNative', () => ({
   PaykitLinkNative: {
@@ -182,6 +188,9 @@ jest.mock('../../KeyStore', () => ({
     getLinkSession: jest.fn(),
     setLinkSession: jest.fn(),
     deleteLinkSession: jest.fn(),
+    deleteLinkSessionIfAlias: jest.fn(),
+    isInitialized: jest.fn(),
+    readLinkSession: jest.fn(),
     setAttachmentSecret: jest.fn(),
     getAttachmentSecret: jest.fn(),
     deleteAttachmentSecrets: jest.fn(),
@@ -396,6 +405,7 @@ describe('LinkService', () => {
     jest.resetAllMocks();
     jest.spyOn(Date, 'now').mockReturnValue(NOW);
     mockedUuid.mockReturnValueOnce(EVENT_ID).mockReturnValue(QUEUE_ID);
+    resetConnectDelegationForTests();
 
     mockedNative.isAvailable.mockReturnValue(true);
     mockedNative.signinWithSecret.mockResolvedValue({ sessionAlias: SESSION_ALIAS, pubky: OWNER });
@@ -412,6 +422,23 @@ describe('LinkService', () => {
       capabilitiesJson: '{}',
     });
     mockedKeyStore.getPubky.mockReturnValue(OWNER);
+    mockedKeyStore.isInitialized.mockReturnValue(true);
+    mockedKeyStore.getLinkSession.mockReturnValue(null);
+    mockedKeyStore.setLinkSession.mockImplementation((alias: string) => {
+      mockedKeyStore.getLinkSession.mockReturnValue(alias);
+    });
+    mockedKeyStore.deleteLinkSession.mockImplementation(() => {
+      mockedKeyStore.getLinkSession.mockReturnValue(null);
+    });
+    mockedKeyStore.readLinkSession.mockImplementation(() => ({
+      ok: true,
+      alias: mockedKeyStore.getLinkSession() ?? null,
+    }));
+    mockedKeyStore.deleteLinkSessionIfAlias.mockImplementation((alias: string) => {
+      if (mockedKeyStore.getLinkSession() !== alias) return false;
+      mockedKeyStore.deleteLinkSession();
+      return true;
+    });
     mockedStorage.getLinkReceiver.mockResolvedValue(receiverRow);
     mockedStorage.getLink.mockResolvedValue(null);
     mockedStorage.getAllLinks.mockResolvedValue([]);
@@ -469,13 +496,11 @@ describe('LinkService', () => {
       await LinkService.clearSession();
       mockedKeyStore.getLinkSession.mockReturnValue(SESSION_ALIAS);
       mockedNative.restoreSession.mockResolvedValue({ pubky: OWNER });
+      mockedNative.reconcileAdoptedSessions.mockClear();
 
       await expect(LinkService.restorePersistedSession()).resolves.toBe(true);
 
-      expect(mockedNative.reconcileAdoptedSessions).toHaveBeenCalledWith(SESSION_ALIAS);
-      const reconcileOrder = mockedNative.reconcileAdoptedSessions.mock.invocationCallOrder.at(-1)!;
-      const restoreOrder = mockedNative.restoreSession.mock.invocationCallOrder.at(-1)!;
-      expect(reconcileOrder).toBeLessThan(restoreOrder);
+      expect(mockedNative.reconcileAdoptedSessions).not.toHaveBeenCalled();
       expect(mockedNative.restoreSession).toHaveBeenCalledWith(SESSION_ALIAS);
     });
 
@@ -526,15 +551,89 @@ describe('LinkService', () => {
       await expect(LinkService.ensureLinkWith(PEER)).resolves.toBe('session-offline');
     });
 
-    it('reconciles native aliases against KeyStore on restore even when none is stored', async () => {
+    it('does not reconcile native aliases from restorePersistedSession', async () => {
       await LinkService.clearSession();
       mockedNative.reconcileAdoptedSessions.mockClear();
       mockedKeyStore.getLinkSession.mockReturnValue(null);
+      mockedKeyStore.readLinkSession.mockReturnValue({ ok: true, alias: null });
 
       await expect(LinkService.restorePersistedSession()).resolves.toBe(false);
 
-      expect(mockedNative.reconcileAdoptedSessions).toHaveBeenCalledWith(null);
+      expect(mockedNative.reconcileAdoptedSessions).not.toHaveBeenCalled();
       expect(mockedNative.restoreSession).not.toHaveBeenCalled();
+    });
+
+    it('boot-reconciles a ready empty KeyStore without treating unread as empty', async () => {
+      resetLinkServiceHarnessState();
+      mockedNative.reconcileAdoptedSessions.mockClear();
+      mockedKeyStore.isInitialized.mockReturnValue(true);
+      mockedKeyStore.readLinkSession.mockReturnValue({ ok: true, alias: null });
+
+      await LinkService.reconcileAdoptedSessionsAtBoot();
+
+      expect(mockedNative.reconcileAdoptedSessions).toHaveBeenCalledWith(null);
+    });
+
+    it('does not boot-reconcile when KeyStore is the unencrypted placeholder or timed out', async () => {
+      resetLinkServiceHarnessState();
+      mockedNative.reconcileAdoptedSessions.mockClear();
+      mockedKeyStore.isInitialized.mockReturnValue(false);
+      mockedKeyStore.readLinkSession.mockReturnValue({ ok: false });
+
+      await LinkService.reconcileAdoptedSessionsAtBoot();
+
+      expect(mockedNative.reconcileAdoptedSessions).not.toHaveBeenCalled();
+    });
+
+    it('does not boot-reconcile when KeyStore read fails', async () => {
+      resetLinkServiceHarnessState();
+      mockedNative.reconcileAdoptedSessions.mockClear();
+      mockedKeyStore.isInitialized.mockReturnValue(true);
+      mockedKeyStore.readLinkSession.mockReturnValue({ ok: false });
+
+      await LinkService.reconcileAdoptedSessionsAtBoot();
+
+      expect(mockedNative.reconcileAdoptedSessions).not.toHaveBeenCalled();
+    });
+
+    it('skips boot reconcile while an enable generation is in flight', async () => {
+      resetLinkServiceHarnessState();
+      mockedKeyStore.isInitialized.mockReturnValue(true);
+      mockedKeyStore.readLinkSession.mockReturnValue({ ok: true, alias: null });
+      mockedNative.startAuthFlow.mockResolvedValue({
+        flowId: 'flow-boot',
+        authorizationUrl: 'pubkyauth://grant',
+      });
+
+      const flow = await LinkService.enable();
+      mockedNative.reconcileAdoptedSessions.mockClear();
+      await LinkService.reconcileAdoptedSessionsAtBoot();
+      expect(mockedNative.reconcileAdoptedSessions).not.toHaveBeenCalled();
+      flow.cancel();
+    });
+
+    it('skips boot reconcile while Connect delegation is in flight', async () => {
+      resetLinkServiceHarnessState();
+      mockedKeyStore.isInitialized.mockReturnValue(true);
+      mockedKeyStore.readLinkSession.mockReturnValue({ ok: true, alias: null });
+      const token = tryBeginConnectDelegation();
+      expect(token).not.toBeNull();
+      mockedNative.reconcileAdoptedSessions.mockClear();
+      await LinkService.reconcileAdoptedSessionsAtBoot();
+      expect(mockedNative.reconcileAdoptedSessions).not.toHaveBeenCalled();
+      finishConnectDelegation(token as number);
+      await LinkService.reconcileAdoptedSessionsAtBoot();
+      expect(mockedNative.reconcileAdoptedSessions).toHaveBeenCalledWith(null);
+    });
+
+    it('latches boot reconcile so a second call in the same process is a no-op', async () => {
+      resetLinkServiceHarnessState();
+      mockedKeyStore.isInitialized.mockReturnValue(true);
+      mockedKeyStore.readLinkSession.mockReturnValue({ ok: true, alias: SESSION_ALIAS });
+      mockedNative.reconcileAdoptedSessions.mockClear();
+      await LinkService.reconcileAdoptedSessionsAtBoot();
+      await LinkService.reconcileAdoptedSessionsAtBoot();
+      expect(mockedNative.reconcileAdoptedSessions).toHaveBeenCalledTimes(1);
     });
 
     it('does not keep KeyStore when adoptHarnessSession restore refuses a pending alias', async () => {
@@ -584,6 +683,27 @@ describe('LinkService', () => {
       expect(mockedKeyStore.deleteLinkSession).toHaveBeenCalled();
       expect(mockedKeyStore.setPubky).not.toHaveBeenCalled();
       expect(LinkService.hasSession()).toBe(false);
+    });
+
+    it('adoptHarnessSession is inert in production builds', async () => {
+      const prior = (globalThis as unknown as { __DEV__: boolean }).__DEV__;
+      (globalThis as unknown as { __DEV__: boolean }).__DEV__ = false;
+      try {
+        await LinkService.clearSession();
+        mockedNative.adoptAuthSession.mockClear();
+        mockedKeyStore.setLinkSession.mockClear();
+        mockedKeyStore.setPubky.mockClear();
+        await expect(LinkService.adoptHarnessSession(SESSION_ALIAS, OWNER)).rejects.toEqual({
+          code: 'unavailable',
+          message: 'adoptHarnessSession is disabled in release builds',
+        });
+        expect(mockedNative.adoptAuthSession).not.toHaveBeenCalled();
+        expect(mockedKeyStore.setLinkSession).not.toHaveBeenCalled();
+        expect(mockedKeyStore.setPubky).not.toHaveBeenCalled();
+        expect(LinkService.hasSession()).toBe(false);
+      } finally {
+        (globalThis as unknown as { __DEV__: boolean }).__DEV__ = prior;
+      }
     });
   });
 
@@ -672,6 +792,70 @@ describe('LinkService', () => {
       expect(mockedKeyStore.setPubky).not.toHaveBeenCalled();
       expect(mockedNative.signOutSession).toHaveBeenCalledWith('alias-orphan');
       expect(mockedNative.publishReceiverMarker).not.toHaveBeenCalled();
+    });
+
+    it('does not restore on adopt unavailable when __DEV__ is false', async () => {
+      const prior = (globalThis as unknown as { __DEV__: boolean }).__DEV__;
+      (globalThis as unknown as { __DEV__: boolean }).__DEV__ = false;
+      try {
+        mockedKeyStore.setLinkSession.mockClear();
+        mockedKeyStore.deleteLinkSession.mockClear();
+        mockedKeyStore.setPubky.mockClear();
+        mockedNative.signOutSession.mockClear();
+        mockedNative.restoreSession.mockClear();
+        mockedNative.startAuthFlow.mockResolvedValue({
+          flowId: 'flow-prod',
+          authorizationUrl: 'pubkyauth://grant',
+        });
+        mockedNative.awaitAuthApproval.mockResolvedValue({
+          sessionAlias: 'alias-orphan',
+          pubky: OWNER,
+        });
+        mockedNative.adoptAuthSession.mockRejectedValue({
+          code: 'unavailable',
+          message: 'unavailable',
+        });
+
+        const flow = await LinkService.enable();
+        await expect(flow.awaitEnabled()).rejects.toEqual({
+          code: 'unavailable',
+          message: 'unavailable',
+        });
+        expect(mockedNative.restoreSession).not.toHaveBeenCalled();
+        expect(mockedKeyStore.deleteLinkSession).toHaveBeenCalled();
+        expect(mockedKeyStore.setPubky).not.toHaveBeenCalled();
+        expect(mockedNative.signOutSession).toHaveBeenCalledWith('alias-orphan');
+      } finally {
+        (globalThis as unknown as { __DEV__: boolean }).__DEV__ = prior;
+      }
+    });
+
+    it('does not drop a different working KeyStore alias on adopt failure', async () => {
+      await LinkService.clearSession();
+      mockedKeyStore.getLinkSession.mockReturnValue('working-alias');
+      mockedKeyStore.setLinkSession.mockImplementation((alias: string) => {
+        mockedKeyStore.getLinkSession.mockReturnValue(alias);
+      });
+      mockedKeyStore.deleteLinkSession.mockImplementation(() => {
+        mockedKeyStore.getLinkSession.mockReturnValue(null);
+      });
+      mockedKeyStore.setPubky.mockClear();
+      mockedNative.signinWithSecret.mockResolvedValue({
+        sessionAlias: 'new-alias',
+        pubky: OWNER,
+      });
+      mockedNative.adoptAuthSession.mockRejectedValue({
+        code: 'protocol',
+        message: 'fail',
+      });
+
+      await expect(LinkService.signinWithSecret('secret')).rejects.toEqual({
+        code: 'protocol',
+        message: 'fail',
+      });
+      expect(mockedKeyStore.getLinkSession()).toBe('working-alias');
+      expect(mockedKeyStore.setLinkSession).toHaveBeenCalledWith('working-alias');
+      expect(mockedKeyStore.setPubky).not.toHaveBeenCalled();
     });
 
     it('reuses an existing receiver alias instead of generating a new key', async () => {

@@ -63,6 +63,8 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
      * when a lock-taking sweep ran inside `awaitAuthApproval`.
      */
     private val pendingIo = Any()
+    /** Aliases inside [adoptAuthSession] after pending is dropped. */
+    private val adoptingAliases = HashSet<String>()
     private var client: ChatClient? = null
     private val sessions = ConcurrentHashMap<String, ChatSession>()
     private val flows = AuthFlowCancelRegistry<ChatAuthFlow>()
@@ -283,19 +285,30 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
     fun adoptAuthSession(sessionAlias: String, promise: Promise) {
         launch(promise) {
             val alias = requireText(sessionAlias, "sessionAlias")
-            if (!flows.adoptPending(alias)) {
-                throw PaykitLinkBridgeError("unavailable", staticMessage("unavailable"))
-            }
             synchronized(pendingIo) {
-                store.clearPendingMarker(alias)
+                adoptingAliases.add(alias)
             }
-            promise.resolve(null)
+            try {
+                if (!flows.adoptPending(alias)) {
+                    throw PaykitLinkBridgeError("unavailable", staticMessage("unavailable"))
+                }
+                synchronized(pendingIo) {
+                    store.clearPendingMarker(alias)
+                }
+                promise.resolve(null)
+            } finally {
+                synchronized(pendingIo) {
+                    adoptingAliases.remove(alias)
+                }
+            }
         }
     }
 
     /**
-     * Boot reconcile: delete adopted bearers KeyStore does not name.
-     * Still-pending aliases are excluded.
+     * Boot reconcile (keystore-ready only, once per JS process): two-sighting
+     * quarantine of adopted bearers KeyStore does not name. In-flight
+     * pending/adopting aliases are excluded. Reserved/awaiting flows have
+     * no session alias until persist.
      */
     @ReactMethod
     fun reconcileAdoptedSessions(knownSessionAlias: String?, promise: Promise) {
@@ -303,7 +316,14 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
             val named = knownSessionAlias?.trim().orEmpty()
             val known = if (named.isEmpty()) emptySet() else setOf(named)
             synchronized(pendingIo) {
-                PaykitLinkDurableReconcile.collectUnreferencedAdopted(store, known) { sessions.remove(it) }
+                val inFlight = HashSet(flows.inFlightSessionAliases())
+                inFlight.addAll(adoptingAliases)
+                PaykitLinkDurableReconcile.reconcileUnreferencedAdopted(
+                    store,
+                    known,
+                    inFlight,
+                    System.currentTimeMillis(),
+                ) { sessions.remove(it) }
             }
             promise.resolve(null)
         }
@@ -1235,6 +1255,7 @@ private class PaykitLinkStore(context: Context) : PaykitLinkSessionCatalog {
         commitEdits { editor ->
             editor.remove(sessionKey(alias))
             editor.remove(sessionPendingKey(alias))
+            editor.remove(PaykitLinkSessionKeys.quarantineKey(alias))
         }
     }
 
@@ -1252,6 +1273,39 @@ private class PaykitLinkStore(context: Context) : PaykitLinkSessionCatalog {
 
     override fun listSessionAliases(): List<String> {
         return prefs.all.keys.mapNotNull { PaykitLinkSessionKeys.sessionAliasFromKey(it) }
+    }
+
+    override fun getBootCounter(): Long {
+        val raw = getString(PaykitLinkSessionKeys.BOOT_COUNTER_KEY) ?: return 0L
+        return raw.toLongOrNull() ?: 0L
+    }
+
+    override fun setBootCounter(value: Long) {
+        putCommitted(PaykitLinkSessionKeys.BOOT_COUNTER_KEY, value.toString())
+    }
+
+    override fun getQuarantine(alias: String): PaykitLinkQuarantineRecord? {
+        val raw = getString(PaykitLinkSessionKeys.quarantineKey(alias)) ?: return null
+        return PaykitLinkSessionKeys.parseQuarantine(raw)
+    }
+
+    override fun putQuarantine(alias: String, record: PaykitLinkQuarantineRecord) {
+        putCommitted(PaykitLinkSessionKeys.quarantineKey(alias), PaykitLinkSessionKeys.formatQuarantine(record))
+    }
+
+    override fun clearQuarantine(alias: String) {
+        commitEdits { editor ->
+            editor.remove(PaykitLinkSessionKeys.quarantineKey(alias))
+        }
+    }
+
+    private fun putCommitted(key: String, value: String) {
+        commitEdits { editor ->
+            editor.putString(
+                key,
+                wrap(value.toByteArray(StandardCharsets.UTF_8), key.toByteArray(StandardCharsets.UTF_8)),
+            )
+        }
     }
 
     fun getString(key: String): String? {
