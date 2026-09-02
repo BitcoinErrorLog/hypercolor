@@ -26,6 +26,12 @@ const OWNER = 'operrr8wsbpr3ue9d4qj41ge1kcc6r7fdiy6o3ugjrrhi4y77rdo';
 const ALICE = 'pxnu33x7jtpx9ar1ytsi4yxbp6a5o36gwhffs8zoxmbuptici1jy';
 const BOB = 'kyp7qac797z86bngq9g3ajqbrsgsb3tibayndqi6fe4cqi3gb6ry';
 const CARA = 'uds5oirjz5uocsyixua8zzwc9b3ix99e1ia93cusy5q6kwqwpcqo';
+const OWNER_B = 'gcumbhd7sqit6nn457jxmrwqx9pyymqwamnarekgo3xppqo6a19o';
+
+const consentOn = {
+  isFollowsImportEnabled: () => true,
+  setFollowsImportEnabled: jest.fn(),
+};
 
 function ok<T>(value: T): NexusResult<T> {
   return { ok: true, value };
@@ -85,6 +91,14 @@ function makeStorage(seed: Contact[] = []) {
         if (!row.addedManually) rows.delete(key);
       }
     }),
+    reconcileFollowSuggestions: jest.fn(async (_owner: PubkyKey, followees: PubkyKey[]) => {
+      const keep = new Set(followees);
+      for (const [key, row] of [...rows.entries()]) {
+        if (keep.has(key)) continue;
+        if (!row.addedManually) rows.delete(key);
+        else rows.set(key, { ...row, isFollowing: false, isMutual: false });
+      }
+    }),
   };
 }
 
@@ -123,6 +137,7 @@ describe('ContactsService.importFollows', () => {
       getHomeserver: async () => 'https://hs',
       nexus: makeNexus(),
       storage,
+      ...consentOn,
     });
 
     const result = await service.importFollows(OWNER);
@@ -161,6 +176,7 @@ describe('ContactsService.importFollows', () => {
       getHomeserver: async () => null,
       nexus: makeNexus(),
       storage,
+      ...consentOn,
     });
 
     await expect(service.importFollows(OWNER)).resolves.toEqual({
@@ -197,6 +213,7 @@ describe('ContactsService.syncRelationships', () => {
       getHomeserver: async () => null,
       nexus,
       storage,
+      ...consentOn,
     });
 
     const result = await service.syncRelationships(OWNER);
@@ -239,6 +256,7 @@ describe('ContactsService.syncRelationships', () => {
         friends: jest.fn(async () => http404()),
       }),
       storage,
+      ...consentOn,
     });
 
     const result = await service.syncRelationships(OWNER);
@@ -278,6 +296,7 @@ describe('ContactsService.syncRelationships', () => {
       getHomeserver: async () => null,
       nexus,
       storage,
+      ...consentOn,
     });
 
     const result = await service.syncRelationships(OWNER);
@@ -312,6 +331,7 @@ describe('ContactsService.syncRelationships', () => {
         friends: jest.fn(async () => ok([])),
       }),
       storage,
+      ...consentOn,
     });
 
     await service.syncRelationships(OWNER);
@@ -328,6 +348,7 @@ describe('ContactsService.importFollows failures', () => {
       getHomeserver: async () => null,
       nexus: makeNexus(),
       storage,
+      ...consentOn,
     });
 
     await expect(service.importFollows(OWNER)).resolves.toEqual({
@@ -353,6 +374,7 @@ function baseDeps(overrides: Partial<Parameters<typeof createContactsService>[0]
       getHomeserver: async () => 'https://hs',
       get: async () => '{"created_at":1}',
       isBlocked: () => false,
+      ...consentOn,
       ...overrides,
       nexus,
       storage,
@@ -369,9 +391,9 @@ describe('ContactsService.refreshFollowsIfEnabled', () => {
       }),
     );
     const nexus = makeNexus();
-    const { service } = baseDeps({ list, nexus });
+    const { service } = baseDeps({ list, nexus, isFollowsImportEnabled: () => false });
 
-    const result = await service.refreshFollowsIfEnabled(OWNER, false);
+    const result = await service.refreshFollowsIfEnabled(OWNER);
 
     expect(result).toEqual({
       skipped: true,
@@ -379,6 +401,23 @@ describe('ContactsService.refreshFollowsIfEnabled', () => {
       followees: [],
       usedNexusFallback: false,
     });
+    expect(list).not.toHaveBeenCalled();
+    expect(nexus.following).not.toHaveBeenCalled();
+    expect(nexus.followers).not.toHaveBeenCalled();
+    expect(nexus.friends).not.toHaveBeenCalled();
+  });
+
+  it('ignores a caller who would force an import while consent is off', async () => {
+    const list = jest.fn(
+      async (): Promise<{ ok: true; urls: string[] }> => ({
+        ok: true,
+        urls: [`pubky://${OWNER}/pub/pubky.app/follows/${ALICE}`],
+      }),
+    );
+    const nexus = makeNexus();
+    const { service } = baseDeps({ list, nexus, isFollowsImportEnabled: () => false });
+    const result = await service.refreshFollowsIfEnabled(OWNER);
+    expect(result.skipped).toBe(true);
     expect(list).not.toHaveBeenCalled();
     expect(nexus.following).not.toHaveBeenCalled();
     expect(nexus.followers).not.toHaveBeenCalled();
@@ -393,7 +432,7 @@ describe('ContactsService.refreshFollowsIfEnabled', () => {
     const nexus = makeNexus();
     const { service } = baseDeps({ list, nexus });
 
-    const result = await service.refreshFollowsIfEnabled(OWNER, true);
+    const result = await service.refreshFollowsIfEnabled(OWNER);
 
     expect(result.skipped).toBe(false);
     if (!result.skipped) {
@@ -401,6 +440,33 @@ describe('ContactsService.refreshFollowsIfEnabled', () => {
       if (result.ok) expect(result.imported).toBe(1);
     }
     expect(list).toHaveBeenCalled();
+    expect(nexus.following).not.toHaveBeenCalled();
+    expect(nexus.followers).not.toHaveBeenCalled();
+    expect(nexus.friends).not.toHaveBeenCalled();
+  });
+
+  it('does not read owner B follows or Nexus after owner A consented', async () => {
+    const enabled = new Map<string, boolean>([[OWNER, true]]);
+    const list = jest.fn(async (url: string) => ({
+      ok: true as const,
+      urls: url.includes(OWNER) ? [`pubky://${OWNER}/pub/pubky.app/follows/${ALICE}`] : [],
+    }));
+    const nexus = makeNexus();
+    const { service } = baseDeps({
+      list,
+      nexus,
+      isFollowsImportEnabled: owner => enabled.get(owner) === true,
+    });
+
+    await service.refreshFollowsIfEnabled(OWNER);
+    list.mockClear();
+    (nexus.following as jest.Mock).mockClear();
+    (nexus.followers as jest.Mock).mockClear();
+    (nexus.friends as jest.Mock).mockClear();
+
+    const result = await service.refreshFollowsIfEnabled(OWNER_B);
+    expect(result.skipped).toBe(true);
+    expect(list).not.toHaveBeenCalled();
     expect(nexus.following).not.toHaveBeenCalled();
     expect(nexus.followers).not.toHaveBeenCalled();
     expect(nexus.friends).not.toHaveBeenCalled();
@@ -429,6 +495,7 @@ describe('ContactsService.importFollowsWithNexusFallback', () => {
     expect(nexus.friends).not.toHaveBeenCalled();
     expect(storage.rows.get(ALICE)?.isFollowing).toBe(true);
     expect(storage.rows.get(BOB)).toBeUndefined();
+    expect(storage.reconcileFollowSuggestions).not.toHaveBeenCalled();
   });
 });
 
@@ -538,5 +605,195 @@ describe('ContactsService.stopUsingFollows', () => {
         isMutual: false,
       }),
     );
+  });
+
+  it('flips consent off before deleting suggestions', async () => {
+    const order: string[] = [];
+    const storage = makeStorage([
+      {
+        pubky: BOB,
+        ownerPubky: OWNER,
+        trustScore: 0,
+        isFollowing: true,
+        isFollower: false,
+        isMutual: false,
+        addedManually: false,
+        firstSeenAt: 1,
+      },
+    ]);
+    storage.deleteFollowSuggestions = jest.fn(async () => {
+      order.push('delete');
+      for (const [key, row] of [...storage.rows.entries()]) {
+        if (!row.addedManually) storage.rows.delete(key);
+      }
+    });
+    const setFollowsImportEnabled = jest.fn((_owner: string, enabled: boolean) => {
+      order.push(enabled ? 'on' : 'off');
+    });
+    const { service } = baseDeps({ storage, setFollowsImportEnabled });
+    await service.stopUsingFollows(OWNER);
+    expect(order[0]).toBe('off');
+    expect(order).toContain('delete');
+    expect(order.indexOf('off')).toBeLessThan(order.indexOf('delete'));
+  });
+
+  it('still flips consent off when suggestion deletion fails', async () => {
+    const storage = makeStorage();
+    storage.deleteFollowSuggestions = jest.fn(async () => {
+      throw new Error('sqlite locked');
+    });
+    const setFollowsImportEnabled = jest.fn();
+    const { service } = baseDeps({ storage, setFollowsImportEnabled });
+    await expect(service.stopUsingFollows(OWNER)).rejects.toThrow(/Could not stop using follows/);
+    expect(setFollowsImportEnabled).toHaveBeenCalledWith(OWNER, false);
+  });
+
+  it('discards an in-flight import that finishes after stop', async () => {
+    let releaseList!: () => void;
+    const listBarrier = new Promise<void>(resolve => {
+      releaseList = resolve;
+    });
+    let markListed!: () => void;
+    const listed = new Promise<void>(resolve => {
+      markListed = resolve;
+    });
+    const list = jest.fn(async () => {
+      markListed();
+      await listBarrier;
+      return {
+        ok: true as const,
+        urls: [`pubky://${OWNER}/pub/pubky.app/follows/${ALICE}`],
+      };
+    });
+    const storage = makeStorage();
+    let enabled = true;
+    const { service } = baseDeps({
+      list,
+      storage,
+      isFollowsImportEnabled: () => enabled,
+      setFollowsImportEnabled: () => {
+        enabled = false;
+      },
+    });
+
+    const importP = service.importFollowsWithNexusFallback(OWNER);
+    await listed;
+    await service.stopUsingFollows(OWNER);
+    releaseList();
+    const result = await importP;
+    expect(result.ok).toBe(false);
+    expect(storage.rows.get(ALICE)).toBeUndefined();
+    expect(storage.upsertContact).not.toHaveBeenCalled();
+  });
+});
+
+describe('ContactsService privacy gates', () => {
+  it('does not list follows or call Nexus from importFollows when consent is off', async () => {
+    const list = jest.fn(async () => ({
+      ok: true as const,
+      urls: [`pubky://${OWNER}/pub/pubky.app/follows/${ALICE}`],
+    }));
+    const nexus = makeNexus();
+    const { service } = baseDeps({ list, nexus, isFollowsImportEnabled: () => false });
+    const result = await service.importFollows(OWNER);
+    expect(result.ok).toBe(false);
+    expect(list).not.toHaveBeenCalled();
+    expect(nexus.following).not.toHaveBeenCalled();
+    expect(nexus.followers).not.toHaveBeenCalled();
+    expect(nexus.friends).not.toHaveBeenCalled();
+  });
+
+  it('does not call Nexus from syncRelationships when consent is off', async () => {
+    const nexus = makeNexus();
+    const { service } = baseDeps({ nexus, isFollowsImportEnabled: () => false });
+    const result = await service.syncRelationships(OWNER);
+    expect(result).toEqual({
+      following: 0,
+      followers: 0,
+      friends: 0,
+      nexusReachable: false,
+      nexusError: 'Follows import is off.',
+    });
+    expect(nexus.following).not.toHaveBeenCalled();
+    expect(nexus.followers).not.toHaveBeenCalled();
+    expect(nexus.friends).not.toHaveBeenCalled();
+  });
+
+  it('does not call Nexus following from the fallback importer when consent is off', async () => {
+    const list = jest.fn(async () => ({ ok: false as const, message: 'homeserver timeout' }));
+    const nexus = makeNexus();
+    const { service } = baseDeps({ list, nexus, isFollowsImportEnabled: () => false });
+    await service.importFollowsWithNexusFallback(OWNER);
+    expect(list).not.toHaveBeenCalled();
+    expect(nexus.following).not.toHaveBeenCalled();
+    expect(nexus.followers).not.toHaveBeenCalled();
+    expect(nexus.friends).not.toHaveBeenCalled();
+  });
+});
+
+describe('ContactsService authoritative follows refresh', () => {
+  it('removes stale follow suggestions after a complete homeserver listing', async () => {
+    const storage = makeStorage([
+      {
+        pubky: BOB,
+        ownerPubky: OWNER,
+        trustScore: 0,
+        isFollowing: true,
+        isFollower: false,
+        isMutual: false,
+        addedManually: false,
+        firstSeenAt: 1,
+      },
+      {
+        pubky: CARA,
+        ownerPubky: OWNER,
+        trustScore: 0,
+        isFollowing: true,
+        isFollower: false,
+        isMutual: true,
+        addedManually: true,
+        firstSeenAt: 1,
+      },
+    ]);
+    const { service } = baseDeps({
+      storage,
+      list: async () => ({
+        ok: true as const,
+        urls: [`pubky://${OWNER}/pub/pubky.app/follows/${ALICE}`],
+      }),
+    });
+    const result = await service.importFollows(OWNER);
+    expect(result.ok).toBe(true);
+    expect(storage.rows.get(ALICE)?.isFollowing).toBe(true);
+    expect(storage.rows.get(BOB)).toBeUndefined();
+    expect(storage.rows.get(CARA)).toEqual(
+      expect.objectContaining({
+        addedManually: true,
+        isFollowing: false,
+        isMutual: false,
+      }),
+    );
+  });
+
+  it('does not prune on a failed homeserver listing', async () => {
+    const storage = makeStorage([
+      {
+        pubky: BOB,
+        ownerPubky: OWNER,
+        trustScore: 0,
+        isFollowing: true,
+        isFollower: false,
+        isMutual: false,
+        addedManually: false,
+        firstSeenAt: 1,
+      },
+    ]);
+    const { service } = baseDeps({
+      storage,
+      list: async () => ({ ok: false as const, message: 'timeout' }),
+    });
+    await service.importFollows(OWNER);
+    expect(storage.rows.get(BOB)?.isFollowing).toBe(true);
+    expect(storage.reconcileFollowSuggestions).not.toHaveBeenCalled();
   });
 });

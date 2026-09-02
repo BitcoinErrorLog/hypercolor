@@ -5,6 +5,10 @@ import type { PubkyKey } from '../../types';
  * Default is off — no homeserver follows listing and no Nexus read until the
  * user confirms the consent sheet.
  *
+ * Consent is persisted per owner and survives sign-out/reconnect for that
+ * same identity. In-memory caches are dropped on identity change so the next
+ * read re-checks MMKV (fail closed if persistence is missing).
+ *
  * MMKV is loaded lazily so unit tests that never touch persistence do not
  * need a native store.
  */
@@ -13,12 +17,17 @@ const BLOCKED_PREFIX = 'blocked:';
 
 const memEnabled = new Map<string, boolean>();
 const memBlocked = new Map<string, Set<string>>();
+const listeners = new Set<() => void>();
 
 let mmkvStore: {
   getString(key: string): string | undefined;
   set(key: string, value: string): void;
 } | null = null;
 let mmkvTried = false;
+
+function notify(): void {
+  for (const listener of listeners) listener();
+}
 
 function storage(): typeof mmkvStore {
   if (mmkvTried) return mmkvStore;
@@ -54,6 +63,7 @@ function writeEnabled(ownerPubky: PubkyKey, enabled: boolean): void {
   } catch {
     // Memory remains the source of truth for this session.
   }
+  notify();
 }
 
 function readBlocked(ownerPubky: PubkyKey): Set<string> {
@@ -82,6 +92,7 @@ function writeBlocked(ownerPubky: PubkyKey, blocked: Set<string>): void {
   } catch {
     // Memory remains the source of truth for this session.
   }
+  notify();
 }
 
 export const FollowsImportSettings = {
@@ -114,9 +125,28 @@ export const FollowsImportSettings = {
     writeBlocked(ownerPubky, blocked);
   },
 
+  /**
+   * Drop in-memory caches so the next lookup re-reads persistence (or
+   * defaults off). Does not wipe MMKV — reconnecting the same owner
+   * keeps their consent.
+   */
+  clearSessionMemory(): void {
+    memEnabled.clear();
+    memBlocked.clear();
+    notify();
+  },
+
+  subscribe(listener: () => void): () => void {
+    listeners.add(listener);
+    return () => {
+      listeners.delete(listener);
+    };
+  },
+
   /** Test-only: drop in-memory caches. Does not wipe MMKV. */
   resetForTests(): void {
     memEnabled.clear();
     memBlocked.clear();
+    listeners.clear();
   },
 };

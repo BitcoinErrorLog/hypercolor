@@ -1,8 +1,15 @@
 import { create } from 'zustand';
 import { immer } from 'zustand/middleware/immer';
 import type { Contact, MeshPeer, PubkyKey } from '../types';
+import { useAuthStore } from './authStore';
+import { FollowsImportSettings } from '../services/contacts/followsImportSettings';
+import {
+  canUpsertOwnedContact,
+  replaceOwnerContactMap,
+} from '../services/contacts/contactOwnerScope';
 
 interface ContactState {
+  ownerPubky: PubkyKey | null;
   contacts: Record<PubkyKey, Contact>;
   meshPeers: Record<string, MeshPeer>; // keyed by pubkyHash
   /** Pubky to show on Contact detail after add-contact or row tap. */
@@ -10,6 +17,8 @@ interface ContactState {
 
   upsertContact: (contact: Contact) => void;
   removeContact: (pubky: PubkyKey) => void;
+  replaceContacts: (ownerPubky: PubkyKey, rows: Contact[]) => void;
+  reset: () => void;
   upsertMeshPeer: (peer: MeshPeer) => void;
   removeMeshPeer: (pubkyHash: string) => void;
   updateTrustScore: (pubky: PubkyKey, delta: number) => void;
@@ -17,14 +26,23 @@ interface ContactState {
   closeContactDetail: () => void;
 }
 
-export const useContactStore = create<ContactState>()(
-  immer(set => ({
+function emptyState(): Pick<ContactState, 'ownerPubky' | 'contacts' | 'meshPeers' | 'detailPubky'> {
+  return {
+    ownerPubky: null,
     contacts: {},
     meshPeers: {},
     detailPubky: null,
+  };
+}
+
+export const useContactStore = create<ContactState>()(
+  immer(set => ({
+    ...emptyState(),
 
     upsertContact: contact =>
       set(state => {
+        if (!canUpsertOwnedContact(state.ownerPubky, contact)) return;
+        if (!state.ownerPubky) state.ownerPubky = contact.ownerPubky;
         state.contacts[contact.pubky] = contact;
       }),
 
@@ -32,6 +50,22 @@ export const useContactStore = create<ContactState>()(
       set(state => {
         delete state.contacts[pubky];
         if (state.detailPubky === pubky) state.detailPubky = null;
+      }),
+
+    replaceContacts: (ownerPubky, rows) =>
+      set(state => {
+        state.ownerPubky = ownerPubky;
+        const next = replaceOwnerContactMap(ownerPubky, rows);
+        state.contacts = next;
+        if (state.detailPubky && !next[state.detailPubky]) state.detailPubky = null;
+      }),
+
+    reset: () =>
+      set(state => {
+        state.ownerPubky = null;
+        state.contacts = {};
+        state.meshPeers = {};
+        state.detailPubky = null;
       }),
 
     upsertMeshPeer: peer =>
@@ -64,3 +98,11 @@ export const useContactStore = create<ContactState>()(
       }),
   })),
 );
+
+let previousOwner = useAuthStore.getState().pubky;
+useAuthStore.subscribe(state => {
+  if (state.pubky === previousOwner) return;
+  previousOwner = state.pubky;
+  useContactStore.getState().reset();
+  FollowsImportSettings.clearSessionMemory();
+});

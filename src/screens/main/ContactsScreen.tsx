@@ -9,6 +9,7 @@ import { StorageService } from '../../services/StorageService';
 import { ContactsService } from '../../services/ContactsService';
 import { TrustEngine } from '../../services/TrustEngine';
 import { FollowsImportSettings } from '../../services/contacts/followsImportSettings';
+import { contactsForOwner } from '../../services/contacts/contactOwnerScope';
 import type { ImportFollowsRefreshResult } from '../../services/ContactsService';
 import { partitionContacts } from '../../ui/contacts/relationshipBadge';
 import { ContactDetailContainer } from './contacts/ContactDetailScreen';
@@ -45,17 +46,26 @@ export default function ContactsScreen() {
   const nav = useNavigation<Nav>();
   const route = useRoute<RouteProp<MainTabParamList, 'Contacts'>>();
   const ownerPubky = useAuthStore(s => s.pubky);
+  const storeOwner = useContactStore(s => s.ownerPubky);
+  const replaceContacts = useContactStore(s => s.replaceContacts);
   const upsertContact = useContactStore(s => s.upsertContact);
-  const removeContact = useContactStore(s => s.removeContact);
   const contactsMap = useContactStore(s => s.contacts);
   const detailPubky = useContactStore(s => s.detailPubky);
   const openContactDetail = useContactStore(s => s.openContactDetail);
   const closeContactDetail = useContactStore(s => s.closeContactDetail);
-  const storeContacts = Object.values(contactsMap);
+  const [, setConsentTick] = useState(0);
 
-  const [followsImportEnabled, setFollowsImportEnabled] = useState(() =>
-    ownerPubky ? FollowsImportSettings.getFollowsImportEnabled(ownerPubky) : false,
+  useEffect(() => FollowsImportSettings.subscribe(() => setConsentTick(t => t + 1)), []);
+
+  const followsImportEnabled = ownerPubky
+    ? FollowsImportSettings.getFollowsImportEnabled(ownerPubky)
+    : false;
+
+  const storeContacts = contactsForOwner(
+    ownerPubky && storeOwner === ownerPubky ? ownerPubky : null,
+    contactsMap,
   );
+
   const [refreshing, setRefreshing] = useState(false);
   const [importing, setImporting] = useState(false);
   const [consentOpen, setConsentOpen] = useState(false);
@@ -68,25 +78,30 @@ export default function ContactsScreen() {
   const [offline, setOffline] = useState(false);
 
   const loadLocal = useCallback(async () => {
-    if (!ownerPubky) return;
+    const owner = useAuthStore.getState().pubky;
+    if (!owner) return;
     try {
-      const rows = await StorageService.getAllContacts(ownerPubky);
+      const rows = await StorageService.getAllContacts(owner);
       for (const row of rows) {
-        await TrustEngine.explain(row.pubky, ownerPubky);
+        await TrustEngine.explain(row.pubky, owner);
       }
-      const scored = await StorageService.getAllContacts(ownerPubky);
-      scored.forEach(upsertContact);
+      if (useAuthStore.getState().pubky !== owner) return;
+      const scored = await StorageService.getAllContacts(owner);
+      if (useAuthStore.getState().pubky !== owner) return;
+      replaceContacts(owner, scored);
       setLoadError(null);
       setLoadErrorDetails(null);
     } catch (err) {
       setLoadError(LOAD_FAILED);
       setLoadErrorDetails(err instanceof Error ? err.message : String(err));
     }
-  }, [ownerPubky, upsertContact]);
+  }, [replaceContacts]);
 
   useEffect(() => {
     if (!ownerPubky) return;
-    setFollowsImportEnabled(FollowsImportSettings.getFollowsImportEnabled(ownerPubky));
+    setUsedNexusFallback(false);
+    setImportError(null);
+    setImportErrorDetails(null);
     void loadLocal();
   }, [loadLocal, ownerPubky]);
 
@@ -124,62 +139,66 @@ export default function ContactsScreen() {
   }, []);
 
   const runImport = useCallback(async () => {
-    if (!ownerPubky) return;
+    const owner = useAuthStore.getState().pubky;
+    if (!owner) return;
+    if (!FollowsImportSettings.getFollowsImportEnabled(owner)) return;
     setImporting(true);
     try {
-      const result = await ContactsService.refreshFollowsIfEnabled(ownerPubky, true);
+      const result = await ContactsService.refreshFollowsIfEnabled(owner);
+      if (useAuthStore.getState().pubky !== owner) return;
+      if (!FollowsImportSettings.getFollowsImportEnabled(owner)) return;
       applyRefreshResult(result);
       await loadLocal();
     } finally {
       setImporting(false);
     }
-  }, [applyRefreshResult, loadLocal, ownerPubky]);
+  }, [applyRefreshResult, loadLocal]);
 
   const handleRefresh = useCallback(async () => {
-    if (!ownerPubky) return;
+    const owner = useAuthStore.getState().pubky;
+    if (!owner) return;
     setRefreshing(true);
     try {
       const result = await pullToRefreshFollows({
-        ownerPubky,
-        followsImportEnabled,
-        refreshFollowsIfEnabled: (owner, enabled) =>
-          ContactsService.refreshFollowsIfEnabled(owner, enabled),
+        ownerPubky: owner,
+        refreshFollowsIfEnabled: ContactsService.refreshFollowsIfEnabled,
       });
+      if (useAuthStore.getState().pubky !== owner) return;
       if (result) applyRefreshResult(result);
       await loadLocal();
     } finally {
       setRefreshing(false);
     }
-  }, [applyRefreshResult, followsImportEnabled, loadLocal, ownerPubky]);
+  }, [applyRefreshResult, loadLocal]);
 
   const handleConfirmConsent = useCallback(() => {
-    if (!ownerPubky) return;
-    FollowsImportSettings.setFollowsImportEnabled(ownerPubky, true);
-    setFollowsImportEnabled(true);
+    const owner = useAuthStore.getState().pubky;
+    if (!owner) return;
+    FollowsImportSettings.setFollowsImportEnabled(owner, true);
     setConsentOpen(false);
-  }, [ownerPubky]);
+  }, []);
 
   useEffect(() => {
     if (!ownerPubky || !followsImportEnabled) return;
     void runImport();
-    // Opening Contacts re-reads follows only while import is on.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ownerPubky, followsImportEnabled]);
+  }, [ownerPubky, followsImportEnabled, runImport]);
 
   const handleStopFollows = useCallback(async () => {
-    if (!ownerPubky) return;
-    await ContactsService.stopUsingFollows(ownerPubky);
-    FollowsImportSettings.setFollowsImportEnabled(ownerPubky, false);
-    setFollowsImportEnabled(false);
-    setUsedNexusFallback(false);
-    setImportStatus(IMPORT_OFF_NOTE);
-    setImportError(null);
-    const remaining = Object.values(useContactStore.getState().contacts);
-    for (const row of remaining) {
-      if (!row.addedManually) removeContact(row.pubky);
+    const owner = useAuthStore.getState().pubky;
+    if (!owner) return;
+    try {
+      await ContactsService.stopUsingFollows(owner);
+      if (useAuthStore.getState().pubky !== owner) return;
+      setUsedNexusFallback(false);
+      setImportStatus(IMPORT_OFF_NOTE);
+      setImportError(null);
+      setImportErrorDetails(null);
+      await loadLocal();
+    } catch (err) {
+      setImportError('Could not stop using follows.');
+      setImportErrorDetails(err instanceof Error ? err.message : String(err));
     }
-    await loadLocal();
-  }, [loadLocal, ownerPubky, removeContact]);
+  }, [loadLocal]);
 
   if (detailPubky) {
     return <ContactDetailContainer pubky={detailPubky} onBack={closeContactDetail} />;
@@ -210,7 +229,7 @@ export default function ContactsScreen() {
       onOpenContact={openContactDetail}
       onUseFollows={() => setConsentOpen(true)}
       onConsentConfirm={() => {
-        void handleConfirmConsent();
+        handleConfirmConsent();
       }}
       onConsentDismiss={() => setConsentOpen(false)}
       onRefreshFollows={() => {
@@ -220,8 +239,10 @@ export default function ContactsScreen() {
         void handleStopFollows();
       }}
       onAddSuggestion={pubky => {
-        if (!ownerPubky) return;
-        void ContactsService.addManualContact(ownerPubky, pubky).then(result => {
+        const owner = useAuthStore.getState().pubky;
+        if (!owner) return;
+        void ContactsService.addManualContact(owner, pubky).then(result => {
+          if (useAuthStore.getState().pubky !== owner) return;
           if (result.ok) {
             upsertContact(result.contact);
             openContactDetail(result.contact.pubky);

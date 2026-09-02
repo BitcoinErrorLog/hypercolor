@@ -5,20 +5,16 @@ import type {
 import type { PubkyKey } from '../../../types';
 
 /**
- * Pull-to-refresh on Contacts. The consent flag is passed through so
- * `refreshFollowsIfEnabled` can skip homeserver follows listing and Nexus
- * when import is off.
+ * Pull-to-refresh on Contacts. Consent is looked up inside
+ * `refreshFollowsIfEnabled` at call time — this helper must not pass a
+ * caller boolean that could override the persisted per-owner flag.
  */
 export async function pullToRefreshFollows(args: {
   ownerPubky: PubkyKey | null;
-  followsImportEnabled: boolean;
-  refreshFollowsIfEnabled: (
-    owner: PubkyKey,
-    enabled: boolean,
-  ) => Promise<ImportFollowsRefreshResult>;
+  refreshFollowsIfEnabled: (owner: PubkyKey) => Promise<ImportFollowsRefreshResult>;
 }): Promise<ImportFollowsRefreshResult | null> {
   if (!args.ownerPubky) return null;
-  return args.refreshFollowsIfEnabled(args.ownerPubky, args.followsImportEnabled);
+  return args.refreshFollowsIfEnabled(args.ownerPubky);
 }
 
 export function afterManualContactAdded(pubky: PubkyKey): {

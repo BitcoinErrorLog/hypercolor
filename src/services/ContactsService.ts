@@ -43,6 +43,9 @@ export type ContactsServiceDeps = {
   get?: (url: string) => Promise<string | null>;
   isBlocked?: (ownerPubky: PubkyKey, pubky: PubkyKey) => boolean;
   onManualAdd?: (ownerPubky: PubkyKey, pubky: PubkyKey) => void;
+  /** Authoritative consent lookup. Fail closed when omitted. */
+  isFollowsImportEnabled: (ownerPubky: PubkyKey) => boolean;
+  setFollowsImportEnabled: (ownerPubky: PubkyKey, enabled: boolean) => void;
   nexus: NexusClientApi;
   storage: {
     upsertContact: typeof StorageService.upsertContact;
@@ -51,6 +54,7 @@ export type ContactsServiceDeps = {
     setContactRelationshipFlags: typeof StorageService.setContactRelationshipFlags;
     deleteContact?: typeof StorageService.deleteContact;
     deleteFollowSuggestions?: typeof StorageService.deleteFollowSuggestions;
+    reconcileFollowSuggestions?: typeof StorageService.reconcileFollowSuggestions;
   };
 };
 
@@ -80,9 +84,32 @@ export type AddContactResult =
     };
 
 const DEFAULT_PAGE = 200;
+const IMPORT_OFF_MESSAGE = 'Follows import is off.';
 
 function followDocumentUrl(ownerPubky: PubkyKey, followee: PubkyKey): string {
   return `pubky://${ownerPubky}${PUBKY_APP_FOLLOWS_SEGMENT}${followee}`;
+}
+
+function consentOn(deps: ContactsServiceDeps, ownerPubky: PubkyKey): boolean {
+  if (!ownerPubky) return false;
+  return deps.isFollowsImportEnabled(ownerPubky) === true;
+}
+
+function withOwnerLock<T>(
+  locks: Map<string, Promise<unknown>>,
+  ownerPubky: PubkyKey,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const prev = locks.get(ownerPubky) ?? Promise.resolve();
+  const next = prev.then(fn, fn);
+  locks.set(
+    ownerPubky,
+    next.then(
+      () => undefined,
+      () => undefined,
+    ),
+  );
+  return next;
 }
 
 async function persistFollowees(
@@ -113,8 +140,45 @@ function skipFollowee(
 }
 
 export function createContactsService(deps: ContactsServiceDeps) {
+  const importGeneration = new Map<string, number>();
+  const ownerLocks = new Map<string, Promise<unknown>>();
+
+  function currentGeneration(ownerPubky: PubkyKey): number {
+    return importGeneration.get(ownerPubky) ?? 0;
+  }
+
+  function bumpGeneration(ownerPubky: PubkyKey): number {
+    const next = currentGeneration(ownerPubky) + 1;
+    importGeneration.set(ownerPubky, next);
+    return next;
+  }
+
+  function writeStillValid(ownerPubky: PubkyKey, generation: number): boolean {
+    return consentOn(deps, ownerPubky) && currentGeneration(ownerPubky) === generation;
+  }
+
+  async function persistIfCurrent(
+    ownerPubky: PubkyKey,
+    generation: number,
+    followees: PubkyKey[],
+    reconcile: boolean,
+  ): Promise<boolean> {
+    return withOwnerLock(ownerLocks, ownerPubky, async () => {
+      if (!writeStillValid(ownerPubky, generation)) return false;
+      await persistFollowees(deps, ownerPubky, followees);
+      if (reconcile && deps.storage.reconcileFollowSuggestions) {
+        await deps.storage.reconcileFollowSuggestions(ownerPubky, followees);
+      }
+      return writeStillValid(ownerPubky, generation);
+    });
+  }
+
   const service = {
     async importFollows(ownerPubky: PubkyKey): Promise<ImportFollowsResult> {
+      if (!consentOn(deps, ownerPubky)) {
+        return { ok: false, imported: 0, followees: [], message: IMPORT_OFF_MESSAGE };
+      }
+      const generation = currentGeneration(ownerPubky);
       const listed = await deps.list(followsDirUrl(ownerPubky));
       if (!listed.ok) {
         return { ok: false, imported: 0, followees: [], message: listed.message };
@@ -129,7 +193,10 @@ export function createContactsService(deps: ContactsServiceDeps) {
         followees.push(followee);
       }
 
-      await persistFollowees(deps, ownerPubky, followees);
+      const wrote = await persistIfCurrent(ownerPubky, generation, followees, true);
+      if (!wrote) {
+        return { ok: false, imported: 0, followees: [], message: IMPORT_OFF_MESSAGE };
+      }
       return { ok: true, imported: followees.length, followees };
     },
 
@@ -141,6 +208,16 @@ export function createContactsService(deps: ContactsServiceDeps) {
     async importFollowsWithNexusFallback(
       ownerPubky: PubkyKey,
     ): Promise<ImportFollowsResult & { usedNexusFallback: boolean }> {
+      if (!consentOn(deps, ownerPubky)) {
+        return {
+          ok: false,
+          imported: 0,
+          followees: [],
+          message: IMPORT_OFF_MESSAGE,
+          usedNexusFallback: false,
+        };
+      }
+      const generation = currentGeneration(ownerPubky);
       const listed = await deps.list(followsDirUrl(ownerPubky));
       if (listed.ok) {
         const followees: PubkyKey[] = [];
@@ -151,8 +228,27 @@ export function createContactsService(deps: ContactsServiceDeps) {
           seen.add(followee);
           followees.push(followee);
         }
-        await persistFollowees(deps, ownerPubky, followees);
+        const wrote = await persistIfCurrent(ownerPubky, generation, followees, true);
+        if (!wrote) {
+          return {
+            ok: false,
+            imported: 0,
+            followees: [],
+            message: IMPORT_OFF_MESSAGE,
+            usedNexusFallback: false,
+          };
+        }
         return { ok: true, imported: followees.length, followees, usedNexusFallback: false };
+      }
+
+      if (!consentOn(deps, ownerPubky)) {
+        return {
+          ok: false,
+          imported: 0,
+          followees: [],
+          message: IMPORT_OFF_MESSAGE,
+          usedNexusFallback: false,
+        };
       }
 
       const followingResult = await collectAllPages(query =>
@@ -174,12 +270,22 @@ export function createContactsService(deps: ContactsServiceDeps) {
         if (skipFollowee(deps, ownerPubky, candidate, seen)) continue;
         seen.add(candidate);
         if (!deps.get) continue;
+        if (!consentOn(deps, ownerPubky)) break;
         const document = await deps.get(followDocumentUrl(ownerPubky, candidate));
         if (document == null || document.length === 0) continue;
         confirmed.push(candidate);
       }
 
-      await persistFollowees(deps, ownerPubky, confirmed);
+      const wrote = await persistIfCurrent(ownerPubky, generation, confirmed, false);
+      if (!wrote) {
+        return {
+          ok: false,
+          imported: 0,
+          followees: [],
+          message: IMPORT_OFF_MESSAGE,
+          usedNexusFallback: true,
+        };
+      }
       return {
         ok: true,
         imported: confirmed.length,
@@ -190,41 +296,61 @@ export function createContactsService(deps: ContactsServiceDeps) {
 
     /**
      * Product gate: no homeserver follows read and no Nexus request unless the
-     * per-owner consent flag is already on.
+     * persisted per-owner consent flag is on at call time. Caller booleans
+     * are ignored.
      */
-    async refreshFollowsIfEnabled(
-      ownerPubky: PubkyKey,
-      followsImportEnabled: boolean,
-    ): Promise<ImportFollowsRefreshResult> {
-      if (!followsImportEnabled) {
+    async refreshFollowsIfEnabled(ownerPubky: PubkyKey): Promise<ImportFollowsRefreshResult> {
+      if (!consentOn(deps, ownerPubky)) {
         return { skipped: true, imported: 0, followees: [], usedNexusFallback: false };
       }
+      const generation = currentGeneration(ownerPubky);
       const result = await service.importFollowsWithNexusFallback(ownerPubky);
+      if (!writeStillValid(ownerPubky, generation)) {
+        return { skipped: true, imported: 0, followees: [], usedNexusFallback: false };
+      }
       return { ...result, skipped: false };
     },
 
     async stopUsingFollows(ownerPubky: PubkyKey): Promise<void> {
-      const rows = await deps.storage.getAllContacts(ownerPubky);
-      if (deps.storage.deleteFollowSuggestions) {
-        await deps.storage.deleteFollowSuggestions(ownerPubky);
-      } else {
-        for (const row of rows) {
-          if (!row.addedManually && deps.storage.deleteContact) {
-            await deps.storage.deleteContact(ownerPubky, row.pubky);
+      deps.setFollowsImportEnabled(ownerPubky, false);
+      bumpGeneration(ownerPubky);
+      await withOwnerLock(ownerLocks, ownerPubky, async () => {
+        const rows = await deps.storage.getAllContacts(ownerPubky);
+        try {
+          if (deps.storage.deleteFollowSuggestions) {
+            await deps.storage.deleteFollowSuggestions(ownerPubky);
+          } else {
+            for (const row of rows) {
+              if (!row.addedManually && deps.storage.deleteContact) {
+                await deps.storage.deleteContact(ownerPubky, row.pubky);
+              }
+            }
           }
+          for (const row of rows) {
+            if (!row.addedManually) continue;
+            await deps.storage.setContactRelationshipFlags(ownerPubky, row.pubky, {
+              isFollowing: false,
+              isFollower: false,
+              isMutual: false,
+            });
+          }
+        } catch (err) {
+          const details = err instanceof Error ? err.message : String(err);
+          throw new Error(`Could not stop using follows. ${details}`);
         }
-      }
-      for (const row of rows) {
-        if (!row.addedManually) continue;
-        await deps.storage.setContactRelationshipFlags(ownerPubky, row.pubky, {
-          isFollowing: false,
-          isFollower: false,
-          isMutual: false,
-        });
-      }
+      });
     },
 
     async syncRelationships(ownerPubky: PubkyKey): Promise<SyncRelationshipsResult> {
+      if (!consentOn(deps, ownerPubky)) {
+        return {
+          following: 0,
+          followers: 0,
+          friends: 0,
+          nexusReachable: false,
+          nexusError: IMPORT_OFF_MESSAGE,
+        };
+      }
       const [followingResult, followersResult, friendsResult] = await Promise.all([
         collectAllPages(query => deps.nexus.following(ownerPubky, query)),
         collectAllPages(query => deps.nexus.followers(ownerPubky, query)),
@@ -240,6 +366,16 @@ export function createContactsService(deps: ContactsServiceDeps) {
           friends: friendsResult.ids.length,
           nexusReachable: false,
           nexusError,
+        };
+      }
+
+      if (!consentOn(deps, ownerPubky)) {
+        return {
+          following: 0,
+          followers: 0,
+          friends: 0,
+          nexusReachable: false,
+          nexusError: IMPORT_OFF_MESSAGE,
         };
       }
 
@@ -429,6 +565,9 @@ export const ContactsService = createContactsService({
   get: url => PubkyService.get(url),
   isBlocked: (owner, pubky) => FollowsImportSettings.isBlocked(owner, pubky),
   onManualAdd: (owner, pubky) => FollowsImportSettings.unblock(owner, pubky),
+  isFollowsImportEnabled: owner => FollowsImportSettings.getFollowsImportEnabled(owner),
+  setFollowsImportEnabled: (owner, enabled) =>
+    FollowsImportSettings.setFollowsImportEnabled(owner, enabled),
   nexus: createNexusClient(),
   storage: {
     upsertContact: c => StorageService.upsertContact(c),
@@ -438,5 +577,7 @@ export const ContactsService = createContactsService({
       StorageService.setContactRelationshipFlags(owner, pubky, flags),
     deleteContact: (owner, pubky) => StorageService.deleteContact(owner, pubky),
     deleteFollowSuggestions: owner => StorageService.deleteFollowSuggestions(owner),
+    reconcileFollowSuggestions: (owner, followees) =>
+      StorageService.reconcileFollowSuggestions(owner, followees),
   },
 });
