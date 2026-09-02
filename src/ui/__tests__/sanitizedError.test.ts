@@ -1,4 +1,6 @@
 import { COPY } from '../../copy/uxCopy';
+import { LinkSendError } from '../../services/link/LinkSendError';
+import { CONTACTS_COPY } from '../contacts/contactsCopy';
 import { classifyError, sanitizeError, stripSensitive } from '../sanitizedError';
 
 const SAMPLE_PUBKY = 'gcumbhd7sqit6nn457jxmrwqx9pyymqwamnarekgo3xppqo6a19o';
@@ -30,6 +32,27 @@ describe('sanitizeError', () => {
     expect(sanitized.details).not.toContain('https://evil.example');
     expect(sanitized.details).not.toContain(SAMPLE_PUBKY);
     expect(classifyError(err)).toBe('unknown');
+  });
+
+  it('maps a denied send to the blocked-contact contract copy', () => {
+    const err = new LinkSendError('denied', CONTACTS_COPY.deniedSendMessage);
+    const sanitized = sanitizeError(err);
+    expect(sanitized.category).toBe('blocked-send');
+    expect(sanitized.message).toBe(CONTACTS_COPY.deniedSendMessage);
+    expect(sanitized.details).toBeNull();
+  });
+
+  it('never surfaces an internal sendDm template or a raw pubky', () => {
+    const err = new Error(
+      `LinkService.sendDm: cannot send to ${SAMPLE_PUBKY} — link status is 'queued'`,
+    );
+    const sanitized = sanitizeError(err, CONTACTS_COPY.couldNotSendMessage);
+    expect(sanitized.category).toBe('unknown');
+    expect(sanitized.message).toBe(CONTACTS_COPY.couldNotSendMessage);
+    expect(sanitized.message).not.toContain('LinkService.sendDm');
+    expect(sanitized.message).not.toContain(SAMPLE_PUBKY);
+    expect(sanitized.details).not.toContain(SAMPLE_PUBKY);
+    expect(sanitized.details).toContain('[pubky]');
   });
 });
 

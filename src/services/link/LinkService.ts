@@ -54,6 +54,10 @@ import { applyPaymentInbound } from '../payments/applyPaymentInbound';
 import { isPaykitPaymentKind } from '../../types/payment';
 import { shouldDropOversizedKnownInbound } from './inboundEnvelope';
 import { FollowsImportSettings } from '../contacts/followsImportSettings';
+import { CONTACTS_COPY } from '../../ui/contacts/contactsCopy';
+import { LinkSendError } from './LinkSendError';
+
+export { LinkSendError } from './LinkSendError';
 
 /**
  * LinkService — end-to-end-encrypted DMs over official Paykit Encrypted
@@ -482,15 +486,7 @@ export const LinkService = {
   async sendDm(peerPubky: PubkyKey, body: string): Promise<LinkMessage> {
     return withQueue(peerPubky, async () => {
       const outcome = await ensureLinkLocked(peerPubky, 'user', false);
-      if (
-        outcome !== 'ready' &&
-        outcome !== 'handshaking-initiator' &&
-        outcome !== 'handshaking-responder'
-      ) {
-        throw new Error(
-          `LinkService.sendDm: cannot send to ${peerPubky} — link status is '${outcome}'`,
-        );
-      }
+      assertLinkSendable(outcome, peerPubky, 'sendDm');
       const ownerForRequest = requireOwner();
       const pending = await StorageService.getMessageRequest(ownerForRequest, peerPubky);
       if (pending?.status === 'pending') {
@@ -534,15 +530,7 @@ export const LinkService = {
   }): Promise<LinkMessage> {
     return withQueue(input.peerPubky, async () => {
       const outcome = await ensureLinkLocked(input.peerPubky, 'user', false);
-      if (
-        outcome !== 'ready' &&
-        outcome !== 'handshaking-initiator' &&
-        outcome !== 'handshaking-responder'
-      ) {
-        throw new Error(
-          `LinkService.sendPreparedMessage: cannot send to ${input.peerPubky} — link status is '${outcome}'`,
-        );
-      }
+      assertLinkSendable(outcome, input.peerPubky, 'sendPreparedMessage');
       const ownerForRequest = requireOwner();
       const pending = await StorageService.getMessageRequest(ownerForRequest, input.peerPubky);
       if (pending?.status === 'pending') {
@@ -1148,11 +1136,33 @@ function isUnusableReceiverAliasError(err: unknown): boolean {
  * {@link ensureLinkLocked}; this is the single choke so a leftover
  * `handshaking` row after a failed block cannot be stepped by the ticker
  * or used to deliver a queued payload.
+ *
+ * Decline is not a deny. A `declined` message request is inbound-queue
+ * memory only ({@link syncPeerLocked}); user-initiated outbound still
+ * proceeds and does not promote or delete that row.
  */
-async function isPeerDenied(ownerPubky: PubkyKey, peerPubky: PubkyKey): Promise<boolean> {
-  if (FollowsImportSettings.isBlocked(ownerPubky, peerPubky)) return true;
-  const existingRequest = await StorageService.getMessageRequest(ownerPubky, peerPubky);
-  return existingRequest?.status === 'declined';
+function isPeerDenied(ownerPubky: PubkyKey, peerPubky: PubkyKey): boolean {
+  return FollowsImportSettings.isBlocked(ownerPubky, peerPubky);
+}
+
+function assertLinkSendable(
+  outcome: EnsureOutcome,
+  peerPubky: PubkyKey,
+  operation: 'sendDm' | 'sendPreparedMessage',
+): void {
+  if (
+    outcome === 'ready' ||
+    outcome === 'handshaking-initiator' ||
+    outcome === 'handshaking-responder'
+  ) {
+    return;
+  }
+  if (outcome === 'denied') {
+    throw new LinkSendError('denied', CONTACTS_COPY.deniedSendMessage);
+  }
+  throw new Error(
+    `LinkService.${operation}: cannot send to ${peerPubky} — link status is '${outcome}'`,
+  );
 }
 
 /**
@@ -1181,7 +1191,7 @@ async function ensureLinkLocked(
   if (!isActiveSession(lookup)) return 'needs-enable';
   const activeSession = lookup;
   const ownerPubky = activeSession.pubky;
-  if (await isPeerDenied(ownerPubky, peerPubky)) return 'denied';
+  if (isPeerDenied(ownerPubky, peerPubky)) return 'denied';
   const receiver = await StorageService.getLinkReceiver(ownerPubky);
   if (!receiver?.markerPublished) return 'needs-enable';
   const localPath = assertValidReceiverPath(coerceReceiverPath(receiver.receiverPath));
@@ -2310,6 +2320,7 @@ async function deliverQueuedPayload(
 
     if (outcome === 'denied') {
       await RetryQueue.recordSuccess(item.id);
+      await markFailed(payload, 'failed');
       return;
     }
 
@@ -2413,7 +2424,10 @@ function toSendError(err: unknown): Error {
   return new Error(native.message);
 }
 
-async function markFailed(payload: AnyLinkRetryPayload): Promise<void> {
+async function markFailed(
+  payload: AnyLinkRetryPayload,
+  groupTerminal: 'sent' | 'failed' = 'sent',
+): Promise<void> {
   if (payload.type === LINK_GROUP_FANOUT_PAYLOAD_TYPE) {
     const remaining = await StorageService.countDeliveryQueueForMessage(payload.eventId);
     if (remaining === 0) {
@@ -2422,8 +2436,16 @@ async function markFailed(payload: AnyLinkRetryPayload): Promise<void> {
         payload.channelId,
         payload.senderPubky,
         payload.eventId,
-        'sent',
+        groupTerminal,
       );
+      if (payload.kind === CHAT_ATTACHMENT_KIND) {
+        await StorageService.updateAttachmentDelivery(
+          payload.ownerPubky,
+          payload.senderPubky,
+          payload.eventId,
+          groupTerminal,
+        );
+      }
     }
     return;
   }

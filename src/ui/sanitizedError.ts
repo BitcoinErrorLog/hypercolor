@@ -1,4 +1,6 @@
 import { COPY } from '../copy/uxCopy';
+import { LinkSendError } from '../services/link/LinkSendError';
+import { CONTACTS_COPY } from './contacts/contactsCopy';
 
 export type SanitizedErrorCategory =
   | 'network'
@@ -8,6 +10,7 @@ export type SanitizedErrorCategory =
   | 'handoff'
   | 'verification'
   | 'offline'
+  | 'blocked-send'
   | 'unknown';
 
 export type SanitizedError = {
@@ -93,6 +96,7 @@ const CATEGORY_MESSAGE: Record<SanitizedErrorCategory, string> = {
   'invalid-callback': COPY.couldNotCompleteAuthorization,
   handoff: COPY.couldNotCompleteAuthorization,
   verification: COPY.couldNotCompleteAuthorization,
+  'blocked-send': CONTACTS_COPY.deniedSendMessage,
   unknown: COPY.couldNotStartAuthorization,
 };
 
@@ -100,6 +104,13 @@ export function sanitizeError(
   err: unknown,
   fallback: string = COPY.couldNotStartAuthorization,
 ): SanitizedError {
+  if (err instanceof LinkSendError && err.code === 'denied') {
+    return {
+      category: 'blocked-send',
+      message: CONTACTS_COPY.deniedSendMessage,
+      details: null,
+    };
+  }
   const category = classifyError(err);
   const raw = rawMessage(err);
   const details = raw.length > 0 ? stripSensitive(raw) : null;

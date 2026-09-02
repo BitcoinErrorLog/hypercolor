@@ -19,6 +19,8 @@ export const CONTACTS_COPY = {
   blockedCleanupPending: 'Blocked · cleanup pending',
   blockedCleanupRetry: 'Retry',
   blockedAddMessage: 'This pubky is blocked.',
+  deniedSendMessage: 'You blocked this contact. Unblock to message them.',
+  couldNotSendMessage: 'Could not send this message over Encrypted Links.',
 
   removeTitle: 'Remove this contact?',
   removeBody:

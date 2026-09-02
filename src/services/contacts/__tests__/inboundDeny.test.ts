@@ -1,4 +1,8 @@
-import { LinkService, LINK_RETRY_PAYLOAD_TYPE } from '../../link/LinkService';
+import {
+  LinkService,
+  LINK_GROUP_FANOUT_PAYLOAD_TYPE,
+  LINK_RETRY_PAYLOAD_TYPE,
+} from '../../link/LinkService';
 import { PaykitLinkNative } from '../../link/PaykitLinkNative';
 import { StorageService } from '../../StorageService';
 import { KeyStore } from '../../KeyStore';
@@ -11,6 +15,7 @@ import {
   type LinkReceiver,
   type LinkRecord,
 } from '../../../types/link';
+import { GROUP_MESSAGE_KIND } from '../../../types/group';
 import type { DeliveryQueueItem, MessageRequest } from '../../../types';
 
 jest.mock('../../link/PaykitLinkNative', () => ({
@@ -103,6 +108,10 @@ jest.mock('../../StorageService', () => ({
     setContactRelationshipFlags: jest.fn(),
     getDueHandshakingLinks: jest.fn(),
     hasQueueItem: jest.fn(),
+    countDeliveryQueueForMessage: jest.fn(),
+    hasGroupMessage: jest.fn(),
+    updateGroupMessageDeliveryState: jest.fn(),
+    updateAttachmentDelivery: jest.fn(),
   },
 }));
 
@@ -207,6 +216,8 @@ describe('inbound deny is authoritative', () => {
     mockedStorage.countLinkMessagesForPeer.mockResolvedValue(0);
     mockedStorage.getDueHandshakingLinks.mockResolvedValue([]);
     mockedStorage.hasQueueItem.mockResolvedValue(true);
+    mockedStorage.countDeliveryQueueForMessage.mockResolvedValue(0);
+    mockedStorage.hasGroupMessage.mockResolvedValue(true);
     mockedStorage.getHandshakeBudget.mockResolvedValue(null);
     mockedRetryQueue.getDue.mockResolvedValue([]);
 
@@ -449,6 +460,54 @@ describe('inbound deny is authoritative', () => {
     expect(mockedRetryQueue.recordSuccess).toHaveBeenCalledWith('q-blocked');
     expect(mockedRetryQueue.defer).not.toHaveBeenCalled();
     expect(mockedRetryQueue.recordFailure).not.toHaveBeenCalled();
+    expect(mockedStorage.updateLinkMessageDeliveryState).toHaveBeenCalledWith(
+      OWNER,
+      OWNER,
+      CHAT_MESSAGE_KIND,
+      'evt-blocked',
+      'failed',
+    );
+  });
+
+  it('finalizes group fan-out as failed when the last recipient is blocked', async () => {
+    FollowsImportSettings.block(OWNER, PEER);
+    const queueItem: DeliveryQueueItem = {
+      id: 'q-group-blocked',
+      messageId: 'evt-group-blocked',
+      recipientPubky: PEER,
+      payload: JSON.stringify({
+        type: LINK_GROUP_FANOUT_PAYLOAD_TYPE,
+        ownerPubky: OWNER,
+        peerPubky: PEER,
+        senderPubky: OWNER,
+        kind: GROUP_MESSAGE_KIND,
+        eventId: 'evt-group-blocked',
+        channelId: `${OWNER}:00000000-0000-4000-8000-00000000bbbb`,
+        rawJson: '{}',
+      }),
+      attempts: 0,
+      nextRetryAt: NOW,
+      createdAt: NOW,
+    };
+    mockedRetryQueue.getDue.mockResolvedValue([queueItem]);
+    mockedStorage.hasQueueItem.mockResolvedValue(true);
+    mockedStorage.hasGroupMessage.mockResolvedValue(true);
+    mockedStorage.countDeliveryQueueForMessage.mockResolvedValue(0);
+    mockedNative.sendPrivateMessageJson.mockClear();
+
+    await LinkService.drainRetries();
+
+    expect(mockedNative.sendPrivateMessageJson).not.toHaveBeenCalled();
+    expect(mockedRetryQueue.recordSuccess).toHaveBeenCalledWith('q-group-blocked');
+    expect(mockedRetryQueue.defer).not.toHaveBeenCalled();
+    expect(mockedRetryQueue.recordFailure).not.toHaveBeenCalled();
+    expect(mockedStorage.updateGroupMessageDeliveryState).toHaveBeenCalledWith(
+      OWNER,
+      `${OWNER}:00000000-0000-4000-8000-00000000bbbb`,
+      OWNER,
+      'evt-group-blocked',
+      'failed',
+    );
   });
 
   it('stops remaining inbox probes when the owner switches mid-loop', async () => {

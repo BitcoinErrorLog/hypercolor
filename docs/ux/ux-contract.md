@@ -582,6 +582,11 @@ decline.` This replaces web's version at `src/components/requests-page.tsx:72-77
 (`src/screens/main/MessageRequestsScreen.tsx:172`), which is wrong for the same reason as
 §B.5 — the follow relationship is not what gates the queue.
 
+**Decline is not a block.** The user may still open a thread and send to that pubky. The
+inbound `declined` row stays `declined` until the user acts (Unblock releases it; Accept
+refuses to reverse a decline). User-initiated outbound does not promote `declined` to
+`accepted` and does not invent a fourth status. Inbound from that peer is still not adopted.
+
 **Held request row.** Display name or `shortPubky`, full pubky in monospace secondary, arrival
 time, and any held group invitations as `Group invitation · {name}` (web already does this at
 `src/components/requests-page.tsx:98-107`; mobile must add it — mobile currently shows only
@@ -748,14 +753,19 @@ action, never a side effect of adding a pubky.
 - **Fail-closed ordering.** Block: deny, then decline, then delete contact. Unblock: release
   declined row, then drop the deny. Manual add of a blocked pubky: persist contact, then
   unblock. Inbound and handshake establishment consult the deny at the Encrypted Link choke
-  point; queued payloads for a blocked peer are dropped, not delivered.
+  point; queued payloads for a blocked peer are dropped as `Failed` (not delivered),
+  not retried, and group fan-out finalizes that recipient. A declined message
+  request is not a deny at this choke.
+- **Send to a blocked pubky.** The thread shows `You blocked this contact. Unblock
+  to message them.` with `Unblock`. Send never surfaces an internal error string.
 - **Block sheet.** Names local deletion (contact row, Encrypted Link, one-to-one messages,
   follows-import skip) and states that Unblock is a separate action — adding the pubky again
   does not lift the block.
 
 **States.** Loading skeleton; `Could not load this contact.` with `Try again`; Offline renders
 from local storage with the payment block (mobile) collapsed and labelled `Unavailable
-offline`; `Blocked`; `Blocked · cleanup pending` with `Retry`.
+offline`; `Blocked`; `Blocked · cleanup pending` with `Retry`; send-to-blocked
+`You blocked this contact. Unblock to message them.` with `Unblock`.
 
 **AC.**
 1. The full pubky is selectable and copyable on both platforms.

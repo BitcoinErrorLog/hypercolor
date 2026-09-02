@@ -40,6 +40,9 @@ import type { LinkStatus } from '../../types/link';
 import { StatusBanner } from '../../ui/StatusBanner';
 import { useSessionStatusStore } from '../../stores/sessionStatusStore';
 import { sanitizeError } from '../../ui/sanitizedError';
+import { CONTACTS_COPY } from '../../ui/contacts/contactsCopy';
+import { ThreadDeniedBanner } from './contacts/ThreadDeniedBanner';
+import { useThreadPeerGate } from './contacts/useThreadPeerGate';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Thread'>;
 
@@ -70,6 +73,7 @@ export default function ThreadScreen({ route }: Props) {
   const [peerContact, setPeerContact] = useState<Contact | null>(null);
   const [linkStatus, setLinkStatus] = useState<LinkStatus | null>(null);
   const sessionKind = useSessionStatusStore(s => s.kind);
+  const { peerBlocked, runUnblock } = useThreadPeerGate(localPubky, participantPubky);
 
   const conversationId = buildDmConversationId(participantPubky);
 
@@ -121,18 +125,20 @@ export default function ThreadScreen({ route }: Props) {
 
   const handleSend = useCallback(async () => {
     const text = draft.trim();
-    if (!text || sending) return;
+    if (!text || sending || peerBlocked) return;
     setDraft('');
     setSending(true);
     try {
       await LinkService.sendDm(participantPubky, text);
       await reloadEncrypted();
-    } catch {
+    } catch (err) {
       await reloadEncrypted();
+      const sanitized = sanitizeError(err, CONTACTS_COPY.couldNotSendMessage);
+      Alert.alert('Send failed', sanitized.message);
     } finally {
       setSending(false);
     }
-  }, [draft, sending, participantPubky, reloadEncrypted]);
+  }, [draft, sending, peerBlocked, participantPubky, reloadEncrypted]);
 
   return (
     <ThreadScreenContent
@@ -181,6 +187,10 @@ export default function ThreadScreen({ route }: Props) {
       sessionKind={sessionKind}
       peerContact={peerContact}
       linkStatus={linkStatus}
+      peerBlocked={peerBlocked}
+      onUnblock={() => {
+        void runUnblock();
+      }}
       onEnableMessaging={() => nav.navigate('EnableMessaging' as never)}
       onRetryFailed={() => {
         void (async () => {
@@ -221,6 +231,8 @@ export function ThreadScreenContent({
   sessionKind,
   peerContact,
   linkStatus,
+  peerBlocked,
+  onUnblock,
   onEnableMessaging,
   onRetryFailed,
   onCopyPubky,
@@ -247,6 +259,8 @@ export function ThreadScreenContent({
   sessionKind: 'offline' | 'needs-enable' | 'revoked' | string;
   peerContact: Contact | null;
   linkStatus: LinkStatus | null;
+  peerBlocked: boolean;
+  onUnblock: () => void;
   onEnableMessaging: () => void;
   onRetryFailed: () => void;
   onCopyPubky: () => void;
@@ -318,7 +332,7 @@ export function ThreadScreenContent({
                 >
                   {formatDeliveryState(item.message.deliveryState)}
                 </Text>
-                {item.message.deliveryState === 'failed' ? (
+                {item.message.deliveryState === 'failed' && !peerBlocked ? (
                   <TouchableOpacity
                     accessibilityRole="button"
                     accessibilityLabel={COPY.retry}
@@ -334,14 +348,14 @@ export function ThreadScreenContent({
         </View>
       );
     },
-    [localPubky, onPaymentsChanged, onRetryFailed],
+    [localPubky, onPaymentsChanged, onRetryFailed, peerBlocked],
   );
 
   const identity = peerIdentity(participantPubky, peerContact);
   const linkLabel = formatLinkStatus(linkStatus);
   const needsEnable =
     sessionKind === 'needs-enable' || sessionKind === 'revoked' || sessionKind === 'unavailable';
-  const composerEnabled = !needsEnable;
+  const composerEnabled = !needsEnable && !peerBlocked;
 
   return (
     <SafeAreaView style={styles.container} testID="threadScreen">
@@ -404,6 +418,7 @@ export function ThreadScreenContent({
       {sessionKind === 'offline' ? (
         <StatusBanner testID="threadOfflineBanner" label={COPY.sessionOfflineBanner} />
       ) : null}
+      {peerBlocked ? <ThreadDeniedBanner onUnblock={onUnblock} /> : null}
 
       {loading ? (
         <View style={styles.loadingContainer}>
@@ -438,7 +453,7 @@ export function ThreadScreenContent({
           />
           <ComposerAttachButton
             target={{ type: 'conversation', peerPubky: participantPubky }}
-            disabled={sending}
+            disabled={sending || peerBlocked}
             onSent={onAttachSent}
           />
           <TextInput
