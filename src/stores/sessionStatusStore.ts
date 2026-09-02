@@ -26,13 +26,17 @@ interface SessionStatusState {
 }
 
 let refreshGeneration = 0;
-let lastReceiverPublished = false;
+let lastReceiverPublished: { pubky: string; published: boolean } | null = null;
+
+export function resetSessionStatusReceiverEvidence(): void {
+  lastReceiverPublished = null;
+}
 
 async function runRefresh(): Promise<void> {
   const gen = ++refreshGeneration;
   const { isAuthenticated, pubky } = useAuthStore.getState();
   if (!isAuthenticated || !pubky) {
-    lastReceiverPublished = false;
+    lastReceiverPublished = null;
     useSessionStatusStore.setState({
       kind: 'no-identity',
       enableStatus: null,
@@ -59,7 +63,8 @@ async function runRefresh(): Promise<void> {
   }
   if (gen !== refreshGeneration) return;
 
-  let receiverPublished = lastReceiverPublished;
+  let receiverPublished =
+    lastReceiverPublished?.pubky === pubky ? lastReceiverPublished.published : false;
   let pending = useSessionStatusStore.getState().pendingRequestCount;
   let groupUnread = useSessionStatusStore.getState().groupUnreadCount;
   const [receiverResult, pendingResult, unreadResult] = await Promise.allSettled([
@@ -70,7 +75,7 @@ async function runRefresh(): Promise<void> {
   if (gen !== refreshGeneration) return;
   if (receiverResult.status === 'fulfilled') {
     receiverPublished = receiverResult.value?.markerPublished === true;
-    lastReceiverPublished = receiverPublished;
+    lastReceiverPublished = { pubky, published: receiverPublished };
   }
   if (pendingResult.status === 'fulfilled') {
     pending = pendingResult.value;

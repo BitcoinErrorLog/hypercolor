@@ -1,7 +1,7 @@
 import { COPY } from '../../copy/uxCopy';
 import { LinkService } from '../../services/link/LinkService';
 import { StorageService } from '../../services/StorageService';
-import { useSessionStatusStore } from '../sessionStatusStore';
+import { resetSessionStatusReceiverEvidence, useSessionStatusStore } from '../sessionStatusStore';
 
 const mockAuthState = {
   isAuthenticated: true,
@@ -58,6 +58,7 @@ describe('sessionStatusStore', () => {
   beforeEach(() => {
     mockAuthState.isAuthenticated = true;
     mockAuthState.pubky = 'c'.repeat(52);
+    resetSessionStatusReceiverEvidence();
     resetStore();
     (LinkService.restorePersistedSession as jest.Mock).mockResolvedValue(undefined);
     (LinkService.getEnableStatus as jest.Mock).mockResolvedValue('enabled');
@@ -153,5 +154,20 @@ describe('sessionStatusStore', () => {
     expect(useSessionStatusStore.getState().kind).not.toBe('needs-enable');
     expect(useSessionStatusStore.getState().enableStatus).toBe('needs-enable');
     expect(useSessionStatusStore.getState().groupUnreadCount).toBe(2);
+  });
+
+  it('does not let owner B inherit owner A receiver evidence', async () => {
+    mockAuthState.pubky = 'a'.repeat(52);
+    (LinkService.getEnableStatus as jest.Mock).mockResolvedValue('needs-enable');
+    (StorageService.getLinkReceiver as jest.Mock).mockResolvedValue({ markerPublished: true });
+    await useSessionStatusStore.getState().refresh();
+    expect(useSessionStatusStore.getState().kind).toBe('revoked');
+
+    mockAuthState.pubky = 'b'.repeat(52);
+    (StorageService.getLinkReceiver as jest.Mock).mockRejectedValue(new Error('disk'));
+    await useSessionStatusStore.getState().refresh();
+    expect(useSessionStatusStore.getState().kind).toBe('needs-enable');
+    expect(useSessionStatusStore.getState().kind).not.toBe('revoked');
+    expect(useSessionStatusStore.getState().enableStatus).toBe('needs-enable');
   });
 });
