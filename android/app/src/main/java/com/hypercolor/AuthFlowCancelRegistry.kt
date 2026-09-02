@@ -6,10 +6,13 @@ package com.hypercolor
  *
  * Paykit FFI has no auth-flow cancel/abort primitive ([ChatAuthFlow] exposes
  * `authorizationUrl` and `awaitApproval` only). Discard is native-side:
- * mark the id cancelled, drop the flow object (UniFFI close stops the relay
- * poll), cancel the in-flight await job, and reject a later await with
- * `auth_flow_cancelled`. Unknown ids and a second cancel are no-ops. A flow
- * whose approval has already been surfaced to JS is left untouched.
+ * mark the id cancelled, drop a not-yet-awaited flow so its relay
+ * subscription stops, cancel the in-flight await job, and reject a later
+ * await with `auth_flow_cancelled`. A wait already spawned by
+ * `awaitApproval` runs to completion inside Paykit and cannot be aborted;
+ * the module closes the handle after that FFI await returns so the poll
+ * can stop. Unknown ids and a second cancel are no-ops. A flow whose
+ * approval has already been surfaced to JS is left untouched.
  */
 internal fun interface AuthFlowCancellable {
     fun cancel()
@@ -121,6 +124,19 @@ internal class AuthFlowCancelRegistry<T> {
                 droppedFlow = slot.flow,
                 droppedCancellable = slot.cancellable,
             )
+        }
+    }
+
+    /**
+     * Called when [id]'s JS await promise is settling. Prunes [cancelled] /
+     * [surfaced] and returns a leftover live flow so the caller can close it
+     * (failed await). Cancel already dropped the slot; this only prunes the id.
+     */
+    fun finishAwait(id: String): T? {
+        synchronized(lock) {
+            cancelled.remove(id)
+            surfaced.remove(id)
+            return slots.remove(id)?.flow
         }
     }
 

@@ -107,6 +107,33 @@ class AuthFlowCancelRegistryTest {
         assertTrue(registry.startAwait("flow-a") is AuthFlowAwaitStart.Missing)
     }
 
+    @Test
+    fun finishAwaitPrunesCancelledAndReturnsLeftoverFlow() {
+        val registry = AuthFlowCancelRegistry<String>()
+        registry.put("flow-a", "auth-flow")
+        assertTrue(registry.startAwait("flow-a") is AuthFlowAwaitStart.Ready)
+        assertSame("auth-flow", registry.finishAwait("flow-a"))
+        assertTrue(registry.startAwait("flow-a") is AuthFlowAwaitStart.Missing)
+
+        registry.put("flow-b", "auth-flow-b")
+        registry.cancel("flow-b")
+        assertTrue(registry.isCancelled("flow-b"))
+        assertNull(registry.finishAwait("flow-b"))
+        assertFalse(registry.isCancelled("flow-b"))
+        assertTrue(registry.startAwait("flow-b") is AuthFlowAwaitStart.Missing)
+    }
+
+    @Test
+    fun finishAwaitPrunesSurfaced() {
+        val registry = AuthFlowCancelRegistry<String>()
+        registry.put("flow-a", "auth-flow")
+        registry.startAwait("flow-a")
+        assertTrue(registry.markSurfaced("flow-a"))
+        assertTrue(registry.isSurfaced("flow-a"))
+        assertNull(registry.finishAwait("flow-a"))
+        assertFalse(registry.isSurfaced("flow-a"))
+    }
+
     private class RecordingCancellable : AuthFlowCancellable {
         var cancelled: Boolean = false
         override fun cancel() {

@@ -142,38 +142,30 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
         launch(promise) {
             val id = requireText(flowId, "flowId")
             val flow = when (val start = flows.startAwait(id)) {
-                is AuthFlowAwaitStart.Cancelled ->
+                is AuthFlowAwaitStart.Cancelled -> {
+                    flows.finishAwait(id)
                     throw PaykitLinkBridgeError(
                         "auth_flow_cancelled",
                         staticMessage("auth_flow_cancelled"),
                     )
+                }
                 is AuthFlowAwaitStart.Missing ->
                     throw PaykitLinkBridgeError("validation", "unknown auth flow")
                 is AuthFlowAwaitStart.Ready -> start.flow
             }
-            startAuthKeepalive(id)
-            val job = kotlin.coroutines.coroutineContext[Job]
-            if (job != null) {
-                flows.attachCancellable(id, AuthFlowCancellable { job.cancel() })
-            }
-            if (flows.isCancelled(id)) {
-                throw PaykitLinkBridgeError(
-                    "auth_flow_cancelled",
-                    staticMessage("auth_flow_cancelled"),
-                )
-            }
             try {
-                val session = try {
-                    flow.awaitApproval()
-                } catch (error: Throwable) {
-                    if (isCoroutineCancellation(error)) {
-                        throw PaykitLinkBridgeError(
-                            "auth_flow_cancelled",
-                            staticMessage("auth_flow_cancelled"),
-                        )
-                    }
-                    throw error
+                startAuthKeepalive(id)
+                val job = kotlin.coroutines.coroutineContext[Job]
+                if (job != null) {
+                    flows.attachCancellable(id, AuthFlowCancellable { job.cancel() })
                 }
+                if (flows.isCancelled(id)) {
+                    throw PaykitLinkBridgeError(
+                        "auth_flow_cancelled",
+                        staticMessage("auth_flow_cancelled"),
+                    )
+                }
+                val session = flow.awaitApproval()
                 if (!flows.markSurfaced(id)) {
                     throw PaykitLinkBridgeError(
                         "auth_flow_cancelled",
@@ -181,9 +173,32 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
                     )
                 }
                 persistSession(session, promise)
+            } catch (error: Throwable) {
+                if (error is PaykitLinkBridgeError && error.code == "auth_flow_cancelled") {
+                    throw error
+                }
+                // Registry-cancelled ids stay auth_flow_cancelled even when the
+                // throw is IllegalStateException (pre-clone close) or any other
+                // coroutine site — not only CancellationException inside awaitApproval.
+                if (flows.isCancelled(id) || isCoroutineCancellation(error)) {
+                    throw PaykitLinkBridgeError(
+                        "auth_flow_cancelled",
+                        staticMessage("auth_flow_cancelled"),
+                    )
+                }
+                throw error
             } finally {
                 flows.detachCancellable(id)
                 releaseAuthKeepalive(id)
+                val cancelled = flows.isCancelled(id)
+                val leftover = flows.finishAwait(id)
+                if (leftover != null) {
+                    closeAuthFlow(leftover)
+                } else if (cancelled) {
+                    // Await already spawned: Paykit's wait finishes; close after
+                    // the FFI return so the UniFFI clone can drop and the poll stop.
+                    closeAuthFlow(flow)
+                }
             }
         }
     }
@@ -198,11 +213,14 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
 
     /**
      * Retires [flowId]'s native waiter. Paykit FFI has no auth-flow cancel
-     * primitive; this drops the UniFFI flow (stopping the relay poll),
-     * cancels an in-flight await, stops keepalive, and marks the id so a
-     * later [awaitAuthApproval] rejects with `auth_flow_cancelled`. Unknown
-     * ids and a second cancel are no-ops. A flow whose approval was already
-     * surfaced to JS is left untouched.
+     * primitive. Discard drops a not-yet-awaited flow so its relay
+     * subscription stops; a wait already spawned by [ChatAuthFlow.awaitApproval]
+     * runs to completion inside Paykit and cannot be aborted. After that FFI
+     * await returns, [awaitAuthApproval] closes the handle so the poll can
+     * stop. Cancels an in-flight coroutine, stops keepalive, and marks the id
+     * so a later [awaitAuthApproval] rejects with `auth_flow_cancelled`.
+     * Unknown ids and a second cancel are no-ops. A flow whose approval was
+     * already surfaced to JS is left untouched.
      */
     @ReactMethod
     fun cancelAuthFlow(flowId: String, promise: Promise) {
@@ -755,6 +773,10 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
             try {
                 block()
             } catch (error: Throwable) {
+                if (isCoroutineCancellation(error)) {
+                    promise.reject("unavailable", staticMessage("unavailable"))
+                    throw error
+                }
                 if (error is PaykitLinkBridgeError && error.code == "auth_flow_cancelled") {
                     promise.reject("auth_flow_cancelled", staticMessage("auth_flow_cancelled"))
                     return@launch

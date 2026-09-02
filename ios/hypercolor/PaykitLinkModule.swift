@@ -39,6 +39,7 @@ class PaykitLinkModule: NSObject {
     private var flows: [String: ChatAuthFlow] = [:]
     private var cancelledFlowIds = Set<String>()
     private var surfacedFlowIds = Set<String>()
+    private var awaitingFlowIds = Set<String>()
     private var awaitTasks: [String: Task<Void, Never>] = [:]
     private var handles: [String: LinkHandle] = [:]
 
@@ -101,8 +102,14 @@ class PaykitLinkModule: NSObject {
         resolver resolve: @escaping RCTPromiseResolveBlock,
         rejecter reject: @escaping RCTPromiseRejectBlock
     ) {
-        let task = Task.detached(priority: .userInitiated) { [weak self] in
-            guard let self else { return }
+        let id = flowId.trimmingCharacters(in: .whitespacesAndNewlines)
+        let task: Task<Void, Never>
+        lock.lock()
+        task = Task.detached(priority: .userInitiated) { [weak self] in
+            guard let self else {
+                reject("unavailable", "unavailable", nil)
+                return
+            }
             do {
                 let value = try await self.performAwaitAuthApproval(flowId)
                 resolve(value)
@@ -111,10 +118,17 @@ class PaykitLinkModule: NSObject {
                 reject(mapped.code, mapped.message, nil)
             }
         }
-        let id = flowId.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !id.isEmpty {
-            lock.withLock { self.awaitTasks[id] = task }
+        if id.isEmpty {
+            lock.unlock()
+            return
         }
+        if cancelledFlowIds.contains(id) {
+            lock.unlock()
+            task.cancel()
+            return
+        }
+        awaitTasks[id] = task
+        lock.unlock()
     }
 
     @objc func stopAuthKeepalive(
@@ -129,8 +143,11 @@ class PaykitLinkModule: NSObject {
     }
 
     /// Paykit FFI has no auth-flow cancel primitive. Native discard: cancel
-    /// the in-flight Task, drop the ChatAuthFlow (deinit stops the relay
-    /// poll), and mark `flowId` so a later await rejects `auth_flow_cancelled`.
+    /// the in-flight Task and drop a not-yet-awaited ChatAuthFlow so its
+    /// relay subscription stops. A wait already spawned by `awaitApproval`
+    /// runs to completion inside Paykit and cannot be aborted; after that
+    /// FFI await returns, the local flow is released so the poll can stop.
+    /// Marks `flowId` so a later await rejects `auth_flow_cancelled`.
     /// Unknown ids and a second cancel are no-ops. Already-surfaced
     /// approvals are left untouched.
     @objc func cancelAuthFlow(
@@ -144,7 +161,7 @@ class PaykitLinkModule: NSObject {
                 if self.surfacedFlowIds.contains(id) {
                     return nil
                 }
-                if self.flows[id] == nil && self.awaitTasks[id] == nil {
+                if self.flows[id] == nil && self.awaitTasks[id] == nil && !self.awaitingFlowIds.contains(id) {
                     return nil
                 }
                 self.cancelledFlowIds.insert(id)
@@ -230,6 +247,7 @@ class PaykitLinkModule: NSObject {
                 self.flows.removeAll()
                 self.cancelledFlowIds.removeAll()
                 self.surfacedFlowIds.removeAll()
+                self.awaitingFlowIds.removeAll()
                 for task in self.awaitTasks.values {
                     task.cancel()
                 }
@@ -754,15 +772,29 @@ class PaykitLinkModule: NSObject {
         let id = try Self.requireText(flowId, name: "flowId")
         let flow: ChatAuthFlow = try lock.withLock {
             if cancelledFlowIds.contains(id) {
+                cancelledFlowIds.remove(id)
                 throw PaykitLinkBridgeError(
                     code: "auth_flow_cancelled",
                     message: Self.staticMessage("auth_flow_cancelled")
                 )
             }
+            if awaitingFlowIds.contains(id) {
+                throw PaykitLinkBridgeError(code: "validation", message: "unknown auth flow")
+            }
             guard let flow = flows[id] else {
                 throw PaykitLinkBridgeError(code: "validation", message: "unknown auth flow")
             }
+            awaitingFlowIds.insert(id)
             return flow
+        }
+        defer {
+            lock.withLock {
+                awaitingFlowIds.remove(id)
+                awaitTasks.removeValue(forKey: id)
+                cancelledFlowIds.remove(id)
+                surfacedFlowIds.remove(id)
+                flows.removeValue(forKey: id)
+            }
         }
         try Task.checkCancellation()
         let session = try await flow.awaitApproval()
@@ -1077,6 +1109,8 @@ class PaykitLinkModule: NSObject {
             return "validation"
         case "consumed":
             return "consumed"
+        case "auth_flow_cancelled":
+            return "auth_flow_cancelled"
         default:
             return "protocol"
         }

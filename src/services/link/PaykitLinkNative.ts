@@ -168,6 +168,12 @@ export interface PaykitLinkNativeApi {
   generateReceiverKey(): Promise<ReceiverKeyResult>;
   getReceiverPublicKey(receiverAlias: string): Promise<string>;
   startAuthFlow(capabilities: string, relayUrl?: string): Promise<AuthFlowStart>;
+  /**
+   * Suspend until Ring approves `flowId`. A second call for the same live
+   * `flowId` is rejected (`validation` / unknown auth flow) — there is no
+   * retry-in-place. After a failed, cancelled, or successful await the native
+   * flow is gone; start a new `startAuthFlow` to try again.
+   */
   awaitAuthApproval(flowId: string): Promise<AuthSessionResult>;
   /**
    * Android: stop the Ring-auth foreground keepalive if `flowId` still owns
@@ -177,11 +183,14 @@ export interface PaykitLinkNativeApi {
   stopAuthKeepalive(flowId: string): Promise<void>;
   /**
    * Retire `flowId`'s native waiter. Paykit FFI has no auth-flow cancel
-   * primitive; native discard cancels the await job, drops the flow (relay
-   * poll stops), stops keepalive, and rejects a later `awaitAuthApproval`
-   * with `auth_flow_cancelled`. Unknown ids and a second cancel are no-ops.
-   * A flow whose approval was already surfaced to JS is left untouched.
-   * No-op when the native method is missing (older builds).
+   * primitive. Native discard cancels the await job, drops a not-yet-awaited
+   * flow so its relay subscription stops, stops keepalive, and rejects a
+   * later `awaitAuthApproval` with `auth_flow_cancelled`. A wait already
+   * spawned by `awaitApproval` runs to completion inside Paykit and cannot
+   * be aborted; after that FFI await returns, native closes the handle so
+   * the poll can stop. Unknown ids and a second cancel are no-ops. A flow
+   * whose approval was already surfaced to JS is left untouched. No-op when
+   * the native method is missing (older builds).
    */
   cancelAuthFlow(flowId: string): Promise<void>;
   /**
