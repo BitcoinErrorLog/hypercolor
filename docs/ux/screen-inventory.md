@@ -107,7 +107,7 @@ Tab icons: `src/navigation/tabBarIcons.tsx` (`Ionicons` from `@expo/vector-icons
 | `hypercolor://awaiting-auth` | RN linking → Auth `AwaitingRingAuth` | Waiting screen (**params may lack `ringAuthUrl`**; QR block hidden if empty) |
 | `hypercolor://ring-callback?…` | `RootNavigator.handleDeepLink` → `PubkyRingAuthService.handleRingCallback` (`src/services/PubkyRingAuthService.ts`) | On success `setAuthenticated` → Main tabs. On failure Alert `Authorization Failed`. **Does not navigate EnableMessaging.** Welcome `paykit-connect` is identity/UKD only (`LinkService.ts` header comment). |
 | `pubkyring://paykit-connect?deviceId&callback=hypercolor://ring-callback&ephemeralPk&caps=` | Built by `buildPaykitConnectUrl`; opened from `requestDelegation` if `Linking.canOpenURL('pubkyring://')` | External Ring; Hypercolor shows `AwaitingRingAuth` |
-| `pubkyauth://…` | `LinkService.enable` → `PaykitLinkNative.startAuthFlow`; `enableMessagingController` auto-opens only URLs with prefix `pubkyauth://` | Enable Messaging authorizing + QR. Return is **not** a Hypercolor deep link: native `awaitAuthApproval(flowId)` then `phase: 'success'`. |
+| `pubkyauth://…` | `LinkService.enable` → `PaykitLinkNative.startAuthFlow`; `enableMessagingController` auto-opens only URLs with prefix `pubkyauth://` | Enable Messaging authorizing + QR. Return is **not** a Hypercolor deep link: native `awaitAuthApproval(flowId)` then `phase: 'success'`. Discarded / user-cancelled flows call `cancelAuthFlow(flowId)` instead of draining via `awaitEnabled()`. |
 | `hypercolor://join-public?channel=…` | `RootNavigator.handleDeepLink` + `parsePublicChannelRef` (`src/types/group.ts`). If unauthenticated, `setPendingPublicJoin`; Channels focus calls `takePendingPublicJoin` | `ChannelScreen` or Alert |
 | `hypercolor://e2e/*` (`__DEV__` only) | `src/navigation/e2eDeepLinks.ts` (`debug-signup`, `switch`, `add-contact`, `send-dm`, `sync-inbox`, `request-payment`, `open-thread`, `whoami`, `ping`, `liveproof`, `last-bodies`). Stripped from RN linking via `linkingUrlForReactNavigation` | Test HUD / navigation; not shipping UX |
 | `lightning:` / `bitcoin:` | `walletHandoff.ts` `openBuiltUri` | External wallet or “No wallet installed” Alert |
@@ -133,7 +133,7 @@ Tab icons: `src/navigation/tabBarIcons.tsx` (`Ionicons` from `@expo/vector-icons
 
 Android hardware Back should still pop (no `BackHandler` lock). That does not give iOS a content-area exit.
 
-Related phases on the same screen: `checking` (spinner), `authorizing` (QR + Open Ring + Copy; Back cancels the native flow), `enabled` (Authorize again + Back), `session-offline` / `error` (Try again + Back), `native-missing` (no retry, Back only).
+Related phases on the same screen: `checking` (spinner), `authorizing` (QR + Open Ring + Copy; Back cancels the native flow via `cancelAuthFlow`), `enabled` (Authorize again + Back), `session-offline` / `error` (Try again + Back), `native-missing` (no retry, Back only).
 
 ## Missing product surfaces (confirmed absent)
 

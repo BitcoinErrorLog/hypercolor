@@ -55,7 +55,7 @@ export type EnableMessagingController = {
   openRing: () => Promise<void>;
   copyAuthorizationUrl: () => void;
   cancel: () => void;
-  __testing: {
+  __testing?: {
     lateFlowDispositionSize: () => number;
   };
 };
@@ -143,13 +143,14 @@ export function createEnableMessagingController(
   function disposeLateFlow(myAttempt: number, nextFlow: LinkEnableFlow): void {
     const recorded = lateFlowDisposition.get(myAttempt);
     lateFlowDisposition.delete(myAttempt);
-    // Enabled: FGS stop only. cancel+drain would sign out the live session.
+    // Enabled: FGS stop only. cancel() would native-cancel this flowId; the
+    // live session is a different flow. Do not drain via awaitEnabled() —
+    // that short-circuits on cancelled and never reaches awaitAuthApproval.
     if (recorded === 'release' || (recorded === undefined && state.phase === 'success')) {
       nextFlow.releaseKeepalive();
       return;
     }
     nextFlow.cancel();
-    void nextFlow.awaitEnabled().catch(() => undefined);
   }
 
   async function applyStatus(status: LinkEnableStatus): Promise<void> {
@@ -354,8 +355,12 @@ export function createEnableMessagingController(
       flow = null;
       emit({ starting: false });
     },
-    __testing: {
-      lateFlowDispositionSize: () => lateFlowDisposition.size,
-    },
+    ...(process.env.NODE_ENV === 'test' || (typeof __DEV__ !== 'undefined' && __DEV__)
+      ? {
+          __testing: {
+            lateFlowDispositionSize: () => lateFlowDisposition.size,
+          },
+        }
+      : {}),
   };
 }

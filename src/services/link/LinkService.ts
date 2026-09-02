@@ -126,8 +126,12 @@ export type LinkEnableFlow = {
   authorizationUrl: string;
   awaitEnabled: () => Promise<{ pubky: string; receiverPath: string; noisePublicKey: string }>;
   /**
-   * Marks the flow cancelled. A subsequently approved session is signed out.
-   * Use only for user/OS cancel, expiry, or a superseded attempt.
+   * Marks the flow cancelled and fires native `cancelAuthFlow(flowId)` so
+   * the waiter is retired even if `awaitEnabled` never ran. A session that
+   * already resolved from an in-flight `awaitEnabled` is still signed out by
+   * that function's post-approval cancelled check. Use only for user/OS
+   * cancel, expiry, or a superseded attempt. Does not change
+   * {@link awaitEnabled}'s approval-order checks.
    */
   cancel: () => void;
   /**
@@ -367,11 +371,19 @@ export const LinkService = {
         // Keepalive stop must not mask auth success, cancellation, or failure.
       }
     };
+    const cancelNativeFlow = async () => {
+      try {
+        await PaykitLinkNative.cancelAuthFlow(flowId);
+      } catch {
+        // Native cancel must not mask JS cancellation or a later enable().
+      }
+    };
     return {
       authorizationUrl,
       cancel: () => {
         cancelled = true;
         void stopKeepalive();
+        void cancelNativeFlow();
       },
       releaseKeepalive: () => {
         void stopKeepalive();

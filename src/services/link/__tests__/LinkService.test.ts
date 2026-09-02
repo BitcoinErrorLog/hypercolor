@@ -48,6 +48,7 @@ jest.mock('../PaykitLinkNative', () => ({
     startAuthFlow: jest.fn(),
     awaitAuthApproval: jest.fn(),
     stopAuthKeepalive: jest.fn(),
+    cancelAuthFlow: jest.fn(),
     signinWithSecret: jest.fn(),
     signupWithSecret: jest.fn(),
     restoreSession: jest.fn(),
@@ -73,7 +74,15 @@ jest.mock('../PaykitLinkNative', () => ({
     const code = (err as { code?: unknown }).code;
     return (
       typeof code === 'string' &&
-      ['network', 'auth', 'protocol', 'consumed', 'validation', 'unavailable'].includes(code)
+      [
+        'network',
+        'auth',
+        'protocol',
+        'consumed',
+        'validation',
+        'unavailable',
+        'auth_flow_cancelled',
+      ].includes(code)
     );
   },
   createLinkNativeError: (code: string, message: string) => ({ code, message }),
@@ -391,6 +400,7 @@ describe('LinkService', () => {
     mockedNative.signOutSession.mockResolvedValue(undefined);
     mockedNative.clearAllNativeSecrets.mockResolvedValue(undefined);
     mockedNative.stopAuthKeepalive.mockResolvedValue(undefined);
+    mockedNative.cancelAuthFlow.mockResolvedValue(undefined);
     mockedNative.closeLink.mockResolvedValue(undefined);
     mockedNative.probeInboundLink.mockResolvedValue({ result: 'none' });
     mockedNative.getReceiverMarker.mockResolvedValue({
@@ -678,6 +688,31 @@ describe('LinkService', () => {
 
       expect(mockedNative.awaitAuthApproval).not.toHaveBeenCalled();
       expect(mockedNative.stopAuthKeepalive).toHaveBeenCalledWith('flow-1');
+      expect(mockedNative.cancelAuthFlow).toHaveBeenCalledWith('flow-1');
+    });
+
+    it('calls cancelAuthFlow on cancel and not on releaseKeepalive', async () => {
+      mockedNative.startAuthFlow
+        .mockResolvedValueOnce({
+          flowId: 'flow-cancel',
+          authorizationUrl: 'pubkyauth://grant',
+        })
+        .mockResolvedValueOnce({
+          flowId: 'flow-release',
+          authorizationUrl: 'pubkyauth://grant',
+        });
+
+      const cancelled = await LinkService.enable();
+      cancelled.cancel();
+      await Promise.resolve();
+      expect(mockedNative.cancelAuthFlow).toHaveBeenCalledWith('flow-cancel');
+      expect(mockedNative.cancelAuthFlow).toHaveBeenCalledTimes(1);
+
+      const released = await LinkService.enable();
+      released.releaseKeepalive();
+      await Promise.resolve();
+      expect(mockedNative.cancelAuthFlow).toHaveBeenCalledTimes(1);
+      expect(mockedNative.stopAuthKeepalive).toHaveBeenCalledWith('flow-release');
     });
 
     it('does not mask awaitEnabled success if stopAuthKeepalive rejects', async () => {

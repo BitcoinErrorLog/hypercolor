@@ -502,7 +502,7 @@ describe('enableMessagingController', () => {
     await stale;
     expect(firstFlow.cancel).toHaveBeenCalled();
     expect(firstFlow.releaseKeepalive).not.toHaveBeenCalled();
-    expect(firstFlow.awaitEnabled).toHaveBeenCalled();
+    expect(firstFlow.awaitEnabled).not.toHaveBeenCalled();
     expect(controller.getState().authorizationUrl).not.toBe('pubkyauth://stale');
 
     await fresh;
@@ -532,7 +532,7 @@ describe('enableMessagingController', () => {
       await started;
     }
 
-    expect(controller.__testing.lateFlowDispositionSize()).toBe(0);
+    expect(controller.__testing?.lateFlowDispositionSize()).toBe(0);
 
     const freshFlow = authFlow();
     enable.mockResolvedValueOnce(freshFlow);

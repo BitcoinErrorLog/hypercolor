@@ -28,6 +28,7 @@ export const LINK_NATIVE_ERROR_CODES = [
   'consumed',
   'validation',
   'unavailable',
+  'auth_flow_cancelled',
 ] as const;
 
 export type LinkNativeErrorCode = (typeof LINK_NATIVE_ERROR_CODES)[number];
@@ -67,6 +68,7 @@ const COARSE_NATIVE_MESSAGES: Record<LinkNativeErrorCode, string> = {
   consumed: 'resource consumed',
   validation: 'validation failed',
   unavailable: 'unavailable',
+  auth_flow_cancelled: 'auth flow cancelled',
 };
 
 export function toLinkNativeError(err: unknown): LinkNativeError {
@@ -173,6 +175,15 @@ export interface PaykitLinkNativeApi {
    * method is missing (iOS / older builds).
    */
   stopAuthKeepalive(flowId: string): Promise<void>;
+  /**
+   * Retire `flowId`'s native waiter. Paykit FFI has no auth-flow cancel
+   * primitive; native discard cancels the await job, drops the flow (relay
+   * poll stops), stops keepalive, and rejects a later `awaitAuthApproval`
+   * with `auth_flow_cancelled`. Unknown ids and a second cancel are no-ops.
+   * A flow whose approval was already surfaced to JS is left untouched.
+   * No-op when the native method is missing (older builds).
+   */
+  cancelAuthFlow(flowId: string): Promise<void>;
   /**
    * Dev/e2e only — release native builds reject with `unavailable` /
    * "secret import is disabled in release builds". Signs in with an
@@ -346,6 +357,13 @@ export const PaykitLinkNative: PaykitLinkNativeApi = {
       return Promise.resolve();
     }
     return invoke('stopAuthKeepalive', flowId);
+  },
+
+  cancelAuthFlow(flowId: string): Promise<void> {
+    if (PaykitLinkModule == null || typeof PaykitLinkModule.cancelAuthFlow !== 'function') {
+      return Promise.resolve();
+    }
+    return invoke('cancelAuthFlow', flowId);
   },
 
   signinWithSecret(identitySecretHex: string): Promise<AuthSessionResult> {

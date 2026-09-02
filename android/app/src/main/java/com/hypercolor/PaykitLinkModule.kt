@@ -37,13 +37,16 @@ import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
+import kotlinx.coroutines.CancellationException as CoroutineCancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import java.util.concurrent.CancellationException as JavaCancellationException
 import org.json.JSONObject
 
 class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaModule(reactContext) {
@@ -53,7 +56,7 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
     private val clientMutex = Mutex()
     private var client: ChatClient? = null
     private val sessions = ConcurrentHashMap<String, ChatSession>()
-    private val flows = AuthFlowSlots<ChatAuthFlow>()
+    private val flows = AuthFlowCancelRegistry<ChatAuthFlow>()
     private val handles = ConcurrentHashMap<String, LinkHandle>()
     private val keepalive = AuthKeepaliveCoordinator(
         ops = object : AuthKeepaliveOps {
@@ -124,7 +127,7 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
             try {
                 startAuthKeepalive(flowId)
             } catch (error: Throwable) {
-                flows.take(flowId)
+                closeAuthFlow(flows.abandon(flowId))
                 throw if (error is PaykitLinkBridgeError) error else mapError(error)
             }
             resolveMap(promise) {
@@ -138,15 +141,48 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
     fun awaitAuthApproval(flowId: String, promise: Promise) {
         launch(promise) {
             val id = requireText(flowId, "flowId")
-            if (flows.peek(id) == null) {
-                throw PaykitLinkBridgeError("validation", "unknown auth flow")
+            val flow = when (val start = flows.startAwait(id)) {
+                is AuthFlowAwaitStart.Cancelled ->
+                    throw PaykitLinkBridgeError(
+                        "auth_flow_cancelled",
+                        staticMessage("auth_flow_cancelled"),
+                    )
+                is AuthFlowAwaitStart.Missing ->
+                    throw PaykitLinkBridgeError("validation", "unknown auth flow")
+                is AuthFlowAwaitStart.Ready -> start.flow
             }
             startAuthKeepalive(id)
-            val flow = flows.take(id)
-                ?: throw PaykitLinkBridgeError("validation", "unknown auth flow")
+            val job = kotlin.coroutines.coroutineContext[Job]
+            if (job != null) {
+                flows.attachCancellable(id, AuthFlowCancellable { job.cancel() })
+            }
+            if (flows.isCancelled(id)) {
+                throw PaykitLinkBridgeError(
+                    "auth_flow_cancelled",
+                    staticMessage("auth_flow_cancelled"),
+                )
+            }
             try {
-                persistSession(flow.awaitApproval(), promise)
+                val session = try {
+                    flow.awaitApproval()
+                } catch (error: Throwable) {
+                    if (isCoroutineCancellation(error)) {
+                        throw PaykitLinkBridgeError(
+                            "auth_flow_cancelled",
+                            staticMessage("auth_flow_cancelled"),
+                        )
+                    }
+                    throw error
+                }
+                if (!flows.markSurfaced(id)) {
+                    throw PaykitLinkBridgeError(
+                        "auth_flow_cancelled",
+                        staticMessage("auth_flow_cancelled"),
+                    )
+                }
+                persistSession(session, promise)
             } finally {
+                flows.detachCancellable(id)
                 releaseAuthKeepalive(id)
             }
         }
@@ -156,6 +192,28 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
     fun stopAuthKeepalive(flowId: String, promise: Promise) {
         launch(promise) {
             releaseAuthKeepalive(requireText(flowId, "flowId"))
+            promise.resolve(null)
+        }
+    }
+
+    /**
+     * Retires [flowId]'s native waiter. Paykit FFI has no auth-flow cancel
+     * primitive; this drops the UniFFI flow (stopping the relay poll),
+     * cancels an in-flight await, stops keepalive, and marks the id so a
+     * later [awaitAuthApproval] rejects with `auth_flow_cancelled`. Unknown
+     * ids and a second cancel are no-ops. A flow whose approval was already
+     * surfaced to JS is left untouched.
+     */
+    @ReactMethod
+    fun cancelAuthFlow(flowId: String, promise: Promise) {
+        launch(promise) {
+            val id = requireText(flowId, "flowId")
+            val outcome = flows.cancel(id)
+            outcome.droppedCancellable?.cancel()
+            closeAuthFlow(outcome.droppedFlow)
+            if (outcome.kind == AuthFlowCancelKind.Cancelled) {
+                releaseAuthKeepalive(id)
+            }
             promise.resolve(null)
         }
     }
@@ -219,7 +277,10 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
     fun clearAllNativeSecrets(promise: Promise) {
         launch(promise) {
             sessions.clear()
-            flows.clear()
+            for ((flow, cancellable) in flows.drainLive()) {
+                cancellable?.cancel()
+                closeAuthFlow(flow)
+            }
             handles.clear()
             keepalive.releaseAll()
             clientMutex.withLock { client = null }
@@ -694,10 +755,27 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
             try {
                 block()
             } catch (error: Throwable) {
+                if (error is PaykitLinkBridgeError && error.code == "auth_flow_cancelled") {
+                    promise.reject("auth_flow_cancelled", staticMessage("auth_flow_cancelled"))
+                    return@launch
+                }
                 val mapped = mapError(error)
                 promise.reject(mapped.code, mapped.message)
             }
         }
+    }
+
+    private fun closeAuthFlow(flow: ChatAuthFlow?) {
+        if (flow == null) return
+        try {
+            flow.close()
+        } catch (_: Throwable) {
+            // UniFFI close is best-effort; the Cleaner still runs.
+        }
+    }
+
+    private fun isCoroutineCancellation(error: Throwable): Boolean {
+        return error is CoroutineCancellationException || error is JavaCancellationException
     }
 
     private suspend fun chatClient(): ChatClient {
@@ -930,6 +1008,7 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
         "signin_failed", "signup_failed", "session_restore_failed", "capabilities_missing" -> "auth"
         "validation" -> "validation"
         "consumed" -> "consumed"
+        "auth_flow_cancelled" -> "auth_flow_cancelled"
         else -> "protocol"
     }
 
@@ -939,6 +1018,7 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
         "validation" -> "validation failed"
         "consumed" -> "resource consumed"
         "unavailable" -> "unavailable"
+        "auth_flow_cancelled" -> "auth flow cancelled"
         else -> "protocol error"
     }
 }
