@@ -28,6 +28,7 @@ export type PaymentReviewInput = {
   nowMs: number;
   destinationsEmpty: boolean;
   walletUnavailable: boolean;
+  handoffError?: string | null;
 };
 
 export type PaymentReviewDestinationOption = {
@@ -180,7 +181,7 @@ export function mapPaymentReview(input: PaymentReviewInput): PaymentReviewView {
     feeText: null,
     expiryText: expiresAt !== null ? formatExpiry(expiresAt, input.nowMs) : null,
     warningText,
-    errorText,
+    errorText: input.handoffError ?? errorText,
     emptyDestinations: input.destinationsEmpty,
     expired,
     amountMismatch: mismatch,

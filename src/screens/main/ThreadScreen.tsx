@@ -66,6 +66,8 @@ import {
 } from '../../ui/composerActions';
 import { mapPaymentReview } from '../../ui/paymentReview';
 import { openBuiltUri } from '../../services/payments/walletHandoff';
+import { continuePaymentReview } from './continuePaymentReview';
+import { eventIdsWithDeliveryQueue } from '../../ui/failedSendRetry';
 import { useReduceMotion } from '../../ui/reduceMotion';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Thread'>;
@@ -100,9 +102,11 @@ export default function ThreadScreen({ route }: Props) {
   const [tipPickerOpen, setTipPickerOpen] = useState(false);
   const [review, setReview] = useState<PaymentReviewRequest | null>(null);
   const [walletUnavailable, setWalletUnavailable] = useState(false);
+  const [reviewHandoffError, setReviewHandoffError] = useState<string | null>(null);
   const [composerNotice, setComposerNotice] = useState<ComposerAttachNotice | null>(null);
   const [peerContact, setPeerContact] = useState<Contact | null>(null);
   const [linkStatus, setLinkStatus] = useState<LinkStatus | null>(null);
+  const [retryableEventIds, setRetryableEventIds] = useState<Set<string>>(() => new Set());
   const sessionKind = useSessionStatusStore(s => s.kind);
 
   const conversationId = buildDmConversationId(participantPubky);
@@ -119,6 +123,11 @@ export default function ThreadScreen({ route }: Props) {
     setAttachments(atts);
     setPayments(pays);
     setTipEndpoints(tips);
+    const failedIds = [
+      ...msgs.filter(row => row.deliveryState === 'failed').map(row => row.eventId),
+      ...atts.filter(row => row.deliveryState === 'failed').map(row => row.eventId),
+    ];
+    setRetryableEventIds(await eventIdsWithDeliveryQueue(failedIds));
     setLoading(false);
     const latest = msgs.reduce((max, m) => Math.max(max, m.sentAt), 0);
     await LinkService.markRead(conversationId, latest > 0 ? latest : Date.now());
@@ -186,6 +195,8 @@ export default function ThreadScreen({ route }: Props) {
       tipPickerOpen={tipPickerOpen}
       review={review}
       walletUnavailable={walletUnavailable}
+      reviewHandoffError={reviewHandoffError}
+      retryableEventIds={retryableEventIds}
       composerNotice={composerNotice}
       onBack={() => nav.goBack()}
       onChangeDraft={setDraft}
@@ -282,12 +293,14 @@ export default function ThreadScreen({ route }: Props) {
       }}
       onReview={next => {
         setWalletUnavailable(false);
+        setReviewHandoffError(null);
         setReview(next);
         setTipPickerOpen(false);
       }}
       onCloseReview={() => {
         setReview(null);
         setWalletUnavailable(false);
+        setReviewHandoffError(null);
       }}
       onCloseTipPicker={() => setTipPickerOpen(false)}
       onNeedTipAmount={endpoint => {
@@ -296,44 +309,45 @@ export default function ThreadScreen({ route }: Props) {
         setComposePayment(true);
         setTipPickerOpen(false);
       }}
-      onContinueReview={async uri => {
+      onContinueReview={uri => {
         if (!review) return;
-        const canOpen = await Linking.canOpenURL(uri);
-        if (!canOpen) {
-          setWalletUnavailable(true);
-          return;
-        }
-        if (review.kind === 'request' && review.record && review.selected) {
-          const { prepareRequestHandoff } = await import('../../services/payments/walletHandoff');
-          const prepared = prepareRequestHandoff({
-            requestAmountBtc: review.amountBtc,
-            endpointIdentifier: review.selected.identifier,
-            payload: review.selected.payload,
-          });
-          const mismatchOnly =
-            !prepared.ok && prepared.error.toLowerCase().includes('does not match');
-          if (prepared.paymentHash && (prepared.ok || mismatchOnly)) {
-            await PaymentService.recordDisplayedInvoice(
-              review.record.peerPubky,
-              review.record.paymentRequestId,
-              prepared.paymentHash,
-            );
+        void (async () => {
+          try {
+            const result = await continuePaymentReview(uri, review, {
+              canOpenURL: url => Linking.canOpenURL(url),
+              openUri: url => openBuiltUri(url),
+              recordDisplayedInvoice: (peer, paymentRequestId, paymentHash) =>
+                PaymentService.recordDisplayedInvoice(peer, paymentRequestId, paymentHash),
+            });
+            setWalletUnavailable(result.walletUnavailable);
+            setReviewHandoffError(result.error);
+            if (result.closeReview) {
+              setReview(null);
+              setWalletUnavailable(false);
+              setReviewHandoffError(null);
+            }
+          } catch (err) {
+            setWalletUnavailable(true);
+            setReviewHandoffError(sanitizeError(err, COPY.couldNotOpenWallet).message);
           }
-        }
-        await openBuiltUri(uri);
-        setReview(null);
+        })();
       }}
       sessionKind={sessionKind}
       peerContact={peerContact}
       linkStatus={linkStatus}
       onEnableMessaging={() => nav.navigate('EnableMessaging' as never)}
-      onRetryFailed={() => {
+      onRetryFailed={eventId => {
         void (async () => {
+          if (!retryableEventIds.has(eventId)) return;
           try {
             await LinkService.recoverPendingSends();
             await LinkService.drainRetries();
           } catch {
-            // Bubble stays Failed until a drain succeeds.
+            setRetryableEventIds(prev => {
+              const next = new Set(prev);
+              next.delete(eventId);
+              return next;
+            });
           }
           await reloadEncrypted();
         })();
@@ -360,6 +374,8 @@ export function ThreadScreenContent({
   tipPickerOpen,
   review,
   walletUnavailable,
+  reviewHandoffError,
+  retryableEventIds,
   composerNotice,
   onBack,
   onChangeDraft,
@@ -398,6 +414,8 @@ export function ThreadScreenContent({
   tipPickerOpen: boolean;
   review: PaymentReviewRequest | null;
   walletUnavailable: boolean;
+  reviewHandoffError: string | null;
+  retryableEventIds: ReadonlySet<string>;
   composerNotice: ComposerAttachNotice | null;
   onBack: () => void;
   onChangeDraft: (value: string) => void;
@@ -419,7 +437,7 @@ export function ThreadScreenContent({
   peerContact: Contact | null;
   linkStatus: LinkStatus | null;
   onEnableMessaging: () => void;
-  onRetryFailed: () => void;
+  onRetryFailed: (eventId: string) => void;
   onCopyPubky: () => void;
 }) {
   const flatListRef = useRef<FlatList<ThreadItem>>(null);
@@ -475,7 +493,15 @@ export function ThreadScreenContent({
         const isMine = item.record.senderPubky === localPubky;
         return (
           <View style={[styles.bubble, isMine ? styles.mine : styles.theirs]}>
-            <AttachmentBubble record={item.record} isMine={isMine} onRetrySend={onRetryFailed} />
+            <AttachmentBubble
+              record={item.record}
+              isMine={isMine}
+              onRetrySend={
+                retryableEventIds.has(item.record.eventId)
+                  ? () => onRetryFailed(item.record.eventId)
+                  : undefined
+              }
+            />
             <View style={styles.meta}>
               <Text style={styles.time}>{formatTime(item.sentAt)}</Text>
             </View>
@@ -505,14 +531,24 @@ export function ThreadScreenContent({
                   {formatDeliveryState(item.message.deliveryState)}
                 </Text>
                 {item.message.deliveryState === 'failed' ? (
-                  <TouchableOpacity
-                    accessibilityRole="button"
-                    accessibilityLabel={COPY.retry}
-                    hitSlop={HIT_SLOP_44}
-                    onPress={onRetryFailed}
-                  >
-                    <Text style={styles.retry}>{COPY.retry}</Text>
-                  </TouchableOpacity>
+                  retryableEventIds.has(item.message.eventId) ? (
+                    <TouchableOpacity
+                      accessibilityRole="button"
+                      accessibilityLabel={COPY.retry}
+                      hitSlop={HIT_SLOP_44}
+                      onPress={() => onRetryFailed(item.message.eventId)}
+                    >
+                      <Text style={styles.retry}>{COPY.retry}</Text>
+                    </TouchableOpacity>
+                  ) : (
+                    <Text
+                      testID="threadSendTerminal"
+                      accessibilityRole="text"
+                      style={styles.statusFailed}
+                    >
+                      {COPY.couldNotSendStartAgain}
+                    </Text>
+                  )
                 ) : null}
               </>
             ) : null}
@@ -520,7 +556,7 @@ export function ThreadScreenContent({
         </View>
       );
     },
-    [localPubky, onPaymentsChanged, onRetryFailed, onReview],
+    [localPubky, onPaymentsChanged, onRetryFailed, onReview, retryableEventIds],
   );
 
   const identity = peerIdentity(participantPubky, peerContact);
@@ -553,6 +589,7 @@ export function ThreadScreenContent({
         nowMs,
         destinationsEmpty: review.destinations.length === 0,
         walletUnavailable,
+        handoffError: reviewHandoffError,
       })
     : null;
 

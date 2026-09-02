@@ -179,6 +179,21 @@ describe('mapPaymentReview', () => {
     expect(view.primaryEnabled).toBe(true);
   });
 
+  it('omits the network row when the lightning network is not decoded', () => {
+    const dest = endpoint({
+      payload: 'lnbc1not-an-invoice',
+      invoiceAmount: null,
+      paymentHash: null,
+    });
+    const view = mapPaymentReview({
+      ...BASE,
+      requestAmountBtc: '0.001',
+      endpoint: dest,
+      destinations: [dest],
+    });
+    expect(view.networkText).toBeNull();
+  });
+
   it('disables the primary when destinations are empty', () => {
     const view = mapPaymentReview({
       ...BASE,

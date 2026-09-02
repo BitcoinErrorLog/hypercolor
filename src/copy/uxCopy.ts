@@ -160,10 +160,17 @@ export const COPY = {
   noTipDestinations: 'No tip destinations from this peer yet.',
   photoPermissionNotice: 'Photo library access is required to send images.',
   openSettings: 'Open settings',
-  messageByteCap: 'Messages are capped at 1000 bytes.',
+  messageByteCap: 'Messages are capped at 1000 bytes including envelope overhead.',
   reviewBeforePaying: 'Review before paying',
   openWallet: 'Open wallet',
   copyPaymentUri: 'Copy payment URI',
+  couldNotOpenWallet: 'Could not open a wallet for this payment.',
+  couldNotCompletePaymentAction: 'Could not complete that payment action.',
+  couldNotSendStartAgain: "Couldn't send — start again",
+  pendingPublicInvite: 'Pending invite to public topic',
+  dismissPendingInvite: 'Dismiss',
+  joinPendingInvite: 'Join',
+  loadPublicTopicsToJoin: 'Load public topics before joining this invite.',
   choosePaymentDestination: 'Choose a destination',
   tipAmountTitle: 'Send a tip',
   continueToReview: 'Continue',
@@ -198,9 +205,14 @@ export function paymentNetworkLabel(
 ): string | null {
   if (scheme === 'bitcoin') return COPY.networkBitcoinMainnet;
   if (scheme !== 'lightning') return null;
+  if (network === 'bitcoin') return COPY.networkLightningMainnet;
   if (network === 'regtest') return COPY.networkLightningRegtest;
   if (network === 'testnet') return COPY.networkLightningTestnet;
-  return COPY.networkLightningMainnet;
+  return null;
+}
+
+export function amountSatsApprox(sats: number): string {
+  return `≈ ${sats} sats`;
 }
 
 export function messageByteCountLabel(used: number, cap: number): string {

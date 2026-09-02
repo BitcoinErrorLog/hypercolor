@@ -12,7 +12,9 @@ jest.mock('../../../stores/sessionStatusStore', () => ({
 }));
 
 jest.mock('../../../services/StorageService', () => ({
-  StorageService: {},
+  StorageService: {
+    hasQueueItemForMessage: jest.fn().mockResolvedValue(false),
+  },
 }));
 
 jest.mock('../../../services/link/LinkService', () => ({
@@ -59,7 +61,9 @@ import {
   MAINNET_P2TR,
 } from '../../../services/payments/__tests__/bolt11Vectors';
 import type { PaymentReviewRequest } from '../../../components/PaymentRequestBubble';
+import { COPY } from '../../../copy/uxCopy';
 import { ThreadScreenContent } from '../ThreadScreen';
+import type { LinkMessage } from '../../../types/link';
 
 const PEER = 'b'.repeat(52);
 
@@ -100,6 +104,8 @@ function props(
     tipPickerOpen: false,
     review: null,
     walletUnavailable: false,
+    reviewHandoffError: null,
+    retryableEventIds: new Set<string>(),
     composerNotice: null,
     onBack: noop,
     onChangeDraft: noop,
@@ -240,6 +246,98 @@ describe('Thread payment compose → Review → handoff', () => {
         .props.onPress();
     });
     expect(onReview).toHaveBeenCalledWith(expect.objectContaining({ selected: first }));
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('keeps Copy reachable and shows a sanitized handoff error', async () => {
+    const dest = endpoint();
+    const review: PaymentReviewRequest = {
+      kind: 'request',
+      record: null,
+      peerPubky: PEER,
+      amountBtc: MAINNET_BOLT11_20U_BTC,
+      amountAsset: 'btc',
+      reference: 'invoice-1',
+      destinations: [dest],
+      selected: dest,
+    };
+    const tree = await render(
+      <ThreadScreenContent
+        {...props({
+          review,
+          walletUnavailable: true,
+          reviewHandoffError: COPY.couldNotOpenWallet,
+        })}
+      />,
+    );
+    expect(
+      tree.root.findByProps({ testID: 'paymentReviewContinue' }).props.accessibilityLabel,
+    ).toBe(COPY.copyPaymentUri);
+    expect(JSON.stringify(tree.toJSON())).toContain(COPY.couldNotOpenWallet);
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('shows a terminal no-Retry state for a permanently dropped send', async () => {
+    const message: LinkMessage = {
+      ownerPubky: 'a'.repeat(52),
+      eventId: '33333333-3333-4333-8333-333333333333',
+      conversationId: `dm:${PEER}`,
+      peerPubky: PEER,
+      senderPubky: 'a'.repeat(52),
+      direction: 'sent',
+      kind: 'hypercolor.chat.message',
+      rawJson: '{}',
+      body: 'hello',
+      sentAt: 1,
+      receivedAt: null,
+      deliveryState: 'failed',
+    };
+    const tree = await render(
+      <ThreadScreenContent {...props({ linkMessages: [message], retryableEventIds: new Set() })} />,
+    );
+    expect(tree.root.findByProps({ testID: 'threadSendTerminal' }).props.children).toBe(
+      COPY.couldNotSendStartAgain,
+    );
+    expect(tree.root.findAllByProps({ accessibilityLabel: COPY.retry })).toHaveLength(0);
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('offers Retry when the delivery queue still holds the send', async () => {
+    const onRetryFailed = jest.fn();
+    const eventId = '33333333-3333-4333-8333-333333333333';
+    const message: LinkMessage = {
+      ownerPubky: 'a'.repeat(52),
+      eventId,
+      conversationId: `dm:${PEER}`,
+      peerPubky: PEER,
+      senderPubky: 'a'.repeat(52),
+      direction: 'sent',
+      kind: 'hypercolor.chat.message',
+      rawJson: '{}',
+      body: 'hello',
+      sentAt: 1,
+      receivedAt: null,
+      deliveryState: 'failed',
+    };
+    const tree = await render(
+      <ThreadScreenContent
+        {...props({
+          linkMessages: [message],
+          retryableEventIds: new Set([eventId]),
+          onRetryFailed,
+        })}
+      />,
+    );
+    await act(async () => {
+      tree.root.findByProps({ accessibilityLabel: COPY.retry }).props.onPress();
+    });
+    expect(onRetryFailed).toHaveBeenCalledWith(eventId);
     await act(async () => {
       tree.unmount();
     });
