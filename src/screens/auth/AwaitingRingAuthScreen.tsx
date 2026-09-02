@@ -20,11 +20,12 @@ import { COPY, ENABLE_AUTH_TTL_MS } from '../../copy/uxCopy';
 import { CustodyLine } from '../../ui/CustodyLine';
 import { HIT_SLOP_44 } from '../../ui/hitTarget';
 import { PubkyRingAuthService } from '../../services/PubkyRingAuthService';
+import { subscribeConnectAuthFeedback } from '../../ui/connectAuthFeedback';
 
 type Nav = NativeStackNavigationProp<AuthStackParamList, 'AwaitingRingAuth'>;
 type Route = RouteProp<AuthStackParamList, 'AwaitingRingAuth'>;
 
-type AwaitPhase = 'waiting' | 'expired';
+type AwaitPhase = 'waiting' | 'expired' | 'denied' | 'offline';
 
 /**
  * Shown after Welcome starts paykit-connect.
@@ -33,11 +34,23 @@ type AwaitPhase = 'waiting' | 'expired';
 export default function AwaitingRingAuthScreen() {
   const nav = useNavigation<Nav>();
   const route = useRoute<Route>();
-  const ringAuthUrl = route.params?.ringAuthUrl ?? '';
+  const initialUrl = route.params?.ringAuthUrl ?? '';
+  const [ringAuthUrl, setRingAuthUrl] = useState(initialUrl);
+  const [expiresAt, setExpiresAt] = useState(() => {
+    return (
+      route.params?.expiresAt ??
+      PubkyRingAuthService.getPendingDelegationExpiresAt() ??
+      Date.now() + ENABLE_AUTH_TTL_MS
+    );
+  });
   const [copied, setCopied] = useState(false);
-  const [phase, setPhase] = useState<AwaitPhase>(
-    PubkyRingAuthService.isPendingDelegationExpired() ? 'expired' : 'waiting',
-  );
+  const [phase, setPhase] = useState<AwaitPhase>(() => {
+    const expires =
+      route.params?.expiresAt ??
+      PubkyRingAuthService.getPendingDelegationExpiresAt() ??
+      Date.now() + ENABLE_AUTH_TTL_MS;
+    return Date.now() >= expires ? 'expired' : 'waiting';
+  });
 
   function handleCopy() {
     if (!ringAuthUrl) return;
@@ -50,10 +63,30 @@ export default function AwaitingRingAuthScreen() {
     nav.goBack();
   }, [nav]);
 
+  const startNewDelegation = useCallback(async () => {
+    await PubkyRingAuthService.cancelPendingDelegation();
+    const deviceId = `hypercolor-${Date.now().toString(16)}`;
+    const next = await PubkyRingAuthService.requestDelegation(deviceId);
+    setRingAuthUrl(next.url);
+    setExpiresAt(next.expiresAt);
+    setCopied(false);
+    setPhase(Date.now() >= next.expiresAt ? 'expired' : 'waiting');
+  }, []);
+
   const handleGenerateNew = useCallback(async () => {
     await PubkyRingAuthService.cancelPendingDelegation();
     nav.goBack();
   }, [nav]);
+
+  const handleTryAgain = useCallback(async () => {
+    if (phase === 'offline' || phase === 'denied' || phase === 'expired') {
+      try {
+        await startNewDelegation();
+      } catch {
+        setPhase('offline');
+      }
+    }
+  }, [phase, startNewDelegation]);
 
   useEffect(() => {
     const sub = BackHandler.addEventListener('hardwareBackPress', () => {
@@ -64,12 +97,36 @@ export default function AwaitingRingAuthScreen() {
   }, [handleCancel]);
 
   useEffect(() => {
+    return subscribeConnectAuthFeedback(next => {
+      setPhase(next);
+    });
+  }, []);
+
+  useEffect(() => {
     if (phase !== 'waiting') return;
+    const remaining = Math.max(0, expiresAt - Date.now());
     const timer = setTimeout(() => {
       setPhase('expired');
-    }, ENABLE_AUTH_TTL_MS);
+    }, remaining);
     return () => clearTimeout(timer);
-  }, [phase]);
+  }, [phase, expiresAt]);
+
+  const title =
+    phase === 'expired'
+      ? COPY.authorizationExpired
+      : phase === 'denied'
+        ? COPY.authorizationDeclined
+        : phase === 'offline'
+          ? COPY.sessionOffline
+          : COPY.waitingForRing;
+  const body =
+    phase === 'expired'
+      ? COPY.welcomeExpiredBody
+      : phase === 'denied'
+        ? COPY.authorizationDeclinedBody
+        : phase === 'offline'
+          ? COPY.welcomeOffline
+          : COPY.waitingForRingBody;
 
   return (
     <SafeAreaView style={styles.container} testID="awaitingRingAuthScreen">
@@ -92,12 +149,8 @@ export default function AwaitingRingAuthScreen() {
           {phase === 'waiting' ? (
             <ActivityIndicator size="large" color="#7c3aed" style={styles.spinner} />
           ) : null}
-          <Text style={styles.title}>
-            {phase === 'expired' ? COPY.authorizationExpired : COPY.waitingForRing}
-          </Text>
-          <Text style={styles.description}>
-            {phase === 'expired' ? COPY.welcomeExpiredBody : COPY.waitingForRingBody}
-          </Text>
+          <Text style={styles.title}>{title}</Text>
+          <Text style={styles.description}>{body}</Text>
           {phase === 'waiting' && ringAuthUrl ? (
             <View style={styles.urlBlock}>
               <Text style={styles.sectionTitle}>Paykit-connect link</Text>
@@ -114,7 +167,9 @@ export default function AwaitingRingAuthScreen() {
                 accessibilityLabel={COPY.openPubkyRing}
                 style={styles.primaryButton}
                 onPress={() => {
-                  void Linking.openURL(ringAuthUrl);
+                  void Linking.openURL(ringAuthUrl).catch(() => {
+                    setPhase('offline');
+                  });
                 }}
               >
                 <Text style={styles.primaryButtonText}>{COPY.openPubkyRing}</Text>
@@ -144,6 +199,32 @@ export default function AwaitingRingAuthScreen() {
             >
               <Text style={styles.primaryButtonText}>{COPY.generateNewLink}</Text>
             </TouchableOpacity>
+          ) : null}
+          {phase === 'denied' || phase === 'offline' ? (
+            <>
+              <TouchableOpacity
+                testID="awaitingRingAuthTryAgain"
+                accessibilityRole="button"
+                accessibilityLabel={COPY.tryAgain}
+                style={styles.primaryButton}
+                onPress={() => {
+                  void handleTryAgain();
+                }}
+              >
+                <Text style={styles.primaryButtonText}>{COPY.tryAgain}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                testID="awaitingRingAuthSecondaryCancel"
+                accessibilityRole="button"
+                accessibilityLabel={COPY.cancel}
+                style={styles.secondaryButton}
+                onPress={() => {
+                  void handleCancel();
+                }}
+              >
+                <Text style={styles.secondaryButtonText}>{COPY.cancel}</Text>
+              </TouchableOpacity>
+            </>
           ) : null}
           <CustodyLine />
         </View>
@@ -194,6 +275,7 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
     minHeight: 44,
     alignItems: 'center',
+    alignSelf: 'stretch',
   },
   secondaryButtonText: { color: '#9ca3af', fontSize: 16 },
 });

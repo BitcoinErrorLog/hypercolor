@@ -30,29 +30,19 @@ import { ENABLE_AUTH_TTL_MS } from '../copy/uxCopy';
 
 interface PendingHandoff {
   ephemeralSkHex: string;
-  url: string;
   startedAt: number;
 }
 
 let _pending: PendingHandoff | null = null;
-
-export function hasPendingDelegation(): boolean {
-  if (!_pending) return false;
-  return Date.now() - _pending.startedAt < ENABLE_AUTH_TTL_MS;
-}
-
-export function getPendingDelegationUrl(): string | null {
-  return hasPendingDelegation() ? (_pending?.url ?? null) : null;
-}
 
 export async function cancelPendingDelegation(): Promise<void> {
   _pending = null;
   await KeyStore.clearPendingRingHandoff();
 }
 
-export function isPendingDelegationExpired(): boolean {
-  if (!_pending) return false;
-  return Date.now() - _pending.startedAt >= ENABLE_AUTH_TTL_MS;
+export function getPendingDelegationExpiresAt(): number | null {
+  if (!_pending) return null;
+  return _pending.startedAt + ENABLE_AUTH_TTL_MS;
 }
 
 export function buildPaykitConnectUrl(deviceId: string, ephemeralPkHex: string): string {
@@ -69,31 +59,27 @@ export function buildPaykitConnectUrl(deviceId: string, ephemeralPkHex: string):
 
 /**
  * Generates an ephemeral X25519 keypair and builds the paykit-connect deep link.
- * Opens pubky-ring when it is installed on this device. Always returns `{ url }`
- * so Welcome can show a QR / copy on AwaitingRingAuth even if Ring is elsewhere.
+ * Opens pubky-ring when it is installed on this device. Always returns
+ * `{ url, expiresAt }` so Welcome can show a QR / copy on AwaitingRingAuth
+ * even if Ring is elsewhere. Each call mints a new ephemeral keypair.
  *
  * @param deviceId - An identifier for this device/session, e.g. "hypercolor-{timestamp}"
  */
-export async function requestDelegation(deviceId: string): Promise<{ url: string }> {
-  if (_pending && Date.now() - _pending.startedAt < ENABLE_AUTH_TTL_MS) {
-    const canOpen = await Linking.canOpenURL('pubkyring://');
-    if (canOpen) {
-      await Linking.openURL(_pending.url);
-    }
-    return { url: _pending.url };
-  }
-
+export async function requestDelegation(
+  deviceId: string,
+): Promise<{ url: string; expiresAt: number }> {
   const { secretKey: ephemeralSkHex, publicKey: ephemeralPkHex } = await x25519GenerateKeypair();
 
   const url = buildPaykitConnectUrl(deviceId, ephemeralPkHex);
-  _pending = { ephemeralSkHex, url, startedAt: Date.now() };
+  const startedAt = Date.now();
+  _pending = { ephemeralSkHex, startedAt };
   await KeyStore.setPendingRingHandoff(ephemeralSkHex);
 
   const canOpen = await Linking.canOpenURL('pubkyring://');
   if (canOpen) {
     await Linking.openURL(url);
   }
-  return { url };
+  return { url, expiresAt: startedAt + ENABLE_AUTH_TTL_MS };
 }
 
 /**
@@ -195,6 +181,13 @@ export async function handleRingCallback(url: string): Promise<DelegationResult>
     );
   }
 
+  const latestSk = _pending?.ephemeralSkHex ?? (await KeyStore.getPendingRingHandoff());
+  if (latestSk !== ephemeralSkHex) {
+    throw new Error(
+      'No pending delegation request. Call requestDelegation() before handling the callback.',
+    );
+  }
+
   // ── Store all delegated keys ──
   await KeyStore.setAppKeypair({
     secretKey: payload.app_key.ed25519_sk,
@@ -262,8 +255,6 @@ export const PubkyRingAuthService = {
   requestDelegation,
   buildPaykitConnectUrl,
   handleRingCallback,
-  hasPendingDelegation,
-  getPendingDelegationUrl,
   cancelPendingDelegation,
-  isPendingDelegationExpired,
+  getPendingDelegationExpiresAt,
 };

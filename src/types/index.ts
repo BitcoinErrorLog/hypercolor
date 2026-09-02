@@ -91,7 +91,7 @@ export type AuthStackParamList = {
    * Waiting for `hypercolor://ring-callback`.
    * `ringAuthUrl` is the `pubkyring://paykit-connect…` link shown as QR + copy.
    */
-  AwaitingRingAuth: { ringAuthUrl: string };
+  AwaitingRingAuth: { ringAuthUrl: string; expiresAt?: number };
 };
 
 export type MainTabParamList = {

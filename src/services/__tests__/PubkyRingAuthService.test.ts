@@ -50,6 +50,20 @@ import {
 } from '../PubkyRingAuthService';
 import { RING_GRANT_CAPABILITIES } from '../../types/link';
 import { pubkyZ32ToHex } from '../../utils/pubkyId';
+import { ENABLE_AUTH_TTL_MS } from '../../copy/uxCopy';
+
+let mockPersistedHandoffSk: string | null = null;
+
+beforeEach(() => {
+  mockPersistedHandoffSk = null;
+  mockGetPendingRingHandoff.mockImplementation(async () => mockPersistedHandoffSk);
+  jest.mocked(KeyStore.setPendingRingHandoff).mockImplementation(async (sk: string) => {
+    mockPersistedHandoffSk = sk;
+  });
+  jest.mocked(KeyStore.clearPendingRingHandoff).mockImplementation(async () => {
+    mockPersistedHandoffSk = null;
+  });
+});
 
 describe('PubkyRingAuthService AppCert', () => {
   it('does not copy the 5-minute handoff TTL onto the AppCert', () => {
@@ -109,7 +123,9 @@ describe('requestDelegation', () => {
 
     const result = await requestDelegation(deviceId);
 
-    expect(result).toEqual({ url: buildPaykitConnectUrl(deviceId, ephemeralPk) });
+    expect(result.url).toBe(buildPaykitConnectUrl(deviceId, ephemeralPk));
+    expect(result.expiresAt).toBeGreaterThan(Date.now());
+    expect(result.expiresAt).toBeLessThanOrEqual(Date.now() + ENABLE_AUTH_TTL_MS);
     expect(Linking.openURL).not.toHaveBeenCalled();
     expect(KeyStore.clearPendingRingHandoff).not.toHaveBeenCalled();
     expect(KeyStore.setPendingRingHandoff).toHaveBeenCalledWith('ephemeral-sk');
@@ -124,13 +140,17 @@ describe('requestDelegation', () => {
     expect(Linking.openURL).toHaveBeenCalledWith(result.url);
   });
 
-  it('reuses a live pending URL instead of minting a second keypair', async () => {
+  it('mints a new keypair on every Connect instead of reusing a live URL', async () => {
     (Linking.canOpenURL as jest.Mock).mockResolvedValue(false);
+    (x25519GenerateKeypair as jest.Mock)
+      .mockResolvedValueOnce({ secretKey: 'ephemeral-sk-1', publicKey: 'pk-1' })
+      .mockResolvedValueOnce({ secretKey: 'ephemeral-sk-2', publicKey: 'pk-2' });
     const first = await requestDelegation(deviceId);
-    (x25519GenerateKeypair as jest.Mock).mockClear();
     const second = await requestDelegation('hypercolor-other');
-    expect(second.url).toBe(first.url);
-    expect(x25519GenerateKeypair).not.toHaveBeenCalled();
+    expect(second.url).not.toBe(first.url);
+    expect(second.url).toBe(buildPaykitConnectUrl('hypercolor-other', 'pk-2'));
+    expect(x25519GenerateKeypair).toHaveBeenCalledTimes(2);
+    expect(KeyStore.setPendingRingHandoff).toHaveBeenLastCalledWith('ephemeral-sk-2');
   });
 });
 
@@ -204,6 +224,59 @@ describe('handleRingCallback z32 owner pubky', () => {
     expect(KeyStore.setPubky).toHaveBeenCalledWith(RING_PUBKY_Z32);
     expect(KeyStore.setHomeserver).toHaveBeenCalledWith(RING_HOMESERVER_Z32);
     expect(result).toEqual({ pubky: RING_PUBKY_Z32, homeserver: RING_HOMESERVER_Z32 });
+  });
+
+  it('rejects a callback after cancel without storing keys', async () => {
+    await cancelPendingDelegation();
+    jest.mocked(KeyStore.setAppKeypair).mockClear();
+    await expect(handleRingCallback(ringCallbackUrl(RING_PUBKY_Z32))).rejects.toThrow(
+      'No pending delegation request. Call requestDelegation() before handling the callback.',
+    );
+    expect(KeyStore.setAppKeypair).not.toHaveBeenCalled();
+  });
+
+  it('decrypts with the replacement keypair and rejects the superseded secret', async () => {
+    (x25519GenerateKeypair as jest.Mock).mockResolvedValue({
+      secretKey: 'ephemeral-sk-replacement',
+      publicKey: 'ephemeral-pk-replacement',
+    });
+    await requestDelegation('hypercolor-replacement');
+    const result = await handleRingCallback(ringCallbackUrl(RING_PUBKY_Z32));
+    expect(sb2Decrypt).toHaveBeenCalledWith(
+      'envelope-b64',
+      'ephemeral-sk-replacement',
+      pubkyZ32ToHex(RING_PUBKY_Z32),
+      `/pub/paykit.app/v0/handoff/${RING_REQUEST_ID}`,
+    );
+    expect(result.pubky).toBe(RING_PUBKY_Z32);
+  });
+
+  it('rejects a replayed callback after success', async () => {
+    await handleRingCallback(ringCallbackUrl(RING_PUBKY_Z32));
+    await expect(handleRingCallback(ringCallbackUrl(RING_PUBKY_Z32))).rejects.toThrow(
+      'No pending delegation request. Call requestDelegation() before handling the callback.',
+    );
+  });
+
+  it('does not persist keys when cancel races an in-flight callback', async () => {
+    let resolveGet!: (value: { isOk: () => boolean; value: string }) => void;
+    (rnGet as jest.Mock).mockImplementation(
+      () =>
+        new Promise(resolve => {
+          resolveGet = resolve;
+        }),
+    );
+    jest.mocked(KeyStore.setAppKeypair).mockClear();
+    const pending = handleRingCallback(ringCallbackUrl(RING_PUBKY_Z32));
+    await cancelPendingDelegation();
+    resolveGet({
+      isOk: () => true,
+      value: JSON.stringify({ sb2: 'envelope-b64' }),
+    });
+    await expect(pending).rejects.toThrow(
+      'No pending delegation request. Call requestDelegation() before handling the callback.',
+    );
+    expect(KeyStore.setAppKeypair).not.toHaveBeenCalled();
   });
 
   it('rejects a malformed pubky with a clean error instead of a hex radix crash', async () => {

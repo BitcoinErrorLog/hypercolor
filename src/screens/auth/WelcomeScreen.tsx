@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react';
+import React, { useCallback, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -8,7 +8,7 @@ import {
   ScrollView,
   ActivityIndicator,
 } from 'react-native';
-import { useNavigation } from '@react-navigation/native';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { AuthStackParamList } from '../../types';
 import { PubkyRingAuthService } from '../../services/PubkyRingAuthService';
@@ -25,29 +25,28 @@ export default function WelcomeScreen() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<{ message: string; details: string | null } | null>(null);
   const inFlight = useRef(false);
-  const startedRef = useRef(false);
+
+  useFocusEffect(
+    useCallback(() => {
+      inFlight.current = false;
+      setLoading(false);
+    }, []),
+  );
 
   async function handleConnect() {
-    if (inFlight.current || loading || startedRef.current) return;
+    if (inFlight.current || loading) return;
     inFlight.current = true;
     setLoading(true);
     setError(null);
     try {
-      const existing = PubkyRingAuthService.getPendingDelegationUrl();
-      if (existing) {
-        startedRef.current = true;
-        nav.navigate('AwaitingRingAuth', { ringAuthUrl: existing });
-        return;
-      }
       const deviceId = `hypercolor-${Date.now().toString(16)}`;
-      const { url } = await PubkyRingAuthService.requestDelegation(deviceId);
-      startedRef.current = true;
-      nav.navigate('AwaitingRingAuth', { ringAuthUrl: url });
+      const { url, expiresAt } = await PubkyRingAuthService.requestDelegation(deviceId);
+      nav.navigate('AwaitingRingAuth', { ringAuthUrl: url, expiresAt });
     } catch (err) {
+      inFlight.current = false;
       const sanitized = sanitizeError(err, COPY.couldNotStartAuthorization);
       setError({ message: sanitized.message, details: sanitized.details });
     } finally {
-      inFlight.current = false;
       setLoading(false);
     }
   }
@@ -75,6 +74,7 @@ export default function WelcomeScreen() {
             testID="welcomeConnectRing"
             accessibilityRole="button"
             accessibilityLabel={COPY.connectWithPubkyRing}
+            accessibilityState={{ busy: loading, disabled: loading }}
             style={[styles.primaryButton, loading && styles.buttonDisabled]}
             onPress={() => {
               void handleConnect();
