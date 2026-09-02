@@ -12,12 +12,21 @@ export function E2eSignupHud() {
 
   if (state.error) {
     return (
-      <View style={styles.wrap} testID="debugSignupErrorHud" pointerEvents="none">
+      <View style={styles.wrap} testID="debugSignupErrorHud" pointerEvents="box-none">
         <View style={styles.card}>
           <Text style={styles.errorTitle}>Debug signup failed</Text>
           <Text testID="debugSignupError" style={styles.errorBody} numberOfLines={4}>
             {state.pubky}
           </Text>
+          <TouchableOpacity
+            testID="debugSignupErrorDismiss"
+            accessibilityRole="button"
+            accessibilityLabel="Dismiss"
+            style={styles.button}
+            onPress={() => applyE2eSignupContinue(state)}
+          >
+            <Text style={styles.buttonText}>Dismiss</Text>
+          </TouchableOpacity>
         </View>
       </View>
     );

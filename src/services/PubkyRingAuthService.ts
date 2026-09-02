@@ -4,6 +4,7 @@ import { x25519GenerateKeypair, sb2VerifySignature, sb2Decrypt } from '../utils/
 import { parsePubky, pubkyZ32ToHex } from '../utils/pubkyId';
 import { RING_GRANT_CAPABILITIES } from '../types/link';
 import { KeyStore, type AppCert } from './KeyStore';
+import { ENABLE_AUTH_TTL_MS } from '../copy/uxCopy';
 
 /**
  * PubkyRingAuthService
@@ -29,11 +30,30 @@ import { KeyStore, type AppCert } from './KeyStore';
 
 interface PendingHandoff {
   ephemeralSkHex: string;
+  url: string;
+  startedAt: number;
 }
 
 let _pending: PendingHandoff | null = null;
 
-// ─── Step 1: Open pubky-ring ──────────────────────────────────────────────────
+export function hasPendingDelegation(): boolean {
+  if (!_pending) return false;
+  return Date.now() - _pending.startedAt < ENABLE_AUTH_TTL_MS;
+}
+
+export function getPendingDelegationUrl(): string | null {
+  return hasPendingDelegation() ? (_pending?.url ?? null) : null;
+}
+
+export async function cancelPendingDelegation(): Promise<void> {
+  _pending = null;
+  await KeyStore.clearPendingRingHandoff();
+}
+
+export function isPendingDelegationExpired(): boolean {
+  if (!_pending) return false;
+  return Date.now() - _pending.startedAt >= ENABLE_AUTH_TTL_MS;
+}
 
 export function buildPaykitConnectUrl(deviceId: string, ephemeralPkHex: string): string {
   const callbackUrl = encodeURIComponent('hypercolor://ring-callback');
@@ -55,12 +75,19 @@ export function buildPaykitConnectUrl(deviceId: string, ephemeralPkHex: string):
  * @param deviceId - An identifier for this device/session, e.g. "hypercolor-{timestamp}"
  */
 export async function requestDelegation(deviceId: string): Promise<{ url: string }> {
+  if (_pending && Date.now() - _pending.startedAt < ENABLE_AUTH_TTL_MS) {
+    const canOpen = await Linking.canOpenURL('pubkyring://');
+    if (canOpen) {
+      await Linking.openURL(_pending.url);
+    }
+    return { url: _pending.url };
+  }
+
   const { secretKey: ephemeralSkHex, publicKey: ephemeralPkHex } = await x25519GenerateKeypair();
 
-  _pending = { ephemeralSkHex };
-  await KeyStore.setPendingRingHandoff(ephemeralSkHex);
-
   const url = buildPaykitConnectUrl(deviceId, ephemeralPkHex);
+  _pending = { ephemeralSkHex, url, startedAt: Date.now() };
+  await KeyStore.setPendingRingHandoff(ephemeralSkHex);
 
   const canOpen = await Linking.canOpenURL('pubkyring://');
   if (canOpen) {
@@ -109,7 +136,7 @@ export async function handleRingCallback(url: string): Promise<DelegationResult>
   const homeserver = parsed.searchParams.get('homeserver');
 
   if (!pubkyParam || !requestId || !homeserver) {
-    throw new Error(`Invalid callback URL — missing required params. Got: ${url}`);
+    throw new Error('Invalid callback URL — missing required params.');
   }
   if (mode !== 'secure_handoff') {
     throw new Error(`Unsupported handoff mode: ${mode}`);
@@ -132,7 +159,7 @@ export async function handleRingCallback(url: string): Promise<DelegationResult>
   const handoffUrl = `pubky://${pubky}/pub/paykit.app/v0/handoff/${requestId}`;
   const getResult = await rnGet(handoffUrl);
   if (!getResult.isOk() || !getResult.value) {
-    throw new Error(`Handoff not found at ${handoffUrl}`);
+    throw new Error('Handoff not found.');
   }
 
   const handoffJson = JSON.parse(getResult.value) as { sb2?: string };
@@ -235,4 +262,8 @@ export const PubkyRingAuthService = {
   requestDelegation,
   buildPaykitConnectUrl,
   handleRingCallback,
+  hasPendingDelegation,
+  getPendingDelegationUrl,
+  cancelPendingDelegation,
+  isPendingDelegationExpired,
 };

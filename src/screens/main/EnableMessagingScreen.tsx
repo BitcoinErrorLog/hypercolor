@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -8,6 +8,9 @@ import {
   ScrollView,
   ActivityIndicator,
   Linking,
+  AppState,
+  BackHandler,
+  type AppStateStatus,
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -15,31 +18,41 @@ import type { RootStackParamList } from '../../types';
 import { AuthQr } from '../../components/AuthQr';
 import { LinkService } from '../../services/link/LinkService';
 import { copyText } from '../../utils/copyText';
+import { COPY, RING_GRANT_SCOPE_DETAIL } from '../../copy/uxCopy';
+import { CustodyLine } from '../../ui/CustodyLine';
+import { ErrorDetails } from '../../ui/ErrorDetails';
+import { HIT_SLOP_44 } from '../../ui/hitTarget';
+import { subscribeEnableMessagingResume } from '../../ui/enableMessagingResume';
 import {
   createEnableMessagingController,
   INITIAL_ENABLE_MESSAGING_STATE,
   type EnableMessagingController,
+  type EnableMessagingPhase,
   type EnableMessagingState,
 } from './enableMessagingController';
 
 type Nav = NativeStackNavigationProp<RootStackParamList, 'EnableMessaging'>;
 
-function statusLabel(state: EnableMessagingState): string {
-  switch (state.phase) {
+export function enableStatusLabel(phase: EnableMessagingPhase): string {
+  switch (phase) {
     case 'checking':
-      return 'Checking messaging status…';
+      return COPY.checkingMessaging;
     case 'native-missing':
-      return 'Native module missing';
-    case 'enabled':
-      return 'Already enabled';
+      return COPY.messagingUnavailable;
+    case 'needs-enable':
+      return COPY.messagingNotEnabled;
     case 'session-offline':
-      return 'Session offline';
+      return COPY.sessionOffline;
     case 'authorizing':
-      return 'Waiting for Pubky Ring…';
+      return COPY.waitingForRing;
+    case 'expired':
+      return COPY.authorizationExpired;
+    case 'denied':
+      return COPY.authorizationDeclined;
     case 'success':
-      return 'Encrypted messaging enabled';
+      return COPY.encryptedMessagingEnabled;
     case 'error':
-      return 'Enable failed';
+      return COPY.couldNotStartAuthorization;
   }
 }
 
@@ -65,116 +78,213 @@ export default function EnableMessagingScreen() {
     };
   }, []);
 
-  function handleCancel() {
-    controllerRef.current?.cancel();
+  const handleDone = useCallback(() => {
+    if (state.phase !== 'success') {
+      controllerRef.current?.cancel();
+    }
     nav.goBack();
-  }
+  }, [nav, state.phase]);
+
+  const handleOpenChats = useCallback(() => {
+    nav.reset({
+      index: 0,
+      routes: [{ name: 'Main', params: { screen: 'Chats' } }],
+    });
+  }, [nav]);
+
+  useEffect(() => {
+    const onAppState = (next: AppStateStatus) => {
+      if (next === 'active') {
+        void controllerRef.current?.onAppActive();
+      }
+    };
+    const sub = AppState.addEventListener('change', onAppState);
+    const unsubResume = subscribeEnableMessagingResume(() => {
+      void controllerRef.current?.onAppActive();
+    });
+    return () => {
+      sub.remove();
+      unsubResume();
+    };
+  }, []);
+
+  useEffect(() => {
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      handleDone();
+      return true;
+    });
+    return () => sub.remove();
+  }, [handleDone]);
+
+  const handleBeginAuth = useCallback(() => {
+    void controllerRef.current?.beginAuth();
+  }, []);
+
+  const handleOpenRing = useCallback(() => {
+    void controllerRef.current?.openRing();
+  }, []);
+
+  const handleRetry = useCallback(() => {
+    void controllerRef.current?.retry();
+  }, []);
+
+  const handleCopyAuth = useCallback(() => {
+    controllerRef.current?.copyAuthorizationUrl();
+  }, []);
 
   const showAuthUrl = state.phase === 'authorizing' && state.authorizationUrl !== null;
-  const canRetry =
-    state.phase === 'error' || state.phase === 'session-offline' || state.phase === 'enabled';
+  const primaryLabel =
+    state.phase === 'needs-enable'
+      ? COPY.enableEncryptedMessaging
+      : state.phase === 'authorizing'
+        ? COPY.openPubkyRing
+        : state.phase === 'expired'
+          ? COPY.generateNewAuthorization
+          : state.phase === 'denied' || state.phase === 'error' || state.phase === 'session-offline'
+            ? COPY.tryAgain
+            : state.phase === 'success'
+              ? COPY.openChats
+              : null;
+  const secondaryLabel =
+    state.phase === 'native-missing'
+      ? COPY.back
+      : state.phase === 'needs-enable'
+        ? COPY.notNow
+        : state.phase === 'expired' ||
+            state.phase === 'denied' ||
+            state.phase === 'session-offline' ||
+            state.phase === 'error'
+          ? COPY.cancel
+          : state.phase === 'success'
+            ? COPY.done
+            : null;
 
   return (
     <SafeAreaView style={styles.container} testID="enableMessagingScreen">
       <View style={styles.header}>
         <TouchableOpacity
           testID="enableMessagingBack"
+          accessibilityRole="button"
           accessibilityLabel="Back"
-          onPress={handleCancel}
+          hitSlop={HIT_SLOP_44}
+          onPress={handleDone}
+          style={styles.backHit}
         >
           <Text style={styles.back}>← Back</Text>
         </TouchableOpacity>
-        <Text style={styles.title}>Messaging</Text>
-        <View style={{ width: 60 }} />
+        <Text style={styles.title}>{COPY.enableEncryptedMessaging}</Text>
+        <View style={styles.backHit} />
       </View>
 
       <ScrollView contentContainerStyle={styles.content}>
-        <Text style={styles.heading}>Enable encrypted messaging</Text>
-        <Text style={styles.explanation}>
-          Encrypted DMs and homeserver writes share one Paykit session. Approve{' '}
-          <Text style={styles.emphasis}>/pub/paykit/:rw,/pub/hypercolor.app/v1/:rw</Text> in Pubky
-          Ring. Hypercolor never holds your identity secret.
-        </Text>
+        <Text style={styles.heading}>{COPY.enableEncryptedMessaging}</Text>
+        <Text style={styles.explanation}>{COPY.approveScopesBody}</Text>
+        <Text style={styles.scopeDetail}>{RING_GRANT_SCOPE_DETAIL}</Text>
 
-        <View style={styles.statusCard}>
+        <View
+          style={styles.statusCard}
+          accessibilityRole="summary"
+          accessibilityLabel={enableStatusLabel(state.phase)}
+        >
           <Text style={styles.statusLabel}>Status</Text>
           <Text testID="enableMessagingStatus" style={styles.statusValue}>
-            {statusLabel(state)}
+            {enableStatusLabel(state.phase)}
           </Text>
           {state.message ? <Text style={styles.statusMessage}>{state.message}</Text> : null}
-          {state.pubky ? (
-            <Text style={styles.mono} numberOfLines={1} ellipsizeMode="middle">
-              {state.pubky}
-            </Text>
-          ) : null}
-          {state.receiverPath ? (
-            <Text style={styles.hint}>Receiver path {state.receiverPath}</Text>
-          ) : null}
+          {state.details ? <ErrorDetails details={state.details} /> : null}
         </View>
 
-        {state.phase === 'checking' || state.phase === 'authorizing' ? (
+        {state.phase === 'checking' ? (
           <ActivityIndicator size="large" color="#7c3aed" style={styles.spinner} />
         ) : null}
 
         {showAuthUrl && state.authorizationUrl ? (
           <View style={styles.urlBlock}>
-            <Text style={styles.sectionTitle}>Authorization URL</Text>
             <Text testID="enableMessagingScanHint" style={styles.scanHint}>
-              Scan with Pubky Ring on this or another device.
+              {COPY.waitingForRingBody}
             </Text>
             <AuthQr value={state.authorizationUrl} />
-            <Text
-              style={styles.authUrl}
-              selectable
-              onPress={() => {
-                void controllerRef.current?.openRing();
-              }}
-            >
+            <Text selectable style={styles.scopeDetail}>
               {state.authorizationUrl}
             </Text>
-            <TouchableOpacity
-              testID="enableMessagingOpenRing"
-              accessibilityLabel="Open Pubky Ring"
-              style={styles.primaryButton}
-              onPress={() => {
-                void controllerRef.current?.openRing();
-              }}
-            >
-              <Text style={styles.primaryButtonText}>Open Pubky Ring</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              testID="enableMessagingCopy"
-              style={styles.secondaryButton}
-              onPress={() => controllerRef.current?.copyAuthorizationUrl()}
-            >
-              <Text style={styles.secondaryButtonText}>
-                {state.copied ? 'Copied' : 'Copy authorization URL'}
-              </Text>
-            </TouchableOpacity>
           </View>
         ) : null}
 
         {state.phase === 'success' ? (
-          <Text style={styles.success}>
-            Ring approved the grant and this device published a receiver marker. You can leave this
-            screen.
-          </Text>
+          <View style={styles.successBlock} testID="enableMessagingSuccess">
+            <View
+              style={styles.successGlyph}
+              accessibilityRole="image"
+              accessibilityLabel="Enabled"
+            >
+              <Text style={styles.successGlyphMark}>✓</Text>
+            </View>
+            <Text style={styles.successTitle}>{COPY.encryptedMessagingEnabled}</Text>
+            <Text style={styles.successBody}>{COPY.encryptedMessagingEnabledBody}</Text>
+          </View>
         ) : null}
 
-        {canRetry ? (
+        {primaryLabel ? (
           <TouchableOpacity
-            testID="enableMessagingRetry"
-            accessibilityLabel={state.phase === 'enabled' ? 'Authorize again' : 'Try again'}
+            testID={
+              state.phase === 'success'
+                ? 'enableMessagingOpenChats'
+                : state.phase === 'authorizing'
+                  ? 'enableMessagingOpenRing'
+                  : state.phase === 'needs-enable'
+                    ? 'enableMessagingStart'
+                    : 'enableMessagingRetry'
+            }
+            accessibilityRole="button"
+            accessibilityLabel={primaryLabel}
             style={styles.primaryButton}
-            onPress={() => {
-              void controllerRef.current?.beginAuth();
-            }}
+            onPress={
+              state.phase === 'success'
+                ? handleOpenChats
+                : state.phase === 'authorizing'
+                  ? handleOpenRing
+                  : state.phase === 'denied' ||
+                      state.phase === 'error' ||
+                      state.phase === 'session-offline'
+                    ? handleRetry
+                    : handleBeginAuth
+            }
           >
-            <Text style={styles.primaryButtonText}>
-              {state.phase === 'enabled' ? 'Authorize again' : 'Try again'}
+            <Text style={styles.primaryButtonText}>{primaryLabel}</Text>
+          </TouchableOpacity>
+        ) : null}
+
+        {state.phase === 'authorizing' ? (
+          <TouchableOpacity
+            testID="enableMessagingCopy"
+            accessibilityRole="button"
+            accessibilityLabel={COPY.copyAuthorizationUrl}
+            style={styles.secondaryButton}
+            onPress={handleCopyAuth}
+          >
+            <Text style={styles.secondaryButtonText}>
+              {state.copied ? COPY.copied : COPY.copyAuthorizationUrl}
+            </Text>
+          </TouchableOpacity>
+        ) : secondaryLabel ? (
+          <TouchableOpacity
+            testID={state.phase === 'success' ? 'enableMessagingDone' : 'enableMessagingSecondary'}
+            accessibilityRole="button"
+            accessibilityLabel={secondaryLabel}
+            style={state.phase === 'success' ? styles.textButton : styles.secondaryButton}
+            onPress={handleDone}
+          >
+            <Text
+              style={state.phase === 'success' ? styles.textButtonText : styles.secondaryButtonText}
+            >
+              {secondaryLabel}
             </Text>
           </TouchableOpacity>
         ) : null}
+
+        <View style={styles.custodyWrap}>
+          <CustodyLine />
+        </View>
       </ScrollView>
     </SafeAreaView>
   );
@@ -187,16 +297,17 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 20,
-    paddingVertical: 14,
+    paddingVertical: 8,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: '#1a1a1a',
   },
-  back: { color: '#7c3aed', fontSize: 16, width: 60 },
-  title: { fontSize: 17, fontWeight: '600', color: '#f9fafb' },
-  content: { paddingHorizontal: 20, paddingVertical: 24, gap: 16 },
+  backHit: { minWidth: 44, minHeight: 44, justifyContent: 'center' },
+  back: { color: '#8f57f0', fontSize: 16 },
+  title: { flex: 1, fontSize: 17, fontWeight: '600', color: '#f9fafb', textAlign: 'center' },
+  content: { paddingHorizontal: 20, paddingVertical: 24, gap: 16, flexGrow: 1 },
   heading: { fontSize: 22, fontWeight: '700', color: '#f9fafb' },
-  explanation: { fontSize: 15, color: '#6b7280', lineHeight: 22 },
-  emphasis: { color: '#7c3aed', fontWeight: '600' },
+  explanation: { fontSize: 15, color: '#808692', lineHeight: 22 },
+  scopeDetail: { fontSize: 13, color: '#808692', fontFamily: 'monospace' },
   statusCard: {
     backgroundColor: '#111111',
     borderRadius: 12,
@@ -208,30 +319,36 @@ const styles = StyleSheet.create({
   statusLabel: {
     fontSize: 12,
     fontWeight: '600',
-    color: '#6b7280',
+    color: '#808692',
     textTransform: 'uppercase',
     letterSpacing: 0.8,
   },
   statusValue: { fontSize: 16, fontWeight: '600', color: '#f9fafb' },
   statusMessage: { fontSize: 14, color: '#9ca3af', lineHeight: 20 },
-  mono: { fontSize: 12, color: '#6b7280', fontFamily: 'monospace' },
-  hint: { fontSize: 12, color: '#4b5563' },
   spinner: { marginVertical: 8 },
   urlBlock: { gap: 12 },
   scanHint: { fontSize: 14, color: '#9ca3af', lineHeight: 20 },
-  sectionTitle: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#6b7280',
-    textTransform: 'uppercase',
-    letterSpacing: 0.8,
+  successBlock: { alignItems: 'center', gap: 12, paddingVertical: 12 },
+  successGlyph: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    backgroundColor: '#1f1b2e',
+    borderWidth: 2,
+    borderColor: '#7c3aed',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  authUrl: { fontSize: 13, color: '#7c3aed', lineHeight: 20 },
+  successGlyphMark: { color: '#86efac', fontSize: 36, fontWeight: '700' },
+  successTitle: { fontSize: 20, fontWeight: '700', color: '#f9fafb', textAlign: 'center' },
+  successBody: { fontSize: 15, color: '#808692', lineHeight: 22, textAlign: 'center' },
   primaryButton: {
     backgroundColor: '#7c3aed',
     borderRadius: 12,
     paddingVertical: 16,
+    minHeight: 44,
     alignItems: 'center',
+    alignSelf: 'stretch',
   },
   primaryButtonText: { color: '#fff', fontSize: 16, fontWeight: '600' },
   secondaryButton: {
@@ -239,8 +356,11 @@ const styles = StyleSheet.create({
     borderColor: '#374151',
     borderRadius: 12,
     paddingVertical: 14,
+    minHeight: 44,
     alignItems: 'center',
   },
   secondaryButtonText: { color: '#9ca3af', fontSize: 16 },
-  success: { fontSize: 15, color: '#86efac', lineHeight: 22 },
+  textButton: { minHeight: 44, alignItems: 'center', justifyContent: 'center' },
+  textButtonText: { color: '#8f57f0', fontSize: 16, fontWeight: '600' },
+  custodyWrap: { marginTop: 'auto', paddingTop: 24, paddingBottom: 8 },
 });

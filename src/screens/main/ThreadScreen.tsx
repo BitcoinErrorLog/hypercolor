@@ -20,7 +20,6 @@ import type { LinkMessage } from '../../types/link';
 import { buildDmConversationId } from '../../types/link';
 import { useAuthStore } from '../../stores/authStore';
 import { StorageService } from '../../services/StorageService';
-import { KeyStore } from '../../services/KeyStore';
 import { LinkService } from '../../services/link/LinkService';
 import { AttachmentBubble } from '../../components/AttachmentBubble';
 import { ComposerAttachButton } from '../../components/ComposerAttachButton';
@@ -31,12 +30,18 @@ import { EnableMessagingCta } from '../../components/EnableMessagingCta';
 import { PaymentService } from '../../services/payments/PaymentService';
 import { isPaykitPaymentKind, PaymentError, type PaymentRequestRecord } from '../../types/payment';
 import type { TipEndpointRecord } from '../../types/payment';
+import { COPY } from '../../copy/uxCopy';
+import { HIT_SLOP_44, minHitStyle } from '../../ui/hitTarget';
+import { formatDeliveryState, formatLinkStatus } from '../../ui/messageStatus';
+import { peerIdentity } from '../../ui/peerIdentity';
+import { copyText } from '../../utils/copyText';
+import type { Contact } from '../../types';
+import type { LinkStatus } from '../../types/link';
+import { StatusBanner } from '../../ui/StatusBanner';
+import { useSessionStatusStore } from '../../stores/sessionStatusStore';
+import { sanitizeError } from '../../ui/sanitizedError';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Thread'>;
-
-function isMessagingEnabled(): boolean {
-  return LinkService.hasSession() || Boolean(KeyStore.getLinkSession());
-}
 
 type ThreadItem =
   | { id: string; sentAt: number; kind: 'link'; message: LinkMessage }
@@ -62,7 +67,9 @@ export default function ThreadScreen({ route }: Props) {
   const [tipEndpoints, setTipEndpoints] = useState<TipEndpointRecord[]>([]);
   const [composePayment, setComposePayment] = useState(false);
   const [paymentBusy, setPaymentBusy] = useState(false);
-  const [messagingEnabled, setMessagingEnabled] = useState(isMessagingEnabled);
+  const [peerContact, setPeerContact] = useState<Contact | null>(null);
+  const [linkStatus, setLinkStatus] = useState<LinkStatus | null>(null);
+  const sessionKind = useSessionStatusStore(s => s.kind);
 
   const conversationId = buildDmConversationId(participantPubky);
 
@@ -81,6 +88,13 @@ export default function ThreadScreen({ route }: Props) {
     setLoading(false);
     const latest = msgs.reduce((max, m) => Math.max(max, m.sentAt), 0);
     await LinkService.markRead(conversationId, latest > 0 ? latest : Date.now());
+    const contact = await StorageService.getContact(participantPubky, localPubky);
+    setPeerContact(contact);
+    try {
+      setLinkStatus(await LinkService.ensureLinkWith(participantPubky));
+    } catch {
+      setLinkStatus(null);
+    }
   }, [conversationId, localPubky, participantPubky]);
 
   useFocusEffect(
@@ -94,7 +108,6 @@ export default function ThreadScreen({ route }: Props) {
           }
         }
         await reloadEncrypted();
-        setMessagingEnabled(isMessagingEnabled());
       })();
     }, [reloadEncrypted]),
   );
@@ -114,11 +127,8 @@ export default function ThreadScreen({ route }: Props) {
     try {
       await LinkService.sendDm(participantPubky, text);
       await reloadEncrypted();
-    } catch (err) {
-      Alert.alert(
-        'Send failed',
-        err instanceof Error ? err.message : 'Could not send this message over Encrypted Links.',
-      );
+    } catch {
+      await reloadEncrypted();
     } finally {
       setSending(false);
     }
@@ -155,22 +165,35 @@ export default function ThreadScreen({ route }: Props) {
             void reloadEncrypted();
           })
           .catch(err => {
-            Alert.alert(
-              'Payment request',
-              err instanceof PaymentError
-                ? err.message
-                : err instanceof Error
-                  ? err.message
-                  : 'Could not send payment request',
+            const sanitized = sanitizeError(
+              err instanceof PaymentError || err instanceof Error
+                ? err
+                : 'Could not send payment request',
+              'Could not send payment request',
             );
+            Alert.alert('Payment request', sanitized.message);
           })
           .finally(() => setPaymentBusy(false));
       }}
       onPaymentsChanged={() => {
         void reloadEncrypted();
       }}
-      messagingEnabled={messagingEnabled}
+      sessionKind={sessionKind}
+      peerContact={peerContact}
+      linkStatus={linkStatus}
       onEnableMessaging={() => nav.navigate('EnableMessaging' as never)}
+      onRetryFailed={() => {
+        void (async () => {
+          try {
+            await LinkService.recoverPendingSends();
+            await LinkService.drainRetries();
+          } catch {
+            // Bubble stays Failed until a drain succeeds.
+          }
+          await reloadEncrypted();
+        })();
+      }}
+      onCopyPubky={() => copyText(participantPubky)}
     />
   );
 }
@@ -195,8 +218,12 @@ export function ThreadScreenContent({
   onClosePaymentCompose,
   onSubmitPayment,
   onPaymentsChanged,
-  messagingEnabled,
+  sessionKind,
+  peerContact,
+  linkStatus,
   onEnableMessaging,
+  onRetryFailed,
+  onCopyPubky,
 }: {
   participantPubky: string;
   localPubky: string | null;
@@ -217,8 +244,12 @@ export function ThreadScreenContent({
   onClosePaymentCompose: () => void;
   onSubmitPayment: (amountBtc: string, reference: string) => void;
   onPaymentsChanged: () => void;
-  messagingEnabled: boolean;
+  sessionKind: 'offline' | 'needs-enable' | 'revoked' | string;
+  peerContact: Contact | null;
+  linkStatus: LinkStatus | null;
   onEnableMessaging: () => void;
+  onRetryFailed: () => void;
+  onCopyPubky: () => void;
 }) {
   const flatListRef = useRef<FlatList<ThreadItem>>(null);
   const items = useMemo(
@@ -278,46 +309,85 @@ export function ThreadScreenContent({
           <View style={styles.meta}>
             <Text style={styles.time}>{formatTime(item.message.sentAt)}</Text>
             {isMine ? (
-              <Text
-                style={[
-                  styles.status,
-                  item.message.deliveryState === 'failed' ? styles.statusFailed : null,
-                ]}
-              >
-                {formatDeliveryState(item.message.deliveryState)}
-              </Text>
+              <>
+                <Text
+                  style={[
+                    styles.status,
+                    item.message.deliveryState === 'failed' ? styles.statusFailed : null,
+                  ]}
+                >
+                  {formatDeliveryState(item.message.deliveryState)}
+                </Text>
+                {item.message.deliveryState === 'failed' ? (
+                  <TouchableOpacity
+                    accessibilityRole="button"
+                    accessibilityLabel={COPY.retry}
+                    hitSlop={HIT_SLOP_44}
+                    onPress={onRetryFailed}
+                  >
+                    <Text style={styles.retry}>{COPY.retry}</Text>
+                  </TouchableOpacity>
+                ) : null}
+              </>
             ) : null}
           </View>
         </View>
       );
     },
-    [localPubky, onPaymentsChanged],
+    [localPubky, onPaymentsChanged, onRetryFailed],
   );
+
+  const identity = peerIdentity(participantPubky, peerContact);
+  const linkLabel = formatLinkStatus(linkStatus);
+  const needsEnable =
+    sessionKind === 'needs-enable' || sessionKind === 'revoked' || sessionKind === 'unavailable';
+  const composerEnabled = !needsEnable;
 
   return (
     <SafeAreaView style={styles.container} testID="threadScreen">
       <View style={styles.header}>
         <TouchableOpacity
           testID="threadBack"
+          accessibilityRole="button"
           accessibilityLabel="Back"
           onPress={onBack}
+          hitSlop={HIT_SLOP_44}
           style={styles.backBtn}
         >
           <Text style={styles.backText}>←</Text>
         </TouchableOpacity>
-        <Text
-          testID="threadTitle"
-          accessibilityLabel={participantPubky}
-          style={styles.title}
-          numberOfLines={1}
-          ellipsizeMode="middle"
+        <TouchableOpacity
+          style={styles.titleWrap}
+          onPress={onCopyPubky}
+          accessibilityRole="button"
+          accessibilityLabel={`Copy ${identity.title}`}
         >
-          {participantPubky}
-        </Text>
+          <Text
+            testID="threadTitle"
+            accessibilityLabel={identity.title}
+            style={styles.title}
+            numberOfLines={1}
+            ellipsizeMode="middle"
+          >
+            {identity.title}
+          </Text>
+          {identity.subtitle ? (
+            <Text style={styles.claimed} numberOfLines={1}>
+              {identity.subtitle}
+            </Text>
+          ) : null}
+          {linkLabel ? (
+            <Text testID="threadLinkStatus" style={styles.linkStatus}>
+              {linkLabel}
+            </Text>
+          ) : null}
+        </TouchableOpacity>
         <TouchableOpacity
           testID="threadRequestPay"
+          accessibilityRole="button"
           accessibilityLabel="Request payment"
           onPress={onOpenPaymentCompose}
+          hitSlop={HIT_SLOP_44}
           style={styles.backBtn}
         >
           <Text style={styles.requestPay}>₿</Text>
@@ -328,13 +398,21 @@ export function ThreadScreenContent({
         endpoints={tipEndpoints}
         onChanged={onPaymentsChanged}
       />
-      {!messagingEnabled ? (
+      {needsEnable ? (
         <EnableMessagingCta testID="threadEnableMessaging" onPress={onEnableMessaging} />
+      ) : null}
+      {sessionKind === 'offline' ? (
+        <StatusBanner testID="threadOfflineBanner" label={COPY.sessionOfflineBanner} />
       ) : null}
 
       {loading ? (
         <View style={styles.loadingContainer}>
           <ActivityIndicator color="#7c3aed" />
+        </View>
+      ) : items.length === 0 ? (
+        <View style={styles.empty}>
+          <Text style={styles.emptyTitle}>{COPY.noMessagesYet}</Text>
+          <Text style={styles.emptyBody}>{COPY.threadEmptyBody}</Text>
         </View>
       ) : (
         <FlatList
@@ -373,14 +451,19 @@ export function ThreadScreenContent({
             placeholderTextColor="#4b5563"
             multiline
             maxLength={4000}
+            editable={composerEnabled}
             returnKeyType="default"
           />
           <TouchableOpacity
             testID="threadSend"
+            accessibilityRole="button"
             accessibilityLabel="Send message"
-            style={[styles.sendBtn, (!draft.trim() || sending) && styles.sendBtnDisabled]}
+            style={[
+              styles.sendBtn,
+              (!draft.trim() || sending || !composerEnabled) && styles.sendBtnDisabled,
+            ]}
             onPress={onSend}
-            disabled={!draft.trim() || sending}
+            disabled={!draft.trim() || sending || !composerEnabled}
           >
             {sending ? (
               <ActivityIndicator color="#fff" size="small" />
@@ -453,23 +536,6 @@ function formatTime(ms: number): string {
   return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
-function formatDeliveryState(state: LinkMessage['deliveryState']): string {
-  switch (state) {
-    case 'sending':
-      return 'sending…';
-    case 'failed':
-      return 'failed to send';
-    case 'sent':
-      return 'sent';
-    case 'delivered':
-      return 'delivered';
-    case 'read':
-      return 'read';
-    default:
-      return state;
-  }
-}
-
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#0a0a0a' },
   header: {
@@ -481,9 +547,15 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: '#1a1a1a',
   },
-  backBtn: { width: 32 },
+  backBtn: { ...minHitStyle },
   backText: { fontSize: 22, color: '#7c3aed' },
-  title: { flex: 1, fontSize: 15, fontWeight: '600', color: '#f9fafb', textAlign: 'center' },
+  titleWrap: { flex: 1, alignItems: 'center', paddingHorizontal: 8 },
+  title: { fontSize: 15, fontWeight: '600', color: '#f9fafb', textAlign: 'center' },
+  claimed: { fontSize: 12, color: '#c4b5fd', textAlign: 'center' },
+  linkStatus: { fontSize: 12, color: '#fbbf24', textAlign: 'center', marginTop: 2 },
+  empty: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24, gap: 8 },
+  emptyTitle: { color: '#f9fafb', fontSize: 16, fontWeight: '600' },
+  emptyBody: { color: '#808692', fontSize: 14, textAlign: 'center', lineHeight: 20 },
   loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   messageList: { padding: 16, gap: 8 },
   bubble: {
@@ -508,8 +580,9 @@ const styles = StyleSheet.create({
   theirsText: { color: '#f9fafb' },
   meta: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 4 },
   time: { fontSize: 10, color: 'rgba(255,255,255,0.5)' },
-  status: { fontSize: 10, color: 'rgba(255,255,255,0.5)' },
+  status: { fontSize: 12, color: 'rgba(255,255,255,0.85)' },
   statusFailed: { color: '#fca5a5' },
+  retry: { fontSize: 12, color: '#fff', fontWeight: '700', textDecorationLine: 'underline' },
   composer: {
     flexDirection: 'row',
     alignItems: 'flex-end',
@@ -527,12 +600,14 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     color: '#f9fafb',
     fontSize: 15,
-    maxHeight: 120,
+    maxHeight: 160,
   },
   sendBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    minWidth: 44,
+    minHeight: 44,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
     backgroundColor: '#7c3aed',
     justifyContent: 'center',
     alignItems: 'center',

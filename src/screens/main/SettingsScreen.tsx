@@ -14,6 +14,7 @@ import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { FeatureFlags } from '../../flags';
 import { useAuthStore } from '../../stores/authStore';
+import { useSessionStatusStore } from '../../stores/sessionStatusStore';
 import type { RootStackParamList } from '../../types';
 import {
   parseLiveProofTokens,
@@ -22,12 +23,23 @@ import {
 } from '../../services/link/liveProof';
 import { TipEndpointsSettings } from '../../components/TipEndpointsSettings';
 import { BackupService } from '../../services/backup/BackupService';
+import { COPY } from '../../copy/uxCopy';
+import { CustodyLine } from '../../ui/CustodyLine';
+import { ErrorDetails } from '../../ui/ErrorDetails';
+import { HIT_SLOP_44 } from '../../ui/hitTarget';
+import { sessionUiModel } from '../../ui/sessionUi';
+import { sanitizeError } from '../../ui/sanitizedError';
+import { setLastBackupAt } from '../../stores/backupMetaStore';
+import { shortPubky } from '../../ui/shortPubky';
 
 type Nav = NativeStackNavigationProp<RootStackParamList, 'Settings'>;
 
 export default function SettingsScreen() {
   const nav = useNavigation<Nav>();
   const homeserver = useAuthStore(s => s.homeserver);
+  const pubky = useAuthStore(s => s.pubky);
+  const sessionKind = useSessionStatusStore(s => s.kind);
+  const session = sessionUiModel(sessionKind);
 
   const [meshEnabled, setMeshEnabled] = useState(() => FeatureFlags.get('mesh_transport'));
   const [telemetryEnabled, setTelemetryEnabled] = useState(() => FeatureFlags.get('telemetry'));
@@ -35,6 +47,7 @@ export default function SettingsScreen() {
   const [recoveryCode, setRecoveryCode] = useState<string | null>(null);
   const [restoreCode, setRestoreCode] = useState('');
   const [restoreNote, setRestoreNote] = useState<string | null>(null);
+  const [restoreError, setRestoreError] = useState<string | null>(null);
 
   function toggleMesh(val: boolean) {
     FeatureFlags.set('mesh_transport', val);
@@ -51,16 +64,36 @@ export default function SettingsScreen() {
       <View style={styles.header}>
         <TouchableOpacity
           testID="settingsBack"
+          accessibilityRole="button"
           accessibilityLabel="Back"
+          hitSlop={HIT_SLOP_44}
           onPress={() => nav.goBack()}
+          style={styles.backHit}
         >
           <Text style={styles.back}>← Back</Text>
         </TouchableOpacity>
         <Text style={styles.title}>Settings</Text>
-        <View style={{ width: 60 }} />
+        <View style={styles.backHit} />
       </View>
 
       <ScrollView contentContainerStyle={styles.content}>
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Identity</Text>
+          <View style={styles.row}>
+            <Text style={styles.rowLabel}>{pubky ? shortPubky(pubky) : COPY.notConnected}</Text>
+          </View>
+          {pubky ? (
+            <View style={styles.row}>
+              <Text style={styles.rowValue} selectable>
+                {pubky}
+              </Text>
+            </View>
+          ) : null}
+          <View style={styles.row}>
+            <CustodyLine />
+          </View>
+        </View>
+
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Homeserver</Text>
           <View style={styles.row}>
@@ -84,6 +117,9 @@ export default function SettingsScreen() {
               value={meshEnabled}
               onValueChange={toggleMesh}
               trackColor={{ true: '#7c3aed' }}
+              accessibilityRole="switch"
+              accessibilityLabel="BLE Mesh (quarantined)"
+              accessibilityState={{ checked: meshEnabled }}
             />
           </View>
         </View>
@@ -91,24 +127,29 @@ export default function SettingsScreen() {
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Encrypted backup</Text>
           <View style={styles.row}>
-            <Text style={styles.rowHint}>
-              Backup uses a random recovery code, not a passphrase. History (contacts, chats,
-              groups, payments, tip lists) restores. Live Encrypted Links re-establish on this
-              device. Attachment files without keys show as unavailable until re-shared.
-            </Text>
+            <Text style={styles.rowHint}>{COPY.backupExplanation}</Text>
+          </View>
+          <View style={styles.row}>
+            <Text style={styles.rowHint}>{COPY.backupCustodyLine}</Text>
           </View>
           <TouchableOpacity
+            accessibilityRole="button"
+            accessibilityLabel="Backup now"
             style={[styles.liveButton, backupBusy && styles.liveButtonDisabled]}
             disabled={backupBusy}
             onPress={() => {
               setBackupBusy(true);
               setRestoreNote(null);
+              setRestoreError(null);
               void BackupService.exportBackup()
                 .then(result => {
                   setRecoveryCode(result.recoveryCode);
+                  setLastBackupAt(Date.now());
                 })
                 .catch(err => {
-                  setRestoreNote(err instanceof Error ? err.message : 'Backup failed');
+                  const sanitized = sanitizeError(err, 'Could not create a backup.');
+                  setRestoreNote(sanitized.message);
+                  setRestoreError(sanitized.details);
                 })
                 .finally(() => setBackupBusy(false));
             }}
@@ -150,6 +191,7 @@ export default function SettingsScreen() {
             onPress={() => {
               setBackupBusy(true);
               setRestoreNote(null);
+              setRestoreError(null);
               void BackupService.restoreBackup(restoreCode)
                 .then(() => {
                   setRestoreNote(
@@ -157,7 +199,9 @@ export default function SettingsScreen() {
                   );
                 })
                 .catch(err => {
-                  setRestoreNote(err instanceof Error ? err.message : 'Restore failed');
+                  const sanitized = sanitizeError(err, 'That recovery code did not work.');
+                  setRestoreNote(sanitized.message);
+                  setRestoreError(sanitized.details);
                 })
                 .finally(() => setBackupBusy(false));
             }}
@@ -166,7 +210,10 @@ export default function SettingsScreen() {
           </TouchableOpacity>
           {restoreNote ? (
             <View style={styles.row}>
-              <Text style={styles.rowHint}>{restoreNote}</Text>
+              <View>
+                <Text style={styles.rowHint}>{restoreNote}</Text>
+                <ErrorDetails details={restoreError} />
+              </View>
             </View>
           ) : null}
         </View>
@@ -182,6 +229,9 @@ export default function SettingsScreen() {
               value={telemetryEnabled}
               onValueChange={toggleTelemetry}
               trackColor={{ true: '#7c3aed' }}
+              accessibilityRole="switch"
+              accessibilityLabel="Telemetry"
+              accessibilityState={{ checked: telemetryEnabled }}
             />
           </View>
         </View>
@@ -190,30 +240,20 @@ export default function SettingsScreen() {
           <Text style={styles.sectionTitle}>Messaging</Text>
           <TouchableOpacity
             testID="settingsEnableMessaging"
-            accessibilityLabel="Enable encrypted messaging"
+            accessibilityRole="button"
+            accessibilityLabel={COPY.enableEncryptedMessaging}
             style={styles.row}
             onPress={() => nav.navigate('EnableMessaging')}
           >
-            <View>
-              <Text style={styles.rowLabel}>Enable encrypted messaging</Text>
-              <Text style={styles.rowHint}>Authorize Pubky Ring for Paykit links</Text>
+            <View style={{ flex: 1, paddingRight: 12 }}>
+              <Text style={styles.rowLabel}>{session.label}</Text>
+              <Text style={styles.rowHint}>{COPY.approveScopesBody}</Text>
             </View>
             <Text style={styles.chevron}>›</Text>
           </TouchableOpacity>
         </View>
 
         <TipEndpointsSettings />
-
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Account</Text>
-          <TouchableOpacity style={styles.row} onPress={() => nav.navigate('Profile' as never)}>
-            <Text style={styles.rowLabel}>Profile</Text>
-            <Text style={styles.chevron}>›</Text>
-          </TouchableOpacity>
-          <View style={styles.row}>
-            <Text style={styles.rowHint}>Keys managed by pubky-ring</Text>
-          </View>
-        </View>
 
         {__DEV__ ? <LiveProofSettingsPanel /> : null}
       </ScrollView>
@@ -232,7 +272,8 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: '#1a1a1a',
   },
-  back: { color: '#7c3aed', fontSize: 16, width: 60 },
+  backHit: { minWidth: 44, minHeight: 44, justifyContent: 'center' },
+  back: { color: '#8f57f0', fontSize: 16 },
   title: { fontSize: 17, fontWeight: '600', color: '#f9fafb' },
   content: { paddingVertical: 24 },
   section: { marginBottom: 32 },

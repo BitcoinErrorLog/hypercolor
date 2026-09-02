@@ -15,6 +15,9 @@ import ChannelScreen from '../screens/main/ChannelScreen';
 import { PubkyRingAuthService } from '../services/PubkyRingAuthService';
 import { GroupService, setPendingPublicJoin } from '../services/group/GroupService';
 import { parsePublicChannelRef } from '../types/group';
+import { sanitizeError } from '../ui/sanitizedError';
+import { COPY } from '../copy/uxCopy';
+import { notifyEnableMessagingResume } from '../ui/enableMessagingResume';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
@@ -82,10 +85,8 @@ export function RootNavigator() {
         try {
           await GroupService.joinPublicChannel(url);
         } catch (err) {
-          Alert.alert(
-            'Join failed',
-            err instanceof Error ? err.message : 'Could not join that public channel.',
-          );
+          const sanitized = sanitizeError(err, 'Could not join that public channel.');
+          Alert.alert('Join failed', sanitized.message);
         }
         return;
       }
@@ -94,11 +95,10 @@ export function RootNavigator() {
       try {
         const { pubky, homeserver } = await PubkyRingAuthService.handleRingCallback(url);
         setAuthenticated(pubky as import('../types').PubkyKey, homeserver);
+        notifyEnableMessagingResume();
       } catch (err) {
-        Alert.alert(
-          'Authorization Failed',
-          (err as Error).message ?? 'Could not complete pubky-ring authorization.',
-        );
+        const sanitized = sanitizeError(err, COPY.couldNotCompleteAuthorization);
+        Alert.alert(COPY.couldNotCompleteAuthorization, sanitized.message);
       }
     },
     [isAuthenticated, setAuthenticated],

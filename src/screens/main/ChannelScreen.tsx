@@ -12,6 +12,7 @@ import {
   ActivityIndicator,
   Alert,
   ScrollView,
+  BackHandler,
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
@@ -30,6 +31,9 @@ import { StorageService } from '../../services/StorageService';
 import { GroupService, subscribeGroupEvents } from '../../services/group/GroupService';
 import { AttachmentBubble } from '../../components/AttachmentBubble';
 import { ComposerAttachButton } from '../../components/ComposerAttachButton';
+import { formatDeliveryState } from '../../ui/messageStatus';
+import { HIT_SLOP_44, minHitStyle } from '../../ui/hitTarget';
+import { peerIdentity } from '../../ui/peerIdentity';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'ChannelScreen'>;
 
@@ -319,7 +323,7 @@ export function ChannelScreenContent({
         return (
           <View style={styles.systemLine}>
             <Text style={styles.systemText}>
-              {item.senderPubky.slice(0, 8)}… {item.body}
+              {item.senderPubky.slice(0, 6)}… {item.body}
             </Text>
           </View>
         );
@@ -336,7 +340,12 @@ export function ChannelScreenContent({
         <View style={[styles.bubble, isMine ? styles.mine : styles.theirs]}>
           {!isMine && (
             <Text style={styles.sender} numberOfLines={1} ellipsizeMode="middle">
-              {item.senderPubky}
+              {
+                peerIdentity(
+                  item.senderPubky,
+                  contacts.find(c => c.pubky === item.senderPubky) ?? null,
+                ).title
+              }
             </Text>
           )}
           {parent ? (
@@ -354,7 +363,9 @@ export function ChannelScreenContent({
           <View style={styles.meta}>
             <Text style={styles.time}>{formatTime(item.sentAt)}</Text>
             {item.editedAt ? <Text style={styles.time}> · edited</Text> : null}
-            {isMine && !isPublic ? <Text style={styles.time}> · {item.deliveryState}</Text> : null}
+            {isMine && !isPublic ? (
+              <Text style={styles.time}> · {formatDeliveryState(item.deliveryState)}</Text>
+            ) : null}
           </View>
           {reactions && reactions.size > 0 ? (
             <View style={styles.reactionRow}>
@@ -367,14 +378,24 @@ export function ChannelScreenContent({
           ) : null}
           {!item.deleted && selfActive ? (
             <View style={styles.actionRow}>
-              <TouchableOpacity onPress={() => onReply(item)}>
+              <TouchableOpacity
+                accessibilityRole="button"
+                accessibilityLabel="Reply"
+                hitSlop={HIT_SLOP_44}
+                onPress={() => onReply(item)}
+                style={minHitStyle}
+              >
                 <Text style={styles.action}>Reply</Text>
               </TouchableOpacity>
               {!isPublic
                 ? REACTION_EMOJIS.map(emoji => (
                     <TouchableOpacity
                       key={emoji}
+                      accessibilityRole="button"
+                      accessibilityLabel={`React with ${emoji}`}
+                      hitSlop={HIT_SLOP_44}
                       onPress={() => onReact(item.eventId, item.senderPubky, emoji)}
+                      style={minHitStyle}
                     >
                       <Text style={styles.action}>{emoji}</Text>
                     </TouchableOpacity>
@@ -382,10 +403,22 @@ export function ChannelScreenContent({
                 : null}
               {isMine && !isPublic ? (
                 <>
-                  <TouchableOpacity onPress={() => onEdit(item.eventId)}>
+                  <TouchableOpacity
+                    accessibilityRole="button"
+                    accessibilityLabel="Edit"
+                    hitSlop={HIT_SLOP_44}
+                    onPress={() => onEdit(item.eventId)}
+                    style={minHitStyle}
+                  >
                     <Text style={styles.action}>Edit</Text>
                   </TouchableOpacity>
-                  <TouchableOpacity onPress={() => onDelete(item.eventId)}>
+                  <TouchableOpacity
+                    accessibilityRole="button"
+                    accessibilityLabel="Delete"
+                    hitSlop={HIT_SLOP_44}
+                    onPress={() => onDelete(item.eventId)}
+                    style={minHitStyle}
+                  >
                     <Text style={styles.action}>Delete</Text>
                   </TouchableOpacity>
                 </>
@@ -398,6 +431,7 @@ export function ChannelScreenContent({
     [
       attachments,
       localPubky,
+      contacts,
       byAuthorEvent,
       byEventId,
       reactionsByTarget,
@@ -410,16 +444,42 @@ export function ChannelScreenContent({
     ],
   );
 
+  useEffect(() => {
+    if (!showMembers) return;
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      onToggleMembers();
+      return true;
+    });
+    return () => sub.remove();
+  }, [showMembers, onToggleMembers]);
+
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
-        <TouchableOpacity onPress={onBack} style={styles.backBtn}>
+        <TouchableOpacity
+          accessibilityRole="button"
+          accessibilityLabel="Back"
+          hitSlop={HIT_SLOP_44}
+          onPress={onBack}
+          style={styles.backBtn}
+        >
           <Text style={styles.backText}>←</Text>
         </TouchableOpacity>
-        <Text style={styles.title} numberOfLines={1}>
+        <Text
+          style={styles.title}
+          numberOfLines={1}
+          accessibilityLabel={channel ? channel.name : 'Channel'}
+        >
           {channel ? `${channel.isPublic ? '#' : ''} ${channel.name}` : 'Channel'}
         </Text>
-        <TouchableOpacity onPress={onToggleMembers} style={styles.backBtn}>
+        <TouchableOpacity
+          accessibilityRole="button"
+          accessibilityLabel={showMembers ? 'Chat' : 'Members'}
+          accessibilityState={{ expanded: showMembers }}
+          hitSlop={HIT_SLOP_44}
+          onPress={onToggleMembers}
+          style={styles.backBtn}
+        >
           <Text style={styles.action}>{showMembers ? 'Chat' : 'Members'}</Text>
         </TouchableOpacity>
       </View>
@@ -449,7 +509,13 @@ export function ChannelScreenContent({
               !isPublic &&
               member.status === 'active' &&
               member.memberPubky !== localPubky ? (
-                <TouchableOpacity onPress={() => onRemoveMember(member.memberPubky)}>
+                <TouchableOpacity
+                  accessibilityRole="button"
+                  accessibilityLabel={`Remove ${contactName(contacts, member.memberPubky)}`}
+                  hitSlop={HIT_SLOP_44}
+                  onPress={() => onRemoveMember(member.memberPubky)}
+                  style={minHitStyle}
+                >
                   <Text style={styles.danger}>Remove</Text>
                 </TouchableOpacity>
               ) : null}
@@ -465,18 +531,34 @@ export function ChannelScreenContent({
                 placeholderTextColor="#4b5563"
                 autoCapitalize="none"
               />
-              <TouchableOpacity onPress={onAddMember}>
+              <TouchableOpacity
+                accessibilityRole="button"
+                accessibilityLabel="Add member"
+                hitSlop={HIT_SLOP_44}
+                onPress={onAddMember}
+                style={minHitStyle}
+              >
                 <Text style={styles.action}>Add</Text>
               </TouchableOpacity>
             </View>
           ) : null}
           {isPublic ? (
-            <TouchableOpacity onPress={onRefreshPublic} style={styles.leaveBtn}>
+            <TouchableOpacity
+              accessibilityRole="button"
+              accessibilityLabel="Refresh from homeserver"
+              onPress={onRefreshPublic}
+              style={styles.leaveBtn}
+            >
               <Text style={styles.action}>Refresh from homeserver</Text>
             </TouchableOpacity>
           ) : null}
           {selfActive ? (
-            <TouchableOpacity onPress={onLeave} style={styles.leaveBtn}>
+            <TouchableOpacity
+              accessibilityRole="button"
+              accessibilityLabel="Leave channel"
+              onPress={onLeave}
+              style={styles.leaveBtn}
+            >
               <Text style={styles.danger}>Leave channel</Text>
             </TouchableOpacity>
           ) : (
@@ -504,7 +586,13 @@ export function ChannelScreenContent({
               <Text style={styles.replyBarText} numberOfLines={1}>
                 Replying to {replyTo.body}
               </Text>
-              <TouchableOpacity onPress={onClearReply}>
+              <TouchableOpacity
+                accessibilityRole="button"
+                accessibilityLabel="Clear reply"
+                hitSlop={HIT_SLOP_44}
+                onPress={onClearReply}
+                style={minHitStyle}
+              >
                 <Text style={styles.action}>Clear</Text>
               </TouchableOpacity>
             </View>
@@ -527,6 +615,8 @@ export function ChannelScreenContent({
               maxLength={4000}
             />
             <TouchableOpacity
+              accessibilityRole="button"
+              accessibilityLabel="Send message"
               style={[styles.sendBtn, (!draft.trim() || sending) && styles.sendBtnDisabled]}
               onPress={onSend}
               disabled={!draft.trim() || sending}
@@ -545,7 +635,7 @@ export function ChannelScreenContent({
 }
 
 function contactName(contacts: Contact[], pubky: string): string {
-  return contacts.find(c => c.pubky === pubky)?.displayName ?? pubky;
+  return peerIdentity(pubky, contacts.find(c => c.pubky === pubky) ?? null).title;
 }
 
 function formatTime(ms: number): string {
@@ -563,7 +653,7 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: '#1a1a1a',
   },
-  backBtn: { minWidth: 32 },
+  backBtn: { ...minHitStyle },
   backText: { fontSize: 22, color: '#7c3aed' },
   title: { flex: 1, fontSize: 17, fontWeight: '700', color: '#f9fafb', textAlign: 'center' },
   loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
@@ -618,9 +708,11 @@ const styles = StyleSheet.create({
     maxHeight: 120,
   },
   sendBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    minWidth: 44,
+    minHeight: 44,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
     backgroundColor: '#7c3aed',
     justifyContent: 'center',
     alignItems: 'center',

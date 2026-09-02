@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -6,7 +6,6 @@ import {
   StyleSheet,
   SafeAreaView,
   ScrollView,
-  Alert,
   ActivityIndicator,
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
@@ -14,22 +13,41 @@ import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { AuthStackParamList } from '../../types';
 import { PubkyRingAuthService } from '../../services/PubkyRingAuthService';
 import { DebugSignupPanel } from './DebugSignupPanel';
+import { COPY } from '../../copy/uxCopy';
+import { CustodyLine } from '../../ui/CustodyLine';
+import { ErrorDetails } from '../../ui/ErrorDetails';
+import { sanitizeError } from '../../ui/sanitizedError';
 
 type Nav = NativeStackNavigationProp<AuthStackParamList, 'Welcome'>;
 
 export default function WelcomeScreen() {
   const nav = useNavigation<Nav>();
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<{ message: string; details: string | null } | null>(null);
+  const inFlight = useRef(false);
+  const startedRef = useRef(false);
 
   async function handleConnect() {
+    if (inFlight.current || loading || startedRef.current) return;
+    inFlight.current = true;
     setLoading(true);
+    setError(null);
     try {
+      const existing = PubkyRingAuthService.getPendingDelegationUrl();
+      if (existing) {
+        startedRef.current = true;
+        nav.navigate('AwaitingRingAuth', { ringAuthUrl: existing });
+        return;
+      }
       const deviceId = `hypercolor-${Date.now().toString(16)}`;
       const { url } = await PubkyRingAuthService.requestDelegation(deviceId);
+      startedRef.current = true;
       nav.navigate('AwaitingRingAuth', { ringAuthUrl: url });
     } catch (err) {
-      Alert.alert('Error', (err as Error).message ?? 'Failed to start pubky-ring authorization');
+      const sanitized = sanitizeError(err, COPY.couldNotStartAuthorization);
+      setError({ message: sanitized.message, details: sanitized.details });
     } finally {
+      inFlight.current = false;
       setLoading(false);
     }
   }
@@ -41,25 +59,32 @@ export default function WelcomeScreen() {
         <View style={styles.content}>
           <Text style={styles.logo}>hypercolor</Text>
           <Text style={styles.tagline}>Private. Decentralized. Yours.</Text>
+          <CustodyLine />
+          <Text style={styles.hint}>{COPY.connectExplanation}</Text>
         </View>
 
         <View style={styles.actions}>
-          <Text style={styles.hint}>
-            Your identity is managed by <Text style={styles.hintBold}>pubky-ring</Text>.{'\n'}
-            Hypercolor never holds your private key.
-          </Text>
+          {error ? (
+            <View accessibilityRole="alert" style={styles.errorBox}>
+              <Text style={styles.errorText}>{error.message}</Text>
+              <ErrorDetails details={error.details} />
+            </View>
+          ) : null}
 
           <TouchableOpacity
             testID="welcomeConnectRing"
-            accessibilityLabel="Connect with pubky-ring"
+            accessibilityRole="button"
+            accessibilityLabel={COPY.connectWithPubkyRing}
             style={[styles.primaryButton, loading && styles.buttonDisabled]}
-            onPress={handleConnect}
+            onPress={() => {
+              void handleConnect();
+            }}
             disabled={loading}
           >
             {loading ? (
               <ActivityIndicator color="#fff" />
             ) : (
-              <Text style={styles.primaryButtonText}>Connect with pubky-ring</Text>
+              <Text style={styles.primaryButtonText}>{COPY.connectWithPubkyRing}</Text>
             )}
           </TouchableOpacity>
 
@@ -86,38 +111,43 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: 32,
     paddingTop: 48,
+    gap: 16,
   },
   logo: {
     fontSize: 40,
     fontWeight: '700',
     color: '#7c3aed',
     letterSpacing: -1,
-    marginBottom: 12,
   },
   tagline: {
     fontSize: 16,
-    color: '#6b7280',
+    color: '#808692',
     textAlign: 'center',
+  },
+  hint: {
+    fontSize: 14,
+    color: '#808692',
+    textAlign: 'center',
+    lineHeight: 20,
   },
   actions: {
     paddingHorizontal: 32,
     paddingBottom: 48,
     gap: 20,
   },
-  hint: {
-    fontSize: 14,
-    color: '#4b5563',
-    textAlign: 'center',
-    lineHeight: 20,
+  errorBox: {
+    borderWidth: 1,
+    borderColor: '#fca5a5',
+    borderRadius: 12,
+    padding: 12,
+    gap: 8,
   },
-  hintBold: {
-    color: '#7c3aed',
-    fontWeight: '600',
-  },
+  errorText: { color: '#fca5a5', fontSize: 14, lineHeight: 20 },
   primaryButton: {
     backgroundColor: '#7c3aed',
     borderRadius: 12,
     paddingVertical: 16,
+    minHeight: 44,
     alignItems: 'center',
   },
   buttonDisabled: {

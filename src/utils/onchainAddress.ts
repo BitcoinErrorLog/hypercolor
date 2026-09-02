@@ -18,13 +18,13 @@ export function isValidMainnetBech32Address(address: string): boolean {
   if (!BECH32_MAINNET_PREFIX.test(address)) return false;
   if (address !== address.toLowerCase()) return false;
   try {
-    const decoded = bech32.decode(address);
+    const decoded = bech32.decode(address as `${string}1${string}`);
     return decoded.prefix === 'bc' && decoded.words[0] === 0;
   } catch {
     // Witness v0 uses bech32; v1+ uses bech32m.
   }
   try {
-    const decoded = bech32m.decode(address);
+    const decoded = bech32m.decode(address as `${string}1${string}`);
     const version = decoded.words[0];
     return decoded.prefix === 'bc' && version !== undefined && version >= 1 && version <= 16;
   } catch {

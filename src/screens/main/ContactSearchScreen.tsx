@@ -45,14 +45,15 @@ export default function ContactSearchScreen() {
           ? `${result.contact.displayName} added. Open the chat to send over Encrypted Links.`
           : 'Contact added. Open the chat to send over Encrypted Links.',
         [
+          { text: 'Stay here', style: 'cancel' },
           {
             text: 'Chat',
             onPress: () => nav.replace('Thread', threadRouteParams(result.contact.pubky)),
           },
         ],
       );
-    } catch (err) {
-      Alert.alert('Error', (err as Error).message ?? 'Add failed.');
+    } catch {
+      Alert.alert('Could not add this contact.', 'Could not add this contact.');
     } finally {
       setLoading(false);
     }
@@ -63,8 +64,11 @@ export default function ContactSearchScreen() {
       <View style={styles.header}>
         <TouchableOpacity
           testID="contactSearchCancel"
+          accessibilityRole="button"
           accessibilityLabel="Cancel"
+          hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
           onPress={() => nav.goBack()}
+          style={{ minHeight: 44, justifyContent: 'center' }}
         >
           <Text style={styles.cancel}>Cancel</Text>
         </TouchableOpacity>

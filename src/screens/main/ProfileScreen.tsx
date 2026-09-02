@@ -1,50 +1,59 @@
 import React, { useCallback, useState } from 'react';
-import {
-  View,
-  Text,
-  TouchableOpacity,
-  StyleSheet,
-  SafeAreaView,
-  ScrollView,
-  Alert,
-} from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, SafeAreaView, ScrollView } from 'react-native';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useAuthStore } from '../../stores/authStore';
+import { useSessionStatusStore } from '../../stores/sessionStatusStore';
 import { PubkyService } from '../../services/PubkyService';
 import type { RootStackParamList } from '../../types';
 import { DebugSignupPanel } from '../auth/DebugSignupPanel';
 import { getE2eIdentity } from '../../navigation/e2eSignupResult';
 import { switchE2eSavedSlotFromUi } from '../../navigation/e2eDeepLinks';
+import { COPY } from '../../copy/uxCopy';
+import { CustodyLine } from '../../ui/CustodyLine';
+import { SignOutSheet } from '../../ui/SignOutSheet';
+import { HIT_SLOP_44 } from '../../ui/hitTarget';
+import { shortPubky } from '../../ui/shortPubky';
+import { sessionUiModel } from '../../ui/sessionUi';
+import { copyText } from '../../utils/copyText';
+import {
+  clearLastBackupAt,
+  formatRelativeBackupTime,
+  getLastBackupAt,
+} from '../../stores/backupMetaStore';
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
 
 export default function ProfileScreen() {
   const nav = useNavigation<Nav>();
-  const { profile, pubky, clearSession } = useAuthStore();
+  const { profile, pubky, setProfile, clearSession } = useAuthStore();
+  const sessionKind = useSessionStatusStore(s => s.kind);
+  const refreshSession = useSessionStatusStore(s => s.refresh);
   const [, setE2eRefresh] = useState(0);
+  const [signOutOpen, setSignOutOpen] = useState(false);
+  const [copied, setCopied] = useState(false);
+
   useFocusEffect(
     useCallback(() => {
       setE2eRefresh(tick => tick + 1);
-    }, []),
+      void refreshSession();
+      if (!pubky) return;
+      void PubkyService.getProfile(pubky).then(next => {
+        if (next) setProfile(next);
+      });
+    }, [pubky, refreshSession, setProfile]),
   );
 
-  async function handleSignOut() {
-    Alert.alert(
-      'Disconnect from pubky-ring',
-      "This removes Hypercolor's delegated access. You will need to re-authorize with pubky-ring to use the app.",
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Disconnect',
-          style: 'destructive',
-          onPress: async () => {
-            await PubkyService.signOut();
-            clearSession();
-          },
-        },
-      ],
-    );
+  const session = sessionUiModel(sessionKind);
+  const displayName =
+    profile?.displayName?.trim() || (pubky ? shortPubky(pubky) : COPY.notConnected);
+  const lastBackupAt = getLastBackupAt();
+
+  async function confirmSignOut() {
+    setSignOutOpen(false);
+    await PubkyService.signOut();
+    clearLastBackupAt();
+    clearSession();
   }
 
   return (
@@ -53,38 +62,90 @@ export default function ProfileScreen() {
         <Text style={styles.title}>Profile</Text>
         <TouchableOpacity
           testID="profileSettings"
-          accessibilityLabel="Settings"
+          accessibilityRole="button"
+          accessibilityLabel={COPY.settingsRow}
+          hitSlop={HIT_SLOP_44}
           onPress={() => nav.navigate('Settings')}
+          style={styles.headerAction}
         >
-          <Text style={styles.settings}>Settings</Text>
+          <Text style={styles.settings}>{COPY.settingsRow}</Text>
         </TouchableOpacity>
       </View>
 
       <ScrollView contentContainerStyle={styles.scroll}>
         <View style={styles.content}>
           <View style={styles.avatar}>
-            <Text style={styles.avatarText}>
-              {profile?.displayName?.charAt(0).toUpperCase() ?? '?'}
-            </Text>
+            <Text style={styles.avatarText}>{displayName.charAt(0).toUpperCase()}</Text>
           </View>
 
-          <Text style={styles.displayName}>{profile?.displayName ?? 'Unnamed'}</Text>
+          <Text style={styles.displayName}>{displayName}</Text>
 
           {pubky ? (
-            <Text
-              testID="profilePubky"
-              accessibilityLabel="Profile pubky"
-              style={styles.pubkyKey}
-              selectable
-            >
-              {pubky}
-            </Text>
+            <>
+              <Text
+                testID="profilePubky"
+                accessibilityLabel="Profile pubky"
+                style={styles.pubkyKey}
+                selectable
+              >
+                {pubky}
+              </Text>
+              <TouchableOpacity
+                testID="profileCopyPubky"
+                accessibilityRole="button"
+                accessibilityLabel="Copy pubky"
+                hitSlop={HIT_SLOP_44}
+                onPress={() => {
+                  copyText(pubky);
+                  setCopied(true);
+                }}
+                style={styles.copyBtn}
+              >
+                <Text style={styles.copyText}>{copied ? COPY.copied : 'Copy'}</Text>
+              </TouchableOpacity>
+            </>
           ) : null}
 
-          <Text style={styles.keystoreNote}>Keys managed by pubky-ring</Text>
+          <CustodyLine />
+        </View>
+
+        <View style={styles.sessionRow} testID="profileSessionStatus">
+          <Text style={styles.sessionLabel}>{session.label}</Text>
+          {session.body ? <Text style={styles.sessionBody}>{session.body}</Text> : null}
+          {sessionKind === 'needs-enable' || sessionKind === 'revoked' ? (
+            <TouchableOpacity
+              accessibilityRole="button"
+              accessibilityLabel={COPY.enableEncryptedMessaging}
+              style={styles.sessionAction}
+              onPress={() => nav.navigate('EnableMessaging')}
+            >
+              <Text style={styles.sessionActionText}>{COPY.enableEncryptedMessaging}</Text>
+            </TouchableOpacity>
+          ) : null}
         </View>
 
         <View style={styles.actions}>
+          <TouchableOpacity
+            testID="profileMessageRequests"
+            accessibilityRole="button"
+            accessibilityLabel={COPY.messageRequestsNav}
+            style={styles.navRow}
+            onPress={() => nav.navigate('MessageRequests')}
+          >
+            <Text style={styles.navRowText}>{COPY.messageRequestsNav}</Text>
+            <Text style={styles.chevron}>›</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            testID="profileOpenSettings"
+            accessibilityRole="button"
+            accessibilityLabel={COPY.settingsRow}
+            style={styles.navRow}
+            onPress={() => nav.navigate('Settings')}
+          >
+            <Text style={styles.navRowText}>{COPY.settingsRow}</Text>
+            <Text style={styles.chevron}>›</Text>
+          </TouchableOpacity>
+
           {__DEV__ ? (
             <>
               {getE2eIdentity('a') ? (
@@ -120,14 +181,23 @@ export default function ProfileScreen() {
           ) : null}
           <TouchableOpacity
             testID="profileSignOut"
-            accessibilityLabel="Disconnect pubky-ring"
+            accessibilityRole="button"
+            accessibilityLabel={COPY.signOut}
             style={styles.dangerButton}
-            onPress={handleSignOut}
+            onPress={() => setSignOutOpen(true)}
           >
-            <Text style={styles.dangerButtonText}>Disconnect pubky-ring</Text>
+            <Text style={styles.dangerButtonText}>{COPY.signOut}</Text>
           </TouchableOpacity>
         </View>
       </ScrollView>
+      <SignOutSheet
+        visible={signOutOpen}
+        lastBackupRelative={lastBackupAt ? formatRelativeBackupTime(lastBackupAt) : null}
+        onCancel={() => setSignOutOpen(false)}
+        onConfirm={() => {
+          void confirmSignOut();
+        }}
+      />
     </SafeAreaView>
   );
 }
@@ -139,12 +209,13 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 20,
-    paddingVertical: 16,
+    paddingVertical: 12,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: '#1a1a1a',
   },
   title: { fontSize: 24, fontWeight: '700', color: '#f9fafb' },
-  settings: { fontSize: 16, color: '#7c3aed', fontWeight: '600' },
+  headerAction: { minHeight: 44, justifyContent: 'center' },
+  settings: { fontSize: 16, color: '#8f57f0', fontWeight: '600' },
   scroll: { flexGrow: 1 },
   content: {
     flexGrow: 1,
@@ -152,6 +223,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: 16,
     paddingVertical: 24,
+    paddingHorizontal: 24,
   },
   avatar: {
     width: 80,
@@ -165,21 +237,43 @@ const styles = StyleSheet.create({
   displayName: { fontSize: 20, fontWeight: '600', color: '#f9fafb' },
   pubkyKey: {
     fontSize: 12,
-    color: '#4b5563',
+    color: '#808692',
     fontFamily: 'monospace',
     maxWidth: 280,
   },
-  keystoreNote: {
-    fontSize: 13,
-    color: '#7c3aed',
-    marginTop: 4,
+  copyBtn: { minHeight: 44, justifyContent: 'center' },
+  copyText: { color: '#8f57f0', fontSize: 15, fontWeight: '600' },
+  sessionRow: {
+    marginHorizontal: 20,
+    padding: 16,
+    borderRadius: 12,
+    backgroundColor: '#111111',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#1a1a1a',
+    gap: 8,
   },
-  actions: { paddingHorizontal: 32, paddingBottom: 48, gap: 16 },
+  sessionLabel: { color: '#f9fafb', fontSize: 16, fontWeight: '600' },
+  sessionBody: { color: '#808692', fontSize: 14, lineHeight: 20 },
+  sessionAction: { minHeight: 44, justifyContent: 'center' },
+  sessionActionText: { color: '#8f57f0', fontSize: 15, fontWeight: '700' },
+  actions: { paddingHorizontal: 20, paddingBottom: 48, gap: 12 },
+  navRow: {
+    minHeight: 44,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 12,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: '#1a1a1a',
+  },
+  navRowText: { color: '#f9fafb', fontSize: 16 },
+  chevron: { fontSize: 20, color: '#808692' },
   e2eSwitch: {
     borderWidth: 1,
     borderColor: '#374151',
     borderRadius: 10,
     paddingVertical: 10,
+    minHeight: 44,
     alignItems: 'center',
   },
   e2eSwitchText: { color: '#c4b5fd', fontSize: 14, fontWeight: '600' },
@@ -188,6 +282,7 @@ const styles = StyleSheet.create({
     borderColor: '#ef4444',
     borderRadius: 12,
     paddingVertical: 16,
+    minHeight: 44,
     alignItems: 'center',
   },
   dangerButtonText: { color: '#ef4444', fontSize: 16, fontWeight: '600' },

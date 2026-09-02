@@ -6,6 +6,8 @@ import {
   AppState,
   Linking,
   LogBox,
+  Text,
+  TouchableOpacity,
   type AppStateStatus,
 } from 'react-native';
 
@@ -160,6 +162,15 @@ export default function App() {
     return (
       <View style={styles.loading}>
         <ActivityIndicator size="large" color="#7c3aed" />
+        <TouchableOpacity
+          testID="appSplashContinue"
+          accessibilityRole="button"
+          accessibilityLabel="Continue"
+          onPress={() => setReady(true)}
+          style={styles.splashContinue}
+        >
+          <Text style={styles.splashContinueText}>Continue</Text>
+        </TouchableOpacity>
       </View>
     );
   }
@@ -173,5 +184,13 @@ const styles = StyleSheet.create({
     backgroundColor: '#0a0a0a',
     justifyContent: 'center',
     alignItems: 'center',
+    gap: 24,
   },
+  splashContinue: {
+    minHeight: 44,
+    minWidth: 44,
+    paddingHorizontal: 24,
+    justifyContent: 'center',
+  },
+  splashContinueText: { color: '#8f57f0', fontSize: 16, fontWeight: '600' },
 });

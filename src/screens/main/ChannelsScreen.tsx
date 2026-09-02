@@ -194,7 +194,7 @@ export function ChannelsScreenContent({
             ) : null}
           </View>
           <Text style={styles.meta} numberOfLines={1}>
-            {item.isPublic ? 'Public channel' : 'Private group'}
+            {item.isPublic ? 'Public topic' : 'Private group'}
           </Text>
         </View>
       </TouchableOpacity>
@@ -207,10 +207,22 @@ export function ChannelsScreenContent({
       <View style={styles.header}>
         <Text style={styles.title}>Channels</Text>
         <View style={styles.headerActions}>
-          <TouchableOpacity onPress={onOpenJoin}>
+          <TouchableOpacity
+            accessibilityRole="button"
+            accessibilityLabel="Join a public topic"
+            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+            onPress={onOpenJoin}
+            style={{ minHeight: 44, justifyContent: 'center' }}
+          >
             <Text style={styles.action}>Join</Text>
           </TouchableOpacity>
-          <TouchableOpacity onPress={onOpenCreate}>
+          <TouchableOpacity
+            accessibilityRole="button"
+            accessibilityLabel="New channel"
+            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+            onPress={onOpenCreate}
+            style={{ minHeight: 44, minWidth: 44, alignItems: 'center', justifyContent: 'center' }}
+          >
             <Text style={styles.add}>+</Text>
           </TouchableOpacity>
         </View>
@@ -229,7 +241,7 @@ export function ChannelsScreenContent({
         />
       )}
 
-      <Modal visible={createOpen} animationType="slide" transparent>
+      <Modal visible={createOpen} animationType="slide" transparent onRequestClose={onCloseCreate}>
         <View style={styles.modalBackdrop}>
           <View style={styles.modalCard}>
             <Text style={styles.modalTitle}>New channel</Text>
@@ -306,7 +318,7 @@ export function ChannelsScreenContent({
         </View>
       </Modal>
 
-      <Modal visible={joinOpen} animationType="slide" transparent>
+      <Modal visible={joinOpen} animationType="slide" transparent onRequestClose={onCloseJoin}>
         <View style={styles.modalBackdrop}>
           <View style={styles.modalCard}>
             <Text style={styles.modalTitle}>Join public channel</Text>

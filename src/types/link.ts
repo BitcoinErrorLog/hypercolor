@@ -53,7 +53,9 @@ export function capabilityCoversPaykitRw(entry: string): boolean {
   const scope = entry.slice(0, colon);
   const actions = entry.slice(colon + 1);
   if (!actions.includes('r') || !actions.includes('w')) return false;
-  return scope === PAYKIT_AUTH_SCOPE || (scope.endsWith('/') && PAYKIT_AUTH_SCOPE.startsWith(scope));
+  return (
+    scope === PAYKIT_AUTH_SCOPE || (scope.endsWith('/') && PAYKIT_AUTH_SCOPE.startsWith(scope))
+  );
 }
 
 /**
