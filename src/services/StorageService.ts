@@ -194,6 +194,19 @@ export const StorageService = {
     );
   },
 
+  async deleteContact(ownerPubky: PubkyKey, pubky: PubkyKey): Promise<void> {
+    const db = await getDb();
+    db.executeSync('DELETE FROM contacts WHERE owner_pubky = ? AND pubky = ?', [ownerPubky, pubky]);
+  },
+
+  /** Drops imported follow suggestions. Manually added contacts are kept. */
+  async deleteFollowSuggestions(ownerPubky: PubkyKey): Promise<void> {
+    const db = await getDb();
+    db.executeSync('DELETE FROM contacts WHERE owner_pubky = ? AND added_manually = 0', [
+      ownerPubky,
+    ]);
+  },
+
   async updateTrustScore(pubky: PubkyKey, delta: number, ownerPubky?: PubkyKey): Promise<void> {
     const db = await getDb();
     const ts = now();

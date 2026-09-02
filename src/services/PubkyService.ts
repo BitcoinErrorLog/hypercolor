@@ -30,10 +30,6 @@ function profilePath(pubky: PubkyKey): string {
   return `pubky://${pubky}${APP_PATH}/profile.json`;
 }
 
-function contactPath(ownerPubky: PubkyKey, contactPubky: PubkyKey): string {
-  return `pubky://${ownerPubky}${APP_PATH}/contacts/${contactPubky}.json`;
-}
-
 function unwrap<T>(result: { isOk(): boolean; value?: T; error?: Error }): T {
   if (!result.isOk()) {
     throw result.error ?? new Error('Unknown pubky operation error');
@@ -117,13 +113,6 @@ export const PubkyService = {
     } catch {
       return null;
     }
-  },
-
-  // ── Contacts ───────────────────────────────────────────────────────────────
-
-  async publishContact(ownerPubky: PubkyKey, contactPubky: PubkyKey): Promise<void> {
-    const payload = JSON.stringify({ pubky: contactPubky, addedAt: Date.now() });
-    await PubkyService.put(contactPath(ownerPubky, contactPubky), payload);
   },
 
   // ── Generic put/get/delete/list ────────────────────────────────────────────

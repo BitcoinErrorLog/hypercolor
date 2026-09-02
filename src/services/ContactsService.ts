@@ -4,6 +4,7 @@ import { isValidPubky, parsePubky } from '../utils/pubkyId';
 import { createNexusClient, type NexusClientApi, type NexusResult } from './NexusClient';
 import { PubkyService, type HomeserverListResult } from './PubkyService';
 import { StorageService } from './StorageService';
+import { FollowsImportSettings } from './contacts/followsImportSettings';
 
 /**
  * pubky.app follows directory, verified against pubky-app-specs
@@ -38,18 +39,28 @@ export type ContactsServiceDeps = {
     avatarHash?: string;
   } | null>;
   getHomeserver: (pubky: PubkyKey) => Promise<string | null>;
+  /** GET a homeserver path. Used to re-check Nexus following ids. */
+  get?: (url: string) => Promise<string | null>;
+  isBlocked?: (ownerPubky: PubkyKey, pubky: PubkyKey) => boolean;
+  onManualAdd?: (ownerPubky: PubkyKey, pubky: PubkyKey) => void;
   nexus: NexusClientApi;
   storage: {
     upsertContact: typeof StorageService.upsertContact;
     getContact: typeof StorageService.getContact;
     getAllContacts: typeof StorageService.getAllContacts;
     setContactRelationshipFlags: typeof StorageService.setContactRelationshipFlags;
+    deleteContact?: typeof StorageService.deleteContact;
+    deleteFollowSuggestions?: typeof StorageService.deleteFollowSuggestions;
   };
 };
 
 export type ImportFollowsResult =
   | { ok: true; imported: number; followees: PubkyKey[] }
   | { ok: false; imported: 0; followees: []; message: string };
+
+export type ImportFollowsRefreshResult =
+  | { skipped: true; imported: 0; followees: []; usedNexusFallback: false }
+  | (ImportFollowsResult & { skipped: false; usedNexusFallback: boolean });
 
 export type SyncRelationshipsResult = {
   following: number;
@@ -61,12 +72,48 @@ export type SyncRelationshipsResult = {
 
 export type AddContactResult =
   | { ok: true; contact: Contact }
-  | { ok: false; reason: 'invalid-pubky' | 'not-found' | 'error'; message: string };
+  | {
+      ok: false;
+      reason: 'invalid-pubky' | 'not-found' | 'duplicate' | 'self' | 'error';
+      message: string;
+      details?: string;
+    };
 
 const DEFAULT_PAGE = 200;
 
+function followDocumentUrl(ownerPubky: PubkyKey, followee: PubkyKey): string {
+  return `pubky://${ownerPubky}${PUBKY_APP_FOLLOWS_SEGMENT}${followee}`;
+}
+
+async function persistFollowees(
+  deps: ContactsServiceDeps,
+  ownerPubky: PubkyKey,
+  followees: PubkyKey[],
+): Promise<void> {
+  await mapPool(followees, PROFILE_HYDRATE_CONCURRENCY, async followee => {
+    const existing = await deps.storage.getContact(followee, ownerPubky);
+    const profile = await deps.getProfile(followee);
+    const contact = mergeContact(ownerPubky, followee, existing, {
+      isFollowing: true,
+      profile,
+    });
+    await deps.storage.upsertContact(contact);
+  });
+}
+
+function skipFollowee(
+  deps: ContactsServiceDeps,
+  ownerPubky: PubkyKey,
+  followee: PubkyKey,
+  seen: Set<string>,
+): boolean {
+  if (!followee || followee === ownerPubky || seen.has(followee)) return true;
+  if (deps.isBlocked?.(ownerPubky, followee)) return true;
+  return false;
+}
+
 export function createContactsService(deps: ContactsServiceDeps) {
-  return {
+  const service = {
     async importFollows(ownerPubky: PubkyKey): Promise<ImportFollowsResult> {
       const listed = await deps.list(followsDirUrl(ownerPubky));
       if (!listed.ok) {
@@ -77,22 +124,104 @@ export function createContactsService(deps: ContactsServiceDeps) {
       const seen = new Set<string>();
       for (const url of urls) {
         const followee = parseFolloweeFromUrl(url);
-        if (!followee || followee === ownerPubky || seen.has(followee)) continue;
+        if (!followee || skipFollowee(deps, ownerPubky, followee, seen)) continue;
         seen.add(followee);
         followees.push(followee);
       }
 
-      await mapPool(followees, PROFILE_HYDRATE_CONCURRENCY, async followee => {
-        const existing = await deps.storage.getContact(followee, ownerPubky);
-        const profile = await deps.getProfile(followee);
-        const contact = mergeContact(ownerPubky, followee, existing, {
-          isFollowing: true,
-          profile,
-        });
-        await deps.storage.upsertContact(contact);
-      });
-
+      await persistFollowees(deps, ownerPubky, followees);
       return { ok: true, imported: followees.length, followees };
+    },
+
+    /**
+     * Homeserver listing first. Only if that listing fails does this ask Nexus
+     * for **following** (never followers) and re-check each id against the
+     * homeserver follow document.
+     */
+    async importFollowsWithNexusFallback(
+      ownerPubky: PubkyKey,
+    ): Promise<ImportFollowsResult & { usedNexusFallback: boolean }> {
+      const listed = await deps.list(followsDirUrl(ownerPubky));
+      if (listed.ok) {
+        const followees: PubkyKey[] = [];
+        const seen = new Set<string>();
+        for (const url of listed.urls) {
+          const followee = parseFolloweeFromUrl(url);
+          if (!followee || skipFollowee(deps, ownerPubky, followee, seen)) continue;
+          seen.add(followee);
+          followees.push(followee);
+        }
+        await persistFollowees(deps, ownerPubky, followees);
+        return { ok: true, imported: followees.length, followees, usedNexusFallback: false };
+      }
+
+      const followingResult = await collectAllPages(query =>
+        deps.nexus.following(ownerPubky, query),
+      );
+      if (followingResult.error !== null) {
+        return {
+          ok: false,
+          imported: 0,
+          followees: [],
+          message: listed.message,
+          usedNexusFallback: true,
+        };
+      }
+
+      const confirmed: PubkyKey[] = [];
+      const seen = new Set<string>();
+      for (const candidate of followingResult.ids) {
+        if (skipFollowee(deps, ownerPubky, candidate, seen)) continue;
+        seen.add(candidate);
+        if (!deps.get) continue;
+        const document = await deps.get(followDocumentUrl(ownerPubky, candidate));
+        if (document == null || document.length === 0) continue;
+        confirmed.push(candidate);
+      }
+
+      await persistFollowees(deps, ownerPubky, confirmed);
+      return {
+        ok: true,
+        imported: confirmed.length,
+        followees: confirmed,
+        usedNexusFallback: true,
+      };
+    },
+
+    /**
+     * Product gate: no homeserver follows read and no Nexus request unless the
+     * per-owner consent flag is already on.
+     */
+    async refreshFollowsIfEnabled(
+      ownerPubky: PubkyKey,
+      followsImportEnabled: boolean,
+    ): Promise<ImportFollowsRefreshResult> {
+      if (!followsImportEnabled) {
+        return { skipped: true, imported: 0, followees: [], usedNexusFallback: false };
+      }
+      const result = await service.importFollowsWithNexusFallback(ownerPubky);
+      return { ...result, skipped: false };
+    },
+
+    async stopUsingFollows(ownerPubky: PubkyKey): Promise<void> {
+      const rows = await deps.storage.getAllContacts(ownerPubky);
+      if (deps.storage.deleteFollowSuggestions) {
+        await deps.storage.deleteFollowSuggestions(ownerPubky);
+      } else {
+        for (const row of rows) {
+          if (!row.addedManually && deps.storage.deleteContact) {
+            await deps.storage.deleteContact(ownerPubky, row.pubky);
+          }
+        }
+      }
+      for (const row of rows) {
+        if (!row.addedManually) continue;
+        await deps.storage.setContactRelationshipFlags(ownerPubky, row.pubky, {
+          isFollowing: false,
+          isFollower: false,
+          isMutual: false,
+        });
+      }
     },
 
     async syncRelationships(ownerPubky: PubkyKey): Promise<SyncRelationshipsResult> {
@@ -164,7 +293,22 @@ export function createContactsService(deps: ContactsServiceDeps) {
           message: 'Not a valid 52-character z-base-32 pubky.',
         };
       }
+      if (pubky === ownerPubky) {
+        return {
+          ok: false,
+          reason: 'self',
+          message: 'You cannot add your own pubky.',
+        };
+      }
       try {
+        const existing = await deps.storage.getContact(pubky, ownerPubky);
+        if (existing?.addedManually) {
+          return {
+            ok: false,
+            reason: 'duplicate',
+            message: 'This pubky is already in your contacts.',
+          };
+        }
         const homeserver = await deps.getHomeserver(pubky);
         if (!homeserver) {
           return {
@@ -174,23 +318,25 @@ export function createContactsService(deps: ContactsServiceDeps) {
           };
         }
         const profile = await deps.getProfile(pubky);
-        const existing = await deps.storage.getContact(pubky, ownerPubky);
         const contact = mergeContact(ownerPubky, pubky, existing, {
           addedManually: true,
           homeserver,
           profile,
         });
         await deps.storage.upsertContact(contact);
+        deps.onManualAdd?.(ownerPubky, pubky);
         return { ok: true, contact };
       } catch (err) {
         return {
           ok: false,
           reason: 'error',
-          message: err instanceof Error ? err.message : String(err),
+          message: 'Could not add that contact.',
+          details: err instanceof Error ? err.message : String(err),
         };
       }
     },
   };
+  return service;
 }
 
 function mergeContact(
@@ -280,6 +426,9 @@ export const ContactsService = createContactsService({
     };
   },
   getHomeserver: pubky => PubkyService.getHomeserver(pubky),
+  get: url => PubkyService.get(url),
+  isBlocked: (owner, pubky) => FollowsImportSettings.isBlocked(owner, pubky),
+  onManualAdd: (owner, pubky) => FollowsImportSettings.unblock(owner, pubky),
   nexus: createNexusClient(),
   storage: {
     upsertContact: c => StorageService.upsertContact(c),
@@ -287,5 +436,7 @@ export const ContactsService = createContactsService({
     getAllContacts: owner => StorageService.getAllContacts(owner),
     setContactRelationshipFlags: (owner, pubky, flags) =>
       StorageService.setContactRelationshipFlags(owner, pubky, flags),
+    deleteContact: (owner, pubky) => StorageService.deleteContact(owner, pubky),
+    deleteFollowSuggestions: owner => StorageService.deleteFollowSuggestions(owner),
   },
 });

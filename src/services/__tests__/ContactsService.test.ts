@@ -44,7 +44,6 @@ function makeNexus(overrides: Partial<NexusClientApi> = {}): NexusClientApi {
     followers: jest.fn(async () => ok([])),
     following: jest.fn(async () => ok([])),
     friends: jest.fn(async () => ok([])),
-    user: jest.fn(async () => ok({})),
     ...overrides,
   };
 }
@@ -78,6 +77,14 @@ function makeStorage(seed: Contact[] = []) {
         }
       },
     ),
+    deleteContact: jest.fn(async (_owner: PubkyKey, pubky: PubkyKey) => {
+      rows.delete(pubky);
+    }),
+    deleteFollowSuggestions: jest.fn(async () => {
+      for (const [key, row] of [...rows.entries()]) {
+        if (!row.addedManually) rows.delete(key);
+      }
+    }),
   };
 }
 
@@ -330,5 +337,206 @@ describe('ContactsService.importFollows failures', () => {
       message: 'homeserver timeout',
     });
     expect(storage.upsertContact).not.toHaveBeenCalled();
+  });
+});
+
+function baseDeps(overrides: Partial<Parameters<typeof createContactsService>[0]> = {}) {
+  const storage =
+    (overrides.storage as ReturnType<typeof makeStorage> | undefined) ?? makeStorage();
+  const nexus = (overrides.nexus as NexusClientApi | undefined) ?? makeNexus();
+  return {
+    storage,
+    nexus,
+    service: createContactsService({
+      list: async () => ({ ok: true as const, urls: [] }),
+      getProfile: async () => null,
+      getHomeserver: async () => 'https://hs',
+      get: async () => '{"created_at":1}',
+      isBlocked: () => false,
+      ...overrides,
+      nexus,
+      storage,
+    }),
+  };
+}
+
+describe('ContactsService.refreshFollowsIfEnabled', () => {
+  it('does not read homeserver follows or Nexus when import is off', async () => {
+    const list = jest.fn(
+      async (): Promise<{ ok: true; urls: string[] }> => ({
+        ok: true,
+        urls: [],
+      }),
+    );
+    const nexus = makeNexus();
+    const { service } = baseDeps({ list, nexus });
+
+    const result = await service.refreshFollowsIfEnabled(OWNER, false);
+
+    expect(result).toEqual({
+      skipped: true,
+      imported: 0,
+      followees: [],
+      usedNexusFallback: false,
+    });
+    expect(list).not.toHaveBeenCalled();
+    expect(nexus.following).not.toHaveBeenCalled();
+    expect(nexus.followers).not.toHaveBeenCalled();
+    expect(nexus.friends).not.toHaveBeenCalled();
+  });
+
+  it('reads the homeserver listing after opt-in and never asks Nexus who follows you', async () => {
+    const list = jest.fn(async () => ({
+      ok: true as const,
+      urls: [`pubky://${OWNER}/pub/pubky.app/follows/${ALICE}`],
+    }));
+    const nexus = makeNexus();
+    const { service } = baseDeps({ list, nexus });
+
+    const result = await service.refreshFollowsIfEnabled(OWNER, true);
+
+    expect(result.skipped).toBe(false);
+    if (!result.skipped) {
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.imported).toBe(1);
+    }
+    expect(list).toHaveBeenCalled();
+    expect(nexus.following).not.toHaveBeenCalled();
+    expect(nexus.followers).not.toHaveBeenCalled();
+    expect(nexus.friends).not.toHaveBeenCalled();
+  });
+});
+
+describe('ContactsService.importFollowsWithNexusFallback', () => {
+  it('asks Nexus following only when the homeserver listing fails, then re-checks documents', async () => {
+    const get = jest.fn(async (url: string) => (url.includes(ALICE) ? '{"created_at":1}' : null));
+    const nexus = makeNexus({
+      following: jest.fn(async () => ok([ALICE, BOB])),
+    });
+    const { service, storage } = baseDeps({
+      list: async () => ({ ok: false, message: 'homeserver timeout' }),
+      get,
+      nexus,
+    });
+
+    const result = await service.importFollowsWithNexusFallback(OWNER);
+
+    expect(result).toEqual(
+      expect.objectContaining({ ok: true, imported: 1, usedNexusFallback: true }),
+    );
+    expect(nexus.following).toHaveBeenCalled();
+    expect(nexus.followers).not.toHaveBeenCalled();
+    expect(nexus.friends).not.toHaveBeenCalled();
+    expect(storage.rows.get(ALICE)?.isFollowing).toBe(true);
+    expect(storage.rows.get(BOB)).toBeUndefined();
+  });
+});
+
+describe('ContactsService.addManualContact', () => {
+  it('rejects an invalid pubky', async () => {
+    const { service } = baseDeps();
+    await expect(service.addManualContact(OWNER, 'not-a-key')).resolves.toEqual({
+      ok: false,
+      reason: 'invalid-pubky',
+      message: 'Not a valid 52-character z-base-32 pubky.',
+    });
+  });
+
+  it('rejects adding yourself', async () => {
+    const { service } = baseDeps();
+    await expect(service.addManualContact(OWNER, OWNER)).resolves.toEqual({
+      ok: false,
+      reason: 'self',
+      message: 'You cannot add your own pubky.',
+    });
+  });
+
+  it('rejects a duplicate added contact', async () => {
+    const storage = makeStorage([
+      {
+        pubky: ALICE,
+        ownerPubky: OWNER,
+        trustScore: 0,
+        isFollowing: false,
+        isFollower: false,
+        isMutual: false,
+        addedManually: true,
+        firstSeenAt: 1,
+      },
+    ]);
+    const { service } = baseDeps({ storage });
+    await expect(service.addManualContact(OWNER, ALICE)).resolves.toEqual({
+      ok: false,
+      reason: 'duplicate',
+      message: 'This pubky is already in your contacts.',
+    });
+  });
+
+  it('promotes a suggestion to an added contact', async () => {
+    const storage = makeStorage([
+      {
+        pubky: ALICE,
+        ownerPubky: OWNER,
+        trustScore: 0,
+        isFollowing: true,
+        isFollower: false,
+        isMutual: false,
+        addedManually: false,
+        firstSeenAt: 1,
+      },
+    ]);
+    const { service } = baseDeps({ storage });
+    const result = await service.addManualContact(OWNER, ALICE);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.contact.addedManually).toBe(true);
+  });
+
+  it('rejects a pubky with no homeserver', async () => {
+    const { service } = baseDeps({
+      getHomeserver: async () => null,
+    });
+    await expect(service.addManualContact(OWNER, ALICE)).resolves.toEqual({
+      ok: false,
+      reason: 'not-found',
+      message: 'No homeserver found for that pubky. Check the key and try again.',
+    });
+  });
+});
+
+describe('ContactsService.stopUsingFollows', () => {
+  it('removes suggestions and clears relationship flags on added contacts', async () => {
+    const storage = makeStorage([
+      {
+        pubky: ALICE,
+        ownerPubky: OWNER,
+        trustScore: 0,
+        isFollowing: true,
+        isFollower: true,
+        isMutual: true,
+        addedManually: true,
+        firstSeenAt: 1,
+      },
+      {
+        pubky: BOB,
+        ownerPubky: OWNER,
+        trustScore: 0,
+        isFollowing: true,
+        isFollower: false,
+        isMutual: false,
+        addedManually: false,
+        firstSeenAt: 1,
+      },
+    ]);
+    const { service } = baseDeps({ storage });
+    await service.stopUsingFollows(OWNER);
+    expect(storage.rows.get(BOB)).toBeUndefined();
+    expect(storage.rows.get(ALICE)).toEqual(
+      expect.objectContaining({
+        addedManually: true,
+        isFollowing: false,
+        isFollower: false,
+        isMutual: false,
+      }),
+    );
   });
 });
