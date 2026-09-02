@@ -1513,6 +1513,13 @@ describe('schema v16 — own invoice history and verified-hash unique index', ()
       [OWNER, OWNER, 'aa'.repeat(32)],
     );
     db.executeSync(
+      `INSERT INTO tip_endpoints
+        (owner_pubky, peer_pubky, identifier, payload, updated_at,
+         validation_status, invoice_amount, invoice_expires_at, payment_hash)
+       VALUES (?, ?, 'btc-lightning-extra', 'lnbc1amountful', 11, 'valid', '0.00002', 99, ?)`,
+      [OWNER, OWNER, 'dd'.repeat(32)],
+    );
+    db.executeSync(
       `INSERT INTO payment_requests
         (owner_pubky, peer_pubky, direction, payment_request_id, event_id,
          amount_value, amount_asset, payment_reference, endpoint_ids, expires_at,
@@ -1557,6 +1564,19 @@ describe('schema v16 — own invoice history and verified-hash unique index', ()
     expect(
       await StorageService.hasOwnInvoiceHash(OWNER, 'btc-lightning-bolt11', 'aa'.repeat(32)),
     ).toBe(true);
+    const amountless = await StorageService.getOwnInvoiceHash(
+      OWNER,
+      'btc-lightning-bolt11',
+      'aa'.repeat(32),
+    );
+    expect(amountless?.invoiceAmountMsat).toBe('amountless');
+    const amountful = await StorageService.getOwnInvoiceHash(
+      OWNER,
+      'btc-lightning-extra',
+      'dd'.repeat(32),
+    );
+    expect(amountful?.invoiceAmountMsat).toBe('2000000');
+    expect(amountful?.invoiceExpiresAt).toBe(99);
 
     const first = await StorageService.getPaymentRequest(
       OWNER,

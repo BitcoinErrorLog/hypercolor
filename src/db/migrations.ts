@@ -17,6 +17,7 @@ import {
   SCHEMA_V16_STATEMENTS,
 } from './schema';
 import type { SqlExecutor } from './sql';
+import { backfillOwnInvoiceHashAmounts, ensureOwnInvoiceHashColumns } from './ownInvoiceHashes';
 
 /**
  * Migration runner for Hypercolor SQLite database.
@@ -30,6 +31,7 @@ import type { SqlExecutor } from './sql';
  * - After adding a migration, bump CURRENT_VERSION.
  */
 
+/** Test seam: current `user_version` after `runMigrations`. Do not hard-code 16. */
 export const CURRENT_SCHEMA_VERSION = 16;
 const CURRENT_VERSION = CURRENT_SCHEMA_VERSION;
 
@@ -62,24 +64,32 @@ export async function runMigrations(db: SqlExecutor): Promise<void> {
   const versionResult = db.executeSync('PRAGMA user_version');
   const currentVersion: number = (versionResult.rows?.[0]?.user_version as number) ?? 0;
 
-  if (currentVersion >= CURRENT_VERSION) {
-    return; // Already up to date
+  if (currentVersion < CURRENT_VERSION) {
+    const pending = MIGRATIONS.filter(m => m.version > currentVersion);
+
+    for (const migration of pending) {
+      db.executeSync('BEGIN');
+      try {
+        for (const statement of migration.statements) {
+          db.executeSync(statement);
+        }
+        db.executeSync(`PRAGMA user_version = ${migration.version}`);
+        db.executeSync('COMMIT');
+      } catch (err) {
+        db.executeSync('ROLLBACK');
+        throw new Error(`Migration v${migration.version} failed: ${(err as Error).message}`);
+      }
+    }
   }
 
-  const pending = MIGRATIONS.filter(m => m.version > currentVersion);
-
-  for (const migration of pending) {
-    db.executeSync('BEGIN');
-    try {
-      for (const statement of migration.statements) {
-        db.executeSync(statement);
-      }
-      // Commit and advance the schema version
-      db.executeSync(`PRAGMA user_version = ${migration.version}`);
-      db.executeSync('COMMIT');
-    } catch (err) {
-      db.executeSync('ROLLBACK');
-      throw new Error(`Migration v${migration.version} failed: ${(err as Error).message}`);
-    }
+  // In-branch v16 databases may predate amount/expiry columns. Idempotent; no version bump.
+  db.executeSync('BEGIN');
+  try {
+    ensureOwnInvoiceHashColumns(db);
+    backfillOwnInvoiceHashAmounts(db);
+    db.executeSync('COMMIT');
+  } catch (err) {
+    db.executeSync('ROLLBACK');
+    throw new Error(`own_invoice_hashes amount backfill failed: ${(err as Error).message}`);
   }
 }

@@ -19,6 +19,7 @@ import {
   isProposalExpired,
   peekPaymentKind,
   rfc3339ZToUnixMs,
+  PROOF_REASON_AMOUNT_MISMATCH,
   type PaymentAction,
   type PaymentDirection,
   type PaymentRequestRecord,
@@ -26,7 +27,8 @@ import {
 } from '../../types/payment';
 import { StorageService } from '../StorageService';
 import { validateTipEndpoint } from './endpointValidation';
-import { extractBolt11Preimage, bolt11PreimagePaymentHash } from './proofVerify';
+import { invoiceAmountRelation, invoiceExpiredBeforeRequest } from './invoiceAmountBind';
+import { bolt11PreimagePaymentHash, extractBolt11Preimage } from './proofVerify';
 
 export type PaymentInboundOutcome =
   | { action: 'applied'; request: PaymentRequestRecord | null }
@@ -415,44 +417,49 @@ async function applyProof(
   const preimage = extractBolt11Preimage(decoded.proof);
   let proofVerified: boolean | null = null;
   let rebindHash: string | undefined;
+  let proofReason: string | undefined;
   if (preimage) {
     const h = await bolt11PreimagePaymentHash(preimage);
     if (h !== null) {
-      if (h === row.displayedPaymentHash) {
-        proofVerified = true;
+      const reused = await StorageService.hasVerifiedPaymentHash(
+        input.ownerPubky,
+        h,
+        decoded.payment_request_id,
+      );
+      if (reused) {
+        proofVerified = false;
       } else {
-        const inHistory = await StorageService.hasOwnInvoiceHash(
+        const invoice = await StorageService.getOwnInvoiceHash(
           input.ownerPubky,
           decoded.payment_endpoint_identifier,
           h,
         );
-        const reused = await StorageService.hasVerifiedPaymentHash(
-          input.ownerPubky,
-          h,
-          decoded.payment_request_id,
-        );
-        if (inHistory && !reused) {
-          proofVerified = true;
-          rebindHash = h;
-        } else if (reused) {
-          proofVerified = false;
-        } else {
-          proofVerified = null;
+        if (invoice && !invoiceExpiredBeforeRequest(invoice.invoiceExpiresAt, row.createdAt)) {
+          const relation = invoiceAmountRelation(invoice.invoiceAmountMsat, row.amountValue);
+          if (relation === 'satisfies') {
+            proofVerified = true;
+            if (h !== row.displayedPaymentHash) rebindHash = h;
+          } else if (relation === 'mismatch') {
+            proofReason = PROOF_REASON_AMOUNT_MISMATCH;
+          }
         }
       }
     }
   }
 
+  const nextStatus: PaymentStatus =
+    proofVerified === true || proofVerified === false ? 'proof_received' : row.status;
   const applied = await StorageService.compareAndSetPaymentRequest(
     input.ownerPubky,
     input.senderPubky,
     decoded.payment_request_id,
     expectedStatusesForAction('proof'),
     {
-      status: 'proof_received',
+      status: nextStatus,
       proofJson: JSON.stringify(decoded.proof),
-      proofVerified,
+      ...(proofVerified !== null ? { proofVerified } : {}),
       ...(rebindHash ? { displayedPaymentHash: rebindHash } : {}),
+      ...(proofReason ? { reason: proofReason } : {}),
     },
   );
   await markSeen(

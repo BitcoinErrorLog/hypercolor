@@ -891,16 +891,37 @@ primary.
    same view before the wallet opens.
 3. Cancelling records no displayed invoice.
 4. In-thread payment receipts use exactly four words:
-   - `requested` — the request is still outstanding: `pending`, `accepted`, an in-flight send,
-     `proof_received` with `proofVerified === null` (cannot corroborate), or `proof_received`
-     with `proofVerified === false` (this preimage already verified another request).
-   - `paid` — `proof_received` and `proofVerified === true` (PaymentService verified `sha256(preimage)`
-     against this request's bound hash or the owner's invoice history for that endpoint).
-   - `expired` — proposal expiry has passed while the request is still `pending` or `accepted`.
-   - `failed` — the request itself ended in `rejected` or `cancelled`. Never used for an unverified
-     or replayed proof.
-     Secondary notes (not a fifth word): `Proof not verified` when `proofVerified === null` on
-     `proof_received`; `This proof was already used` when `proofVerified === false`.
+   - `requested` — the request is still outstanding: `pending`; `accepted`
+     (including after an unverifiable or amount-mismatched proof — those stay
+     `accepted` so a later proof or Cancel can still land); an in-flight send;
+     a legacy `proof_received` row with `proofVerified === null`; or
+     `proof_received` with `proofVerified === false` (this preimage already
+     verified another request).
+   - `paid` — `proof_received` and `proofVerified === true`. The payee verifies
+     `sha256(preimage)` against the owner's invoice history for that endpoint
+     (the create-time snapshot hash is the same history) **and** the bound
+     invoice amount must satisfy the request: invoice millisatoshis ≥ request
+     millisatoshis. Over-payment is `paid`. Under-payment is not. An amountless
+     invoice cannot satisfy an amount-bearing request (v1 requests always carry
+     an amount). An invoice that expired at or before the request was created
+     cannot corroborate it. Amount mismatch does not occupy the verified-hash
+     unique index, so the matching request can still be marked `paid` by the
+     same preimage.
+   - `expired` — proposal expiry has passed while the request is still
+     `pending`. An `accepted` request past proposal expiry still accepts proofs
+     and is shown as `requested`, not `expired`.
+   - `failed` — the request itself ended in `rejected` or `cancelled`. Never
+     used for an unverified, amount-mismatched, or replayed proof.
+
+     Secondary notes (not a fifth word):
+     - `Payment proof could not be verified yet` when a proof could not be
+       corroborated (`proofVerified === null` on `accepted`, or on a legacy
+       `proof_received` row). The request stays non-terminal (`accepted`); the
+       payee Cancel action already shown on pending/accepted remains available;
+       a later proof event can still mark it `paid`.
+     - `This proof does not match this request's amount` when the preimage
+       hashes to an own invoice whose amount does not satisfy this request.
+     - `This proof was already used` when `proofVerified === false`.
 
 ### D.13 Backup / recovery-code gate
 

@@ -1,6 +1,7 @@
 import { COPY } from '../copy/uxCopy';
 import {
   displayPaymentStatus,
+  PROOF_REASON_AMOUNT_MISMATCH,
   type PaymentDisplayStatus,
   type PaymentRequestRecord,
 } from '../types/payment';
@@ -16,28 +17,39 @@ export type PaymentReceiptView = {
   note: string | null;
 };
 
+export type PaymentReceiptRecord = Pick<
+  PaymentRequestRecord,
+  'status' | 'expiresAt' | 'pendingEventId' | 'proofVerified' | 'proofJson' | 'reason'
+>;
+
 /**
  * In-thread payment receipts. Only requested / paid / expired / failed.
- * `paid` is reserved for a PaymentService-verified proof.
+ * `paid` is reserved for a PaymentService-verified proof whose invoice amount
+ * satisfies the request.
  */
 export function formatPaymentReceiptStatus(
-  record: Pick<PaymentRequestRecord, 'status' | 'expiresAt' | 'pendingEventId' | 'proofVerified'>,
+  record: PaymentReceiptRecord,
   nowMs: number,
 ): PaymentReceiptWord {
   return formatPaymentReceipt(record, nowMs).word;
 }
 
 export function formatPaymentReceipt(
-  record: Pick<PaymentRequestRecord, 'status' | 'expiresAt' | 'pendingEventId' | 'proofVerified'>,
+  record: PaymentReceiptRecord,
   nowMs: number,
 ): PaymentReceiptView {
-  if (record.status === 'proof_received') {
-    if (record.proofVerified === true) {
-      return { word: COPY.paymentPaid, note: null };
-    }
-    if (record.proofVerified === false) {
-      return { word: COPY.paymentRequested, note: COPY.proofAlreadyUsed };
-    }
+  if (record.status === 'proof_received' && record.proofVerified === true) {
+    return { word: COPY.paymentPaid, note: null };
+  }
+  if (record.proofVerified === false) {
+    return { word: COPY.paymentRequested, note: COPY.proofAlreadyUsed };
+  }
+  if (record.reason === PROOF_REASON_AMOUNT_MISMATCH) {
+    return { word: COPY.paymentRequested, note: COPY.proofAmountMismatch };
+  }
+  const unverifiableOnAccepted =
+    record.status === 'accepted' && record.proofJson !== null && record.proofVerified !== true;
+  if (record.status === 'proof_received' || unverifiableOnAccepted) {
     return { word: COPY.paymentRequested, note: COPY.proofNotVerified };
   }
   const status: PaymentDisplayStatus = displayPaymentStatus(

@@ -20,25 +20,32 @@ jest.mock('../../StorageService', () => ({
     getTipEndpoint: jest.fn(),
     hasVerifiedPaymentHash: jest.fn(),
     hasOwnInvoiceHash: jest.fn(),
+    getOwnInvoiceHash: jest.fn(),
   },
 }));
 
 import { createHash } from 'crypto';
 import { StorageService } from '../../StorageService';
 import { applyPaymentInbound } from '../applyPaymentInbound';
+import { INVOICE_AMOUNTLESS } from '../invoiceAmountBind';
+import { COPY } from '../../../copy/uxCopy';
+import { formatPaymentReceipt } from '../../../ui/paymentReceiptStatus';
 import {
   EMPTY_PAYMENT_RECORD_EXTRAS,
   ENDPOINT_LIGHTNING_BOLT11,
   PAYKIT_PAYMENT_PROOF_KIND,
   PAYKIT_PAYMENT_REQUEST_KIND,
   PAYKIT_PRIVATE_PAYMENT_LIST_KIND,
+  PROOF_REASON_AMOUNT_MISMATCH,
   buildPaymentAcceptanceEnvelope,
   buildPaymentCancellationEnvelope,
   buildPaymentProofEnvelope,
   buildPaymentRejectionEnvelope,
   buildPaymentRequestEnvelope,
   buildPrivatePaymentListEnvelope,
+  canTransition,
   displayPaymentStatus,
+  type OwnInvoiceHashRecord,
   type PaymentEventRecord,
   type PaymentRequestPatch,
   type PaymentRequestRecord,
@@ -59,13 +66,15 @@ const EVENT_ACC = '8a0d8b4c-913f-4e31-9f2c-2a6f5bb4d102';
 const EVENT_REJ = '8a0d8b4c-913f-4e31-9f2c-2a6f5bb4d103';
 const EVENT_CAN = '8a0d8b4c-913f-4e31-9f2c-2a6f5bb4d104';
 const EVENT_PRF = '8a0d8b4c-913f-4e31-9f2c-2a6f5bb4d105';
+const EVENT_PRF_2 = '8a0d8b4c-913f-4e31-9f2c-2a6f5bb4d107';
+const REQUEST_MSAT = '100000000';
 
 const mockedStorage = jest.mocked(StorageService);
 
 type Store = {
   requests: Map<string, PaymentRequestRecord>;
   events: Map<string, PaymentEventRecord>;
-  ownHashes: Set<string>;
+  ownInvoices: Map<string, OwnInvoiceHashRecord>;
 };
 
 function requestKey(owner: string, peer: string, id: string): string {
@@ -147,8 +156,28 @@ function installStore(store: Store): void {
     return false;
   });
   mockedStorage.hasOwnInvoiceHash.mockImplementation(async (owner, identifier, hash) =>
-    store.ownHashes.has(`${owner}|${identifier}|${hash}`),
+    store.ownInvoices.has(`${owner}|${identifier}|${hash}`),
   );
+  mockedStorage.getOwnInvoiceHash.mockImplementation(
+    async (owner, identifier, hash) =>
+      store.ownInvoices.get(`${owner}|${identifier}|${hash}`) ?? null,
+  );
+}
+
+function putOwnInvoice(
+  store: Store,
+  hash: string,
+  amountMsat: string | null = REQUEST_MSAT,
+  expiresAt: number | null = NOW + 86_400_000,
+): void {
+  store.ownInvoices.set(`${OWNER}|${ENDPOINT_LIGHTNING_BOLT11}|${hash}`, {
+    ownerPubky: OWNER,
+    endpointIdentifier: ENDPOINT_LIGHTNING_BOLT11,
+    paymentHash: hash,
+    firstSeenAt: NOW,
+    invoiceAmountMsat: amountMsat,
+    invoiceExpiresAt: expiresAt,
+  });
 }
 
 function sentRow(overrides: Partial<PaymentRequestRecord> = {}): PaymentRequestRecord {
@@ -189,7 +218,7 @@ describe('applyPaymentInbound authorization (S2)', () => {
 
   beforeEach(() => {
     jest.resetAllMocks();
-    store = { requests: new Map(), events: new Map(), ownHashes: new Set() };
+    store = { requests: new Map(), events: new Map(), ownInvoices: new Map() };
     installStore(store);
   });
 
@@ -343,13 +372,20 @@ describe('applyPaymentInbound authorization (S2)', () => {
     });
     expect((await inbound(PEER_A, proof.json)).action).toBe('applied');
     const afterProof = store.requests.get(requestKey(OWNER, PEER_A, REQUEST_ID));
-    expect(afterProof?.status).toBe('proof_received');
+    expect(afterProof?.status).toBe('accepted');
+    expect(afterProof?.proofVerified).toBeNull();
     expect(displayPaymentStatus(afterProof!.status, afterProof!.expiresAt, NOW, afterProof)).toBe(
-      'claimed',
+      'accepted',
     );
+    expect(formatPaymentReceipt(afterProof!, NOW)).toEqual({
+      word: COPY.paymentRequested,
+      note: COPY.proofNotVerified,
+    });
+    expect(canTransition(afterProof!.status, 'cancel', false)).toBe(true);
+    expect(canTransition(afterProof!.status, 'proof', false)).toBe(true);
   });
 
-  it('renders an empty opaque proof as claimed without a checkmark', async () => {
+  it('keeps an empty opaque proof non-terminal so a later proof can land', async () => {
     store.requests.set(requestKey(OWNER, PEER_A, REQUEST_ID), sentRow({ status: 'accepted' }));
     const envelope = {
       version: 1,
@@ -364,7 +400,9 @@ describe('applyPaymentInbound authorization (S2)', () => {
     expect((await inbound(PEER_A, JSON.stringify(envelope))).action).toBe('applied');
     const row = store.requests.get(requestKey(OWNER, PEER_A, REQUEST_ID));
     expect(row?.proofVerified).toBeNull();
-    expect(displayPaymentStatus(row!.status, row!.expiresAt, NOW, row)).toBe('claimed');
+    expect(row?.status).toBe('accepted');
+    expect(displayPaymentStatus(row!.status, row!.expiresAt, NOW, row)).toBe('accepted');
+    expect(formatPaymentReceipt(row!, NOW).note).toBe(COPY.proofNotVerified);
   });
 
   it('marks a bolt11 preimage verified when we already displayed the invoice hash', async () => {
@@ -374,6 +412,7 @@ describe('applyPaymentInbound authorization (S2)', () => {
       requestKey(OWNER, PEER_A, REQUEST_ID),
       sentRow({ status: 'accepted', displayedPaymentHash: paymentHash }),
     );
+    putOwnInvoice(store, paymentHash);
     const proof = buildPaymentProofEnvelope({
       eventId: EVENT_PRF,
       paymentRequestId: REQUEST_ID,
@@ -505,7 +544,7 @@ describe('applyPaymentInbound authorization (S2)', () => {
       requestKey(OWNER, PEER_A, REQUEST_ID),
       sentRow({ status: 'accepted', displayedPaymentHash: staleHash }),
     );
-    store.ownHashes.add(`${OWNER}|${ENDPOINT_LIGHTNING_BOLT11}|${rotatedHash}`);
+    putOwnInvoice(store, rotatedHash);
     const proof = buildPaymentProofEnvelope({
       eventId: EVENT_PRF,
       paymentRequestId: REQUEST_ID,
@@ -527,7 +566,7 @@ describe('applyPaymentInbound authorization (S2)', () => {
       requestKey(OWNER, PEER_A, REQUEST_ID),
       sentRow({ status: 'accepted', displayedPaymentHash: null }),
     );
-    store.ownHashes.add(`${OWNER}|${ENDPOINT_LIGHTNING_BOLT11}|${laterHash}`);
+    putOwnInvoice(store, laterHash);
     const proof = buildPaymentProofEnvelope({
       eventId: EVENT_PRF,
       paymentRequestId: REQUEST_ID,
@@ -558,7 +597,12 @@ describe('applyPaymentInbound authorization (S2)', () => {
     const row = store.requests.get(requestKey(OWNER, PEER_A, REQUEST_ID));
     expect(row?.proofVerified).toBeNull();
     expect(row?.displayedPaymentHash).toBeNull();
-    expect(displayPaymentStatus(row!.status, row!.expiresAt, NOW, row)).toBe('claimed');
+    expect(row?.status).toBe('accepted');
+    expect(displayPaymentStatus(row!.status, row!.expiresAt, NOW, row)).toBe('accepted');
+    expect(formatPaymentReceipt(row!, NOW)).toEqual({
+      word: COPY.paymentRequested,
+      note: COPY.proofNotVerified,
+    });
   });
 
   it('marks a genuine per-request hash match as verified', async () => {
@@ -568,6 +612,7 @@ describe('applyPaymentInbound authorization (S2)', () => {
       requestKey(OWNER, PEER_A, REQUEST_ID),
       sentRow({ status: 'accepted', displayedPaymentHash: paymentHash }),
     );
+    putOwnInvoice(store, paymentHash);
     const proof = buildPaymentProofEnvelope({
       eventId: EVENT_PRF,
       paymentRequestId: REQUEST_ID,
@@ -578,5 +623,177 @@ describe('applyPaymentInbound authorization (S2)', () => {
     expect((await inbound(PEER_A, proof.json)).action).toBe('applied');
     const row = store.requests.get(requestKey(OWNER, PEER_A, REQUEST_ID));
     expect(row?.proofVerified).toBe(true);
+  });
+
+  it('marks paid after a junk preimage then a matching preimage', async () => {
+    const goodPreimage = 'ab'.repeat(32);
+    const goodHash = createHash('sha256').update(Buffer.from(goodPreimage, 'hex')).digest('hex');
+    const junkPreimage = '00'.repeat(32);
+    store.requests.set(
+      requestKey(OWNER, PEER_A, REQUEST_ID),
+      sentRow({ status: 'accepted', displayedPaymentHash: goodHash }),
+    );
+    putOwnInvoice(store, goodHash);
+    const junk = buildPaymentProofEnvelope({
+      eventId: EVENT_PRF,
+      paymentRequestId: REQUEST_ID,
+      paymentReference: 'invoice-2026-0001',
+      paymentEndpointIdentifier: ENDPOINT_LIGHTNING_BOLT11,
+      proofData: junkPreimage,
+    });
+    expect((await inbound(PEER_A, junk.json)).action).toBe('applied');
+    const afterJunk = store.requests.get(requestKey(OWNER, PEER_A, REQUEST_ID));
+    expect(afterJunk?.status).toBe('accepted');
+    expect(afterJunk?.proofVerified).toBeNull();
+    expect(formatPaymentReceipt(afterJunk!, NOW).note).toBe(COPY.proofNotVerified);
+
+    const good = buildPaymentProofEnvelope({
+      eventId: EVENT_PRF_2,
+      paymentRequestId: REQUEST_ID,
+      paymentReference: 'invoice-2026-0001',
+      paymentEndpointIdentifier: ENDPOINT_LIGHTNING_BOLT11,
+      proofData: goodPreimage,
+    });
+    expect((await inbound(PEER_A, good.json)).action).toBe('applied');
+    const afterGood = store.requests.get(requestKey(OWNER, PEER_A, REQUEST_ID));
+    expect(afterGood?.status).toBe('proof_received');
+    expect(afterGood?.proofVerified).toBe(true);
+    expect(formatPaymentReceipt(afterGood!, NOW)).toEqual({
+      word: COPY.paymentPaid,
+      note: null,
+    });
+  });
+
+  it('stays requested after two junk preimages', async () => {
+    store.requests.set(requestKey(OWNER, PEER_A, REQUEST_ID), sentRow({ status: 'accepted' }));
+    const first = buildPaymentProofEnvelope({
+      eventId: EVENT_PRF,
+      paymentRequestId: REQUEST_ID,
+      paymentReference: 'invoice-2026-0001',
+      paymentEndpointIdentifier: ENDPOINT_LIGHTNING_BOLT11,
+      proofData: '00'.repeat(32),
+    });
+    const second = buildPaymentProofEnvelope({
+      eventId: EVENT_PRF_2,
+      paymentRequestId: REQUEST_ID,
+      paymentReference: 'invoice-2026-0001',
+      paymentEndpointIdentifier: ENDPOINT_LIGHTNING_BOLT11,
+      proofData: '11'.repeat(32),
+    });
+    expect((await inbound(PEER_A, first.json)).action).toBe('applied');
+    expect((await inbound(PEER_A, second.json)).action).toBe('applied');
+    const row = store.requests.get(requestKey(OWNER, PEER_A, REQUEST_ID));
+    expect(row?.status).toBe('accepted');
+    expect(row?.proofVerified).toBeNull();
+    expect(formatPaymentReceipt(row!, NOW).word).toBe(COPY.paymentRequested);
+    expect(canTransition(row!.status, 'proof', false)).toBe(true);
+    expect(canTransition(row!.status, 'cancel', false)).toBe(true);
+  });
+
+  it('does not mark a large request paid from a small invoice preimage', async () => {
+    const smallPreimage = 'ab'.repeat(32);
+    const smallHash = createHash('sha256').update(Buffer.from(smallPreimage, 'hex')).digest('hex');
+    const largeId = 'c7f9c2a1-6d43-4b0e-a8d4-0fe2c712ab44';
+    const smallId = REQUEST_ID;
+    store.requests.set(
+      requestKey(OWNER, PEER_A, largeId),
+      sentRow({
+        paymentRequestId: largeId,
+        amountValue: '0.01',
+        status: 'accepted',
+        displayedPaymentHash: '22'.repeat(32),
+      }),
+    );
+    store.requests.set(
+      requestKey(OWNER, PEER_A, smallId),
+      sentRow({
+        amountValue: '0.00001',
+        status: 'accepted',
+        displayedPaymentHash: smallHash,
+      }),
+    );
+    putOwnInvoice(store, smallHash, '1000000');
+    const againstLarge = buildPaymentProofEnvelope({
+      eventId: EVENT_PRF,
+      paymentRequestId: largeId,
+      paymentReference: 'invoice-2026-0001',
+      paymentEndpointIdentifier: ENDPOINT_LIGHTNING_BOLT11,
+      proofData: smallPreimage,
+    });
+    expect((await inbound(PEER_A, againstLarge.json)).action).toBe('applied');
+    const large = store.requests.get(requestKey(OWNER, PEER_A, largeId));
+    const small = store.requests.get(requestKey(OWNER, PEER_A, smallId));
+    expect(large?.proofVerified).not.toBe(true);
+    expect(large?.status).toBe('accepted');
+    expect(large?.reason).toBe(PROOF_REASON_AMOUNT_MISMATCH);
+    expect(formatPaymentReceipt(large!, NOW)).toEqual({
+      word: COPY.paymentRequested,
+      note: COPY.proofAmountMismatch,
+    });
+    expect(small?.proofVerified).toBeNull();
+    expect(small?.status).toBe('accepted');
+    expect(formatPaymentReceipt(small!, NOW).note).toBeNull();
+  });
+
+  it('marks over-payment paid and rejects an amountless invoice against an amount-bearing request', async () => {
+    const overPreimage = 'cd'.repeat(32);
+    const overHash = createHash('sha256').update(Buffer.from(overPreimage, 'hex')).digest('hex');
+    const nonePreimage = 'ef'.repeat(32);
+    const noneHash = createHash('sha256').update(Buffer.from(nonePreimage, 'hex')).digest('hex');
+    const overId = REQUEST_ID;
+    const noneId = 'c7f9c2a1-6d43-4b0e-a8d4-0fe2c712ab44';
+    store.requests.set(
+      requestKey(OWNER, PEER_A, overId),
+      sentRow({ status: 'accepted', amountValue: '0.00001' }),
+    );
+    store.requests.set(
+      requestKey(OWNER, PEER_A, noneId),
+      sentRow({ paymentRequestId: noneId, status: 'accepted', amountValue: '0.001' }),
+    );
+    putOwnInvoice(store, overHash, '2000000');
+    putOwnInvoice(store, noneHash, INVOICE_AMOUNTLESS);
+    const overProof = buildPaymentProofEnvelope({
+      eventId: EVENT_PRF,
+      paymentRequestId: overId,
+      paymentReference: 'invoice-2026-0001',
+      paymentEndpointIdentifier: ENDPOINT_LIGHTNING_BOLT11,
+      proofData: overPreimage,
+    });
+    const noneProof = buildPaymentProofEnvelope({
+      eventId: EVENT_PRF_2,
+      paymentRequestId: noneId,
+      paymentReference: 'invoice-2026-0001',
+      paymentEndpointIdentifier: ENDPOINT_LIGHTNING_BOLT11,
+      proofData: nonePreimage,
+    });
+    expect((await inbound(PEER_A, overProof.json)).action).toBe('applied');
+    expect((await inbound(PEER_A, noneProof.json)).action).toBe('applied');
+    expect(store.requests.get(requestKey(OWNER, PEER_A, overId))?.proofVerified).toBe(true);
+    const noneRow = store.requests.get(requestKey(OWNER, PEER_A, noneId));
+    expect(noneRow?.proofVerified).not.toBe(true);
+    expect(noneRow?.reason).toBe(PROOF_REASON_AMOUNT_MISMATCH);
+    expect(formatPaymentReceipt(noneRow!, NOW).note).toBe(COPY.proofAmountMismatch);
+  });
+
+  it('does not corroborate an invoice that expired before the request was created', async () => {
+    const preimage = 'ab'.repeat(32);
+    const paymentHash = createHash('sha256').update(Buffer.from(preimage, 'hex')).digest('hex');
+    store.requests.set(
+      requestKey(OWNER, PEER_A, REQUEST_ID),
+      sentRow({ status: 'accepted', createdAt: NOW }),
+    );
+    putOwnInvoice(store, paymentHash, REQUEST_MSAT, NOW - 1);
+    const proof = buildPaymentProofEnvelope({
+      eventId: EVENT_PRF,
+      paymentRequestId: REQUEST_ID,
+      paymentReference: 'invoice-2026-0001',
+      paymentEndpointIdentifier: ENDPOINT_LIGHTNING_BOLT11,
+      proofData: preimage,
+    });
+    expect((await inbound(PEER_A, proof.json)).action).toBe('applied');
+    const row = store.requests.get(requestKey(OWNER, PEER_A, REQUEST_ID));
+    expect(row?.proofVerified).toBeNull();
+    expect(row?.status).toBe('accepted');
+    expect(formatPaymentReceipt(row!, NOW).note).toBe(COPY.proofNotVerified);
   });
 });

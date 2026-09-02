@@ -3,16 +3,34 @@
  *
  * Bolt11 invoices are single-use, so the payee rotates the tip invoice after
  * every payment. Proof verification therefore cannot bind to one create-time
- * snapshot: it looks up `sha256(preimage)` in this owner-scoped history.
+ * snapshot: it looks up `sha256(preimage)` in this owner-scoped history AND
+ * requires the stored invoice amount to satisfy the request (see
+ * `invoiceAmountRelation`).
  *
+ * `invoice_amount_msat` is the bolt11 msat string, the sentinel `amountless`,
+ * or NULL (unknown — cannot corroborate). `invoice_expires_at` is unix ms.
  * Seed copies current own tip hashes (`owner_pubky = peer_pubky`) so invoices
- * already on disk are known. Inserts are `OR IGNORE` (primary key is the
- * triple). `first_seen_at` is the tip row's `updated_at` at seed time.
+ * already on disk are known; amount/expiry are filled from the tip row (NULL
+ * tip amount → `amountless`) and backfilled from the payload when needed.
+ * Inserts upsert missing metadata; they never overwrite a known amount.
+ * `first_seen_at` is the tip row's `updated_at` at seed time.
+ *
+ * Rows are not pruned. An invoice that expired at or before the request was
+ * created cannot corroborate that request; later expiry is not a proof reject
+ * (the payment may have settled before expiry).
  *
  * Duplicate `proof_verified = 1` rows that share `(owner_pubky,
  * displayed_payment_hash)` are reduced before the unique index: the earliest
  * `created_at` (lowest `rowid` on ties) stays verified; the others have
  * `proof_verified` set to NULL (cannot corroborate — not replay).
+ *
+ * The unique index is owner-scoped and not direction-scoped: one owner's
+ * payer row and payee row cannot both be verified against the same hash.
+ * That is the replay case it exists to catch (self-link or a peer republishing
+ * the owner's invoice).
+ *
+ * v16 collides with W2b's `group_fanout_outcomes` at merge. Do not renumber
+ * here; parent rebase makes W2c v17 as an idempotent reconciliation migration.
  */
 export const SCHEMA_V16_STATEMENTS: readonly string[] = [
   `CREATE TABLE IF NOT EXISTS own_invoice_hashes (
@@ -20,11 +38,16 @@ export const SCHEMA_V16_STATEMENTS: readonly string[] = [
     endpoint_identifier   TEXT    NOT NULL,
     payment_hash          TEXT    NOT NULL,
     first_seen_at         INTEGER NOT NULL,
+    invoice_amount_msat   TEXT,
+    invoice_expires_at    INTEGER,
     PRIMARY KEY (owner_pubky, endpoint_identifier, payment_hash)
   )`,
   `INSERT OR IGNORE INTO own_invoice_hashes
-     (owner_pubky, endpoint_identifier, payment_hash, first_seen_at)
-   SELECT owner_pubky, identifier, payment_hash, updated_at
+     (owner_pubky, endpoint_identifier, payment_hash, first_seen_at,
+      invoice_amount_msat, invoice_expires_at)
+   SELECT owner_pubky, identifier, payment_hash, updated_at,
+          CASE WHEN invoice_amount IS NULL THEN 'amountless' ELSE NULL END,
+          invoice_expires_at
      FROM tip_endpoints
     WHERE owner_pubky = peer_pubky
       AND payment_hash IS NOT NULL`,

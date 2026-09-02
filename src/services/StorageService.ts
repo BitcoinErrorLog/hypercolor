@@ -59,6 +59,7 @@ import type {
   OwnInvoiceHashRecord,
 } from '../types/payment';
 import { isPaykitPaymentKind } from '../types/payment';
+import { bindingFromEndpoint } from './payments/invoiceAmountBind';
 import { KeyStore } from './KeyStore';
 import { cachePathsForAttachment, deleteCacheFiles } from './attachments/fileIo';
 import { OWNER_BACKUP_VERSION, type OwnerBackupSnapshot } from './backup/snapshot';
@@ -1104,7 +1105,16 @@ export const StorageService = {
         ],
       );
       if (tip.peerPubky === ownerPubky && tip.paymentHash) {
-        insertOwnInvoiceHash(db, ownerPubky, tip.identifier, tip.paymentHash, tip.updatedAt);
+        const binding = bindingFromEndpoint(tip);
+        insertOwnInvoiceHash(
+          db,
+          ownerPubky,
+          tip.identifier,
+          tip.paymentHash,
+          tip.updatedAt,
+          binding.amountMsat,
+          binding.expiresAt,
+        );
       }
     }
     for (const hashRow of snapshot.ownInvoiceHashes ?? []) {
@@ -1115,6 +1125,8 @@ export const StorageService = {
         hashRow.endpointIdentifier,
         hashRow.paymentHash,
         hashRow.firstSeenAt,
+        hashRow.invoiceAmountMsat ?? null,
+        hashRow.invoiceExpiresAt ?? null,
       );
     }
     for (const attachment of snapshot.attachments) {
@@ -2255,14 +2267,24 @@ export const StorageService = {
     endpointIdentifier: string,
     paymentHash: string,
   ): Promise<boolean> {
+    const row = await StorageService.getOwnInvoiceHash(ownerPubky, endpointIdentifier, paymentHash);
+    return row !== null;
+  },
+
+  async getOwnInvoiceHash(
+    ownerPubky: PubkyKey,
+    endpointIdentifier: string,
+    paymentHash: string,
+  ): Promise<OwnInvoiceHashRecord | null> {
     const db = await getDb();
     const result = db.executeSync(
-      `SELECT 1 FROM own_invoice_hashes
+      `SELECT * FROM own_invoice_hashes
        WHERE owner_pubky = ? AND endpoint_identifier = ? AND payment_hash = ?
        LIMIT 1`,
       [ownerPubky, endpointIdentifier, paymentHash],
     );
-    return (result.rows?.length ?? 0) > 0;
+    const row = result.rows?.[0];
+    return row ? rowToOwnInvoiceHash(row) : null;
   },
 
   async getTipEndpoint(
@@ -2360,13 +2382,20 @@ export const StorageService = {
             endpoint.paymentHash ?? null,
           ],
         );
-        if (ownerPubky === peerPubky && endpoint.paymentHash) {
+        if (
+          ownerPubky === peerPubky &&
+          endpoint.paymentHash &&
+          endpoint.validationStatus !== 'rejected'
+        ) {
+          const binding = bindingFromEndpoint(endpoint);
           insertOwnInvoiceHash(
             db,
             ownerPubky,
             endpoint.identifier,
             endpoint.paymentHash,
             updatedAt,
+            binding.amountMsat,
+            binding.expiresAt,
           );
         }
       }
@@ -2815,6 +2844,8 @@ function rowToOwnInvoiceHash(row: any): OwnInvoiceHashRecord {
     endpointIdentifier: String(row.endpoint_identifier),
     paymentHash: String(row.payment_hash),
     firstSeenAt: Number(row.first_seen_at),
+    invoiceAmountMsat: typeof row.invoice_amount_msat === 'string' ? row.invoice_amount_msat : null,
+    invoiceExpiresAt: typeof row.invoice_expires_at === 'number' ? row.invoice_expires_at : null,
   };
 }
 
@@ -2824,12 +2855,18 @@ function insertOwnInvoiceHash(
   endpointIdentifier: string,
   paymentHash: string,
   firstSeenAt: number,
+  invoiceAmountMsat: string | null,
+  invoiceExpiresAt: number | null,
 ): void {
   db.executeSync(
-    `INSERT OR IGNORE INTO own_invoice_hashes
-      (owner_pubky, endpoint_identifier, payment_hash, first_seen_at)
-     VALUES (?, ?, ?, ?)`,
-    [ownerPubky, endpointIdentifier, paymentHash, firstSeenAt],
+    `INSERT INTO own_invoice_hashes
+      (owner_pubky, endpoint_identifier, payment_hash, first_seen_at,
+       invoice_amount_msat, invoice_expires_at)
+     VALUES (?, ?, ?, ?, ?, ?)
+     ON CONFLICT(owner_pubky, endpoint_identifier, payment_hash) DO UPDATE SET
+       invoice_amount_msat = COALESCE(own_invoice_hashes.invoice_amount_msat, excluded.invoice_amount_msat),
+       invoice_expires_at = COALESCE(own_invoice_hashes.invoice_expires_at, excluded.invoice_expires_at)`,
+    [ownerPubky, endpointIdentifier, paymentHash, firstSeenAt, invoiceAmountMsat, invoiceExpiresAt],
   );
 }
 
@@ -2848,8 +2885,13 @@ function sqliteChanges(db: SqlExecutor): number {
 function isVerifiedHashUniqueError(err: unknown): boolean {
   const code = typeof err === 'object' && err !== null && 'code' in err ? String(err.code) : '';
   const message = err instanceof Error ? err.message : String(err);
-  if (/UNIQUE constraint failed/i.test(message)) return true;
-  return code === 'SQLITE_CONSTRAINT_UNIQUE' || /CONSTRAINT_UNIQUE/i.test(code);
+  const isUnique =
+    /UNIQUE constraint failed/i.test(message) ||
+    code === 'SQLITE_CONSTRAINT_UNIQUE' ||
+    /CONSTRAINT_UNIQUE/i.test(code);
+  if (!isUnique) return false;
+  if (/idx_payment_requests_owner_verified_hash/i.test(message)) return true;
+  return /payment_requests/i.test(message) && /displayed_payment_hash/i.test(message);
 }
 
 function casPaymentRequestRow(
@@ -2966,7 +3008,11 @@ function compareAndSetPaymentRequestRow(
       patch.reason === undefined ? null : patch.reason,
       patch.pendingEventId === undefined ? null : patch.pendingEventId,
       patch.displayedPaymentHash === undefined ? null : patch.displayedPaymentHash,
-      patch.proofVerified === undefined ? null : patch.proofVerified ? 1 : 0,
+      patch.proofVerified === undefined || patch.proofVerified === null
+        ? null
+        : patch.proofVerified
+          ? 1
+          : 0,
       now(),
       ownerPubky,
       peerPubky,

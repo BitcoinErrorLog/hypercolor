@@ -408,10 +408,10 @@ export async function runLinkLiveProof(
           pubkyA,
           pubkyB,
           requestOne.envelope.payment_request_id,
-          'proof_received',
+          'accepted',
         );
         if (applied.action !== 'applied') throw new Error(`A apply proof: ${applied.action}`);
-        return 'proof_received (dummy hex — does not close P4)';
+        return 'accepted (dummy hex — unverifiable proof stays non-terminal)';
       }))
     ) {
       return failed();
@@ -524,7 +524,7 @@ export async function runLinkLiveProof(
           pubkyA,
           pubkyB,
           requestOne.envelope.payment_request_id,
-          'proof_received',
+          'accepted',
         );
         if (applied.action !== 'applied') throw new Error(`A apply rejection: ${applied.action}`);
         return 'rejected';

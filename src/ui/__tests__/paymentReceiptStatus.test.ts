@@ -1,5 +1,5 @@
 import { COPY } from '../../copy/uxCopy';
-import type { PaymentRequestRecord } from '../../types/payment';
+import { PROOF_REASON_AMOUNT_MISMATCH, type PaymentRequestRecord } from '../../types/payment';
 import {
   formatPaymentReceipt,
   formatPaymentReceiptStatus,
@@ -105,6 +105,18 @@ describe('formatPaymentReceiptStatus', () => {
         note: COPY.proofNotVerified,
       },
       {
+        status: 'accepted',
+        extras: { proofJson: '{"data":"00"}', proofVerified: null },
+        word: COPY.paymentRequested,
+        note: COPY.proofNotVerified,
+      },
+      {
+        status: 'accepted',
+        extras: { reason: PROOF_REASON_AMOUNT_MISMATCH, proofJson: '{"data":"aa"}' },
+        word: COPY.paymentRequested,
+        note: COPY.proofAmountMismatch,
+      },
+      {
         status: 'proof_received',
         extras: { proofVerified: false },
         word: COPY.paymentRequested,
@@ -116,6 +128,12 @@ describe('formatPaymentReceiptStatus', () => {
         status: 'pending',
         extras: { expiresAt: now - 1 },
         word: COPY.paymentExpired,
+        note: null,
+      },
+      {
+        status: 'accepted',
+        extras: { expiresAt: now - 1 },
+        word: COPY.paymentRequested,
         note: null,
       },
     ];

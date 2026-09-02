@@ -129,10 +129,12 @@ describe('PaymentComposeSheet', () => {
       tree.root.findByProps({ testID: 'paymentComposeAmount' }).props.onChangeText('0.001');
     });
     expect(tree.root.findByProps({ testID: 'paymentComposeSats' }).props.children).toBe(
-      amountSatsApprox(100_000),
+      '100,000 sats',
     );
+    expect(amountSatsApprox(100_000)).toBe('100,000 sats');
     expect(amountSatsApprox(100_000, 'en-US')).toBe('100,000 sats');
     expect(amountSatsApprox(100_000, 'en-US')).not.toMatch(/≈/);
+    expect(amountSatsApprox(50_000_000)).toBe(amountSatsApprox(50_000_000, 'en-US'));
     await unmount(tree);
   });
 });

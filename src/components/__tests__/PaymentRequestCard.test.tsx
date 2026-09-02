@@ -91,4 +91,40 @@ describe('PaymentRequestCard', () => {
       tree.unmount();
     });
   });
+
+  it('keeps payee Cancel on an accepted request after an unverifiable proof', async () => {
+    let tree!: ReactTestRenderer;
+    await act(async () => {
+      tree = create(
+        <PaymentRequestCard
+          record={record({
+            direction: 'sent',
+            status: 'accepted',
+            proofJson: '{"data":"00"}',
+            proofVerified: null,
+          })}
+          isPayee
+          nowMs={1_000}
+          busy={false}
+          proofDraft=""
+          onChangeProofDraft={noop}
+          onAccept={noop}
+          onReject={noop}
+          onCancel={noop}
+          onPayInWallet={noop}
+          onSubmitProof={noop}
+        />,
+      );
+    });
+    const labels = tree.root
+      .findAllByProps({ accessibilityRole: 'button' })
+      .map(node => node.props.accessibilityLabel);
+    expect(labels).toContain('Cancel');
+    expect(tree.root.findByProps({ testID: 'paymentRequestProofNote' }).props.children).toBe(
+      COPY.proofNotVerified,
+    );
+    await act(async () => {
+      tree.unmount();
+    });
+  });
 });

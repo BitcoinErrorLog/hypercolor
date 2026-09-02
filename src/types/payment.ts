@@ -227,6 +227,9 @@ export const EMPTY_PAYMENT_RECORD_EXTRAS = {
   proofVerified: null,
 } as const;
 
+/** Local-only proof apply reason. Never serialized on a payment envelope. */
+export const PROOF_REASON_AMOUNT_MISMATCH = 'amount_mismatch';
+
 export type PaymentRequestPatch = {
   status: PaymentStatus;
   proofJson?: string | null;
@@ -266,6 +269,9 @@ export interface OwnInvoiceHashRecord {
   endpointIdentifier: string;
   paymentHash: string;
   firstSeenAt: number;
+  /** Bolt11 msat string, the sentinel `amountless`, or null if unknown. */
+  invoiceAmountMsat: string | null;
+  invoiceExpiresAt: number | null;
 }
 
 export class PaymentError extends Error {
@@ -461,10 +467,10 @@ export function displayPaymentStatus(
   nowMs: number,
   extras?: { pendingEventId?: string | null; proofVerified?: boolean | null },
 ): PaymentDisplayStatus {
-  if (extras?.pendingEventId) return 'sending';
   if (status === 'proof_received') {
     return extras?.proofVerified === true ? 'verified' : 'claimed';
   }
+  if (extras?.pendingEventId) return 'sending';
   if (status === 'pending' && isProposalExpired(expiresAt, nowMs)) return 'expired';
   return status;
 }

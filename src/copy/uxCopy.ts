@@ -181,11 +181,12 @@ export const COPY = {
   paymentPaid: 'paid',
   paymentExpired: 'expired',
   paymentFailed: 'failed',
-  proofNotVerified: 'Proof not verified',
+  proofNotVerified: 'Payment proof could not be verified yet',
   proofAlreadyUsed: 'This proof was already used',
+  proofAmountMismatch: "This proof does not match this request's amount",
   paymentSending: 'Sending…',
   invoiceNotRecorded:
-    'Your wallet opened, but this invoice was not recorded on this device. Proof verification here may not work — the receipt stays requested until a matching proof can be verified.',
+    'Your wallet opened, but this invoice was not recorded on this device. Tap Open wallet again to record it. Proof verification here may not work until then — the receipt stays requested until a matching proof can be verified.',
   networkBitcoinMainnet: 'Bitcoin mainnet',
   networkLightningMainnet: 'Lightning on Bitcoin mainnet',
   networkLightningRegtest: 'Lightning on Bitcoin regtest',
@@ -219,7 +220,8 @@ export function paymentNetworkLabel(
   return null;
 }
 
-export function amountSatsApprox(sats: number, locale?: string): string {
+/** Whole sats with grouping that matches the period-only BTC input grammar. */
+export function amountSatsApprox(sats: number, locale = 'en-US'): string {
   const grouped = new Intl.NumberFormat(locale, { maximumFractionDigits: 0 }).format(sats);
   return `${grouped} sats`;
 }

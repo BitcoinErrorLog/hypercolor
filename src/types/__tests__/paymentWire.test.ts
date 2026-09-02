@@ -291,6 +291,12 @@ describe('payment wire contracts', () => {
       'verified',
     );
     expect(displayPaymentStatus('accepted', null, 1, { pendingEventId: EVENT_ID })).toBe('sending');
+    expect(
+      displayPaymentStatus('proof_received', null, 1, {
+        pendingEventId: EVENT_ID,
+        proofVerified: true,
+      }),
+    ).toBe('verified');
   });
 
   it('encodes the state machine: pending accept/reject/cancel; proof only from accepted', () => {
