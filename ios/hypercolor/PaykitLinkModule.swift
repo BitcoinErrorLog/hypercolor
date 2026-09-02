@@ -33,6 +33,11 @@ private enum PaykitAttachmentAead {
 
 @objc(PaykitLinkModule)
 class PaykitLinkModule: NSObject, RCTInvalidating {
+    /// Non-reentrant `NSLock`. Never call a helper that takes `lock` /
+    /// `lock.withLock` while this lock is held (P0-1: `awaitAuthApproval`
+    /// used to call `sweepDurablePendingIfNeeded` inside the critical
+    /// section and deadlocked). Sweep, persist, and Keychain I/O run
+    /// outside this lock. `lock` and `pendingIoLock` are never held together.
     private let lock = NSLock()
     private var client: ChatClient?
     private var sessions: [String: ChatSession] = [:]
@@ -147,6 +152,9 @@ class PaykitLinkModule: NSObject, RCTInvalidating {
         resolver resolve: @escaping RCTPromiseResolveBlock,
         rejecter reject: @escaping RCTPromiseRejectBlock
     ) {
+        // Sweep takes `lock` itself. Hoist above this non-reentrant acquire
+        // (matches `startAuthFlow` / `adoptAuthSession`).
+        sweepDurablePendingIfNeeded()
         lock.lock()
         // Admission is atomic under this lock (Kotlin `startAwait`):
         // tornDown → unavailable; idle → reserved(lease); reserved/awaiting/
@@ -157,8 +165,8 @@ class PaykitLinkModule: NSObject, RCTInvalidating {
         // retain self across the non-abortable FFI wait: invalidate/deinit
         // has to mark cancelled-owner(lease) so post-FFI fails closed and
         // never persistSession. Persist is pending until `adoptAuthSession`.
-        // Never overwrite awaitTasks[id].
-        sweepDurablePendingIfNeeded()
+        // Never overwrite awaitTasks[id]. Never call lock-taking helpers
+        // from this critical section.
         if bridgeTornDown {
             lock.unlock()
             reject("unavailable", Self.staticMessage("unavailable"), nil)
@@ -342,6 +350,9 @@ class PaykitLinkModule: NSObject, RCTInvalidating {
         #endif
     }
 
+    /// JS already wrote `KeyStore.setLinkSession`. Native only drops the
+    /// durable pending marker. Unknown / already-adopted aliases reject
+    /// `unavailable` (`session()` then refuses pending and unknown).
     @objc func adoptAuthSession(
         _ sessionAlias: String,
         resolver resolve: @escaping RCTPromiseResolveBlock,
@@ -371,6 +382,39 @@ class PaykitLinkModule: NSObject, RCTInvalidating {
         }
     }
 
+    /// Boot reconcile: delete adopted bearers KeyStore does not name.
+    /// Still-pending aliases are excluded (in-flight enable / pending sweep).
+    @objc func reconcileAdoptedSessions(
+        _ knownSessionAlias: Any?,
+        resolver resolve: @escaping RCTPromiseResolveBlock,
+        rejecter reject: @escaping RCTPromiseRejectBlock
+    ) {
+        runAsync(resolve, reject) {
+            self.sweepDurablePendingIfNeeded()
+            var known = Set<String>()
+            if let named = Self.optionalText(knownSessionAlias) {
+                known.insert(named)
+            }
+            let sessionAliases = try PaykitLinkStore.listSessionAliases()
+            let pending = Set(try PaykitLinkStore.listPendingSessionAliases())
+            let orphans = PaykitLinkAuthProtocol.orphanAdoptedAliases(
+                sessionAliases: sessionAliases,
+                pendingAliases: pending,
+                knownAliases: known
+            )
+            for alias in orphans {
+                self.lock.withLock {
+                    self.sessions.removeValue(forKey: alias)
+                }
+                try self.pendingIoLock.withLock {
+                    try PaykitLinkStore.delete(account: PaykitLinkStore.sessionAccount(alias))
+                    try PaykitLinkStore.delete(account: PaykitLinkStore.pendingAccount(alias))
+                }
+            }
+            return NSNull()
+        }
+    }
+
     @objc func restoreSession(
         _ sessionAlias: String,
         resolver resolve: @escaping RCTPromiseResolveBlock,
@@ -393,8 +437,10 @@ class PaykitLinkModule: NSObject, RCTInvalidating {
                 self.sessions.removeValue(forKey: alias)
                 self.pendingSessionAliases.remove(alias)
             }
-            try PaykitLinkStore.delete(account: PaykitLinkStore.sessionAccount(alias))
-            try PaykitLinkStore.delete(account: PaykitLinkStore.pendingAccount(alias))
+            try self.pendingIoLock.withLock {
+                try PaykitLinkStore.delete(account: PaykitLinkStore.sessionAccount(alias))
+                try PaykitLinkStore.delete(account: PaykitLinkStore.pendingAccount(alias))
+            }
             return NSNull()
         }
     }
@@ -1197,8 +1243,21 @@ class PaykitLinkModule: NSObject, RCTInvalidating {
         }
         do {
             try pendingIoLock.withLock {
-                try PaykitLinkStore.put(session.exportSession(), account: PaykitLinkStore.sessionAccount(alias))
-                try PaykitLinkStore.put("1", account: PaykitLinkStore.pendingAccount(alias))
+                try PaykitLinkAuthProtocol.writeMarkerThenBearer(
+                    writeMarker: {
+                        try PaykitLinkStore.put("1", account: PaykitLinkStore.pendingAccount(alias))
+                    },
+                    writeBearer: {
+                        try PaykitLinkStore.put(
+                            session.exportSession(),
+                            account: PaykitLinkStore.sessionAccount(alias)
+                        )
+                    },
+                    rollback: {
+                        try? PaykitLinkStore.delete(account: PaykitLinkStore.sessionAccount(alias))
+                        try? PaykitLinkStore.delete(account: PaykitLinkStore.pendingAccount(alias))
+                    }
+                )
             }
         } catch {
             pendingIoLock.withLock {
@@ -1239,35 +1298,41 @@ class PaykitLinkModule: NSObject, RCTInvalidating {
     }
 
     /// Process-death leftovers: durable pending with no live runtime means
-    /// JS never adopted. Delete so an orphan enabled session cannot exist.
+    /// JS never wrote KeyStore. Delete so an orphan enabled session cannot
+    /// exist. Takes `lock` internally — must not be called while `lock` is
+    /// held. Latches only after a successful Keychain enumeration.
     private func sweepDurablePendingIfNeeded() {
-        let shouldSweep: Bool = lock.withLock {
-            if sweptDurablePending { return false }
-            sweptDurablePending = true
-            return true
+        let already: Bool = lock.withLock { sweptDurablePending }
+        guard !already else { return }
+        let aliases: [String]
+        do {
+            aliases = try PaykitLinkStore.listPendingSessionAliases()
+        } catch {
+            return
         }
-        guard shouldSweep else { return }
-        let aliases = (try? PaykitLinkStore.listPendingSessionAliases()) ?? []
+        lock.withLock { sweptDurablePending = true }
         for alias in aliases {
             lock.withLock {
                 sessions.removeValue(forKey: alias)
                 pendingSessionAliases.remove(alias)
             }
-            try? PaykitLinkStore.delete(account: PaykitLinkStore.sessionAccount(alias))
-            try? PaykitLinkStore.delete(account: PaykitLinkStore.pendingAccount(alias))
+            pendingIoLock.withLock {
+                try? PaykitLinkStore.delete(account: PaykitLinkStore.sessionAccount(alias))
+                try? PaykitLinkStore.delete(account: PaykitLinkStore.pendingAccount(alias))
+            }
         }
     }
 
     private func session(_ alias: String) async throws -> ChatSession {
-        let blocked = lock.withLock { pendingSessionAliases.contains(alias) }
-        if blocked {
-            throw PaykitLinkBridgeError(code: "unavailable", message: Self.staticMessage("unavailable"))
-        }
-        if (try? PaykitLinkStore.getString(account: PaykitLinkStore.pendingAccount(alias))) != nil {
+        let pendingInMemory = lock.withLock { pendingSessionAliases.contains(alias) }
+        if pendingInMemory {
             throw PaykitLinkBridgeError(code: "unavailable", message: Self.staticMessage("unavailable"))
         }
         if let live = lock.withLock({ sessions[alias] }) {
             return live
+        }
+        if (try? PaykitLinkStore.getString(account: PaykitLinkStore.pendingAccount(alias))) != nil {
+            throw PaykitLinkBridgeError(code: "unavailable", message: Self.staticMessage("unavailable"))
         }
         guard let bearer = try PaykitLinkStore.getString(account: PaykitLinkStore.sessionAccount(alias)),
               !bearer.isEmpty
@@ -1620,16 +1685,21 @@ enum PaykitLinkStore {
     }
 
     static func receiverAccount(_ alias: String) -> String { "receiver.\(alias)" }
-    static func sessionAccount(_ alias: String) -> String { "session.\(alias)" }
-    static func pendingAccount(_ alias: String) -> String { "session.pending.\(alias)" }
+    static func sessionAccount(_ alias: String) -> String {
+        PaykitLinkAuthProtocol.sessionAccount(alias)
+    }
+    static func pendingAccount(_ alias: String) -> String {
+        PaykitLinkAuthProtocol.pendingAccount(alias)
+    }
 
     static func listPendingSessionAliases() throws -> [String] {
-        let prefix = "session.pending."
         let accounts = try listAccounts(forService: service)
-        return accounts.compactMap { account in
-            guard account.hasPrefix(prefix) else { return nil }
-            return String(account.dropFirst(prefix.count))
-        }
+        return PaykitLinkAuthProtocol.pendingAliases(fromAccounts: accounts)
+    }
+
+    static func listSessionAliases() throws -> [String] {
+        let accounts = try listAccounts(forService: service)
+        return PaykitLinkAuthProtocol.sessionAliases(fromAccounts: accounts)
     }
 
     static func put(_ value: String, account: String) throws {
@@ -1762,15 +1832,22 @@ enum PaykitLinkStore {
         ]
         var result: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
-        if isAbsent(status) {
+        switch PaykitLinkAuthProtocol.classifyListStatus(Int32(status)) {
+        case .empty:
             #if DEBUG
             return listFallbackAccounts()
             #else
             return []
             #endif
-        }
-        if status != errSecSuccess {
+        case .unavailable:
+            throw PaykitLinkBridgeError(
+                code: "unavailable",
+                message: "keychain enumeration unavailable (\(status))"
+            )
+        case .failed:
             throw PaykitLinkBridgeError(code: "protocol", message: "keychain read failed")
+        case .items:
+            break
         }
         let items = (result as? [[String: Any]]) ?? []
         var accounts = items.compactMap { item in

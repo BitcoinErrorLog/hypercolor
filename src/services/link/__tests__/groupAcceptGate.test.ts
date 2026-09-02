@@ -53,6 +53,7 @@ jest.mock('../PaykitLinkNative', () => ({
     startAuthFlow: jest.fn(),
     awaitAuthApproval: jest.fn(),
     adoptAuthSession: jest.fn(),
+    reconcileAdoptedSessions: jest.fn(),
     stopAuthKeepalive: jest.fn(),
     signinWithSecret: jest.fn(),
     signupWithSecret: jest.fn(),
@@ -490,6 +491,7 @@ describe('group accept gate', () => {
 
     mockedNative.isAvailable.mockReturnValue(true);
     mockedNative.signinWithSecret.mockResolvedValue({ sessionAlias: SESSION_ALIAS, pubky: OWNER });
+    mockedNative.adoptAuthSession.mockResolvedValue(undefined);
     mockedNative.signOutSession.mockResolvedValue(undefined);
     mockedNative.clearAllNativeSecrets.mockResolvedValue(undefined);
     mockedNative.removeReceiverMarker.mockResolvedValue(undefined);

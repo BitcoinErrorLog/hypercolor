@@ -48,6 +48,7 @@ jest.mock('../PaykitLinkNative', () => ({
     startAuthFlow: jest.fn(),
     awaitAuthApproval: jest.fn(),
     adoptAuthSession: jest.fn(),
+    reconcileAdoptedSessions: jest.fn(),
     stopAuthKeepalive: jest.fn(),
     cancelAuthFlow: jest.fn(),
     signinWithSecret: jest.fn(),
@@ -399,6 +400,7 @@ describe('LinkService', () => {
     mockedNative.isAvailable.mockReturnValue(true);
     mockedNative.signinWithSecret.mockResolvedValue({ sessionAlias: SESSION_ALIAS, pubky: OWNER });
     mockedNative.adoptAuthSession.mockResolvedValue(undefined);
+    mockedNative.reconcileAdoptedSessions.mockResolvedValue(undefined);
     mockedNative.signOutSession.mockResolvedValue(undefined);
     mockedNative.clearAllNativeSecrets.mockResolvedValue(undefined);
     mockedNative.stopAuthKeepalive.mockResolvedValue(undefined);
@@ -457,7 +459,7 @@ describe('LinkService', () => {
       expect(mockedNative.adoptAuthSession).toHaveBeenCalledWith(SESSION_ALIAS);
       const adoptOrder = mockedNative.adoptAuthSession.mock.invocationCallOrder[0]!;
       const storeOrder = mockedKeyStore.setLinkSession.mock.invocationCallOrder[0]!;
-      expect(adoptOrder).toBeLessThan(storeOrder);
+      expect(storeOrder).toBeLessThan(adoptOrder);
       expect(mockedKeyStore.setLinkSession).toHaveBeenCalledWith(SESSION_ALIAS);
       expect(mockedKeyStore.setPubky).toHaveBeenCalledWith(OWNER);
       expect(LinkService.hasSession()).toBe(true);
@@ -470,6 +472,10 @@ describe('LinkService', () => {
 
       await expect(LinkService.restorePersistedSession()).resolves.toBe(true);
 
+      expect(mockedNative.reconcileAdoptedSessions).toHaveBeenCalledWith(SESSION_ALIAS);
+      const reconcileOrder = mockedNative.reconcileAdoptedSessions.mock.invocationCallOrder.at(-1)!;
+      const restoreOrder = mockedNative.restoreSession.mock.invocationCallOrder.at(-1)!;
+      expect(reconcileOrder).toBeLessThan(restoreOrder);
       expect(mockedNative.restoreSession).toHaveBeenCalledWith(SESSION_ALIAS);
     });
 
@@ -519,6 +525,66 @@ describe('LinkService', () => {
       expect(mockedKeyStore.deleteLinkSession).not.toHaveBeenCalled();
       await expect(LinkService.ensureLinkWith(PEER)).resolves.toBe('session-offline');
     });
+
+    it('reconciles native aliases against KeyStore on restore even when none is stored', async () => {
+      await LinkService.clearSession();
+      mockedNative.reconcileAdoptedSessions.mockClear();
+      mockedKeyStore.getLinkSession.mockReturnValue(null);
+
+      await expect(LinkService.restorePersistedSession()).resolves.toBe(false);
+
+      expect(mockedNative.reconcileAdoptedSessions).toHaveBeenCalledWith(null);
+      expect(mockedNative.restoreSession).not.toHaveBeenCalled();
+    });
+
+    it('does not keep KeyStore when adoptHarnessSession restore refuses a pending alias', async () => {
+      await LinkService.clearSession();
+      mockedKeyStore.setLinkSession.mockClear();
+      mockedKeyStore.deleteLinkSession.mockClear();
+      mockedKeyStore.setPubky.mockClear();
+      mockedNative.adoptAuthSession.mockRejectedValue({
+        code: 'unavailable',
+        message: 'unavailable',
+      });
+      mockedNative.restoreSession.mockRejectedValue({
+        code: 'unavailable',
+        message: 'unavailable',
+      });
+
+      await expect(LinkService.adoptHarnessSession(SESSION_ALIAS, OWNER)).rejects.toEqual({
+        code: 'unavailable',
+        message: 'unavailable',
+      });
+      expect(mockedKeyStore.setLinkSession).toHaveBeenCalledWith(SESSION_ALIAS);
+      expect(mockedNative.restoreSession).toHaveBeenCalledWith(SESSION_ALIAS);
+      expect(mockedKeyStore.deleteLinkSession).toHaveBeenCalled();
+      expect(mockedKeyStore.setPubky).not.toHaveBeenCalled();
+      expect(LinkService.hasSession()).toBe(false);
+    });
+
+    it('does not keep KeyStore when adoptHarnessSession restore refuses an unknown alias', async () => {
+      await LinkService.clearSession();
+      mockedKeyStore.setLinkSession.mockClear();
+      mockedKeyStore.deleteLinkSession.mockClear();
+      mockedKeyStore.setPubky.mockClear();
+      mockedNative.adoptAuthSession.mockRejectedValue({
+        code: 'unavailable',
+        message: 'unavailable',
+      });
+      mockedNative.restoreSession.mockRejectedValue({
+        code: 'auth',
+        message: 'session alias not found',
+      });
+
+      await expect(LinkService.adoptHarnessSession(SESSION_ALIAS, OWNER)).rejects.toEqual({
+        code: 'auth',
+        message: 'session alias not found',
+      });
+      expect(mockedNative.restoreSession).toHaveBeenCalledWith(SESSION_ALIAS);
+      expect(mockedKeyStore.deleteLinkSession).toHaveBeenCalled();
+      expect(mockedKeyStore.setPubky).not.toHaveBeenCalled();
+      expect(LinkService.hasSession()).toBe(false);
+    });
   });
 
   describe('enable (Ring path)', () => {
@@ -547,7 +613,7 @@ describe('LinkService', () => {
       expect(mockedNative.adoptAuthSession).toHaveBeenCalledWith('alias-2');
       const adoptOrder = mockedNative.adoptAuthSession.mock.invocationCallOrder.at(-1)!;
       const storeCalls = mockedKeyStore.setLinkSession.mock.invocationCallOrder;
-      expect(storeCalls[storeCalls.length - 1]).toBeGreaterThan(adoptOrder);
+      expect(storeCalls[storeCalls.length - 1]).toBeLessThan(adoptOrder);
       expect(mockedNative.generateReceiverKey).toHaveBeenCalled();
       expect(mockedStorage.upsertLinkReceiver).toHaveBeenNthCalledWith(
         1,
@@ -575,6 +641,7 @@ describe('LinkService', () => {
 
     it('does not persist KeyStore when adoptAuthSession rejects', async () => {
       mockedKeyStore.setLinkSession.mockClear();
+      mockedKeyStore.deleteLinkSession.mockClear();
       mockedKeyStore.setPubky.mockClear();
       mockedNative.signOutSession.mockClear();
       mockedNative.startAuthFlow.mockResolvedValue({
@@ -589,13 +656,19 @@ describe('LinkService', () => {
         code: 'unavailable',
         message: 'unavailable',
       });
+      mockedNative.restoreSession.mockRejectedValue({
+        code: 'unavailable',
+        message: 'unavailable',
+      });
 
       const flow = await LinkService.enable();
       await expect(flow.awaitEnabled()).rejects.toEqual({
         code: 'unavailable',
         message: 'unavailable',
       });
-      expect(mockedKeyStore.setLinkSession).not.toHaveBeenCalled();
+      expect(mockedKeyStore.setLinkSession).toHaveBeenCalledWith('alias-orphan');
+      expect(mockedNative.restoreSession).toHaveBeenCalledWith('alias-orphan');
+      expect(mockedKeyStore.deleteLinkSession).toHaveBeenCalled();
       expect(mockedKeyStore.setPubky).not.toHaveBeenCalled();
       expect(mockedNative.signOutSession).toHaveBeenCalledWith('alias-orphan');
       expect(mockedNative.publishReceiverMarker).not.toHaveBeenCalled();

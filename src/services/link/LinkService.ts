@@ -221,18 +221,8 @@ export const LinkService = {
    */
   async signinWithSecret(identitySecretHex: string): Promise<{ pubky: string }> {
     const { sessionAlias, pubky } = await PaykitLinkNative.signinWithSecret(identitySecretHex);
-    try {
-      await adoptNativeSession(sessionAlias);
-    } catch (err) {
-      try {
-        await PaykitLinkNative.signOutSession(sessionAlias);
-      } catch {
-        // Adopt failed: drop the unusable pending bearer.
-      }
-      throw err;
-    }
+    await persistThenAdopt(sessionAlias);
     KeyStore.setPubky(pubky);
-    KeyStore.setLinkSession(sessionAlias);
     session = { alias: sessionAlias, pubky };
     return { pubky };
   },
@@ -248,6 +238,11 @@ export const LinkService = {
       await StorageService.retryPendingCleanup();
     } catch {
       // Cleanup journal is best-effort; session restore still proceeds.
+    }
+    try {
+      await reconcileNativeSessions();
+    } catch {
+      // Reconcile is best-effort; restore still proceeds.
     }
     const lookup = await sessionOrRestore();
     return isActiveSession(lookup);
@@ -337,14 +332,8 @@ export const LinkService = {
     if (alias.length === 0 || id.length === 0) {
       throw new Error('LinkService.adoptHarnessSession: sessionAlias and pubky are required');
     }
-    try {
-      await adoptNativeSession(alias);
-    } catch (err) {
-      if (!isLinkNativeError(err) || err.code !== 'unavailable') throw err;
-      await PaykitLinkNative.restoreSession(alias);
-    }
+    await persistThenAdopt(alias);
     KeyStore.setPubky(id);
-    KeyStore.setLinkSession(alias);
     session = { alias, pubky: id };
   },
 
@@ -418,18 +407,8 @@ export const LinkService = {
             }
             throw new Error('LinkService.enable: the messaging enable flow was cancelled');
           }
-          try {
-            await adoptNativeSession(sessionAlias);
-          } catch (err) {
-            try {
-              await PaykitLinkNative.signOutSession(sessionAlias);
-            } catch {
-              // Adopt failed: drop the unusable pending bearer.
-            }
-            throw err;
-          }
+          await persistThenAdopt(sessionAlias);
           KeyStore.setPubky(pubky);
-          KeyStore.setLinkSession(sessionAlias);
           session = { alias: sessionAlias, pubky };
           return provisionReceiver(sessionAlias, pubky);
         } finally {
@@ -1093,11 +1072,48 @@ function isActiveSession(lookup: SessionLookup): lookup is ActiveSession {
 }
 
 /**
- * Native pending → adopted. Must resolve before KeyStore/session use.
- * Rejection is a typed `LinkNativeError` (typically `unavailable`).
+ * JS is the reconciler: write KeyStore first, then native adopt (marker
+ * delete only). A valid bearer therefore cannot exist with neither a
+ * pending marker nor a KeyStore reference.
+ *
+ * `adoptAuthSession` `unavailable` is the already-adopted / swept case.
+ * Restore is consulted only then; `session()` refuses still-pending and
+ * unknown aliases, so this cannot resurrect an orphan. Failure rolls
+ * KeyStore back and signs the native alias out.
  */
-async function adoptNativeSession(sessionAlias: string): Promise<void> {
-  await PaykitLinkNative.adoptAuthSession(sessionAlias);
+async function persistThenAdopt(sessionAlias: string): Promise<void> {
+  KeyStore.setLinkSession(sessionAlias);
+  try {
+    await PaykitLinkNative.adoptAuthSession(sessionAlias);
+  } catch (err) {
+    if (isLinkNativeError(err) && err.code === 'unavailable') {
+      try {
+        await PaykitLinkNative.restoreSession(sessionAlias);
+        return;
+      } catch (restoreErr) {
+        KeyStore.deleteLinkSession();
+        try {
+          await PaykitLinkNative.signOutSession(sessionAlias);
+        } catch {
+          // Native may already have dropped the bearer.
+        }
+        throw restoreErr;
+      }
+    }
+    KeyStore.deleteLinkSession();
+    try {
+      await PaykitLinkNative.signOutSession(sessionAlias);
+    } catch {
+      // Adopt failed: drop the unusable pending bearer.
+    }
+    throw err;
+  }
+}
+
+async function reconcileNativeSessions(): Promise<void> {
+  if (!PaykitLinkNative.isAvailable()) return;
+  const known = KeyStore.getLinkSession();
+  await PaykitLinkNative.reconcileAdoptedSessions(known);
 }
 
 // ─── Enable internals ─────────────────────────────────────────────────────────

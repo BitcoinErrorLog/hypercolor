@@ -55,10 +55,12 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
     private val store = PaykitLinkStore(reactContext.applicationContext)
     private val clientMutex = Mutex()
     /**
-     * Serializes pending-session store I/O. Never held together with the
-     * registry monitor: persist/adopt/teardown-delete take this only after
-     * the short state transition. Prevents a write from landing after
-     * teardown already rolled back an alias.
+     * Serializes pending-session store I/O. JVM intrinsic monitor
+     * (`synchronized`): reentrant, so the owning thread can re-enter this
+     * object. It is never nested with the registry monitor: persist / adopt
+     * / teardown-delete / sweep take this only after the short state
+     * transition returns. Cannot self-deadlock the way iOS `NSLock` did
+     * when a lock-taking sweep ran inside `awaitAuthApproval`.
      */
     private val pendingIo = Any()
     private var client: ChatClient? = null
@@ -273,9 +275,9 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
     }
 
     /**
-     * JS acknowledgement that it holds [sessionAlias] and will persist it
-     * in KeyStore only after this resolves. Pending → adopted. Unknown or
-     * already-adopted aliases reject `unavailable`.
+     * JS already wrote `KeyStore.setLinkSession`. Native only drops the
+     * durable pending marker. Unknown or already-adopted aliases reject
+     * `unavailable` (`session()` then refuses pending and unknown).
      */
     @ReactMethod
     fun adoptAuthSession(sessionAlias: String, promise: Promise) {
@@ -286,6 +288,22 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
             }
             synchronized(pendingIo) {
                 store.clearPendingMarker(alias)
+            }
+            promise.resolve(null)
+        }
+    }
+
+    /**
+     * Boot reconcile: delete adopted bearers KeyStore does not name.
+     * Still-pending aliases are excluded.
+     */
+    @ReactMethod
+    fun reconcileAdoptedSessions(knownSessionAlias: String?, promise: Promise) {
+        launch(promise) {
+            val named = knownSessionAlias?.trim().orEmpty()
+            val known = if (named.isEmpty()) emptySet() else setOf(named)
+            synchronized(pendingIo) {
+                PaykitLinkDurableReconcile.collectUnreferencedAdopted(store, known) { sessions.remove(it) }
             }
             promise.resolve(null)
         }
@@ -840,27 +858,24 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
 
     /**
      * Process-death leftovers: a durable pending marker with no live
-     * runtime means JS never adopted. Delete bearer + marker so an orphan
-     * enabled session cannot exist.
+     * runtime means JS never wrote KeyStore. Delete bearer + marker so an
+     * orphan enabled session cannot exist. Failures must not abort module
+     * `initialize()`.
      */
     private fun sweepDurablePendingFromPreviousProcess() {
-        val leftovers = store.listPendingSessionAliases()
-        if (leftovers.isEmpty()) return
-        synchronized(pendingIo) {
-            for (alias in leftovers) {
-                sessions.remove(alias)
-                store.deleteSession(alias)
+        try {
+            synchronized(pendingIo) {
+                PaykitLinkDurableReconcile.sweepPendingLeftovers(store) { sessions.remove(it) }
             }
+        } catch (error: Throwable) {
+            Log.e(PAYKIT_LINK_LOG_TAG, "pending sweep failed type=${error.javaClass.name}")
         }
     }
 
     private fun deletePendingAliases(aliases: List<String>) {
         if (aliases.isEmpty()) return
         synchronized(pendingIo) {
-            for (alias in aliases) {
-                sessions.remove(alias)
-                store.deleteSession(alias)
-            }
+            PaykitLinkDurableReconcile.deleteAliases(store, aliases) { sessions.remove(it) }
         }
     }
 
@@ -913,7 +928,7 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
     }
 
     private suspend fun session(alias: String): ChatSession {
-        if (flows.isPending(alias) || store.hasPendingMarker(alias)) {
+        if (PaykitLinkSessionGuard.isPending(flows.isPending(alias), store.hasPendingMarker(alias))) {
             throw PaykitLinkBridgeError("unavailable", staticMessage("unavailable"))
         }
         sessions[alias]?.let { return it }
@@ -1188,14 +1203,14 @@ private data class LinkHandle(
     val context: SnapshotContext,
 )
 
-private class PaykitLinkStore(context: Context) {
+private class PaykitLinkStore(context: Context) : PaykitLinkSessionCatalog {
     private val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
     fun putString(key: String, value: String) {
         prefs.edit().putString(key, wrap(value.toByteArray(StandardCharsets.UTF_8), key.toByteArray(StandardCharsets.UTF_8))).apply()
     }
 
-    fun putPendingSession(alias: String, bearer: String) {
+    override fun putPendingSession(alias: String, bearer: String) {
         val sessionPref = sessionKey(alias)
         val pendingPref = sessionPendingKey(alias)
         commitEdits { editor ->
@@ -1210,37 +1225,38 @@ private class PaykitLinkStore(context: Context) {
         }
     }
 
-    fun clearPendingMarker(alias: String) {
+    override fun clearPendingMarker(alias: String) {
         commitEdits { editor ->
             editor.remove(sessionPendingKey(alias))
         }
     }
 
-    fun deleteSession(alias: String) {
+    override fun deleteSession(alias: String) {
         commitEdits { editor ->
             editor.remove(sessionKey(alias))
             editor.remove(sessionPendingKey(alias))
         }
     }
 
-    fun hasPendingMarker(alias: String): Boolean {
+    override fun hasPendingMarker(alias: String): Boolean {
         return prefs.contains(sessionPendingKey(alias))
     }
 
-    fun listPendingSessionAliases(): List<String> {
-        val prefix = PENDING_PREFIX
-        return prefs.all.keys.mapNotNull { key ->
-            if (key.startsWith(prefix)) key.removePrefix(prefix) else null
-        }
+    override fun hasSessionBearer(alias: String): Boolean {
+        return prefs.contains(sessionKey(alias))
+    }
+
+    override fun listPendingSessionAliases(): List<String> {
+        return prefs.all.keys.mapNotNull { PaykitLinkSessionKeys.pendingAliasFromKey(it) }
+    }
+
+    override fun listSessionAliases(): List<String> {
+        return prefs.all.keys.mapNotNull { PaykitLinkSessionKeys.sessionAliasFromKey(it) }
     }
 
     fun getString(key: String): String? {
         val stored = prefs.getString(key, null) ?: return null
         return String(unwrap(stored, key.toByteArray(StandardCharsets.UTF_8)), StandardCharsets.UTF_8)
-    }
-
-    fun delete(key: String) {
-        prefs.edit().remove(key).apply()
     }
 
     fun clearAll() {
@@ -1370,8 +1386,7 @@ private class PaykitLinkStore(context: Context) {
         private const val TAG_BITS = 128
 
         fun receiverKey(alias: String): String = "receiver.$alias"
-        fun sessionKey(alias: String): String = "session.$alias"
-        fun sessionPendingKey(alias: String): String = "$PENDING_PREFIX$alias"
-        private const val PENDING_PREFIX = "session.pending."
+        fun sessionKey(alias: String): String = PaykitLinkSessionKeys.sessionKey(alias)
+        fun sessionPendingKey(alias: String): String = PaykitLinkSessionKeys.sessionPendingKey(alias)
     }
 }

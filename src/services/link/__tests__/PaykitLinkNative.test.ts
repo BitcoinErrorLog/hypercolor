@@ -49,6 +49,7 @@ describe('PaykitLinkNative contract', () => {
       | 'stopAuthKeepalive'
       | 'cancelAuthFlow'
       | 'adoptAuthSession'
+      | 'reconcileAdoptedSessions'
     > = {
       signinWithSecret: async () => ({ sessionAlias: 'a', pubky: 'b' }),
       signupWithSecret: async () => ({ sessionAlias: 'a', pubky: 'b' }),
@@ -56,6 +57,7 @@ describe('PaykitLinkNative contract', () => {
       stopAuthKeepalive: async () => undefined,
       cancelAuthFlow: async () => undefined,
       adoptAuthSession: async () => undefined,
+      reconcileAdoptedSessions: async () => undefined,
     };
     expect(typeof api.signinWithSecret).toBe('function');
     expect(typeof api.signupWithSecret).toBe('function');
@@ -63,20 +65,31 @@ describe('PaykitLinkNative contract', () => {
     expect(typeof api.stopAuthKeepalive).toBe('function');
     expect(typeof api.cancelAuthFlow).toBe('function');
     expect(typeof api.adoptAuthSession).toBe('function');
+    expect(typeof api.reconcileAdoptedSessions).toBe('function');
   });
 
-  it('requires adoptAuthSession before JS may store a session alias', () => {
+  it('requires KeyStore to persist the alias before adoptAuthSession', () => {
     expect(SOURCE).toContain('adoptAuthSession(sessionAlias: string): Promise<void>');
-    expect(SOURCE).toMatch(/Must be awaited before storing or using the alias/);
+    expect(SOURCE).toMatch(/JS already persisted `sessionAlias` in KeyStore/);
     expect(SOURCE).toMatch(/pending → adopted/);
     const adopt = jsdocBefore('adoptAuthSession(sessionAlias: string): Promise<void>');
     expect(adopt).toMatch(/unavailable/);
+    expect(adopt).toMatch(/refuses/);
   });
 
   it('does not treat a missing adoptAuthSession native method as a no-op', () => {
     expect(SOURCE).toContain("return invoke('adoptAuthSession', sessionAlias)");
     expect(SOURCE).not.toMatch(
       /typeof PaykitLinkModule\.adoptAuthSession !== 'function'[\s\S]*return Promise\.resolve\(\)/,
+    );
+  });
+
+  it('does not treat a missing reconcileAdoptedSessions native method as a no-op', () => {
+    expect(SOURCE).toContain(
+      "return invoke('reconcileAdoptedSessions', knownSessionAlias ?? null)",
+    );
+    expect(SOURCE).not.toMatch(
+      /typeof PaykitLinkModule\.reconcileAdoptedSessions !== 'function'[\s\S]*return Promise\.resolve\(\)/,
     );
   });
 

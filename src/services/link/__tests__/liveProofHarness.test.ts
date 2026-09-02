@@ -110,6 +110,7 @@ jest.mock('../PaykitLinkNative', () => ({
     startAuthFlow: jest.fn(),
     awaitAuthApproval: jest.fn(),
     adoptAuthSession: jest.fn(),
+    reconcileAdoptedSessions: jest.fn(),
     stopAuthKeepalive: jest.fn(),
     generateReceiverKey: jest.fn(),
     publishReceiverMarker: jest.fn(),

@@ -35,6 +35,10 @@ RCT_EXTERN_METHOD(adoptAuthSession:(NSString *)sessionAlias
                   resolver:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject)
 
+RCT_EXTERN_METHOD(reconcileAdoptedSessions:(id)knownSessionAlias
+                  resolver:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
+
 RCT_EXTERN_METHOD(signinWithSecret:(NSString *)identitySecretHex
                   resolver:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject)

@@ -96,6 +96,11 @@ internal sealed class AuthFlowAwaitStart<out T> {
 }
 
 internal class AuthFlowCancelRegistry<T> {
+    /**
+     * JVM intrinsic monitor (`synchronized`): reentrant. No registry method
+     * calls another registry method, so re-entry is unused. Store I/O never
+     * runs under this monitor. Cannot self-deadlock; contrast iOS `NSLock`.
+     */
     private val lock = Any()
     private val slots = HashMap<String, Slot<T>>()
     /** Cancelled tombstones: `null` lease is cancelled-no-owner. */

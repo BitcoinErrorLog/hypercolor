@@ -69,7 +69,7 @@ class AuthPendingAdoptTest {
         val harness = Harness()
         assertFalse(harness.registry.adoptPending("missing"))
         harness.registry.registerPending("alias-live")
-        harness.store.putPending("alias-live", "token")
+        harness.store.putPendingSession("alias-live", "token")
         harness.sessions["alias-live"] = "token"
         assertTrue(harness.registry.adoptPending("alias-live"))
         harness.store.clearPendingMarker("alias-live")
@@ -79,14 +79,11 @@ class AuthPendingAdoptTest {
 
     @Test
     fun initSweepDeletesDurablePendingLeftovers() {
-        val store = FakeDurableStore()
+        val store = InMemoryPaykitLinkSessionStore()
         val sessions = linkedMapOf("orphan" to "leftover-bearer")
-        store.putPending("orphan", "leftover-bearer")
-        val leftovers = store.pendingMarkers.toList()
-        for (alias in leftovers) {
-            sessions.remove(alias)
-            store.delete(alias)
-        }
+        store.putPendingSession("orphan", "leftover-bearer")
+        val leftovers = PaykitLinkDurableReconcile.sweepPendingLeftovers(store) { sessions.remove(it) }
+        assertEquals(listOf("orphan"), leftovers)
         assertTrue(store.bearers.isEmpty())
         assertTrue(store.pendingMarkers.isEmpty())
         assertTrue(sessions.isEmpty())
@@ -100,9 +97,8 @@ class AuthPendingAdoptTest {
 
         val snapshot = harness.registry.drainLive()
         assertEquals(listOf("alias-1"), snapshot.pendingAliases)
-        for (alias in snapshot.pendingAliases) {
-            harness.sessions.remove(alias)
-            harness.store.delete(alias)
+        PaykitLinkDurableReconcile.deleteAliases(harness.store, snapshot.pendingAliases) {
+            harness.sessions.remove(it)
         }
         assertTrue(harness.store.bearers.isEmpty())
         assertTrue(harness.store.pendingMarkers.isEmpty())
@@ -115,7 +111,7 @@ class AuthPendingAdoptTest {
     private class Harness {
         val flow = FakeAuthFlow()
         val registry = AuthFlowCancelRegistry<FakeAuthFlow>()
-        val store = FakeDurableStore()
+        val store = InMemoryPaykitLinkSessionStore()
         val sessions = linkedMapOf<String, String>()
         val resolver = ScheduledJsBridge()
 
@@ -131,12 +127,12 @@ class AuthPendingAdoptTest {
                 awaitFfi = { flow.awaitApproval() },
                 closeFlow = { it?.close() },
                 persist = { value, alias ->
-                    store.putPending(alias, value)
+                    store.putPendingSession(alias, value)
                     sessions[alias] = value
                 },
                 rollbackPending = { alias ->
                     sessions.remove(alias)
-                    store.delete(alias)
+                    store.deleteSession(alias)
                     registry.dropPending(alias)
                 },
                 scheduleResolve = { _, alias ->
@@ -150,10 +146,7 @@ class AuthPendingAdoptTest {
             val snapshot = registry.teardown()
             snapshot.ownerCancellables.forEach { it.cancel() }
             snapshot.idleFlows.forEach { it.close() }
-            for (alias in snapshot.pendingAliases) {
-                sessions.remove(alias)
-                store.delete(alias)
-            }
+            PaykitLinkDurableReconcile.deleteAliases(store, snapshot.pendingAliases) { sessions.remove(it) }
         }
 
         fun deliverJsAdopt(): Boolean {
@@ -184,25 +177,6 @@ class AuthPendingAdoptTest {
             val alias = payload ?: return null
             delivered += 1
             return alias
-        }
-    }
-
-    class FakeDurableStore {
-        val bearers = linkedMapOf<String, String>()
-        val pendingMarkers = linkedSetOf<String>()
-
-        fun putPending(alias: String, bearer: String) {
-            bearers[alias] = bearer
-            pendingMarkers.add(alias)
-        }
-
-        fun clearPendingMarker(alias: String) {
-            pendingMarkers.remove(alias)
-        }
-
-        fun delete(alias: String) {
-            bearers.remove(alias)
-            pendingMarkers.remove(alias)
         }
     }
 

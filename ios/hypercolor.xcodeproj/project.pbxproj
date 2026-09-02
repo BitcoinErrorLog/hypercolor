@@ -14,6 +14,7 @@
 		3E461D99554A48A4959DE609 /* SplashScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = AA286B85B6C04FC6940260E9 /* SplashScreen.storyboard */; };
 		3E8468AB5D6CA0ECF66E4A86 /* PubkyNoiseModule.swift in Sources */ = {isa = PBXBuildFile; fileRef = E6982E7ABBF22DB3F0D1730F /* PubkyNoiseModule.swift */; };
 		6A60EE9DAC8B00F65C152D7C /* PaykitLinkModule.m in Sources */ = {isa = PBXBuildFile; fileRef = BF7B7296A12D06607BA9774B /* PaykitLinkModule.m */; };
+		4C8E1A2B3D4F5061728394A5 /* PaykitLinkAuthProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5D9F2B3C4E5A61728394B5C6 /* PaykitLinkAuthProtocol.swift */; };
 		73A7CBE5CD9CA33126A678D1 /* PaykitLinkModule.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5573E5F4CC79372B98021862 /* PaykitLinkModule.swift */; };
 		804C84CA7A9521ECAAB82020 /* PaykitPublicKeys.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2EAB4AFECF0190612BC6777A /* PaykitPublicKeys.swift */; };
 		8FBE05AEFA21A37FF9FB614B /* Paykit.xcframework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = E37E710A1E9774EE262722A6 /* Paykit.xcframework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
@@ -52,6 +53,7 @@
 		2FE87CE1E119D21DDA2B9C6D /* PubkyNoiseModule.m */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.objc; name = PubkyNoiseModule.m; path = hypercolor/PubkyNoiseModule.m; sourceTree = "<group>"; };
 		4E99088B43A9934B8B14D28F /* paykit.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = paykit.swift; path = hypercolor/paykit.swift; sourceTree = "<group>"; };
 		5573E5F4CC79372B98021862 /* PaykitLinkModule.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = PaykitLinkModule.swift; path = hypercolor/PaykitLinkModule.swift; sourceTree = "<group>"; };
+		5D9F2B3C4E5A61728394B5C6 /* PaykitLinkAuthProtocol.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = PaykitLinkAuthProtocol.swift; path = hypercolor/PaykitLinkAuthProtocol.swift; sourceTree = "<group>"; };
 		626A7DFFE6409B0B72B8FA35 /* libPods-hypercolor.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = "libPods-hypercolor.a"; sourceTree = BUILT_PRODUCTS_DIR; };
 		78F89CC8A30CB06E7A541AC5 /* Pods-hypercolor.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-hypercolor.debug.xcconfig"; path = "Target Support Files/Pods-hypercolor/Pods-hypercolor.debug.xcconfig"; sourceTree = "<group>"; };
 		A8183F303DF8614F6962096D /* Pods-hypercolor.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-hypercolor.release.xcconfig"; path = "Target Support Files/Pods-hypercolor/Pods-hypercolor.release.xcconfig"; sourceTree = "<group>"; };
@@ -130,6 +132,7 @@
 				4E99088B43A9934B8B14D28F /* paykit.swift */,
 				2EAB4AFECF0190612BC6777A /* PaykitPublicKeys.swift */,
 				5573E5F4CC79372B98021862 /* PaykitLinkModule.swift */,
+				5D9F2B3C4E5A61728394B5C6 /* PaykitLinkAuthProtocol.swift */,
 				BF7B7296A12D06607BA9774B /* PaykitLinkModule.m */,
 				E37E710A1E9774EE262722A6 /* Paykit.xcframework */,
 			);
@@ -381,6 +384,7 @@
 				DDF22DD3AF2EC3A58C60861D /* paykit.swift in Sources */,
 				804C84CA7A9521ECAAB82020 /* PaykitPublicKeys.swift in Sources */,
 				73A7CBE5CD9CA33126A678D1 /* PaykitLinkModule.swift in Sources */,
+				4C8E1A2B3D4F5061728394A5 /* PaykitLinkAuthProtocol.swift in Sources */,
 				6A60EE9DAC8B00F65C152D7C /* PaykitLinkModule.m in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

@@ -179,9 +179,12 @@ export interface PaykitLinkNativeApi {
    * `auth_flow_cancelled`) and never persist. Approval persists the bearer as
    * **pending** (teardown-visible + durable marker) and resolves with the alias;
    * that resolve only *schedules* JS in RN 0.81.5 and is not adoption. JS must
-   * `await adoptAuthSession(alias)` before storing or using the alias. If
-   * invalidation or process death wins before adopt, native deletes the
-   * pending bearer. After invalidation, a later
+   * `await adoptAuthSession(alias)` **after** writing the alias to KeyStore.
+   * Native adopt only deletes the pending marker. If invalidation or process
+   * death wins before KeyStore write, the pending sweep deletes the bearer.
+   * If death wins after KeyStore write but before adopt, the next boot's
+   * pending sweep deletes the native session and restore self-heals (`auth`).
+   * After invalidation, a later
    * `startAuthFlow` / `awaitAuthApproval` / `cancelAuthFlow` rejects
    * `unavailable` immediately. After a failed, cancelled, torn-down, or
    * successful await the native flow is gone; start a new `startAuthFlow`
@@ -219,13 +222,20 @@ export interface PaykitLinkNativeApi {
    */
   cancelAuthFlow(flowId: string): Promise<void>;
   /**
-   * JS acknowledgement that it holds `sessionAlias` from
-   * `awaitAuthApproval` / `signinWithSecret` / `signupWithSecret` and will
-   * persist it in KeyStore only after this resolves. Native is the authority:
-   * pending → adopted. Unknown, swept, or already-adopted aliases reject
-   * `unavailable`. Must be awaited before storing or using the alias.
+   * JS already persisted `sessionAlias` in KeyStore. Native deletes only
+   * the pending marker (pending → adopted). Unknown, swept, or
+   * already-adopted aliases reject `unavailable`. `session()` refuses
+   * still-pending and unknown aliases, so a restore fallback cannot
+   * resurrect an orphan.
    */
   adoptAuthSession(sessionAlias: string): Promise<void>;
+  /**
+   * Boot reconcile: delete adopted native session aliases that KeyStore
+   * does not reference. Still-pending aliases are left for the native
+   * pending sweep / in-flight enable. Pass `null` when KeyStore has no
+   * alias. Must not be treated as a no-op when the native method is missing.
+   */
+  reconcileAdoptedSessions(knownSessionAlias?: string | null): Promise<void>;
   /**
    * Dev/e2e only — release native builds reject with `unavailable` /
    * "secret import is disabled in release builds". Signs in with an
@@ -414,6 +424,10 @@ export const PaykitLinkNative: PaykitLinkNativeApi = {
 
   adoptAuthSession(sessionAlias: string): Promise<void> {
     return invoke('adoptAuthSession', sessionAlias);
+  },
+
+  reconcileAdoptedSessions(knownSessionAlias?: string | null): Promise<void> {
+    return invoke('reconcileAdoptedSessions', knownSessionAlias ?? null);
   },
 
   signinWithSecret(identitySecretHex: string): Promise<AuthSessionResult> {
