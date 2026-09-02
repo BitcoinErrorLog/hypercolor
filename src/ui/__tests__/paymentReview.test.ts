@@ -241,4 +241,32 @@ describe('mapPaymentReview', () => {
     expect(view.primaryEnabled).toBe(false);
     expect(view.uri).toBeNull();
   });
+
+  it('filters on-chain destinations for a sub-satoshi amount and offers Lightning', () => {
+    const lightning = endpoint({
+      payload: MAINNET_BOLT11_AMOUNTLESS,
+      invoiceAmount: null,
+      paymentHash: null,
+    });
+    const onchain = endpoint({
+      identifier: ENDPOINT_BITCOIN_P2TR,
+      payload: MAINNET_P2TR,
+      invoiceAmount: null,
+      paymentHash: null,
+    });
+    const view = mapPaymentReview({
+      ...BASE,
+      requestAmountBtc: '0.000000001',
+      endpoint: onchain,
+      destinations: [lightning, onchain],
+    });
+    expect(view.destinations.map(row => row.identifier)).toEqual([ENDPOINT_LIGHTNING_BOLT11]);
+    expect(view.selectedIdentifier).toBe(ENDPOINT_LIGHTNING_BOLT11);
+    expect(view.uri).toBe(`lightning:${MAINNET_BOLT11_AMOUNTLESS}`);
+    expect(view.uri).not.toMatch(/bitcoin:/);
+    expect(view.uri).not.toMatch(/amount=0\.000000001/);
+    expect(view.warningText).toContain(COPY.onlyLightningCanPayAmount);
+    expect(view.primaryEnabled).toBe(true);
+    expect(view.errorText).toBeNull();
+  });
 });

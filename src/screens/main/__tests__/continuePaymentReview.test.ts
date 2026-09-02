@@ -150,4 +150,55 @@ describe('continuePaymentReview', () => {
       error: null,
     });
   });
+
+  it('does not record or open when the review amount asset is not bitcoin', async () => {
+    const recordDisplayedInvoice = jest.fn();
+    const openUri = jest.fn();
+    const canOpenURL = jest.fn(async () => true);
+    const usd = review();
+    usd.amountAsset = 'usd';
+    usd.amountBtc = '1';
+    const result = await continuePaymentReview(URI, usd, {
+      canOpenURL,
+      openUri,
+      recordDisplayedInvoice,
+    });
+    expect(result).toEqual({
+      closeReview: false,
+      walletUnavailable: false,
+      recordFailed: false,
+      error: COPY.unsupportedPaymentAmount,
+    });
+    expect(canOpenURL).not.toHaveBeenCalled();
+    expect(openUri).not.toHaveBeenCalled();
+    expect(recordDisplayedInvoice).not.toHaveBeenCalled();
+  });
+
+  it('does not record or open when preparation fails for a reason other than amount mismatch', async () => {
+    const recordDisplayedInvoice = jest.fn();
+    const openUri = jest.fn();
+    const canOpenURL = jest.fn(async () => true);
+    const result = await continuePaymentReview(URI, review(), {
+      canOpenURL,
+      openUri,
+      recordDisplayedInvoice,
+      prepare: () => ({
+        ok: false,
+        error: 'endpoint identifier is not a lightning or bitcoin destination',
+        requestAmountBtc: MAINNET_BOLT11_20U_BTC,
+        invoiceAmountBtc: null,
+        paymentHash: null,
+        expiresAtMs: null,
+      }),
+    });
+    expect(result).toEqual({
+      closeReview: false,
+      walletUnavailable: false,
+      recordFailed: false,
+      error: 'endpoint identifier is not a lightning or bitcoin destination',
+    });
+    expect(canOpenURL).not.toHaveBeenCalled();
+    expect(openUri).not.toHaveBeenCalled();
+    expect(recordDisplayedInvoice).not.toHaveBeenCalled();
+  });
 });

@@ -105,7 +105,10 @@ export type PaymentAction = 'accept' | 'reject' | 'cancel' | 'proof';
  * - Inbound amounts decode official Paykit decimals (`.5`, `10.`, any
  *   non-empty asset without controls). App v1 persists a request only
  *   when `asset === btc` and the normalized value is a positive BTC
- *   amount; otherwise the event is marked unapplied.
+ *   amount (millisatoshi precision, up to 11 decimals); otherwise the
+ *   event is marked unapplied. Lightning handoff stays msat-exact.
+ *   On-chain BIP21 `amount=` is sat-denominated, so destinations are
+ *   excluded when `btcDecimalToSats` is null rather than rounding.
  * - Inbound `proof` is an opaque JSON object (official Paykit JsonMap).
  *   Empty `{}` decodes. Render is neutral "Payment claimed" unless a
  *   bolt11 preimage is verified against a displayed invoice hash.
@@ -360,7 +363,11 @@ export function isPositiveBtcAmount(value: string): boolean {
   return !isZeroAmount(value);
 }
 
-/** App v1 chat payments: persist and hand off only positive bitcoin amounts. */
+/**
+ * App v1 chat payments: persist positive bitcoin amounts, including
+ * millisatoshi-exact values that are not whole sats. Do not use this
+ * as the on-chain BIP21 gate — that requires `btcDecimalToSats`.
+ */
 export function isSupportedV1PaymentAmount(amount: PaymentAmount): boolean {
   return amount.asset === PAYMENT_ASSET_BTC && isPositiveBtcAmount(amount.value);
 }

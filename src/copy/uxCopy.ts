@@ -176,6 +176,7 @@ export const COPY = {
   continueToReview: 'Continue',
   noMatchingDestination: 'This peer has no destination that matches this request.',
   unsupportedPaymentAmount: 'This payment request is not a supported bitcoin amount.',
+  onlyLightningCanPayAmount: 'Only Lightning can pay this amount.',
   invoiceExpired: 'This invoice expired.',
   noWalletForLink: 'No app on this device can open that payment link.',
   paymentRequested: 'requested',

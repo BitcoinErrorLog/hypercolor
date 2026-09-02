@@ -156,6 +156,7 @@ export async function runPaymentHandoffLiveProof(
       !(await record('handoff-bind-amount', async () => {
         const lightning = prepareHandoff({
           requestAmountBtc: requestAmount,
+          amountAsset: 'btc',
           endpointIdentifier: ENDPOINT_LIGHTNING_BOLT11,
           payload: LIVEPROOF_BOLT11_20U,
         });
@@ -168,6 +169,7 @@ export async function runPaymentHandoffLiveProof(
         }
         const onchain = prepareHandoff({
           requestAmountBtc: requestAmount,
+          amountAsset: 'btc',
           endpointIdentifier: ENDPOINT_BITCOIN_P2TR,
           payload: LIVEPROOF_P2TR,
         });
@@ -190,6 +192,7 @@ export async function runPaymentHandoffLiveProof(
       !(await record('handoff-injection-closed', async () => {
         const wrongScheme = prepareHandoff({
           requestAmountBtc: requestAmount,
+          amountAsset: 'btc',
           endpointIdentifier: 'https-url',
           payload: 'https://evil.example',
         });
@@ -197,6 +200,7 @@ export async function runPaymentHandoffLiveProof(
 
         const swappedAmount = prepareHandoff({
           requestAmountBtc: '0.001',
+          amountAsset: 'btc',
           endpointIdentifier: ENDPOINT_LIGHTNING_BOLT11,
           payload: LIVEPROOF_BOLT11_20U,
         });
@@ -204,6 +208,7 @@ export async function runPaymentHandoffLiveProof(
 
         const swappedDest = prepareHandoff({
           requestAmountBtc: requestAmount,
+          amountAsset: 'btc',
           endpointIdentifier: ENDPOINT_BITCOIN_P2TR,
           payload: 'javascript:alert(1)',
         });

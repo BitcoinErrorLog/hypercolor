@@ -5,6 +5,8 @@ import {
   type RequestHandoffResult,
 } from '../services/payments/walletHandoff';
 import {
+  btcDecimalToSats,
+  isPositiveBtcAmount,
   isSupportedV1PaymentAmount,
   PAYMENT_ASSET_BTC,
   schemeForEndpointIdentifier,
@@ -77,23 +79,61 @@ function isReviewAmountSupported(input: PaymentReviewInput): boolean {
   });
 }
 
-function handoffFor(input: PaymentReviewInput): RequestHandoffResult | null {
-  if (!input.endpoint) return null;
-  if (!isReviewAmountSupported(input)) return null;
+function isBitcoinDestination(row: TipEndpointRecord): boolean {
+  return schemeForEndpointIdentifier(row.identifier) === 'bitcoin';
+}
+
+function isSubSatBtcAmount(value: string): boolean {
+  return isPositiveBtcAmount(value) && btcDecimalToSats(value) === null;
+}
+
+function payableDestinations(input: PaymentReviewInput): TipEndpointRecord[] {
+  if (!(isReviewAmountSupported(input) && isSubSatBtcAmount(input.requestAmountBtc))) {
+    return [...input.destinations];
+  }
+  return input.destinations.filter(row => !isBitcoinDestination(row));
+}
+
+function resolveReviewEndpoint(
+  requested: TipEndpointRecord | null,
+  destinations: readonly TipEndpointRecord[],
+): TipEndpointRecord | null {
+  if (requested && destinations.some(row => row.identifier === requested.identifier)) {
+    return requested;
+  }
+  if (destinations.length === 1) return destinations[0] ?? null;
+  return null;
+}
+
+function joinWarningText(...parts: Array<string | null | undefined>): string | null {
+  const texts = parts.filter((part): part is string => typeof part === 'string' && part.length > 0);
+  return texts.length === 0 ? null : texts.join(' ');
+}
+
+function handoffFor(
+  requestAmountBtc: string,
+  amountAsset: string,
+  endpoint: TipEndpointRecord | null,
+): RequestHandoffResult | null {
+  if (!endpoint) return null;
+  if (!isSupportedV1PaymentAmount({ value: requestAmountBtc, asset: amountAsset })) return null;
   return prepareRequestHandoff({
-    requestAmountBtc: input.requestAmountBtc,
-    endpointIdentifier: input.endpoint.identifier,
-    payload: input.endpoint.payload,
-    amountAsset: input.amountAsset,
+    requestAmountBtc,
+    endpointIdentifier: endpoint.identifier,
+    payload: endpoint.payload,
+    amountAsset,
   });
 }
 
-function tryUri(input: PaymentReviewInput): string | null {
-  if (!input.endpoint) return null;
-  if (!isReviewAmountSupported(input)) return null;
+function tryUri(
+  requestAmountBtc: string,
+  amountAsset: string,
+  endpoint: TipEndpointRecord | null,
+): string | null {
+  if (!endpoint) return null;
+  if (!isSupportedV1PaymentAmount({ value: requestAmountBtc, asset: amountAsset })) return null;
   try {
-    return buildPayUri(input.endpoint.identifier, input.endpoint.payload, input.requestAmountBtc)
-      .uri;
+    return buildPayUri(endpoint.identifier, endpoint.payload, requestAmountBtc).uri;
   } catch {
     return null;
   }
@@ -134,18 +174,26 @@ function networkForEndpoint(endpoint: TipEndpointRecord | null): string | null {
 /** Maps request/tip + destination into the Payment Review sheet model. */
 export function mapPaymentReview(input: PaymentReviewInput): PaymentReviewView {
   const identity = peerIdentity(input.recipientPubky, input.recipientContact);
-  const handoff = handoffFor(input);
-  const uri = tryUri(input);
-  const invoiceAmount = handoff?.invoiceAmountBtc ?? input.endpoint?.invoiceAmount ?? null;
+  const destinations = payableDestinations(input);
+  const endpoint = resolveReviewEndpoint(input.endpoint, destinations);
+  const droppedOnchain =
+    isReviewAmountSupported(input) &&
+    isSubSatBtcAmount(input.requestAmountBtc) &&
+    input.destinations.some(isBitcoinDestination);
+  const lightningOnlyNote = droppedOnchain ? COPY.onlyLightningCanPayAmount : null;
+  const handoff = handoffFor(input.requestAmountBtc, input.amountAsset, endpoint);
+  const uri = tryUri(input.requestAmountBtc, input.amountAsset, endpoint);
+  const invoiceAmount = handoff?.invoiceAmountBtc ?? endpoint?.invoiceAmount ?? null;
   const mismatch = isAmountMismatch(handoff);
-  const expiresAt = expiryMs(input, handoff);
+  const expiresAt = expiryMs({ ...input, endpoint }, handoff);
   const expired = expiresAt !== null && expiresAt <= input.nowMs;
   const handoffError = handoff && !handoff.ok ? handoff.error : null;
   const amountMissing = !isReviewAmountSupported(input);
-  const needsChoice = input.destinations.length > 1 && input.endpoint === null;
+  const destinationsEmpty = input.destinationsEmpty || destinations.length === 0;
+  const needsChoice = destinations.length > 1 && endpoint === null;
 
   let errorText: string | null = null;
-  if (input.destinationsEmpty) {
+  if (destinationsEmpty) {
     errorText = COPY.noMatchingDestination;
   } else if (needsChoice) {
     errorText = COPY.choosePaymentDestination;
@@ -160,18 +208,21 @@ export function mapPaymentReview(input: PaymentReviewInput): PaymentReviewView {
     errorText = handoffError;
   }
 
-  const warningText = input.recordFailed
-    ? COPY.invoiceNotRecorded
-    : mismatch
-      ? invoiceAmountMismatchWarning(invoiceAmount ?? '', input.requestAmountBtc)
-      : input.walletUnavailable
-        ? COPY.noWalletForLink
-        : handoff && handoff.ok
-          ? (handoff.warning ?? null)
-          : null;
+  const warningText = joinWarningText(
+    lightningOnlyNote,
+    input.recordFailed
+      ? COPY.invoiceNotRecorded
+      : mismatch
+        ? invoiceAmountMismatchWarning(invoiceAmount ?? '', input.requestAmountBtc)
+        : input.walletUnavailable
+          ? COPY.noWalletForLink
+          : handoff && handoff.ok
+            ? (handoff.warning ?? null)
+            : null,
+  );
 
   const primaryEnabled =
-    !input.destinationsEmpty &&
+    !destinationsEmpty &&
     !needsChoice &&
     !amountMissing &&
     !expired &&
@@ -187,26 +238,26 @@ export function mapPaymentReview(input: PaymentReviewInput): PaymentReviewView {
     amountText: `${input.requestAmountBtc} ${input.amountAsset.toUpperCase()}`.trim(),
     invoiceAmountText: invoiceAmount ? `${invoiceAmount} BTC` : null,
     referenceText: input.reference,
-    destinationText: input.endpoint
-      ? formatTipIdentifierDisplay(input.endpoint.identifier)
+    destinationText: endpoint
+      ? formatTipIdentifierDisplay(endpoint.identifier)
       : needsChoice
         ? COPY.choosePaymentDestination
         : null,
-    payloadText: input.endpoint ? payloadPreview(input.endpoint.payload) : null,
-    networkText: networkForEndpoint(input.endpoint),
+    payloadText: endpoint ? payloadPreview(endpoint.payload) : null,
+    networkText: networkForEndpoint(endpoint),
     feeText: null,
     expiryText: expiresAt !== null ? formatExpiry(expiresAt, input.nowMs) : null,
     warningText,
     errorText: input.handoffError ?? errorText,
-    emptyDestinations: input.destinationsEmpty,
+    emptyDestinations: destinationsEmpty,
     expired,
     amountMismatch: mismatch,
     requiresDestinationChoice: needsChoice,
-    destinations: input.destinations.map(row => ({
+    destinations: destinations.map(row => ({
       identifier: row.identifier,
       label: formatTipIdentifierDisplay(row.identifier),
     })),
-    selectedIdentifier: input.endpoint?.identifier ?? null,
+    selectedIdentifier: endpoint?.identifier ?? null,
     primaryEnabled,
     primaryOutline: mismatch && primaryEnabled,
     primaryLabel: copyPrimary ? COPY.copyPaymentUri : COPY.openWallet,
@@ -215,6 +266,6 @@ export function mapPaymentReview(input: PaymentReviewInput): PaymentReviewView {
     secondaryAction: copyPrimary ? 'open' : uri ? 'copy' : null,
     uri,
     walletUnavailable: input.walletUnavailable,
-    paymentHash: handoff?.paymentHash ?? input.endpoint?.paymentHash ?? null,
+    paymentHash: handoff?.paymentHash ?? endpoint?.paymentHash ?? null,
   };
 }

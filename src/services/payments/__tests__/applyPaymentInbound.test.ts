@@ -858,6 +858,21 @@ describe('applyPaymentInbound v1 amount gate', () => {
     await expectUnappliedReject(requestJson({ value: '0.000000000001', asset: 'btc' }));
   });
 
+  it('persists a millisatoshi-exact inbound BTC amount', async () => {
+    const result = await inbound(PEER_A, requestJson({ value: '0.000000001', asset: 'btc' }));
+    expect(result.action).toBe('applied');
+    expect(store.requests.get(requestKey(OWNER, PEER_A, REQUEST_ID))).toEqual(
+      expect.objectContaining({
+        amountValue: '0.000000001',
+        amountAsset: 'btc',
+        status: 'pending',
+      }),
+    );
+    expect(store.events.get(eventKey(OWNER, `dm:${PEER_A}`, PEER_A, EVENT_REQ))?.applied).toBe(
+      true,
+    );
+  });
+
   it('persists a valid inbound BTC amount', async () => {
     const result = await inbound(PEER_A, requestJson({ value: '0.001', asset: 'btc' }));
     expect(result.action).toBe('applied');

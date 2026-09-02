@@ -864,8 +864,18 @@ the invoice amount on its own line. (4) Destination: the selected endpoint ident
 **Amount mismatch.** When `prepareRequestHandoff` returns an invoice amount that differs from
 the requested amount, the sheet shows a warning row `The invoice is for {invoice} BTC, not the
 {requested} BTC that was requested.` and the primary button stays enabled but is outline, not
-brand-filled. When `prepareRequestHandoff` returns `ok: false`, the primary button is disabled
-and the error renders in the warnings region.
+brand-filled. Confirm still records the displayed invoice (when a hash is present) and may
+open the wallet. When `prepareRequestHandoff` returns `ok: false` for any other reason, the
+primary button is disabled, the error renders in the warnings region, and confirm does not
+record an invoice or open a URI.
+
+**Sub-satoshi amounts.** App v1 accepts positive `btc` amounts down to millisatoshi precision
+(up to 11 decimal places). Lightning stays exact via integer millisatoshis. Bitcoin on-chain
+amounts are satoshi-denominated: BIP21 `amount=` must not use more than eight decimal places
+and must not round. When `btcDecimalToSats(value)` is null, on-chain destinations are
+excluded from Review, `buildPayUri` refuses to emit `bitcoin:…?amount=`, and the sheet shows
+`Only Lightning can pay this amount.` The inbound persist gate is not tightened to sat-exact,
+because a millisatoshi-exact Lightning request is valid.
 
 **Expiry.** When the destination invoice has expired, the sheet shows `This invoice expired.`
 and the primary is disabled. (`ThreadTipBar` already computes this at

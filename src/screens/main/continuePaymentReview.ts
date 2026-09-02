@@ -1,6 +1,9 @@
 import { COPY } from '../../copy/uxCopy';
 import type { PaymentReviewRequest } from '../../components/PaymentRequestBubble';
-import { prepareRequestHandoff } from '../../services/payments/walletHandoff';
+import {
+  prepareRequestHandoff,
+  type RequestHandoffResult,
+} from '../../services/payments/walletHandoff';
 import { sanitizeError } from '../../ui/sanitizedError';
 
 export type ContinuePaymentReviewResult = {
@@ -21,6 +24,10 @@ export type ContinuePaymentReviewDeps = {
   prepare?: typeof prepareRequestHandoff;
 };
 
+function isAmountMismatchFailure(prepared: RequestHandoffResult): boolean {
+  return !prepared.ok && prepared.error.toLowerCase().includes('does not match');
+}
+
 /**
  * Confirm path for Payment Review. Every awaited step is caught so a rejecting
  * `canOpenURL` / `recordDisplayedInvoice` / `openURL` cannot leave the sheet
@@ -33,6 +40,24 @@ export async function continuePaymentReview(
 ): Promise<ContinuePaymentReviewResult> {
   const fallback = COPY.couldNotOpenWallet;
   const prepare = deps.prepare ?? prepareRequestHandoff;
+
+  let prepared: RequestHandoffResult | null = null;
+  if (review.selected) {
+    prepared = prepare({
+      requestAmountBtc: review.amountBtc,
+      endpointIdentifier: review.selected.identifier,
+      payload: review.selected.payload,
+      amountAsset: review.amountAsset,
+    });
+    if (!prepared.ok && !isAmountMismatchFailure(prepared)) {
+      return {
+        closeReview: false,
+        walletUnavailable: false,
+        recordFailed: false,
+        error: prepared.error,
+      };
+    }
+  }
 
   let canOpen = false;
   try {
@@ -50,23 +75,21 @@ export async function continuePaymentReview(
   }
 
   let recordError: string | null = null;
-  if (review.kind === 'request' && review.record && review.selected) {
-    const prepared = prepare({
-      requestAmountBtc: review.amountBtc,
-      endpointIdentifier: review.selected.identifier,
-      payload: review.selected.payload,
-    });
-    const mismatchOnly = !prepared.ok && prepared.error.toLowerCase().includes('does not match');
-    if (prepared.paymentHash && (prepared.ok || mismatchOnly)) {
-      try {
-        await deps.recordDisplayedInvoice(
-          review.record.peerPubky,
-          review.record.paymentRequestId,
-          prepared.paymentHash,
-        );
-      } catch (err) {
-        recordError = sanitizeError(err, fallback).message;
-      }
+  if (
+    review.kind === 'request' &&
+    review.record &&
+    prepared &&
+    prepared.paymentHash &&
+    (prepared.ok || isAmountMismatchFailure(prepared))
+  ) {
+    try {
+      await deps.recordDisplayedInvoice(
+        review.record.peerPubky,
+        review.record.paymentRequestId,
+        prepared.paymentHash,
+      );
+    } catch (err) {
+      recordError = sanitizeError(err, fallback).message;
     }
   }
 

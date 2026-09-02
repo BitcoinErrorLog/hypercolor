@@ -1,9 +1,10 @@
 import { Alert, Clipboard, Linking } from 'react-native';
 import { COPY } from '../../copy/uxCopy';
 import {
+  btcDecimalToSats,
   isSupportedV1PaymentAmount,
   isValidOnchainAddress,
-  PAYMENT_ASSET_BTC,
+  satsToBtcDecimal,
   schemeForEndpointIdentifier,
 } from '../../types/payment';
 import {
@@ -68,11 +69,14 @@ export function buildPayUri(
     if (!isValidOnchainAddress(payload)) {
       throw new Error('on-chain address failed validation');
     }
-    const uri =
-      requestAmountBtc !== undefined && requestAmountBtc.length > 0
-        ? `bitcoin:${payload}?amount=${requestAmountBtc}`
-        : `bitcoin:${payload}`;
-    return { uri, scheme };
+    if (requestAmountBtc !== undefined && requestAmountBtc.length > 0) {
+      const sats = btcDecimalToSats(requestAmountBtc);
+      if (sats === null) {
+        throw new Error('on-chain amount must be a whole-satoshi BTC decimal');
+      }
+      return { uri: `bitcoin:${payload}?amount=${satsToBtcDecimal(sats)}`, scheme };
+    }
+    return { uri: `bitcoin:${payload}`, scheme };
   }
   throw new Error('endpoint identifier is not a lightning or bitcoin destination');
 }
@@ -86,10 +90,9 @@ export function prepareRequestHandoff(input: {
   requestAmountBtc: string;
   endpointIdentifier: string;
   payload: string;
-  amountAsset?: string;
+  amountAsset: string;
 }): RequestHandoffResult {
-  const amountAsset = input.amountAsset ?? PAYMENT_ASSET_BTC;
-  if (!isSupportedV1PaymentAmount({ value: input.requestAmountBtc, asset: amountAsset })) {
+  if (!isSupportedV1PaymentAmount({ value: input.requestAmountBtc, asset: input.amountAsset })) {
     return {
       ok: false,
       error: COPY.unsupportedPaymentAmount,
@@ -101,6 +104,16 @@ export function prepareRequestHandoff(input: {
   }
   const scheme = schemeForEndpointIdentifier(input.endpointIdentifier);
   if (scheme === 'bitcoin') {
+    if (btcDecimalToSats(input.requestAmountBtc) === null) {
+      return {
+        ok: false,
+        error: COPY.onlyLightningCanPayAmount,
+        requestAmountBtc: input.requestAmountBtc,
+        invoiceAmountBtc: null,
+        paymentHash: null,
+        expiresAtMs: null,
+      };
+    }
     try {
       const { uri } = buildPayUri(input.endpointIdentifier, input.payload, input.requestAmountBtc);
       return {

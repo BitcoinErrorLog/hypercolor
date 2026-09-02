@@ -1,3 +1,4 @@
+import { COPY } from '../../../copy/uxCopy';
 import { buildPayUri, openPayUri, prepareRequestHandoff } from '../walletHandoff';
 import { ENDPOINT_BITCOIN_P2TR, ENDPOINT_LIGHTNING_BOLT11 } from '../../../types/payment';
 import {
@@ -37,12 +38,23 @@ describe('buildPayUri', () => {
     expect(() => buildPayUri(ENDPOINT_BITCOIN_P2TR, `bc1p${'a'.repeat(100)}`)).toThrow();
     expect(() => buildPayUri('https-url', 'https://evil.example')).toThrow();
   });
+
+  it('refuses a sub-satoshi BIP21 amount instead of emitting more than eight decimals', () => {
+    expect(() => buildPayUri(ENDPOINT_BITCOIN_P2TR, MAINNET_P2TR, '0.000000001')).toThrow(
+      'on-chain amount must be a whole-satoshi BTC decimal',
+    );
+    expect(() => buildPayUri(ENDPOINT_BITCOIN_P2TR, MAINNET_P2TR, '0.000000001')).toThrow();
+    const { uri } = buildPayUri(ENDPOINT_BITCOIN_P2TR, MAINNET_P2TR, '0.000000010');
+    expect(uri).toBe(`bitcoin:${MAINNET_P2TR}?amount=0.00000001`);
+    expect(uri).not.toMatch(/amount=0\.000000001\b/);
+  });
 });
 
 describe('prepareRequestHandoff', () => {
   it('blocks when the invoice amount differs from the request amount', () => {
     const result = prepareRequestHandoff({
       requestAmountBtc: '0.001',
+      amountAsset: 'btc',
       endpointIdentifier: ENDPOINT_LIGHTNING_BOLT11,
       payload: MAINNET_BOLT11_20U,
     });
@@ -56,6 +68,7 @@ describe('prepareRequestHandoff', () => {
   it('allows a matching invoice amount and surfaces the decoded amount', () => {
     const result = prepareRequestHandoff({
       requestAmountBtc: MAINNET_BOLT11_20U_BTC,
+      amountAsset: 'btc',
       endpointIdentifier: ENDPOINT_LIGHTNING_BOLT11,
       payload: MAINNET_BOLT11_20U,
     });
@@ -74,6 +87,7 @@ describe('prepareRequestHandoff', () => {
   it('warns on an amountless invoice and names the request amount', () => {
     const result = prepareRequestHandoff({
       requestAmountBtc: '0.001',
+      amountAsset: 'btc',
       endpointIdentifier: ENDPOINT_LIGHTNING_BOLT11,
       payload: MAINNET_BOLT11_AMOUNTLESS,
     });
@@ -99,6 +113,7 @@ describe('prepareRequestHandoff', () => {
   it('binds bitcoin: URIs to the request amount', () => {
     const result = prepareRequestHandoff({
       requestAmountBtc: '0.001',
+      amountAsset: 'btc',
       endpointIdentifier: ENDPOINT_BITCOIN_P2TR,
       payload: MAINNET_P2TR,
     });
@@ -111,6 +126,28 @@ describe('prepareRequestHandoff', () => {
         invoiceAmountBtc: null,
       }),
     );
+  });
+
+  it('refuses on-chain handoff for a sub-satoshi request and keeps Lightning exact', () => {
+    const onchain = prepareRequestHandoff({
+      requestAmountBtc: '0.000000001',
+      amountAsset: 'btc',
+      endpointIdentifier: ENDPOINT_BITCOIN_P2TR,
+      payload: MAINNET_P2TR,
+    });
+    expect(onchain.ok).toBe(false);
+    if (onchain.ok) return;
+    expect(onchain.error).toBe(COPY.onlyLightningCanPayAmount);
+
+    const lightning = prepareRequestHandoff({
+      requestAmountBtc: '0.000000001',
+      amountAsset: 'btc',
+      endpointIdentifier: ENDPOINT_LIGHTNING_BOLT11,
+      payload: MAINNET_BOLT11_AMOUNTLESS,
+    });
+    expect(lightning.ok).toBe(true);
+    if (!lightning.ok) return;
+    expect(lightning.uri).toBe(`lightning:${MAINNET_BOLT11_AMOUNTLESS}`);
   });
 });
 
