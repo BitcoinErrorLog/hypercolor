@@ -2208,6 +2208,28 @@ export const StorageService = {
     );
   },
 
+  /**
+   * True when this owner already verified a proof against `paymentHash` on a
+   * different request. Blocks cross-request preimage reuse.
+   */
+  async hasVerifiedPaymentHash(
+    ownerPubky: PubkyKey,
+    paymentHash: string,
+    exceptPaymentRequestId: string,
+  ): Promise<boolean> {
+    const db = await getDb();
+    const result = db.executeSync(
+      `SELECT 1 FROM payment_requests
+       WHERE owner_pubky = ?
+         AND payment_request_id != ?
+         AND displayed_payment_hash = ?
+         AND proof_verified = 1
+       LIMIT 1`,
+      [ownerPubky, exceptPaymentRequestId, paymentHash],
+    );
+    return (result.rows?.length ?? 0) > 0;
+  },
+
   async getTipEndpoint(
     ownerPubky: PubkyKey,
     peerPubky: PubkyKey,

@@ -75,7 +75,7 @@ export const PaymentService = {
       proofJson: null,
       reason: null,
       pendingEventId: eventId,
-      displayedPaymentHash: null,
+      displayedPaymentHash: await snapshotOwnInvoiceHash(owner, endpointIds),
       proofVerified: null,
     };
     const queueId = uuidv4();
@@ -456,6 +456,18 @@ function validateLocalTipEndpoints(
     cleaned.push(validated);
   }
   return cleaned;
+}
+
+async function snapshotOwnInvoiceHash(
+  owner: PubkyKey,
+  endpointIds: readonly string[],
+): Promise<string | null> {
+  for (const identifier of endpointIds) {
+    if (schemeForEndpointIdentifier(identifier) !== 'lightning') continue;
+    const tip = await StorageService.getTipEndpoint(owner, owner, identifier);
+    if (tip?.paymentHash) return tip.paymentHash;
+  }
+  return null;
 }
 
 function requireOwner(): PubkyKey {

@@ -413,18 +413,19 @@ async function applyProof(
   }
 
   const preimage = extractBolt11Preimage(decoded.proof);
-  let paymentHash = row.displayedPaymentHash;
-  if (!paymentHash) {
-    const ownTip = await StorageService.getTipEndpoint(
-      input.ownerPubky,
-      input.ownerPubky,
-      decoded.payment_endpoint_identifier,
-    );
-    paymentHash = ownTip?.paymentHash ?? null;
-  }
+  const paymentHash = row.displayedPaymentHash;
   let proofVerified: boolean | null = null;
   if (preimage && paymentHash) {
-    proofVerified = await verifyBolt11Preimage(preimage, paymentHash);
+    const reused = await StorageService.hasVerifiedPaymentHash(
+      input.ownerPubky,
+      paymentHash,
+      decoded.payment_request_id,
+    );
+    if (reused) {
+      proofVerified = false;
+    } else {
+      proofVerified = await verifyBolt11Preimage(preimage, paymentHash);
+    }
   }
 
   const applied = await StorageService.compareAndSetPaymentRequest(
@@ -436,7 +437,6 @@ async function applyProof(
       status: 'proof_received',
       proofJson: JSON.stringify(decoded.proof),
       proofVerified,
-      ...(paymentHash ? { displayedPaymentHash: paymentHash } : {}),
     },
   );
   await markSeen(

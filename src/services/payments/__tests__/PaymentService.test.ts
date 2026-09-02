@@ -27,6 +27,7 @@ jest.mock('../../StorageService', () => ({
     listTipEndpoints: jest.fn(),
     listPaymentRequestsForPeer: jest.fn(),
     setDisplayedPaymentHash: jest.fn(),
+    getTipEndpoint: jest.fn(),
   },
 }));
 
@@ -129,6 +130,7 @@ describe('PaymentService', () => {
     mockedStorage.persistPaymentOutboundTransition.mockResolvedValue(true);
     mockedStorage.persistPaymentCreateWithSendIntent.mockResolvedValue(undefined);
     mockedStorage.persistPaymentEventWithSendIntent.mockResolvedValue(undefined);
+    mockedStorage.getTipEndpoint.mockResolvedValue(null);
   });
 
   it('persists and sends a payment_request within the link byte budget', async () => {
@@ -355,5 +357,36 @@ describe('PaymentService', () => {
     ).rejects.toMatchObject({ code: 'budget' });
     expect(mockedStorage.persistPaymentCreateWithSendIntent).not.toHaveBeenCalled();
     expect(mockedLink.attemptPersistedSend).not.toHaveBeenCalled();
+  });
+
+  it('snapshots the payee invoice hash onto the request at create time', async () => {
+    mockedUuid
+      .mockReturnValueOnce(EVENT_ID)
+      .mockReturnValueOnce(REQUEST_ID)
+      .mockReturnValueOnce(QUEUE_ID);
+    mockedStorage.getTipEndpoint.mockResolvedValue({
+      ownerPubky: OWNER,
+      peerPubky: OWNER,
+      identifier: ENDPOINT_LIGHTNING_BOLT11,
+      payload: MAINNET_BOLT11_20U,
+      updatedAt: 1,
+      validationStatus: 'valid',
+      invoiceAmount: null,
+      invoiceExpiresAt: null,
+      paymentHash: 'ab'.repeat(32),
+    });
+    mockedStorage.getPaymentRequest.mockResolvedValue(
+      row({
+        direction: 'sent',
+        pendingEventId: EVENT_ID,
+        displayedPaymentHash: 'ab'.repeat(32),
+      }),
+    );
+    await PaymentService.requestPayment(PEER, { value: '0.001' }, 'invoice-2026-0001');
+    expect(mockedStorage.persistPaymentCreateWithSendIntent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        record: expect.objectContaining({ displayedPaymentHash: 'ab'.repeat(32) }),
+      }),
+    );
   });
 });

@@ -18,6 +18,7 @@ jest.mock('../../StorageService', () => ({
     compareAndSetPaymentRequest: jest.fn(),
     replaceTipEndpoints: jest.fn(),
     getTipEndpoint: jest.fn(),
+    hasVerifiedPaymentHash: jest.fn(),
   },
 }));
 
@@ -122,6 +123,14 @@ function installStore(store: Store): void {
   );
   mockedStorage.replaceTipEndpoints.mockResolvedValue(undefined);
   mockedStorage.getTipEndpoint.mockResolvedValue(null);
+  mockedStorage.hasVerifiedPaymentHash.mockImplementation(async (owner, hash, exceptId) => {
+    for (const existing of store.requests.values()) {
+      if (existing.ownerPubky !== owner) continue;
+      if (existing.paymentRequestId === exceptId) continue;
+      if (existing.displayedPaymentHash === hash && existing.proofVerified === true) return true;
+    }
+    return false;
+  });
 }
 
 function sentRow(overrides: Partial<PaymentRequestRecord> = {}): PaymentRequestRecord {
@@ -434,5 +443,91 @@ describe('applyPaymentInbound authorization (S2)', () => {
     );
     expect(PAYKIT_PAYMENT_REQUEST_KIND).toBe('paykit.payment_request');
     expect(PAYKIT_PRIVATE_PAYMENT_LIST_KIND).toBe('paykit.private_payment_list');
+  });
+
+  it('does not mark a second request paid when the same preimage is reused', async () => {
+    const preimage = 'cd'.repeat(32);
+    const paymentHash = createHash('sha256').update(Buffer.from(preimage, 'hex')).digest('hex');
+    const secondId = 'c7f9c2a1-6d43-4b0e-a8d4-0fe2c712ab44';
+    store.requests.set(
+      requestKey(OWNER, PEER_A, REQUEST_ID),
+      sentRow({
+        status: 'proof_received',
+        displayedPaymentHash: paymentHash,
+        proofVerified: true,
+      }),
+    );
+    store.requests.set(
+      requestKey(OWNER, PEER_A, secondId),
+      sentRow({
+        paymentRequestId: secondId,
+        status: 'accepted',
+        displayedPaymentHash: paymentHash,
+      }),
+    );
+    const proof = buildPaymentProofEnvelope({
+      eventId: EVENT_PRF,
+      paymentRequestId: secondId,
+      paymentReference: 'invoice-2026-0001',
+      paymentEndpointIdentifier: ENDPOINT_LIGHTNING_BOLT11,
+      proofData: preimage,
+    });
+    expect((await inbound(PEER_A, proof.json)).action).toBe('applied');
+    const second = store.requests.get(requestKey(OWNER, PEER_A, secondId));
+    expect(second?.status).toBe('proof_received');
+    expect(second?.proofVerified).not.toBe(true);
+    expect(store.requests.get(requestKey(OWNER, PEER_A, REQUEST_ID))?.proofVerified).toBe(true);
+  });
+
+  it('leaves proofVerified null when the request has no bound hash after invoice rotation', async () => {
+    const preimage = 'ab'.repeat(32);
+    const oldHash = createHash('sha256').update(Buffer.from(preimage, 'hex')).digest('hex');
+    store.requests.set(
+      requestKey(OWNER, PEER_A, REQUEST_ID),
+      sentRow({ status: 'accepted', displayedPaymentHash: null }),
+    );
+    mockedStorage.getTipEndpoint.mockResolvedValue({
+      ownerPubky: OWNER,
+      peerPubky: OWNER,
+      identifier: ENDPOINT_LIGHTNING_BOLT11,
+      payload: MAINNET_BOLT11_20U,
+      updatedAt: NOW,
+      validationStatus: 'valid',
+      invoiceAmount: MAINNET_BOLT11_20U_BTC,
+      invoiceExpiresAt: null,
+      paymentHash: MAINNET_BOLT11_20U_HASH,
+    });
+    const proof = buildPaymentProofEnvelope({
+      eventId: EVENT_PRF,
+      paymentRequestId: REQUEST_ID,
+      paymentReference: 'invoice-2026-0001',
+      paymentEndpointIdentifier: ENDPOINT_LIGHTNING_BOLT11,
+      proofData: preimage,
+    });
+    expect((await inbound(PEER_A, proof.json)).action).toBe('applied');
+    const row = store.requests.get(requestKey(OWNER, PEER_A, REQUEST_ID));
+    expect(row?.proofVerified).toBeNull();
+    expect(row?.displayedPaymentHash).toBeNull();
+    expect(oldHash).not.toBe(MAINNET_BOLT11_20U_HASH);
+    expect(displayPaymentStatus(row!.status, row!.expiresAt, NOW, row)).toBe('claimed');
+  });
+
+  it('marks a genuine per-request hash match as verified', async () => {
+    const preimage = 'ef'.repeat(32);
+    const paymentHash = createHash('sha256').update(Buffer.from(preimage, 'hex')).digest('hex');
+    store.requests.set(
+      requestKey(OWNER, PEER_A, REQUEST_ID),
+      sentRow({ status: 'accepted', displayedPaymentHash: paymentHash }),
+    );
+    const proof = buildPaymentProofEnvelope({
+      eventId: EVENT_PRF,
+      paymentRequestId: REQUEST_ID,
+      paymentReference: 'invoice-2026-0001',
+      paymentEndpointIdentifier: ENDPOINT_LIGHTNING_BOLT11,
+      proofData: preimage,
+    });
+    expect((await inbound(PEER_A, proof.json)).action).toBe('applied');
+    const row = store.requests.get(requestKey(OWNER, PEER_A, REQUEST_ID));
+    expect(row?.proofVerified).toBe(true);
   });
 });
