@@ -12,7 +12,7 @@ import { NavigationContainer, type LinkingOptions } from '@react-navigation/nati
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../types';
 import { E2eSignupHud } from './E2eSignupHud';
-import { navigationRef } from './navigationRef';
+import { navigationRef, navigateRoot } from './navigationRef';
 import { startE2eClipboardChannel } from './e2eClipboardChannel';
 import { handleE2eDeepLink, isE2eDeepLinkUrl, linkingUrlForReactNavigation } from './e2eDeepLinks';
 import { AuthStack } from './AuthStack';
@@ -22,13 +22,19 @@ import ThreadScreen from '../screens/main/ThreadScreen';
 import ChannelScreen from '../screens/main/ChannelScreen';
 import { PubkyRingAuthService } from '../services/PubkyRingAuthService';
 import { PubkyService } from '../services/PubkyService';
-import { GroupService, setPendingPublicJoin } from '../services/group/GroupService';
+import {
+  bindPendingPublicJoin,
+  consumePendingPublicJoinRedirect,
+  GroupService,
+  setPendingPublicJoin,
+} from '../services/group/GroupService';
 import { parsePublicChannelRef } from '../types/group';
 import { sanitizeError } from '../ui/sanitizedError';
 import { COPY } from '../copy/uxCopy';
 import { notifyEnableMessagingResume } from '../ui/enableMessagingResume';
 import { notifyConnectAuthFeedback } from '../ui/connectAuthFeedback';
 import { stackTransitionAnimation, useReduceMotion } from '../ui/reduceMotion';
+import { PUBLIC_CHANNELS_ROUTE } from '../ui/exposurePaths';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
@@ -108,7 +114,7 @@ function LoadingFallback() {
 }
 
 export function RootNavigator() {
-  const { isAuthenticated, setAuthenticated } = useAuthStore();
+  const { isAuthenticated, setAuthenticated, pubky } = useAuthStore();
   const reduceMotion = useReduceMotion();
   const stackAnimation = (kind: 'slide_from_right' | 'slide_from_bottom') =>
     stackTransitionAnimation(reduceMotion, kind);
@@ -118,15 +124,9 @@ export function RootNavigator() {
       if (url.startsWith('hypercolor://e2e/')) return;
       if (url.startsWith('hypercolor://join-public')) {
         if (!parsePublicChannelRef(url)) return;
-        if (!isAuthenticated) {
-          setPendingPublicJoin(url);
-          return;
-        }
-        try {
-          await GroupService.joinPublicChannel(url);
-        } catch (err) {
-          const sanitized = sanitizeError(err, 'Could not join that public channel.');
-          Alert.alert('Join failed', sanitized.message);
+        setPendingPublicJoin(url, isAuthenticated ? pubky : null);
+        if (isAuthenticated && pubky && consumePendingPublicJoinRedirect(pubky)) {
+          navigateRoot(PUBLIC_CHANNELS_ROUTE.name, PUBLIC_CHANNELS_ROUTE.params);
         }
         return;
       }
@@ -152,8 +152,16 @@ export function RootNavigator() {
         Alert.alert(COPY.couldNotCompleteAuthorization, sanitized.message);
       }
     },
-    [isAuthenticated, setAuthenticated],
+    [isAuthenticated, pubky, setAuthenticated],
   );
+
+  useEffect(() => {
+    if (!isAuthenticated || !pubky) return;
+    bindPendingPublicJoin(pubky);
+    if (consumePendingPublicJoinRedirect(pubky)) {
+      navigateRoot(PUBLIC_CHANNELS_ROUTE.name, PUBLIC_CHANNELS_ROUTE.params);
+    }
+  }, [isAuthenticated, pubky]);
 
   useEffect(() => {
     if (__DEV__) {

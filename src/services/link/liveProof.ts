@@ -7,6 +7,7 @@ import {
   decodeLinkEnvelope,
 } from '../../types/link';
 import {
+  EMPTY_PAYMENT_RECORD_EXTRAS,
   ENDPOINT_LIGHTNING_BOLT11,
   PAYKIT_PAYMENT_ACCEPTANCE_KIND,
   PAYKIT_PAYMENT_PROOF_KIND,
@@ -414,10 +415,10 @@ export async function runLinkLiveProof(
           pubkyA,
           pubkyB,
           requestOne.envelope.payment_request_id,
-          'proof_received',
+          'accepted',
         );
         if (applied.action !== 'applied') throw new Error(`A apply proof: ${applied.action}`);
-        return 'proof_received (dummy hex — does not close P4)';
+        return 'accepted (dummy hex — unverifiable proof stays non-terminal)';
       }))
     ) {
       return failed();
@@ -533,7 +534,7 @@ export async function runLinkLiveProof(
           pubkyA,
           pubkyB,
           requestOne.envelope.payment_request_id,
-          'proof_received',
+          'accepted',
         );
         if (applied.action !== 'applied') throw new Error(`A apply rejection: ${applied.action}`);
         return 'rejected';
@@ -580,9 +581,7 @@ async function persistOutboundRequest(
     updatedAt: nowMs,
     proofJson: null,
     reason: null,
-    pendingEventId: null,
-    displayedPaymentHash: null,
-    proofVerified: null,
+    ...EMPTY_PAYMENT_RECORD_EXTRAS,
   });
   await StorageService.savePaymentEvent({
     ownerPubky,

@@ -15,8 +15,14 @@ import {
   SCHEMA_V14_STATEMENTS,
   SCHEMA_V15_STATEMENTS,
   SCHEMA_V16_STATEMENTS,
+  SCHEMA_V17_STATEMENTS,
 } from './schema';
 import type { SqlExecutor, SqlValue } from './sql';
+import {
+  markOwnInvoiceHashRepairRetry,
+  repairOwnInvoiceHashes,
+  runOwnInvoiceHashAmountBackfill,
+} from './ownInvoiceHashes';
 
 /**
  * Migration runner for Hypercolor SQLite database.
@@ -28,9 +34,19 @@ import type { SqlExecutor, SqlValue } from './sql';
  * - Never modify an existing migration. Add a new one instead.
  * - Every statement must be idempotent (use IF NOT EXISTS / IF EXISTS).
  * - After adding a migration, bump CURRENT_VERSION.
+ *
+ * Versioning note (mobile UX integration): W2b and W2c both shipped
+ * unreleased `user_version = 16` with different tables. We keep W2b as
+ * v16 and add v17 as the idempotent union (W2c own-invoice-hash objects
+ * plus W2b CREATE IF NOT EXISTS). That way devices on either v16 shape
+ * converge, and v15 devices step through v16 then v17. Idempotent
+ * repairs (blocked-peers column, legacy queue owners, own-invoice-hash
+ * repair/backfill) still re-run after the version loop.
  */
 
-const CURRENT_VERSION = 16;
+/** Test seam: current `user_version` after `runMigrations`. Do not hard-code. */
+export const CURRENT_SCHEMA_VERSION = 17;
+const CURRENT_VERSION = CURRENT_SCHEMA_VERSION;
 
 type Migration = {
   version: number;
@@ -54,6 +70,7 @@ const MIGRATIONS: readonly Migration[] = [
   { version: 14, statements: SCHEMA_V14_STATEMENTS },
   { version: 15, statements: SCHEMA_V15_STATEMENTS },
   { version: 16, statements: SCHEMA_V16_STATEMENTS },
+  { version: 17, statements: SCHEMA_V17_STATEMENTS },
 ];
 
 export async function runMigrations(db: SqlExecutor): Promise<void> {
@@ -65,38 +82,16 @@ export async function runMigrations(db: SqlExecutor): Promise<void> {
     return;
   }
 
-  // CURRENT_VERSION stays 16. Unreleased v16 was mutated in place, so a
-  // database already stamped 16 may be missing later-wave tables. Replay
-  // the idempotent CREATE TABLE/INDEX statements every launch; gate only
-  // the duplicate-column ALTER behind PRAGMA table_info.
-  if (currentVersion === CURRENT_VERSION) {
-    const latest = MIGRATIONS.find(m => m.version === CURRENT_VERSION);
-    if (!latest) return;
-    db.executeSync('BEGIN');
-    try {
-      for (const statement of latest.statements) {
-        if (/ALTER TABLE/i.test(statement)) continue;
-        applyStatement(db, statement);
-      }
-      ensureBlockedPeersCleanupPending(db);
-      reconcileLegacyQueueOwners(db);
-      db.executeSync('COMMIT');
-    } catch (err) {
-      db.executeSync('ROLLBACK');
-      throw err;
-    }
-    return;
-  }
-
+  // Apply any pending versioned migrations (v15→v16→v17, or v16→v17).
+  // v17 statements are all IF NOT EXISTS / idempotent so either prior v16
+  // shape can upgrade safely.
   const pending = MIGRATIONS.filter(m => m.version > currentVersion);
-
   for (const migration of pending) {
     db.executeSync('BEGIN');
     try {
       for (const statement of migration.statements) {
         applyStatement(db, statement);
       }
-      // Commit and advance the schema version
       db.executeSync(`PRAGMA user_version = ${migration.version}`);
       db.executeSync('COMMIT');
     } catch (err) {
@@ -105,13 +100,65 @@ export async function runMigrations(db: SqlExecutor): Promise<void> {
     }
   }
 
+  // Post-version idempotent reconciliation — safe on every launch.
+  // Covers: already-at-17 DBs, and CREATE-replay for objects that may
+  // predate later in-branch ALTERs on unreleased v16 installs.
   db.executeSync('BEGIN');
   try {
+    for (const statement of SCHEMA_V16_STATEMENTS) {
+      if (/ALTER TABLE/i.test(statement)) continue;
+      applyStatement(db, statement);
+    }
+    for (const statement of SCHEMA_V17_STATEMENTS) {
+      if (/ALTER TABLE/i.test(statement)) continue;
+      applyStatement(db, statement);
+    }
+    ensureBlockedPeersCleanupPending(db);
     reconcileLegacyQueueOwners(db);
     db.executeSync('COMMIT');
   } catch (err) {
     db.executeSync('ROLLBACK');
     throw err;
+  }
+
+  // W2c own-invoice-hash repair is never startup-fatal: repair commits
+  // `invoice_reused` before the rest, then amount backfill commits
+  // separately, so a later throw cannot roll back CREATE TABLE.
+  try {
+    repairOwnInvoiceHashes(db);
+  } catch (err) {
+    logOwnInvoiceHashRepairFailure(db, err);
+  }
+  try {
+    db.executeSync('BEGIN');
+    runOwnInvoiceHashAmountBackfill(db);
+    db.executeSync('COMMIT');
+  } catch (err) {
+    logOwnInvoiceHashRepairFailure(db, err);
+  }
+}
+
+function logOwnInvoiceHashRepairFailure(db: SqlExecutor, err: unknown): void {
+  try {
+    db.executeSync('ROLLBACK');
+  } catch {
+    // Rollback is best-effort if BEGIN never succeeded.
+  }
+  console.warn(
+    '[db] own_invoice_hashes repair failed; will retry next launch',
+    err instanceof Error ? err.message : 'unknown error',
+  );
+  try {
+    db.executeSync('BEGIN');
+    markOwnInvoiceHashRepairRetry(db);
+    db.executeSync('COMMIT');
+  } catch {
+    try {
+      db.executeSync('ROLLBACK');
+    } catch {
+      // Marker write is best-effort; next launch still retries because the
+      // completion key is not set.
+    }
   }
 }
 

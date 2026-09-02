@@ -6,6 +6,7 @@ import {
 } from '@synonymdev/react-native-pubky';
 import { KeyStore } from './KeyStore';
 import { LinkService } from './link/LinkService';
+import { clearDeferredPublicJoin } from '../stores/deferredPublicJoin';
 import { StorageService } from './StorageService';
 import {
   ensureSignOutPaint,
@@ -106,6 +107,7 @@ export const PubkyService = {
         // Full messaging teardown while the current-owner identity is still
         // readable. Identity clear runs only after a zero-error wipe.
         await LinkService.clearSession({ owner: previousOwner });
+        clearDeferredPublicJoin(previousOwner);
       } catch (err) {
         restorePaintedOwner(previousOwner, generation);
         throw err;

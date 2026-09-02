@@ -440,6 +440,14 @@ describe('GroupService', () => {
     const msgs = await GroupService.listMessages(joined.channelId);
     expect(msgs.some(m => m.body === 'hello public' && m.senderPubky === OWNER)).toBe(true);
   });
+
+  it('lists local channels without reading the public homeserver', async () => {
+    mockedPubky.get.mockClear();
+    mockedPubky.list.mockClear();
+    await GroupService.listChannels();
+    expect(mockedPubky.get).not.toHaveBeenCalled();
+    expect(mockedPubky.list).not.toHaveBeenCalled();
+  });
 });
 
 function fakePubky(seed: number): string {

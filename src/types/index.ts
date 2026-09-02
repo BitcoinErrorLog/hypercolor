@@ -98,9 +98,15 @@ export type AuthStackParamList = {
 
 export type MainTabParamList = {
   Chats: undefined;
-  Channels: undefined;
+  Channels: { mode?: 'private' | 'public' } | undefined;
   Contacts: { focusPubky?: PubkyKey } | undefined;
   Profile: undefined;
+};
+
+export type SettingsSection = 'backup' | 'payments';
+
+export type SettingsRouteParams = {
+  section?: SettingsSection | undefined;
 };
 
 export type RootStackParamList = {
@@ -111,7 +117,7 @@ export type RootStackParamList = {
   ContactSearch: undefined;
   ContactDetail: { pubky: PubkyKey };
   MessageRequests: undefined;
-  Settings: undefined;
+  Settings: SettingsRouteParams | undefined;
   EnableMessaging: undefined;
 };
 

@@ -1,11 +1,16 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, TextInput } from 'react-native';
 import {
-  displayPaymentStatus,
-  formatPaymentDisplayText,
-  type PaymentDisplayStatus,
-  type PaymentRequestRecord,
-} from '../types/payment';
+  View,
+  Text,
+  TouchableOpacity,
+  StyleSheet,
+  TextInput,
+  ActivityIndicator,
+} from 'react-native';
+import { formatPaymentDisplayText, type PaymentRequestRecord } from '../types/payment';
+import { COPY } from '../copy/uxCopy';
+import { HIT_SLOP_44 } from '../ui/hitTarget';
+import { formatPaymentReceipt } from '../ui/paymentReceiptStatus';
 
 export function PaymentRequestCard({
   record,
@@ -32,10 +37,8 @@ export function PaymentRequestCard({
   onPayInWallet: () => void;
   onSubmitProof: () => void;
 }) {
-  const status = displayPaymentStatus(record.status, record.expiresAt, nowMs, {
-    pendingEventId: record.pendingEventId,
-    proofVerified: record.proofVerified,
-  });
+  const receipt = formatPaymentReceipt(record, nowMs);
+  const statusWord = receipt.word;
   const isPayer = !isPayee;
 
   return (
@@ -46,12 +49,31 @@ export function PaymentRequestCard({
       </Text>
       <Text style={styles.reference}>{formatPaymentDisplayText(record.paymentReference)}</Text>
       <View style={styles.chipRow}>
-        <StatusChip status={status} />
+        <StatusChip status={statusWord} />
         {record.expiresAt !== null ? (
           <ExpiryLabel expiresAt={record.expiresAt} nowMs={nowMs} />
         ) : null}
       </View>
-      {isPayer && status === 'pending' ? (
+      {receipt.note ? (
+        <Text testID="paymentRequestProofNote" style={styles.reference}>
+          {receipt.note}
+        </Text>
+      ) : null}
+      {record.pendingEventId !== null ? (
+        <View
+          testID="paymentRequestSending"
+          accessibilityRole="progressbar"
+          accessibilityLabel={COPY.paymentSending}
+          style={styles.sendingRow}
+        >
+          <ActivityIndicator color="#fff" />
+          <Text style={styles.sendingText}>{COPY.paymentSending}</Text>
+        </View>
+      ) : null}
+      {isPayer &&
+      record.status === 'pending' &&
+      statusWord === COPY.paymentRequested &&
+      record.pendingEventId === null ? (
         <View style={styles.actions}>
           <ActionButton label="Accept" onPress={onAccept} disabled={busy} primary />
           <ActionButton label="Reject" onPress={onReject} disabled={busy} />
@@ -81,28 +103,15 @@ export function PaymentRequestCard({
   );
 }
 
-function statusLabel(status: PaymentDisplayStatus): string {
-  switch (status) {
-    case 'claimed':
-      return 'Payment claimed';
-    case 'verified':
-      return 'Paid';
-    case 'sending':
-      return 'sending';
-    case 'proof_received':
-      return 'Payment claimed';
-    default:
-      return status.replace('_', ' ');
-  }
-}
-
-function StatusChip({ status }: { status: PaymentDisplayStatus }) {
+function StatusChip({ status }: { status: string }) {
   return (
-    <View style={[styles.chip, chipTone(status)]}>
-      <Text style={styles.chipText}>
-        {status === 'verified' ? '✓ ' : ''}
-        {statusLabel(status)}
-      </Text>
+    <View
+      testID="paymentRequestStatus"
+      accessibilityRole="text"
+      accessibilityLabel={status}
+      style={[styles.chip, chipTone(status)]}
+    >
+      <Text style={styles.chipText}>{status}</Text>
     </View>
   );
 }
@@ -131,6 +140,10 @@ function ActionButton({
 }) {
   return (
     <TouchableOpacity
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      accessibilityState={{ disabled }}
+      hitSlop={HIT_SLOP_44}
       style={[
         styles.btn,
         primary ? styles.btnPrimary : styles.btnGhost,
@@ -144,19 +157,13 @@ function ActionButton({
   );
 }
 
-function chipTone(status: PaymentDisplayStatus) {
+function chipTone(status: string) {
   switch (status) {
-    case 'accepted':
-    case 'verified':
+    case COPY.paymentPaid:
       return styles.chipOk;
-    case 'rejected':
-    case 'cancelled':
-    case 'expired':
+    case COPY.paymentFailed:
+    case COPY.paymentExpired:
       return styles.chipBad;
-    case 'claimed':
-    case 'proof_received':
-    case 'sending':
-      return styles.chipPending;
     default:
       return styles.chipPending;
   }
@@ -190,7 +197,14 @@ const styles = StyleSheet.create({
   expiry: { fontSize: 11, color: 'rgba(255,255,255,0.6)' },
   actions: { flexDirection: 'row', gap: 8, marginTop: 4 },
   actionsColumn: { gap: 8, marginTop: 4 },
-  btn: { borderRadius: 10, paddingHorizontal: 12, paddingVertical: 8, alignItems: 'center' },
+  btn: {
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    minHeight: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   btnPrimary: { backgroundColor: 'rgba(255,255,255,0.18)' },
   btnGhost: { backgroundColor: 'rgba(0,0,0,0.25)' },
   btnDisabled: { opacity: 0.4 },
@@ -204,4 +218,6 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontFamily: 'monospace',
   },
+  sendingRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 4, minHeight: 44 },
+  sendingText: { color: 'rgba(255,255,255,0.8)', fontSize: 13, fontWeight: '600' },
 });

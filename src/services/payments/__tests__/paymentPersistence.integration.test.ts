@@ -222,3 +222,62 @@ describe('payment persist + CAS (real SQL)', () => {
     );
   });
 });
+
+describe('verified-hash unique matcher vs unrelated UNIQUE', () => {
+  afterEach(() => {
+    setDbForTests(null);
+  });
+
+  it('rethrows an unrelated UNIQUE violation instead of rewriting proofVerified', async () => {
+    const db = openMemoryDb();
+    setDbForTests(db);
+    await runMigrations(db);
+
+    const idA = 'b7f9c2a1-6d43-4b0e-a8d4-0fe2c712ab33';
+    const idB = 'c7f9c2a1-6d43-4b0e-a8d4-0fe2c712ab44';
+    const base = {
+      ownerPubky: OWNER,
+      peerPubky: PEER,
+      direction: 'sent' as const,
+      eventId: EVENT_REQ,
+      amountValue: '0.001',
+      amountAsset: 'btc',
+      paymentReference: 'invoice-2026-0001',
+      endpointIds: [ENDPOINT_LIGHTNING_BOLT11],
+      expiresAt: null,
+      status: 'accepted' as const,
+      createdAt: 10,
+      updatedAt: 10,
+      proofJson: null,
+      ...EMPTY_PAYMENT_RECORD_EXTRAS,
+    };
+    await StorageService.savePaymentRequest({
+      ...base,
+      paymentRequestId: idA,
+      reason: 'occupied',
+    });
+    await StorageService.savePaymentRequest({
+      ...base,
+      paymentRequestId: idB,
+      eventId: EVENT_ACC,
+      reason: null,
+    });
+    db.executeSync(
+      `CREATE UNIQUE INDEX idx_payment_requests_reason_tmp
+         ON payment_requests(reason)
+         WHERE reason IS NOT NULL`,
+    );
+
+    await expect(
+      StorageService.compareAndSetPaymentRequest(OWNER, PEER, idB, ['accepted'], {
+        status: 'proof_received',
+        proofVerified: true,
+        reason: 'occupied',
+      }),
+    ).rejects.toThrow(/UNIQUE constraint failed/);
+
+    const row = await StorageService.getPaymentRequest(OWNER, PEER, idB);
+    expect(row?.proofVerified).toBeNull();
+    expect(row?.status).toBe('accepted');
+  });
+});

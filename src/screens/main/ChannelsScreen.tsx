@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   View,
   Text,
@@ -11,24 +11,39 @@ import {
   ScrollView,
   Alert,
 } from 'react-native';
-import { useFocusEffect, useNavigation } from '@react-navigation/native';
+import { useFocusEffect, useNavigation, useRoute } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import type { Contact, RootStackParamList } from '../../types';
-import type { GroupChannel } from '../../types/group';
+import type { RouteProp } from '@react-navigation/native';
+import type { Contact, MainTabParamList, RootStackParamList } from '../../types';
 import { PRIVATE_GROUP_MEMBER_CAP } from '../../flags/config';
 import { useAuthStore } from '../../stores/authStore';
 import { StorageService } from '../../services/StorageService';
 import {
   GroupService,
-  takePendingPublicJoin,
+  dismissPendingPublicJoin,
+  peekPendingPublicInvite,
   subscribeGroupEvents,
+  takePendingPublicJoin,
 } from '../../services/group/GroupService';
-import { COPY } from '../../copy/uxCopy';
-import { sanitizeError } from '../../ui/sanitizedError';
-import { HIT_SLOP_44, minHitStyle } from '../../ui/hitTarget';
+import { parsePublicChannelRef } from '../../types/group';
+import { COPY, pendingInviteChannelHost, publicGraphWarning } from '../../copy/uxCopy';
+import { HIT_SLOP_44 } from '../../ui/hitTarget';
+import { shortPubky } from '../../ui/shortPubky';
+import {
+  filterChannelsByMode,
+  mayReadPublicGraph,
+  mayWritePublicGraph,
+  parseChannelMode,
+  publicListVisible,
+  withUnreadCounts,
+  type ChannelListItem,
+  type ChannelMode,
+} from '../../ui/channelList';
 import { modalAnimationType, useReduceMotion } from '../../ui/reduceMotion';
+import { sanitizeError } from '../../ui/sanitizedError';
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
+type ChannelsRoute = RouteProp<MainTabParamList, 'Channels'>;
 
 function alertSanitized(err: unknown, fallback: string): void {
   const sanitized = sanitizeError(err, fallback);
@@ -37,12 +52,17 @@ function alertSanitized(err: unknown, fallback: string): void {
 
 export default function ChannelsScreen() {
   const nav = useNavigation<Nav>();
+  const route = useRoute<ChannelsRoute>();
   const ownerPubky = useAuthStore(s => s.pubky);
-  const [channels, setChannels] = useState<GroupChannel[]>([]);
+  const [channels, setChannels] = useState<ChannelListItem[]>([]);
   const [contacts, setContacts] = useState<Contact[]>([]);
+  const [mode, setMode] = useState<ChannelMode>(() => parseChannelMode(route.params?.mode));
+  const [publicOptIn, setPublicOptIn] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [joinOpen, setJoinOpen] = useState(false);
+  const [createPublicDefault, setCreatePublicDefault] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [pendingInvite, setPendingInvite] = useState<string | null>(null);
 
   const reload = useCallback(async () => {
     if (!ownerPubky) {
@@ -50,28 +70,36 @@ export default function ChannelsScreen() {
       setContacts([]);
       return;
     }
-    const [rows, people] = await Promise.all([
+    const [rows, unread, people] = await Promise.all([
       GroupService.listChannels(),
+      StorageService.unreadCountsForGroupChannels(ownerPubky),
       StorageService.getAllContacts(ownerPubky),
     ]);
-    setChannels(rows);
+    setChannels(withUnreadCounts(rows, unread));
     setContacts(people);
   }, [ownerPubky]);
+
+  const refreshPendingInvite = useCallback(() => {
+    if (!ownerPubky) {
+      setPendingInvite(null);
+      return;
+    }
+    setPendingInvite(peekPendingPublicInvite(ownerPubky));
+  }, [ownerPubky]);
+
+  useEffect(() => {
+    setMode(parseChannelMode(route.params?.mode));
+  }, [route.params?.mode]);
+
+  useEffect(() => {
+    refreshPendingInvite();
+  }, [refreshPendingInvite]);
 
   useFocusEffect(
     useCallback(() => {
       void reload();
-      const pending = takePendingPublicJoin();
-      if (pending) {
-        void GroupService.joinPublicChannel(pending)
-          .then(ch => {
-            nav.navigate('ChannelScreen', { channelId: ch.channelId });
-          })
-          .catch(err => {
-            alertSanitized(err, COPY.couldNotJoinChannel);
-          });
-      }
-    }, [reload, nav]),
+      refreshPendingInvite();
+    }, [reload, refreshPendingInvite]),
   );
 
   useEffect(() => {
@@ -85,11 +113,24 @@ export default function ChannelsScreen() {
     <ChannelsScreenContent
       channels={channels}
       contacts={contacts}
+      mode={mode}
+      publicOptIn={publicOptIn}
       createOpen={createOpen}
       joinOpen={joinOpen}
+      createPublicDefault={createPublicDefault}
       busy={busy}
+      pendingInvite={pendingInvite}
       memberCap={PRIVATE_GROUP_MEMBER_CAP}
-      onOpenCreate={() => setCreateOpen(true)}
+      onModeChange={next => {
+        setMode(next);
+      }}
+      onLoadPublic={() => {
+        setPublicOptIn(true);
+      }}
+      onOpenCreate={isPublic => {
+        setCreatePublicDefault(isPublic);
+        setCreateOpen(true);
+      }}
       onCloseCreate={() => setCreateOpen(false)}
       onOpenJoin={() => setJoinOpen(true)}
       onCloseJoin={() => setJoinOpen(false)}
@@ -107,6 +148,7 @@ export default function ChannelsScreen() {
         }
       }}
       onCreatePublic={async name => {
+        if (!mayWritePublicGraph(publicOptIn)) return;
         setBusy(true);
         try {
           const channel = await GroupService.createPublicChannel(name);
@@ -120,6 +162,7 @@ export default function ChannelsScreen() {
         }
       }}
       onJoinPublic={async ref => {
+        if (!mayReadPublicGraph(publicOptIn)) return;
         setBusy(true);
         try {
           const channel = await GroupService.joinPublicChannel(ref);
@@ -132,6 +175,27 @@ export default function ChannelsScreen() {
           setBusy(false);
         }
       }}
+      onConfirmPendingJoin={async () => {
+        if (!ownerPubky || !mayReadPublicGraph(publicOptIn)) return;
+        const pending = takePendingPublicJoin(ownerPubky);
+        refreshPendingInvite();
+        if (!pending) return;
+        setBusy(true);
+        try {
+          const channel = await GroupService.joinPublicChannel(pending);
+          await reload();
+          nav.navigate('ChannelScreen', { channelId: channel.channelId });
+        } catch (err) {
+          alertSanitized(err, COPY.couldNotJoinChannel);
+        } finally {
+          setBusy(false);
+        }
+      }}
+      onDismissPendingJoin={() => {
+        if (!ownerPubky) return;
+        dismissPendingPublicJoin(ownerPubky);
+        refreshPendingInvite();
+      }}
       onOpenChannel={channelId => nav.navigate('ChannelScreen', { channelId })}
     />
   );
@@ -140,10 +204,16 @@ export default function ChannelsScreen() {
 export function ChannelsScreenContent({
   channels,
   contacts,
+  mode,
+  publicOptIn,
   createOpen,
   joinOpen,
+  createPublicDefault,
   busy,
+  pendingInvite,
   memberCap,
+  onModeChange,
+  onLoadPublic,
   onOpenCreate,
   onCloseCreate,
   onOpenJoin,
@@ -151,102 +221,259 @@ export function ChannelsScreenContent({
   onCreatePrivate,
   onCreatePublic,
   onJoinPublic,
+  onConfirmPendingJoin,
+  onDismissPendingJoin,
   onOpenChannel,
 }: {
-  channels: GroupChannel[];
+  channels: ChannelListItem[];
   contacts: Contact[];
+  mode: ChannelMode;
+  publicOptIn: boolean;
   createOpen: boolean;
   joinOpen: boolean;
+  createPublicDefault: boolean;
   busy: boolean;
+  pendingInvite: string | null;
   memberCap: number;
-  onOpenCreate: () => void;
+  onModeChange: (mode: ChannelMode) => void;
+  onLoadPublic: () => void;
+  onOpenCreate: (isPublic: boolean) => void;
   onCloseCreate: () => void;
   onOpenJoin: () => void;
   onCloseJoin: () => void;
   onCreatePrivate: (name: string, memberPubkys: string[]) => void;
   onCreatePublic: (name: string) => void;
   onJoinPublic: (ref: string) => void;
+  onConfirmPendingJoin: () => void;
+  onDismissPendingJoin: () => void;
   onOpenChannel: (channelId: string) => void;
 }) {
+  const reduceMotion = useReduceMotion();
   const [name, setName] = useState('');
-  const [isPublic, setIsPublic] = useState(false);
+  const [publicOverride, setPublicOverride] = useState<boolean | null>(null);
   const [selected, setSelected] = useState<Record<string, boolean>>({});
   const [joinRef, setJoinRef] = useState('');
-  const reduceMotion = useReduceMotion();
-  const modalMotion = modalAnimationType(reduceMotion, 'slide');
+  const isPublic = publicOptIn && (publicOverride ?? createPublicDefault);
+  const pendingInviteParsed = pendingInvite ? parsePublicChannelRef(pendingInvite) : null;
+  const pendingInviteDetail = pendingInviteParsed
+    ? pendingInviteChannelHost(
+        pendingInviteParsed.localId,
+        shortPubky(pendingInviteParsed.hostPubky),
+      )
+    : null;
+
+  const visible = useMemo(() => {
+    const filtered = filterChannelsByMode(channels, mode);
+    if (mode === 'public' && !publicListVisible(publicOptIn)) return [];
+    return filtered;
+  }, [channels, mode, publicOptIn]);
 
   const selectedPubkys = Object.keys(selected).filter(k => selected[k]);
+  const animation = modalAnimationType(reduceMotion, 'slide');
 
   const renderChannel = useCallback(
-    ({ item }: { item: GroupChannel }) => {
-      const unread = item.unreadCount ?? 0;
-      const kind = item.isPublic ? 'Public topic' : 'Private group';
-      return (
-        <TouchableOpacity
-          accessibilityRole="button"
-          accessibilityLabel={`Open ${item.name}`}
-          accessibilityHint={unread > 0 ? `${kind}, ${unread} unread` : kind}
-          style={styles.row}
-          onPress={() => onOpenChannel(item.channelId)}
-        >
-          <View style={styles.avatar}>
-            <Text style={styles.avatarLetter}>
-              {item.isPublic ? '#' : item.name.charAt(0).toUpperCase()}
+    ({ item }: { item: ChannelListItem }) => (
+      <TouchableOpacity
+        testID={item.isPublic ? 'channelRowPublic' : 'channelRowPrivate'}
+        style={styles.row}
+        onPress={() => onOpenChannel(item.channelId)}
+        accessibilityRole="button"
+        accessibilityLabel={`${item.name}, ${item.isPublic ? COPY.publicTopic : COPY.privateGroup}${
+          item.unreadCount > 0 ? `, ${item.unreadCount} unread` : ''
+        }`}
+      >
+        <View style={styles.avatar}>
+          <Text style={styles.avatarLetter}>
+            {item.isPublic ? '#' : item.name.charAt(0).toUpperCase()}
+          </Text>
+        </View>
+        <View style={styles.body}>
+          <View style={styles.rowHeader}>
+            <Text style={styles.name} numberOfLines={1}>
+              {item.name}
             </Text>
+            {item.lastMessageAt ? (
+              <Text style={styles.time}>{formatRelativeTime(item.lastMessageAt)}</Text>
+            ) : null}
           </View>
-          <View style={styles.body}>
-            <View style={styles.rowHeader}>
-              <Text style={styles.name} numberOfLines={1}>
-                {item.name}
-              </Text>
-              {item.lastMessageAt ? (
-                <Text style={styles.time}>{formatRelativeTime(item.lastMessageAt)}</Text>
-              ) : null}
-            </View>
+          <View style={styles.metaRow}>
             <Text style={styles.meta} numberOfLines={1}>
-              {kind}
-              {unread > 0 ? ` · ${unread}` : ''}
+              {item.isPublic ? COPY.publicTopic : COPY.privateGroup}
             </Text>
+            {item.unreadCount > 0 ? (
+              <View testID="channelUnreadBadge" style={styles.badge}>
+                <Text style={styles.badgeText}>
+                  {item.unreadCount > 99 ? '99+' : item.unreadCount}
+                </Text>
+              </View>
+            ) : null}
           </View>
-        </TouchableOpacity>
-      );
-    },
+        </View>
+      </TouchableOpacity>
+    ),
     [onOpenChannel],
   );
 
+  const emptyPrivate = (
+    <View testID="channelsEmptyPrivate" style={styles.empty}>
+      <Text style={styles.emptyText}>{COPY.noPrivateGroupsYet}</Text>
+      <Text style={styles.emptyHint}>{COPY.privateGroupsEmptyBody}</Text>
+      <TouchableOpacity
+        testID="channelsEmptyCreatePrivate"
+        accessibilityRole="button"
+        accessibilityLabel={COPY.newPrivateGroup}
+        hitSlop={HIT_SLOP_44}
+        onPress={() => onOpenCreate(false)}
+        style={styles.emptyAction}
+      >
+        <Text style={styles.emptyActionText}>{COPY.newPrivateGroup}</Text>
+      </TouchableOpacity>
+    </View>
+  );
+
+  const emptyPublic = publicOptIn ? (
+    <View testID="channelsEmptyPublic" style={styles.empty}>
+      <Text style={styles.emptyText}>{COPY.noPublicTopicsYet}</Text>
+      <Text style={styles.emptyHint}>{COPY.publicTopicsEmptyBody}</Text>
+      <TouchableOpacity
+        testID="channelsEmptyJoin"
+        accessibilityRole="button"
+        accessibilityLabel={COPY.joinByLink}
+        hitSlop={HIT_SLOP_44}
+        onPress={onOpenJoin}
+        style={styles.emptyAction}
+      >
+        <Text style={styles.emptyActionText}>{COPY.joinByLink}</Text>
+      </TouchableOpacity>
+    </View>
+  ) : (
+    <View testID="channelsPublicGate" style={styles.empty}>
+      <Text style={styles.emptyHint}>{COPY.publicTopicsEmptyBody}</Text>
+    </View>
+  );
+
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={styles.container} testID="channelsScreen">
       <View style={styles.header}>
-        <Text style={styles.title}>Channels</Text>
+        <Text style={styles.title}>{COPY.channelsTitle}</Text>
         <View style={styles.headerActions}>
+          {mode === 'public' && publicOptIn ? (
+            <TouchableOpacity
+              testID="channelsJoin"
+              accessibilityRole="button"
+              accessibilityLabel={COPY.joinByLink}
+              hitSlop={HIT_SLOP_44}
+              onPress={onOpenJoin}
+              style={styles.headerHit}
+            >
+              <Text style={styles.action}>{COPY.joinByLink}</Text>
+            </TouchableOpacity>
+          ) : null}
           <TouchableOpacity
+            testID="channelsNew"
             accessibilityRole="button"
-            accessibilityLabel="Join a public topic"
+            accessibilityLabel={mode === 'public' ? COPY.newPublicTopic : COPY.newPrivateGroup}
             hitSlop={HIT_SLOP_44}
-            onPress={onOpenJoin}
-            style={{ minHeight: 44, justifyContent: 'center' }}
-          >
-            <Text style={styles.action}>Join</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            accessibilityRole="button"
-            accessibilityLabel="New channel"
-            hitSlop={HIT_SLOP_44}
-            onPress={onOpenCreate}
-            style={{ minHeight: 44, minWidth: 44, alignItems: 'center', justifyContent: 'center' }}
+            onPress={() => onOpenCreate(mode === 'public')}
+            style={styles.headerHit}
           >
             <Text style={styles.add}>+</Text>
           </TouchableOpacity>
         </View>
       </View>
-      {channels.length === 0 ? (
-        <View style={styles.empty}>
-          <Text style={styles.emptyText}>No channels yet.</Text>
-          <Text style={styles.emptyHint}>Create a private group or join a public channel.</Text>
+
+      <View testID="channelsModeControl" style={styles.segment} accessibilityRole="tablist">
+        <TouchableOpacity
+          testID="channelsModePrivate"
+          accessibilityRole="tab"
+          accessibilityLabel={COPY.channelsPrivate}
+          accessibilityState={{ selected: mode === 'private' }}
+          hitSlop={HIT_SLOP_44}
+          onPress={() => onModeChange('private')}
+          style={[styles.segmentBtn, mode === 'private' && styles.segmentOn]}
+        >
+          <Text style={styles.segmentText}>{COPY.channelsPrivate}</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          testID="channelsModePublic"
+          accessibilityRole="tab"
+          accessibilityLabel={COPY.channelsPublic}
+          accessibilityState={{ selected: mode === 'public' }}
+          hitSlop={HIT_SLOP_44}
+          onPress={() => onModeChange('public')}
+          style={[styles.segmentBtn, mode === 'public' && styles.segmentOn]}
+        >
+          <Text style={styles.segmentText}>{COPY.channelsPublic}</Text>
+        </TouchableOpacity>
+      </View>
+
+      {pendingInvite ? (
+        <View testID="channelsPendingInvite" accessibilityRole="alert" style={styles.pendingInvite}>
+          <Text style={styles.pendingTitle}>{COPY.pendingPublicInvite}</Text>
+          {pendingInviteDetail ? (
+            <Text testID="channelsPendingInviteDetail" style={styles.pendingBody}>
+              {pendingInviteDetail}
+            </Text>
+          ) : null}
+          {!publicOptIn ? (
+            <Text style={styles.pendingBody}>{COPY.loadPublicTopicsToJoin}</Text>
+          ) : null}
+          <View style={styles.pendingActions}>
+            <TouchableOpacity
+              testID="channelsPendingDismiss"
+              accessibilityRole="button"
+              accessibilityLabel={COPY.dismissPendingInvite}
+              hitSlop={HIT_SLOP_44}
+              onPress={onDismissPendingJoin}
+              style={styles.pendingHit}
+            >
+              <Text style={styles.action}>{COPY.dismissPendingInvite}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              testID="channelsPendingJoin"
+              accessibilityRole="button"
+              accessibilityLabel={COPY.joinPendingInvite}
+              accessibilityState={{ disabled: busy || !publicOptIn }}
+              hitSlop={HIT_SLOP_44}
+              disabled={busy || !publicOptIn}
+              onPress={onConfirmPendingJoin}
+              style={styles.pendingHit}
+            >
+              <Text style={styles.actionPrimary}>{COPY.joinPendingInvite}</Text>
+            </TouchableOpacity>
+          </View>
         </View>
+      ) : null}
+
+      {mode === 'public' ? (
+        <View testID="channelsPublicWarning" style={styles.warning}>
+          <Text style={styles.warningTitle}>{COPY.publicGraphWarningTitle}</Text>
+          <Text style={styles.warningBody}>{publicGraphWarning()}</Text>
+          <Text style={styles.substrate}>{COPY.publicSubstrateMobile}</Text>
+          {!publicOptIn ? (
+            <TouchableOpacity
+              testID="channelsLoadPublic"
+              accessibilityRole="button"
+              accessibilityLabel={COPY.loadPublicTopics}
+              hitSlop={HIT_SLOP_44}
+              onPress={onLoadPublic}
+              style={styles.loadBtn}
+            >
+              <Text style={styles.loadBtnText}>{COPY.loadPublicTopics}</Text>
+            </TouchableOpacity>
+          ) : null}
+        </View>
+      ) : null}
+
+      {visible.length === 0 ? (
+        mode === 'private' ? (
+          emptyPrivate
+        ) : (
+          emptyPublic
+        )
       ) : (
         <FlatList
-          data={channels}
+          data={visible}
           keyExtractor={item => item.channelId}
           renderItem={renderChannel}
           contentContainerStyle={styles.list}
@@ -255,38 +482,48 @@ export function ChannelsScreenContent({
 
       <Modal
         visible={createOpen}
-        animationType={modalMotion}
+        animationType={animation}
         transparent
-        onRequestClose={onCloseCreate}
+        onRequestClose={() => {
+          setPublicOverride(null);
+          onCloseCreate();
+        }}
       >
         <View style={styles.modalBackdrop}>
           <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>New channel</Text>
+            <Text style={styles.modalTitle}>{COPY.newChannelSheetTitle}</Text>
             <TextInput
               style={styles.input}
               value={name}
               onChangeText={setName}
               placeholder="Name"
               placeholderTextColor="#4b5563"
+              accessibilityLabel="Channel name"
             />
             <View style={styles.toggleRow}>
               <TouchableOpacity
                 accessibilityRole="button"
-                accessibilityLabel="Private group"
+                accessibilityLabel={COPY.privateGroup}
                 accessibilityState={{ selected: !isPublic }}
+                hitSlop={HIT_SLOP_44}
                 style={[styles.toggle, !isPublic && styles.toggleOn]}
-                onPress={() => setIsPublic(false)}
+                onPress={() => setPublicOverride(false)}
               >
-                <Text style={styles.toggleText}>Private group</Text>
+                <Text style={styles.toggleText}>{COPY.privateGroup}</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 accessibilityRole="button"
-                accessibilityLabel="Public topic"
-                accessibilityState={{ selected: isPublic }}
+                accessibilityLabel={COPY.channelsPublic}
+                accessibilityState={{ selected: isPublic, disabled: !publicOptIn }}
+                hitSlop={HIT_SLOP_44}
+                disabled={!publicOptIn}
                 style={[styles.toggle, isPublic && styles.toggleOn]}
-                onPress={() => setIsPublic(true)}
+                onPress={() => {
+                  if (!publicOptIn) return;
+                  setPublicOverride(true);
+                }}
               >
-                <Text style={styles.toggleText}>Public</Text>
+                <Text style={styles.toggleText}>{COPY.channelsPublic}</Text>
               </TouchableOpacity>
             </View>
             {!isPublic ? (
@@ -303,6 +540,7 @@ export function ChannelsScreenContent({
                       accessibilityRole="checkbox"
                       accessibilityLabel={`Select ${contact.displayName ?? 'member'}`}
                       accessibilityState={{ checked: on, disabled: wouldExceed }}
+                      hitSlop={HIT_SLOP_44}
                       style={styles.memberRow}
                       disabled={wouldExceed}
                       onPress={() =>
@@ -321,32 +559,38 @@ export function ChannelsScreenContent({
                 })}
               </ScrollView>
             ) : (
-              <Text style={styles.hint}>
-                Public channels are plaintext on the homeserver. Discovery is by invite link — Nexus
-                does not index chat URIs.
-              </Text>
+              <View testID="createPublicWarning">
+                <Text style={styles.hint}>{publicGraphWarning()}</Text>
+                <Text style={styles.hint}>{COPY.publicSubstrateMobile}</Text>
+              </View>
             )}
             <View style={styles.modalActions}>
               <TouchableOpacity
                 accessibilityRole="button"
-                accessibilityLabel="Cancel"
-                accessibilityState={{ disabled: busy }}
-                onPress={onCloseCreate}
+                accessibilityLabel={COPY.cancel}
+                hitSlop={HIT_SLOP_44}
+                onPress={() => {
+                  setPublicOverride(null);
+                  onCloseCreate();
+                }}
                 disabled={busy}
-                style={minHitStyle}
+                style={styles.modalHit}
               >
-                <Text style={styles.action}>Cancel</Text>
+                <Text style={styles.action}>{COPY.cancel}</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 accessibilityRole="button"
                 accessibilityLabel="Create"
                 accessibilityState={{ busy, disabled: busy || name.trim().length === 0 }}
+                hitSlop={HIT_SLOP_44}
                 disabled={busy || name.trim().length === 0}
-                style={minHitStyle}
                 onPress={() => {
-                  if (isPublic) onCreatePublic(name);
-                  else onCreatePrivate(name, selectedPubkys);
+                  if (isPublic) {
+                    if (!mayWritePublicGraph(publicOptIn)) return;
+                    onCreatePublic(name);
+                  } else onCreatePrivate(name, selectedPubkys);
                 }}
+                style={styles.modalHit}
               >
                 <Text style={styles.actionPrimary}>{busy ? '…' : 'Create'}</Text>
               </TouchableOpacity>
@@ -355,15 +599,11 @@ export function ChannelsScreenContent({
         </View>
       </Modal>
 
-      <Modal
-        visible={joinOpen}
-        animationType={modalMotion}
-        transparent
-        onRequestClose={onCloseJoin}
-      >
+      <Modal visible={joinOpen} animationType={animation} transparent onRequestClose={onCloseJoin}>
         <View style={styles.modalBackdrop}>
           <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>Join public channel</Text>
+            <Text style={styles.modalTitle}>{COPY.joinPublicTopicTitle}</Text>
+            <Text style={styles.hint}>{publicGraphWarning()}</Text>
             <TextInput
               style={styles.input}
               value={joinRef}
@@ -371,25 +611,30 @@ export function ChannelsScreenContent({
               placeholder="hypercolor://join-public?channel=…"
               placeholderTextColor="#4b5563"
               autoCapitalize="none"
+              accessibilityLabel="Public topic invite link"
             />
             <View style={styles.modalActions}>
               <TouchableOpacity
                 accessibilityRole="button"
-                accessibilityLabel="Cancel"
-                accessibilityState={{ disabled: busy }}
+                accessibilityLabel={COPY.cancel}
+                hitSlop={HIT_SLOP_44}
                 onPress={onCloseJoin}
                 disabled={busy}
-                style={minHitStyle}
+                style={styles.modalHit}
               >
-                <Text style={styles.action}>Cancel</Text>
+                <Text style={styles.action}>{COPY.cancel}</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 accessibilityRole="button"
-                accessibilityLabel="Join"
-                accessibilityState={{ busy, disabled: busy || joinRef.trim().length === 0 }}
-                disabled={busy || joinRef.trim().length === 0}
-                style={minHitStyle}
+                accessibilityLabel={COPY.joinByLink}
+                accessibilityState={{
+                  busy,
+                  disabled: busy || joinRef.trim().length === 0 || !publicOptIn,
+                }}
+                hitSlop={HIT_SLOP_44}
+                disabled={busy || joinRef.trim().length === 0 || !publicOptIn}
                 onPress={() => onJoinPublic(joinRef)}
+                style={styles.modalHit}
               >
                 <Text style={styles.actionPrimary}>{busy ? '…' : 'Join'}</Text>
               </TouchableOpacity>
@@ -422,9 +667,60 @@ const styles = StyleSheet.create({
   },
   title: { fontSize: 24, fontWeight: '700', color: '#f9fafb' },
   headerActions: { flexDirection: 'row', alignItems: 'center', gap: 16 },
+  headerHit: { minHeight: 44, minWidth: 44, justifyContent: 'center', alignItems: 'center' },
   action: { color: '#7c3aed', fontSize: 16, fontWeight: '600' },
   actionPrimary: { color: '#c4b5fd', fontSize: 16, fontWeight: '700' },
   add: { fontSize: 28, color: '#7c3aed', fontWeight: '600' },
+  segment: {
+    flexDirection: 'row',
+    marginHorizontal: 16,
+    marginTop: 12,
+    backgroundColor: '#111',
+    borderRadius: 12,
+    padding: 4,
+    gap: 4,
+  },
+  segmentBtn: {
+    flex: 1,
+    minHeight: 44,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  segmentOn: { backgroundColor: '#4c1d95' },
+  segmentText: { color: '#f9fafb', fontWeight: '600' },
+  warning: {
+    marginHorizontal: 16,
+    marginTop: 12,
+    padding: 12,
+    borderRadius: 12,
+    backgroundColor: '#1f1b2e',
+    gap: 6,
+  },
+  warningTitle: { color: '#c4b5fd', fontSize: 14, fontWeight: '700' },
+  warningBody: { color: '#f9fafb', fontSize: 13, lineHeight: 18 },
+  substrate: { color: '#808692', fontSize: 13, lineHeight: 18 },
+  pendingInvite: {
+    marginHorizontal: 16,
+    marginTop: 12,
+    padding: 12,
+    borderRadius: 12,
+    backgroundColor: '#1f1b2e',
+    gap: 8,
+  },
+  pendingTitle: { color: '#c4b5fd', fontSize: 14, fontWeight: '700' },
+  pendingBody: { color: '#f9fafb', fontSize: 13, lineHeight: 18 },
+  pendingActions: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  pendingHit: { minHeight: 44, justifyContent: 'center' },
+  loadBtn: {
+    minHeight: 44,
+    marginTop: 4,
+    borderRadius: 12,
+    backgroundColor: '#7c3aed',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  loadBtnText: { color: '#fff', fontSize: 15, fontWeight: '700' },
   list: { paddingVertical: 4 },
   row: {
     flexDirection: 'row',
@@ -446,11 +742,32 @@ const styles = StyleSheet.create({
   body: { flex: 1, gap: 3 },
   rowHeader: { flexDirection: 'row', justifyContent: 'space-between', gap: 8 },
   name: { flex: 1, fontSize: 16, fontWeight: '600', color: '#f9fafb' },
-  time: { fontSize: 12, color: '#6b7280' },
-  meta: { fontSize: 13, color: '#6b7280' },
-  empty: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: 8 },
-  emptyText: { color: '#6b7280', fontSize: 16 },
-  emptyHint: { color: '#4b5563', fontSize: 14, textAlign: 'center', paddingHorizontal: 32 },
+  time: { fontSize: 12, color: '#808692' },
+  metaRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
+  meta: { fontSize: 13, color: '#808692', flex: 1 },
+  badge: {
+    minWidth: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: '#7c3aed',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 6,
+  },
+  badgeText: { color: '#fff', fontSize: 11, fontWeight: '700' },
+  empty: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: 8, padding: 24 },
+  emptyText: { color: '#f9fafb', fontSize: 16, fontWeight: '600' },
+  emptyHint: { color: '#808692', fontSize: 14, textAlign: 'center', paddingHorizontal: 12 },
+  emptyAction: {
+    minHeight: 44,
+    marginTop: 8,
+    paddingHorizontal: 16,
+    borderRadius: 12,
+    backgroundColor: '#7c3aed',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  emptyActionText: { color: '#fff', fontSize: 15, fontWeight: '700' },
   modalBackdrop: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.6)',
@@ -470,15 +787,16 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     paddingHorizontal: 14,
     paddingVertical: 10,
+    minHeight: 44,
     color: '#f9fafb',
     fontSize: 15,
   },
   toggleRow: { flexDirection: 'row', gap: 8 },
   toggle: {
     flex: 1,
+    minHeight: 44,
     borderRadius: 10,
     paddingVertical: 8,
-    minHeight: 44,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: '#1a1a1a',
@@ -486,13 +804,14 @@ const styles = StyleSheet.create({
   toggleOn: { backgroundColor: '#4c1d95' },
   toggleText: { color: '#f9fafb', fontWeight: '600' },
   memberList: { maxHeight: 240 },
-  memberRow: { paddingVertical: 8, minHeight: 44, justifyContent: 'center' },
+  memberRow: { paddingVertical: 10, minHeight: 44, justifyContent: 'center' },
   memberName: { color: '#9ca3af', fontSize: 14 },
   memberOn: { color: '#c4b5fd', fontWeight: '600' },
-  hint: { color: '#6b7280', fontSize: 13, lineHeight: 18 },
+  hint: { color: '#808692', fontSize: 13, lineHeight: 18 },
   modalActions: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     paddingTop: 8,
   },
+  modalHit: { minHeight: 44, justifyContent: 'center' },
 });

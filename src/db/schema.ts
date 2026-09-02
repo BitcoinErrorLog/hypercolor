@@ -38,6 +38,145 @@ export const SCHEMA_V16_STATEMENTS: readonly string[] = [
   `CREATE INDEX IF NOT EXISTS idx_blocked_peers_owner
     ON blocked_peers(owner_pubky)`,
   `ALTER TABLE blocked_peers ADD COLUMN cleanup_pending INTEGER NOT NULL DEFAULT 0`,
+
+/**
+ * Schema v17 — merge reconciliation for dual v16 shapes.
+ *
+ * Both W2b and W2c shipped unreleased `user_version = 16` with different
+ * tables. Devices may already be on either shape. v16 in this tree keeps
+ * the W2b statements (fan-out outcomes + blocked peers). v17 applies the
+ * W2c own-invoice-hash statements AND re-applies W2b CREATE IF NOT EXISTS
+ * so a W2c-stamped v16 database still gains the contacts/deny-list tables.
+ * Every statement is idempotent; ALTER ADD COLUMN is PRAGMA-guarded in
+ * the migration runner. A version bump (not an in-place v16 replay alone)
+ * gives a clear stamp once the union is present, while idempotent repairs
+ * still re-run every launch.
+ */
+
+* Schema v16 — owner invoice history + one verified preimage per hash.
+ *
+ * Proof verification binds to THIS request first: `sha256(preimage)` must
+ * equal `payment_requests.displayed_payment_hash` (recorded before wallet
+ * open). `own_invoice_hashes` supplies amount/expiry metadata for that hash.
+ * When no displayed hash was recorded, or the snapshot no longer matches
+ * the paid invoice (wallet rotation after create), history may corroborate
+ * only an invoice whose `first_seen_at >= request.created_at` and that was
+ * not displayed for a different request or as a tip (`display_context =
+ * 'tip'` never corroborates a request). A successful mismatch bind rewrites
+ * `displayed_payment_hash` to the paid invoice.
+ *
+ * `invoice_amount_msat` is the bolt11 msat string, the sentinel `amountless`
+ * (only after a valid amountless mainnet bolt11 decode), `unknown` (repair
+ * could not derive an amount), or NULL (not yet repaired — cannot
+ * corroborate). `invoice_expires_at` is unix ms.
+ * Seed copies current own tip hashes (`owner_pubky = peer_pubky`) so invoices
+ * already on disk are known; amount/expiry start NULL and are filled from a
+ * mainnet bolt11 decode or a denormalized BTC decimal. Inserts never
+ * overwrite a known millisatoshi string; a verified decode may replace
+ * `amountless` / `unknown`. `first_seen_at` is the tip row's `updated_at`
+ * at seed time. `display_context` / `payment_request_id` start NULL and are
+ * written when an invoice is displayed for a request or a tip.
+ * `payment_request_id` is write-once until the bound request is cancelled,
+ * rejected, or proposal-expired, which clears it so a later request can
+ * bind. A verified/paid binding is never cleared.
+ *
+ * Rows are not pruned. An invoice that expired at or before the request was
+ * created cannot corroborate that request; later expiry is not a proof reject
+ * (the payment may have settled before expiry).
+ *
+ * Duplicate `proof_verified = 1` rows that share `(owner_pubky,
+ * displayed_payment_hash)` are reduced before the unique index: the earliest
+ * `created_at` (lowest `rowid` on ties) stays verified; the others have
+ * `proof_verified` set to NULL (cannot corroborate — not replay).
+ *
+ * The unique index is owner-scoped and not direction-scoped: one owner's
+ * payer row and payee row cannot both be verified against the same hash.
+ * That is the replay case it exists to catch (self-link or a peer republishing
+ * the owner's invoice). A hash that verified a request cannot verify another.
+ *
+ * v16 collides with W2b's `group_fanout_outcomes` at merge. Do not renumber
+ * here; parent rebase makes W2c v17 as an idempotent reconciliation migration.
+ * The v16 set and the in-branch repair are both `IF NOT EXISTS` so a
+ * W2b-stamped v16 database still gains this table without a version bump.
+ */
+export const OWN_INVOICE_HASHES_CREATE_SQL = `CREATE TABLE IF NOT EXISTS own_invoice_hashes (
+    owner_pubky           TEXT    NOT NULL,
+    endpoint_identifier   TEXT    NOT NULL,
+    payment_hash          TEXT    NOT NULL,
+    first_seen_at         INTEGER NOT NULL,
+    invoice_amount_msat   TEXT,
+    invoice_expires_at    INTEGER,
+    display_context       TEXT,
+    payment_request_id    TEXT,
+    PRIMARY KEY (owner_pubky, endpoint_identifier, payment_hash)
+  )`;
+
+export const OWN_INVOICE_HASHES_SEED_SQL = `INSERT OR IGNORE INTO own_invoice_hashes
+     (owner_pubky, endpoint_identifier, payment_hash, first_seen_at,
+      invoice_amount_msat, invoice_expires_at)
+   SELECT owner_pubky, identifier, payment_hash, updated_at,
+          NULL,
+          invoice_expires_at
+     FROM tip_endpoints
+    WHERE owner_pubky = peer_pubky
+      AND payment_hash IS NOT NULL`;
+
+export const PAYMENT_REQUESTS_VERIFIED_HASH_DEDUP_SQL = `UPDATE payment_requests
+      SET proof_verified = NULL
+    WHERE rowid IN (
+      SELECT rowid FROM (
+        SELECT p.rowid AS rowid
+          FROM payment_requests AS p
+         WHERE p.proof_verified = 1
+           AND p.displayed_payment_hash IS NOT NULL
+           AND EXISTS (
+             SELECT 1
+               FROM payment_requests AS o
+              WHERE o.owner_pubky = p.owner_pubky
+                AND o.displayed_payment_hash = p.displayed_payment_hash
+                AND o.proof_verified = 1
+                AND (
+                  o.created_at < p.created_at
+                  OR (o.created_at = p.created_at AND o.rowid < p.rowid)
+                )
+           )
+      )
+    )`;
+
+export const PAYMENT_REQUESTS_VERIFIED_HASH_INDEX_SQL = `CREATE UNIQUE INDEX IF NOT EXISTS idx_payment_requests_owner_verified_hash
+     ON payment_requests(owner_pubky, displayed_payment_hash)
+     WHERE proof_verified = 1`;
+
+export const SCHEMA_V17_STATEMENTS: readonly string[] = [
+
+  OWN_INVOICE_HASHES_CREATE_SQL,
+  OWN_INVOICE_HASHES_SEED_SQL,
+  PAYMENT_REQUESTS_VERIFIED_HASH_DEDUP_SQL,
+  PAYMENT_REQUESTS_VERIFIED_HASH_INDEX_SQL,
+  // W2b v16 objects (IF NOT EXISTS) so W2c-stamped v16 devices gain them.
+  `CREATE TABLE IF NOT EXISTS group_fanout_outcomes (
+    owner_pubky      TEXT NOT NULL,
+    channel_id       TEXT NOT NULL,
+    event_id         TEXT NOT NULL,
+    sender_pubky     TEXT NOT NULL,
+    recipient_pubky  TEXT NOT NULL,
+    status           TEXT NOT NULL,
+    reason           TEXT,
+    updated_at       INTEGER NOT NULL,
+    PRIMARY KEY (owner_pubky, channel_id, event_id, sender_pubky, recipient_pubky)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_group_fanout_outcomes_event
+    ON group_fanout_outcomes(owner_pubky, channel_id, sender_pubky, event_id)`,
+  `CREATE TABLE IF NOT EXISTS blocked_peers (
+    owner_pubky       TEXT NOT NULL,
+    peer_pubky        TEXT NOT NULL,
+    blocked_at        INTEGER NOT NULL,
+    cleanup_pending   INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (owner_pubky, peer_pubky)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_blocked_peers_owner
+    ON blocked_peers(owner_pubky)`,
+];
 ];
 
 /**

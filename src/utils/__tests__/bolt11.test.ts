@@ -1,3 +1,4 @@
+import { COPY } from '../../copy/uxCopy';
 import { decodeBolt11Invoice, isMainnetBolt11, msatToBtcDecimal } from '../bolt11';
 import {
   MAINNET_BOLT11_20U,
@@ -29,7 +30,7 @@ describe('decodeBolt11Invoice', () => {
 
   it('rejects a checksum-corrupted invoice', () => {
     expect(() => decodeBolt11Invoice(corruptBolt11Checksum(MAINNET_BOLT11_20U))).toThrow(
-      /checksum|Invalid/i,
+      COPY.invoiceInvalid,
     );
     expect(isMainnetBolt11(corruptBolt11Checksum(MAINNET_BOLT11_20U))).toBe(false);
   });

@@ -42,7 +42,7 @@ jest.mock('../../services/attachments/fileIo', () => ({
 }));
 
 import { setDbForTests } from '../index';
-import { runMigrations } from '../migrations';
+import { runMigrations, CURRENT_SCHEMA_VERSION } from '../migrations';
 import {
   SCHEMA_V1_STATEMENTS,
   SCHEMA_V2_STATEMENTS,
@@ -57,7 +57,10 @@ import {
   SCHEMA_V11_STATEMENTS,
   SCHEMA_V12_STATEMENTS,
   SCHEMA_V13_STATEMENTS,
+  SCHEMA_V14_STATEMENTS,
+  SCHEMA_V15_STATEMENTS,
   SCHEMA_V16_STATEMENTS,
+  SCHEMA_V17_STATEMENTS,
 } from '../schema';
 import { StorageService } from '../../services/StorageService';
 import { KeyStore } from '../../services/KeyStore';
@@ -69,6 +72,25 @@ import {
   openFileDb as openFileDbRaw,
   openMemoryDb as openMemoryDbRaw,
 } from './betterSqliteAdapter';
+  INVOICE_AMOUNT_UNKNOWN,
+  INVOICE_AMOUNTLESS,
+} from '../../services/payments/invoiceAmountBind';
+import {
+  MAINNET_BOLT11_20U,
+  MAINNET_BOLT11_20U_HASH,
+  MAINNET_BOLT11_20U_MSAT,
+  MAINNET_BOLT11_AMOUNTLESS,
+  REGTEST_BOLT11,
+  REGTEST_BOLT11_HASH,
+  TESTNET_BOLT11,
+  TESTNET_BOLT11_HASH,
+} from '../../services/payments/__tests__/bolt11Vectors';
+import { OWNER_BACKUP_VERSION } from '../../services/backup/snapshot';
+  OWN_INVOICE_HASH_BACKFILL_META_KEY,
+  OWN_INVOICE_HASH_BACKFILL_SCAN_FROM,
+  OWN_INVOICE_HASH_REPAIR_RETRY_META_KEY,
+} from '../ownInvoiceHashes';
+import { openFileDb, openMemoryDb } from './betterSqliteAdapter';
 import { mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { dirname, join } from 'path';
@@ -173,7 +195,9 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
 
     await runMigrations(db);
 
-    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(16);
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(
+      CURRENT_SCHEMA_VERSION,
+    );
     expect(db.executeSync('SELECT * FROM link_receivers').rows).toEqual([]);
     expect(
       db.executeSync(
@@ -408,7 +432,9 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
     setDbForTests(db);
     await runMigrations(db);
 
-    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(16);
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(
+      CURRENT_SCHEMA_VERSION,
+    );
     const cols = db.executeSync('PRAGMA table_info(contacts)').rows ?? [];
     const names = cols.map(row => row.name);
     expect(names).toEqual(
@@ -905,7 +931,9 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
 
     await runMigrations(db);
 
-    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(16);
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(
+      CURRENT_SCHEMA_VERSION,
+    );
     for (const name of ['threads', 'messages', 'channels', 'channel_members', 'cursor_state']) {
       expect(
         db.executeSync("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", [name])
@@ -932,7 +960,9 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
     setDbForTests(db);
     await runMigrations(db);
 
-    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(16);
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(
+      CURRENT_SCHEMA_VERSION,
+    );
     for (const name of [
       'group_channels',
       'group_members',
@@ -1093,7 +1123,9 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
 
     await runMigrations(db);
 
-    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(16);
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(
+      CURRENT_SCHEMA_VERSION,
+    );
     const row = db.executeSync('SELECT * FROM group_messages').rows?.[0];
     expect(row).toEqual(
       expect.objectContaining({
@@ -1119,7 +1151,9 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
     setDbForTests(db);
     await runMigrations(db);
 
-    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(16);
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(
+      CURRENT_SCHEMA_VERSION,
+    );
     expect(
       db.executeSync("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'attachments'")
         .rows,
@@ -1263,12 +1297,19 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
     setDbForTests(db);
     await runMigrations(db);
 
-    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(16);
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(
+      CURRENT_SCHEMA_VERSION,
+    );
     const paymentCols = (db.executeSync('PRAGMA table_info(payment_requests)').rows ?? []).map(
       col => col.name,
     );
     expect(paymentCols).toEqual(
-      expect.arrayContaining(['pending_event_id', 'displayed_payment_hash', 'proof_verified']),
+      expect.arrayContaining([
+        'pending_event_id',
+        'displayed_payment_hash',
+        'proof_verified',
+        'invoice_reused',
+      ]),
     );
     expect(
       db.executeSync(
@@ -1419,7 +1460,9 @@ describe('link schema v15 — durable handshake abuse budget (real SQL)', () => 
 
     await runMigrations(db);
 
-    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(16);
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(
+      CURRENT_SCHEMA_VERSION,
+    );
     const row = db.executeSync('SELECT * FROM links').rows?.[0] ?? {};
     expect(row).toEqual(expect.objectContaining({ owner_pubky: OWNER, peer_pubky: PEER }));
     expect(Object.keys(row)).not.toContain('pending_advances');
@@ -1752,7 +1795,9 @@ describe('link schema v16 — per-recipient group fan-out outcomes (real SQL)', 
     setDbForTests(db);
     await runMigrations(db);
 
-    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(16);
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(
+      CURRENT_SCHEMA_VERSION,
+    );
     expect(
       db.executeSync(
         "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'group_fanout_outcomes'",
@@ -1863,11 +1908,13 @@ describe('link schema v16 — per-recipient group fan-out outcomes (real SQL)', 
     const names = (info.rows ?? []).map(row => String(row.name));
     expect(names).toContain('cleanup_pending');
     await runMigrations(db);
-    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(16);
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(
+      CURRENT_SCHEMA_VERSION,
+    );
     expect(SCHEMA_V16_STATEMENTS.some(s => /cleanup_pending/.test(s))).toBe(true);
   });
 
-  it('replays all v16 CREATE statements on a database already stamped 16', async () => {
+  it('upgrades a bare v16 stamp to the union schema and is idempotent on re-run', async () => {
     const db = openMemoryDb();
     openDbs.push(db);
     setDbForTests(db);
@@ -1890,7 +1937,9 @@ describe('link schema v16 — per-recipient group fan-out outcomes (real SQL)', 
     const info = db.executeSync('PRAGMA table_info(blocked_peers)');
     expect((info.rows ?? []).map(row => String(row.name))).toContain('cleanup_pending');
     await runMigrations(db);
-    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(16);
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(
+      CURRENT_SCHEMA_VERSION,
+    );
     expect(
       db.executeSync(
         "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('group_fanout_outcomes', 'blocked_peers')",
@@ -2134,6 +2183,428 @@ describe('link schema v16 — legacy queue owner backfill', () => {
   });
 });
 
+describe('schema v16 — own invoice history and verified-hash unique index', () => {
+  afterEach(() => {
+    setDbForTests(null);
+  });
+
+  it('seeds own tip hashes, keeps the earliest verified duplicate, and wipes with the account', async () => {
+    const db = openMemoryDb();
+    applyThroughV15(db);
+    db.executeSync(
+      `INSERT INTO tip_endpoints
+        (owner_pubky, peer_pubky, identifier, payload, updated_at,
+         validation_status, invoice_amount, invoice_expires_at, payment_hash)
+       VALUES (?, ?, 'btc-lightning-bolt11', 'lnbc1seed', 10, 'valid', NULL, NULL, ?)`,
+      [OWNER, OWNER, 'aa'.repeat(32)],
+    );
+    db.executeSync(
+      `INSERT INTO tip_endpoints
+        (owner_pubky, peer_pubky, identifier, payload, updated_at,
+         validation_status, invoice_amount, invoice_expires_at, payment_hash)
+       VALUES (?, ?, 'btc-lightning-extra', 'lnbc1amountful', 11, 'valid', '0.00002', 99, ?)`,
+      [OWNER, OWNER, 'dd'.repeat(32)],
+    );
+    db.executeSync(
+      `INSERT INTO payment_requests
+        (owner_pubky, peer_pubky, direction, payment_request_id, event_id,
+         amount_value, amount_asset, payment_reference, endpoint_ids, expires_at,
+         status, created_at, updated_at, proof_json, reason,
+         pending_event_id, displayed_payment_hash, proof_verified)
+       VALUES (?, ?, 'sent', ?, ?, '0.001', 'btc', 'ref', '[]', NULL,
+               'proof_received', 10, 10, NULL, NULL, NULL, ?, 1)`,
+      [OWNER, PEER, 'b7f9c2a1-6d43-4b0e-a8d4-0fe2c712ab33', EVENT, 'bb'.repeat(32)],
+    );
+    db.executeSync(
+      `INSERT INTO payment_requests
+        (owner_pubky, peer_pubky, direction, payment_request_id, event_id,
+         amount_value, amount_asset, payment_reference, endpoint_ids, expires_at,
+         status, created_at, updated_at, proof_json, reason,
+         pending_event_id, displayed_payment_hash, proof_verified)
+       VALUES (?, ?, 'sent', ?, ?, '0.001', 'btc', 'ref', '[]', NULL,
+               'proof_received', 20, 20, NULL, NULL, NULL, ?, 1)`,
+      [
+        OWNER,
+        OTHER,
+        'c7f9c2a1-6d43-4b0e-a8d4-0fe2c712ab44',
+        '00000000-0000-4000-8000-000000000002',
+        'bb'.repeat(32),
+      ],
+    );
+    setDbForTests(db);
+    await runMigrations(db);
+
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(
+      CURRENT_SCHEMA_VERSION,
+    );
+    expect(
+      db.executeSync(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'own_invoice_hashes'",
+      ).rows,
+    ).toHaveLength(1);
+    expect(
+      db.executeSync(
+        "SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_payment_requests_owner_verified_hash'",
+      ).rows,
+    ).toHaveLength(1);
+    expect(
+      await StorageService.hasOwnInvoiceHash(OWNER, 'btc-lightning-bolt11', 'aa'.repeat(32)),
+    ).toBe(true);
+    const amountless = await StorageService.getOwnInvoiceHash(
+      OWNER,
+      'btc-lightning-bolt11',
+      'aa'.repeat(32),
+    );
+    expect(amountless?.invoiceAmountMsat).toBe(INVOICE_AMOUNT_UNKNOWN);
+    const amountful = await StorageService.getOwnInvoiceHash(
+      OWNER,
+      'btc-lightning-extra',
+      'dd'.repeat(32),
+    );
+    expect(amountful?.invoiceAmountMsat).toBe('2000000');
+    expect(amountful?.invoiceExpiresAt).toBe(99);
+
+    const first = await StorageService.getPaymentRequest(
+      OWNER,
+      PEER,
+      'b7f9c2a1-6d43-4b0e-a8d4-0fe2c712ab33',
+    );
+    const second = await StorageService.getPaymentRequest(
+      OWNER,
+      OTHER,
+      'c7f9c2a1-6d43-4b0e-a8d4-0fe2c712ab44',
+    );
+    expect(first?.proofVerified).toBe(true);
+    expect(second?.proofVerified).toBeNull();
+
+    await StorageService.replaceTipEndpoints(
+      OWNER,
+      OWNER,
+      [
+        {
+          identifier: 'btc-lightning-bolt11',
+          payload: 'lnbc1rotated',
+          paymentHash: 'cc'.repeat(32),
+        },
+      ],
+      30,
+    );
+    expect(
+      await StorageService.hasOwnInvoiceHash(OWNER, 'btc-lightning-bolt11', 'cc'.repeat(32)),
+    ).toBe(true);
+    expect(
+      await StorageService.hasOwnInvoiceHash(OWNER, 'btc-lightning-bolt11', 'aa'.repeat(32)),
+    ).toBe(true);
+
+    await StorageService.clearAccountData(OWNER);
+    expect(
+      await StorageService.hasOwnInvoiceHash(OWNER, 'btc-lightning-bolt11', 'aa'.repeat(32)),
+    ).toBe(false);
+  });
+
+  it('backfills a v15 amount-bearing bolt11 whose denormalized amount is NULL', async () => {
+    const db = openMemoryDb();
+    applyThroughV15(db);
+    db.executeSync(
+      `INSERT INTO tip_endpoints
+        (owner_pubky, peer_pubky, identifier, payload, updated_at,
+         validation_status, invoice_amount, invoice_expires_at, payment_hash)
+       VALUES (?, ?, 'btc-lightning-bolt11', ?, 10, 'valid', NULL, NULL, ?)`,
+      [OWNER, OWNER, MAINNET_BOLT11_20U, MAINNET_BOLT11_20U_HASH],
+    );
+    setDbForTests(db);
+    await runMigrations(db);
+    const row = await StorageService.getOwnInvoiceHash(
+      OWNER,
+      'btc-lightning-bolt11',
+      MAINNET_BOLT11_20U_HASH,
+    );
+    expect(row?.invoiceAmountMsat).toBe(MAINNET_BOLT11_20U_MSAT);
+  });
+
+  it('replaces a sticky amountless sentinel with a verified mainnet amount', async () => {
+    const db = openMemoryDb();
+    applyThroughV15(db);
+    db.executeSync(
+      `INSERT INTO tip_endpoints
+        (owner_pubky, peer_pubky, identifier, payload, updated_at,
+         validation_status, invoice_amount, invoice_expires_at, payment_hash)
+       VALUES (?, ?, 'btc-lightning-bolt11', ?, 10, 'valid', NULL, NULL, ?)`,
+      [OWNER, OWNER, MAINNET_BOLT11_20U, MAINNET_BOLT11_20U_HASH],
+    );
+    setDbForTests(db);
+    await runMigrations(db);
+    db.executeSync(`UPDATE own_invoice_hashes SET invoice_amount_msat = 'amountless'`);
+    db.executeSync('DELETE FROM schema_meta');
+    await runMigrations(db);
+    const repaired = await StorageService.getOwnInvoiceHash(
+      OWNER,
+      'btc-lightning-bolt11',
+      MAINNET_BOLT11_20U_HASH,
+    );
+    expect(repaired?.invoiceAmountMsat).toBe(MAINNET_BOLT11_20U_MSAT);
+  });
+
+  it('derives amountless only from a decoded amountless mainnet bolt11', async () => {
+    const db = openMemoryDb();
+    applyThroughV15(db);
+    db.executeSync(
+      `INSERT INTO tip_endpoints
+        (owner_pubky, peer_pubky, identifier, payload, updated_at,
+         validation_status, invoice_amount, invoice_expires_at, payment_hash)
+       VALUES (?, ?, 'btc-lightning-bolt11', ?, 10, 'valid', NULL, NULL, ?)`,
+      [
+        OWNER,
+        OWNER,
+        MAINNET_BOLT11_AMOUNTLESS,
+        '0001020304050607080900010203040506070809000102030405060708090102',
+      ],
+    );
+    setDbForTests(db);
+    await runMigrations(db);
+    const row = await StorageService.getOwnInvoiceHash(
+      OWNER,
+      'btc-lightning-bolt11',
+      '0001020304050607080900010203040506070809000102030405060708090102',
+    );
+    expect(row?.invoiceAmountMsat).toBe(INVOICE_AMOUNTLESS);
+  });
+
+  it('leaves testnet invoice metadata unknown after v15→v16 backfill', async () => {
+    const db = openMemoryDb();
+    applyThroughV15(db);
+    db.executeSync(
+      `INSERT INTO tip_endpoints
+        (owner_pubky, peer_pubky, identifier, payload, updated_at,
+         validation_status, invoice_amount, invoice_expires_at, payment_hash)
+       VALUES (?, ?, 'btc-lightning-bolt11', ?, 10, 'valid', '0.2', 99, ?),
+              (?, ?, 'btc-lightning-extra', ?, 11, 'valid', '24', 99, ?)`,
+      [
+        OWNER,
+        OWNER,
+        TESTNET_BOLT11,
+        TESTNET_BOLT11_HASH,
+        OWNER,
+        OWNER,
+        REGTEST_BOLT11,
+        REGTEST_BOLT11_HASH,
+      ],
+    );
+    setDbForTests(db);
+    await runMigrations(db);
+    const backfilled = await StorageService.getOwnInvoiceHash(
+      OWNER,
+      'btc-lightning-bolt11',
+      TESTNET_BOLT11_HASH,
+    );
+    expect(backfilled?.invoiceAmountMsat).toBe(INVOICE_AMOUNT_UNKNOWN);
+    expect(backfilled?.invoiceExpiresAt).toBeNull();
+    const backfilledRegtest = await StorageService.getOwnInvoiceHash(
+      OWNER,
+      'btc-lightning-extra',
+      REGTEST_BOLT11_HASH,
+    );
+    expect(backfilledRegtest?.invoiceAmountMsat).toBe(INVOICE_AMOUNT_UNKNOWN);
+    expect(backfilledRegtest?.invoiceExpiresAt).toBeNull();
+  });
+
+  it('does not store amount or expiry when history write is a non-mainnet invoice', async () => {
+    const db = openMemoryDb();
+    setDbForTests(db);
+    await runMigrations(db);
+    await StorageService.replaceTipEndpoints(
+      OWNER,
+      OWNER,
+      [
+        {
+          identifier: 'btc-lightning-bolt11',
+          payload: REGTEST_BOLT11,
+          paymentHash: REGTEST_BOLT11_HASH,
+          invoiceAmount: '24',
+          invoiceExpiresAt: 99,
+          validationStatus: 'valid',
+        },
+      ],
+      40,
+    );
+    const written = await StorageService.getOwnInvoiceHash(
+      OWNER,
+      'btc-lightning-bolt11',
+      REGTEST_BOLT11_HASH,
+    );
+    expect(written?.invoiceAmountMsat).toBeNull();
+    expect(written?.invoiceExpiresAt).toBeNull();
+  });
+
+  it('does not restore non-mainnet invoice amount metadata', async () => {
+    const restoreDb = openMemoryDb();
+    setDbForTests(restoreDb);
+    await runMigrations(restoreDb);
+    await StorageService.importOwnerBackup(OWNER, {
+      version: OWNER_BACKUP_VERSION,
+      ownerPubky: OWNER,
+      exportedAt: 1,
+      contacts: [],
+      messageRequests: [],
+      linkMessages: [],
+      readCursors: [],
+      groupChannels: [],
+      groupMembers: [],
+      groupMessages: [],
+      paymentRequests: [],
+      tipEndpoints: [
+        {
+          ownerPubky: OWNER,
+          peerPubky: OWNER,
+          identifier: 'btc-lightning-bolt11',
+          payload: TESTNET_BOLT11,
+          updatedAt: 10,
+          validationStatus: 'valid',
+          invoiceAmount: '0.2',
+          invoiceExpiresAt: 99,
+          paymentHash: TESTNET_BOLT11_HASH,
+        },
+      ],
+      ownInvoiceHashes: [
+        {
+          ownerPubky: OWNER,
+          endpointIdentifier: 'btc-lightning-bolt11',
+          paymentHash: TESTNET_BOLT11_HASH,
+          firstSeenAt: 10,
+          invoiceAmountMsat: '2000000000',
+          invoiceExpiresAt: 99,
+          displayContext: null,
+          paymentRequestId: null,
+        },
+      ],
+      attachments: [],
+    });
+    const restored = await StorageService.getOwnInvoiceHash(
+      OWNER,
+      'btc-lightning-bolt11',
+      TESTNET_BOLT11_HASH,
+    );
+    expect(restored?.invoiceAmountMsat).toBeNull();
+    expect(restored?.invoiceExpiresAt).toBeNull();
+  });
+
+  it('creates own_invoice_hashes when upgrading a W2b-shaped or bare v16 stamp', async () => {
+    const db = openMemoryDb();
+    db.executeSync('PRAGMA user_version = 16');
+    setDbForTests(db);
+    await expect(runMigrations(db)).resolves.toBeUndefined();
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(
+      CURRENT_SCHEMA_VERSION,
+    );
+    expect(
+      db.executeSync(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'own_invoice_hashes'",
+      ).rows,
+    ).toHaveLength(1);
+  });
+
+  it('does not fail startup when own_invoice_hashes backfill throws', async () => {
+    const db = openMemoryDb();
+    setDbForTests(db);
+    await runMigrations(db);
+    db.executeSync('DELETE FROM schema_meta WHERE key = ?', [OWN_INVOICE_HASH_BACKFILL_META_KEY]);
+    const original = db.executeSync.bind(db);
+    db.executeSync = (query, params) => {
+      const sql = String(query);
+      if (sql.includes(OWN_INVOICE_HASH_BACKFILL_SCAN_FROM)) {
+        throw new Error('scan boom');
+      }
+      return original(query, params);
+    };
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    await expect(runMigrations(db)).resolves.toBeUndefined();
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(
+      CURRENT_SCHEMA_VERSION,
+    );
+    expect(warn).toHaveBeenCalledWith(
+      '[db] own_invoice_hashes repair failed; will retry next launch',
+      'scan boom',
+    );
+    const retry =
+      db.executeSync(`SELECT value FROM schema_meta WHERE key = ?`, [
+        OWN_INVOICE_HASH_REPAIR_RETRY_META_KEY,
+      ]).rows ?? [];
+    expect(retry.length).toBe(1);
+    warn.mockRestore();
+  });
+
+  it('does not rescan own_invoice_hashes after the repair marker is set', async () => {
+    const db = openMemoryDb();
+    setDbForTests(db);
+    await runMigrations(db);
+
+    const original = db.executeSync.bind(db);
+    const scans: string[] = [];
+    db.executeSync = (query, params) => {
+      const sql = String(query);
+      if (sql.includes(OWN_INVOICE_HASH_BACKFILL_SCAN_FROM)) scans.push(sql);
+      return original(query, params);
+    };
+    await runMigrations(db);
+    expect(scans).toHaveLength(0);
+  });
+
+  it('adds invoice_reused on an already-v16 payment_requests table without bumping user_version', async () => {
+    const db = openMemoryDb();
+    applyThroughV15(db);
+    for (const statement of SCHEMA_V16_STATEMENTS) {
+      db.executeSync(statement);
+    }
+    db.executeSync('PRAGMA user_version = 16');
+    const before = (db.executeSync('PRAGMA table_info(payment_requests)').rows ?? []).map(col =>
+      String(col.name),
+    );
+    expect(before).not.toContain('invoice_reused');
+    setDbForTests(db);
+    await runMigrations(db);
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(
+      CURRENT_SCHEMA_VERSION,
+    );
+    const after = (db.executeSync('PRAGMA table_info(payment_requests)').rows ?? []).map(col =>
+      String(col.name),
+    );
+    expect(after).toContain('invoice_reused');
+  });
+
+  it('keeps invoice_reused when a later repair statement throws', async () => {
+    const db = openMemoryDb();
+    applyThroughV15(db);
+    for (const statement of SCHEMA_V16_STATEMENTS) {
+      db.executeSync(statement);
+    }
+    db.executeSync('PRAGMA user_version = 16');
+    const original = db.executeSync.bind(db);
+    db.executeSync = (query, params) => {
+      const sql = String(query);
+      if (
+        sql.includes('CREATE UNIQUE INDEX IF NOT EXISTS idx_payment_requests_owner_verified_hash')
+      ) {
+        throw new Error('index boom');
+      }
+      return original(query, params);
+    };
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    setDbForTests(db);
+    await expect(runMigrations(db)).resolves.toBeUndefined();
+    db.executeSync = original;
+    expect(
+      (db.executeSync('PRAGMA table_info(payment_requests)').rows ?? []).map(col =>
+        String(col.name),
+      ),
+    ).toContain('invoice_reused');
+    expect(warn).toHaveBeenCalledWith(
+      '[db] own_invoice_hashes repair failed; will retry next launch',
+      'index boom',
+    );
+    warn.mockRestore();
+  });
+});
+
 function applyThroughV5(db: ReturnType<typeof openMemoryDb>): void {
   for (const statement of [
     ...SCHEMA_V1_STATEMENTS,
@@ -2176,3 +2647,106 @@ function applyThroughV13(db: ReturnType<typeof openMemoryDb>): void {
   }
   db.executeSync('PRAGMA user_version = 13');
 }
+
+function applyThroughV15(db: ReturnType<typeof openMemoryDb>): void {
+  applyThroughV13(db);
+  for (const statement of [...SCHEMA_V14_STATEMENTS, ...SCHEMA_V15_STATEMENTS]) {
+    db.executeSync(statement);
+  }
+  db.executeSync('PRAGMA user_version = 15');
+}
+
+describe('schema upgrade union (v15 / dual-v16)', () => {
+  let openDbs: Array<ReturnType<typeof openMemoryDb>> = [];
+
+  afterEach(() => {
+    for (const db of openDbs) {
+      try {
+        db.close();
+      } catch {
+        // already closed
+      }
+    }
+    openDbs = [];
+    setDbForTests(null);
+  });
+
+  function expectUnionSchema(db: ReturnType<typeof openMemoryDb>): void {
+    const tables = db.executeSync(
+      `SELECT name FROM sqlite_master
+        WHERE type = 'table'
+          AND name IN (
+            'group_fanout_outcomes',
+            'blocked_peers',
+            'own_invoice_hashes'
+          )
+        ORDER BY name`,
+    );
+    expect((tables.rows ?? []).map(row => String(row.name))).toEqual([
+      'blocked_peers',
+      'group_fanout_outcomes',
+      'own_invoice_hashes',
+    ]);
+    const blockedCols = (
+      db.executeSync('PRAGMA table_info(blocked_peers)').rows ?? []
+    ).map(row => String(row.name));
+    expect(blockedCols).toContain('cleanup_pending');
+    const invoiceCols = (
+      db.executeSync('PRAGMA table_info(own_invoice_hashes)').rows ?? []
+    ).map(row => String(row.name));
+    for (const col of [
+      'invoice_amount_msat',
+      'invoice_expires_at',
+      'display_context',
+      'payment_request_id',
+    ]) {
+      expect(invoiceCols).toContain(col);
+    }
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(
+      CURRENT_SCHEMA_VERSION,
+    );
+  }
+
+  it('upgrades from v15 to the full union', async () => {
+    const db = openMemoryDb();
+    openDbs.push(db);
+    setDbForTests(db);
+    db.executeSync('PRAGMA user_version = 15');
+    await runMigrations(db);
+    expectUnionSchema(db);
+    await runMigrations(db);
+    expectUnionSchema(db);
+  });
+
+  it('upgrades from W2b-shaped v16 (fanout + blocked) to the full union', async () => {
+    const db = openMemoryDb();
+    openDbs.push(db);
+    setDbForTests(db);
+    for (const statement of SCHEMA_V16_STATEMENTS) {
+      if (/ALTER TABLE/i.test(statement)) continue;
+      db.executeSync(statement);
+    }
+    db.executeSync('PRAGMA user_version = 16');
+    await runMigrations(db);
+    expectUnionSchema(db);
+    await runMigrations(db);
+    expectUnionSchema(db);
+  });
+
+  it('upgrades from W2c-shaped v16 (own_invoice_hashes) to the full union', async () => {
+    const db = openMemoryDb();
+    openDbs.push(db);
+    setDbForTests(db);
+    for (const statement of SCHEMA_V17_STATEMENTS) {
+      // Apply only W2c own-invoice statements (skip re-injected W2b creates)
+      if (/group_fanout_outcomes|blocked_peers/.test(statement)) continue;
+      if (/ALTER TABLE/i.test(statement)) continue;
+      db.executeSync(statement);
+    }
+    db.executeSync('PRAGMA user_version = 16');
+    await runMigrations(db);
+    expectUnionSchema(db);
+    await runMigrations(db);
+    expectUnionSchema(db);
+  });
+});

@@ -13,6 +13,8 @@ import {
   Alert,
   ScrollView,
   BackHandler,
+  AccessibilityInfo,
+  findNodeHandle,
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
@@ -34,15 +36,29 @@ import { PRIVATE_GROUP_MEMBER_CAP } from '../../flags/config';
 import { useAuthStore } from '../../stores/authStore';
 import { StorageService } from '../../services/StorageService';
 import { GroupService, subscribeGroupEvents } from '../../services/group/GroupService';
+import { LinkService } from '../../services/link/LinkService';
 import { AttachmentBubble } from '../../components/AttachmentBubble';
-import { ComposerAttachButton } from '../../components/ComposerAttachButton';
+import { eventIdsWithDeliveryQueue } from '../../ui/failedSendRetry';
+import {
+  pickAndSendFile,
+  pickAndSendPhoto,
+  type ComposerAttachNotice,
+} from '../../components/ComposerAttachButton';
+import { ComposerActionMenu } from '../../components/ComposerActionMenu';
 import { formatDeliveryState } from '../../ui/messageStatus';
 import { formatGroupFanoutAggregate } from '../../ui/groupFanoutStatus';
 import { HIT_SLOP_44, minHitStyle } from '../../ui/hitTarget';
 import { peerIdentity } from '../../ui/peerIdentity';
-import { COPY } from '../../copy/uxCopy';
+import { COPY, messageByteCountLabel, publicGraphWarning } from '../../copy/uxCopy';
 import { sanitizeError } from '../../ui/sanitizedError';
 import { useSessionStatusStore } from '../../stores/sessionStatusStore';
+import {
+  composerActionItems,
+  draftEnvelopeByteSize,
+  draftExceedsByteCap,
+  type DraftEnvelopeContext,
+} from '../../ui/composerActions';
+import { LINK_MESSAGE_MAX_BYTES } from '../../types/link';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'ChannelScreen'>;
 
@@ -71,6 +87,9 @@ export default function ChannelScreen({ route }: Props) {
   const [addPubky, setAddPubky] = useState('');
   const [editingEventId, setEditingEventId] = useState<string | null>(null);
   const [fanoutOutcomes, setFanoutOutcomes] = useState<GroupFanoutOutcome[]>([]);
+  const [actionMenuOpen, setActionMenuOpen] = useState(false);
+  const [composerNotice, setComposerNotice] = useState<ComposerAttachNotice | null>(null);
+  const [retryableEventIds, setRetryableEventIds] = useState<Set<string>>(() => new Set());
 
   const reload = useCallback(async () => {
     const [ch, msgs, mems, atts, outcomes] = await Promise.all([
@@ -89,6 +108,11 @@ export default function ChannelScreen({ route }: Props) {
     setMembers(mems);
     setAttachments(atts);
     setFanoutOutcomes(outcomes);
+    const failedIds = [
+      ...msgs.filter(row => row.deliveryState === 'failed').map(row => row.eventId),
+      ...atts.filter(row => row.deliveryState === 'failed').map(row => row.eventId),
+    ];
+    setRetryableEventIds(await eventIdsWithDeliveryQueue(failedIds));
     if (ownerPubky) {
       setContacts(await StorageService.getAllContacts(ownerPubky));
     }
@@ -124,11 +148,16 @@ export default function ChannelScreen({ route }: Props) {
   const handleSend = useCallback(async () => {
     const text = draft.trim();
     if (!text || sending || !channel) return;
-    setDraft('');
+    const envelopeCtx: DraftEnvelopeContext = {
+      surface: channel.isPublic ? 'public-topic' : 'private-group',
+      channelId: channel.channelId,
+    };
+    if (localPubky) envelopeCtx.authorPubky = localPubky;
+    if (replyTo?.eventId) envelopeCtx.replyToEventId = replyTo.eventId;
+    if (replyTo?.senderPubky) envelopeCtx.replyToAuthorPubky = replyTo.senderPubky;
+    if (draftExceedsByteCap(text, envelopeCtx)) return;
     const reply = replyTo;
     const editId = editingEventId;
-    setReplyTo(null);
-    setEditingEventId(null);
     setSending(true);
     try {
       const replyTarget = reply
@@ -147,13 +176,16 @@ export default function ChannelScreen({ route }: Props) {
       } else {
         await GroupService.sendGroupMessage(channelId, text);
       }
+      setDraft('');
+      setReplyTo(null);
+      setEditingEventId(null);
       await reload();
     } catch (err) {
       alertSanitized(err, COPY.couldNotSendMessage);
     } finally {
       setSending(false);
     }
-  }, [draft, sending, channel, channelId, replyTo, editingEventId, reload]);
+  }, [draft, sending, channel, channelId, replyTo, editingEventId, localPubky, reload]);
 
   return (
     <ChannelScreenContent
@@ -178,8 +210,26 @@ export default function ChannelScreen({ route }: Props) {
       onSend={() => {
         void handleSend();
       }}
-      onAttachSent={() => {
-        void reload();
+      actionMenuOpen={actionMenuOpen}
+      composerNotice={composerNotice}
+      onOpenActionMenu={() => setActionMenuOpen(true)}
+      onCloseActionMenu={() => setActionMenuOpen(false)}
+      onComposerAction={id => {
+        setActionMenuOpen(false);
+        if (!channel) return;
+        if (id === 'photo') {
+          void pickAndSendPhoto({ type: 'channel', channelId: channel.channelId }).then(result => {
+            if (result.ok) void reload();
+            else if ('notice' in result) setComposerNotice(result.notice);
+          });
+          return;
+        }
+        if (id === 'file') {
+          void pickAndSendFile({ type: 'channel', channelId: channel.channelId }).then(result => {
+            if (result.ok) void reload();
+            else if ('notice' in result) setComposerNotice(result.notice);
+          });
+        }
       }}
       onReply={setReplyTo}
       onClearReply={() => setReplyTo(null)}
@@ -243,6 +293,23 @@ export default function ChannelScreen({ route }: Props) {
           alertSanitized(err, COPY.couldNotRefreshChannel);
         }
       }}
+      retryableEventIds={retryableEventIds}
+      onRetryFailed={eventId => {
+        void (async () => {
+          if (!retryableEventIds.has(eventId)) return;
+          try {
+            await LinkService.recoverPendingSends();
+            await LinkService.drainRetries();
+          } catch {
+            setRetryableEventIds(prev => {
+              const next = new Set(prev);
+              next.delete(eventId);
+              return next;
+            });
+          }
+          await reload();
+        })();
+      }}
     />
   );
 }
@@ -267,7 +334,11 @@ export function ChannelScreenContent({
   onBack,
   onChangeDraft,
   onSend,
-  onAttachSent,
+  actionMenuOpen,
+  composerNotice,
+  onOpenActionMenu,
+  onCloseActionMenu,
+  onComposerAction,
   onReply,
   onClearReply,
   onToggleMembers,
@@ -279,6 +350,8 @@ export function ChannelScreenContent({
   onRemoveMember,
   onLeave,
   onRefreshPublic,
+  retryableEventIds,
+  onRetryFailed,
 }: {
   channel: GroupChannel | null;
   messages: GroupMessage[];
@@ -299,7 +372,13 @@ export function ChannelScreenContent({
   onBack: () => void;
   onChangeDraft: (value: string) => void;
   onSend: () => void;
-  onAttachSent: () => void;
+  actionMenuOpen: boolean;
+  composerNotice: ComposerAttachNotice | null;
+  onOpenActionMenu: () => void;
+  onCloseActionMenu: () => void;
+  onComposerAction: (
+    id: 'photo' | 'file' | 'request-payment' | 'send-tip' | 'send-tip-list',
+  ) => void;
   onReply: (message: GroupMessage) => void;
   onClearReply: () => void;
   onToggleMembers: () => void;
@@ -311,8 +390,12 @@ export function ChannelScreenContent({
   onRemoveMember: (pubky: string) => void;
   onLeave: () => void;
   onRefreshPublic: () => void;
+  retryableEventIds: ReadonlySet<string>;
+  onRetryFailed: (eventId: string) => void;
 }) {
   const flatListRef = useRef<FlatList<GroupMessage>>(null);
+  const plusRef = useRef<View>(null);
+  const menuWasOpen = useRef(false);
   const byAuthorEvent = useMemo(() => {
     const map = new Map<string, GroupMessage>();
     for (const msg of messages) map.set(`${msg.senderPubky}:${msg.eventId}`, msg);
@@ -359,6 +442,29 @@ export function ChannelScreenContent({
     return map;
   }, [fanoutOutcomes]);
   const isPublic = channel?.isPublic === true;
+  const envelopeCtx: DraftEnvelopeContext = {
+    surface: isPublic ? 'public-topic' : 'private-group',
+  };
+  if (channel?.channelId) envelopeCtx.channelId = channel.channelId;
+  if (localPubky) envelopeCtx.authorPubky = localPubky;
+  if (replyTo?.eventId) envelopeCtx.replyToEventId = replyTo.eventId;
+  if (replyTo?.senderPubky) envelopeCtx.replyToAuthorPubky = replyTo.senderPubky;
+  const overCap = draftExceedsByteCap(draft, envelopeCtx);
+  const byteLabel = messageByteCountLabel(
+    draftEnvelopeByteSize(draft, envelopeCtx),
+    LINK_MESSAGE_MAX_BYTES,
+  );
+
+  useEffect(() => {
+    if (actionMenuOpen) {
+      menuWasOpen.current = true;
+      return;
+    }
+    if (!menuWasOpen.current) return;
+    menuWasOpen.current = false;
+    const tag = findNodeHandle(plusRef.current);
+    if (tag != null) AccessibilityInfo.setAccessibilityFocus(tag);
+  }, [actionMenuOpen]);
 
   const renderMessage = useCallback(
     ({ item }: { item: GroupMessage }) => {
@@ -404,7 +510,15 @@ export function ChannelScreenContent({
             </Text>
           ) : null}
           {item.kind === CHAT_ATTACHMENT_KIND && attachment && !item.deleted ? (
-            <AttachmentBubble record={attachment} isMine={isMine} />
+            <AttachmentBubble
+              record={attachment}
+              isMine={isMine}
+              onRetrySend={
+                retryableEventIds.has(attachment.eventId)
+                  ? () => onRetryFailed(attachment.eventId)
+                  : undefined
+              }
+            />
           ) : (
             <Text style={[styles.bubbleText, isMine ? styles.mineText : styles.theirsText]}>
               {item.deleted ? 'Message deleted' : item.body}
@@ -413,7 +527,43 @@ export function ChannelScreenContent({
           <View style={styles.meta}>
             <Text style={styles.time}>{formatTime(item.sentAt)}</Text>
             {item.editedAt ? <Text style={styles.time}> · edited</Text> : null}
-            {outboundLabel ? <Text style={styles.time}> · {outboundLabel}</Text> : null}
+            {isMine && !isPublic ? (
+              <>
+                {outboundLabel ? (
+                  <Text
+                    style={[
+                      styles.time,
+                      item.deliveryState === 'failed' ? styles.statusFailed : null,
+                    ]}
+                  >
+                    {' '}
+                    · {outboundLabel}
+                  </Text>
+                ) : null}
+                {item.deliveryState === 'failed' ? (
+                  retryableEventIds.has(item.eventId) ? (
+                    <TouchableOpacity
+                      accessibilityRole="button"
+                      accessibilityLabel={COPY.retry}
+                      hitSlop={HIT_SLOP_44}
+                      onPress={() => onRetryFailed(item.eventId)}
+                    >
+                      <Text style={styles.retry}>{COPY.retry}</Text>
+                    </TouchableOpacity>
+                  ) : (
+                    <Text
+                      testID="channelSendTerminal"
+                      accessibilityRole="text"
+                      style={styles.statusFailed}
+                    >
+                      {COPY.couldNotSendStartAgain}
+                    </Text>
+                  )
+                ) : null}
+              </>
+            ) : outboundLabel ? (
+              <Text style={styles.time}> · {outboundLabel}</Text>
+            ) : null}
           </View>
           {reactions && reactions.size > 0 ? (
             <View style={styles.reactionRow}>
@@ -491,6 +641,8 @@ export function ChannelScreenContent({
       onReact,
       onEdit,
       onDelete,
+      onRetryFailed,
+      retryableEventIds,
     ],
   );
 
@@ -533,6 +685,17 @@ export function ChannelScreenContent({
           <Text style={styles.action}>{showMembers ? 'Chat' : 'Members'}</Text>
         </TouchableOpacity>
       </View>
+      {channel ? (
+        <View testID="channelDestinationBanner" style={styles.destBanner}>
+          <Text testID="channelModeMeta" style={styles.destMeta}>
+            {isPublic ? COPY.publicTopic : COPY.privateGroup}
+          </Text>
+          <Text style={styles.destLine}>
+            {isPublic ? COPY.channelDestinationPublic : COPY.channelDestinationPrivate}
+          </Text>
+          {isPublic ? <Text style={styles.destWarning}>{publicGraphWarning()}</Text> : null}
+        </View>
+      ) : null}
 
       {loading ? (
         <View style={styles.loadingContainer}>
@@ -647,29 +810,65 @@ export function ChannelScreenContent({
               </TouchableOpacity>
             </View>
           ) : null}
+          {composerNotice ? (
+            <View testID="channelComposerNotice" accessibilityRole="alert" style={styles.notice}>
+              <Text style={styles.noticeText}>{composerNotice.message}</Text>
+              {composerNotice.actionLabel && composerNotice.onAction ? (
+                <TouchableOpacity
+                  accessibilityRole="button"
+                  accessibilityLabel={composerNotice.actionLabel}
+                  hitSlop={HIT_SLOP_44}
+                  onPress={composerNotice.onAction}
+                  style={minHitStyle}
+                >
+                  <Text style={styles.action}>{composerNotice.actionLabel}</Text>
+                </TouchableOpacity>
+              ) : null}
+            </View>
+          ) : null}
           <View style={styles.composer}>
-            {!isPublic && channel ? (
-              <ComposerAttachButton
-                target={{ type: 'channel', channelId: channel.channelId }}
-                disabled={sending}
-                onSent={onAttachSent}
-              />
-            ) : null}
+            <ComposerActionMenu
+              visible={actionMenuOpen}
+              actions={composerActionItems(isPublic ? 'public-topic' : 'private-group', {
+                messagingEnabled: selfActive,
+                inboxClosed: false,
+                hasTipEndpoints: false,
+              })}
+              onSelect={onComposerAction}
+              onClose={onCloseActionMenu}
+            />
+            <TouchableOpacity
+              ref={plusRef}
+              testID="channelComposerPlus"
+              accessibilityRole="button"
+              accessibilityLabel={COPY.composerAttach}
+              hitSlop={HIT_SLOP_44}
+              onPress={onOpenActionMenu}
+              style={styles.plusBtn}
+            >
+              <Text style={styles.plusIcon}>+</Text>
+            </TouchableOpacity>
             <TextInput
+              accessibilityLabel="Message"
               style={styles.input}
               value={draft}
               onChangeText={onChangeDraft}
               placeholder="Message…"
               placeholderTextColor="#4b5563"
               multiline
-              maxLength={4000}
             />
             <TouchableOpacity
               accessibilityRole="button"
               accessibilityLabel="Send message"
-              style={[styles.sendBtn, (!draft.trim() || sending) && styles.sendBtnDisabled]}
+              accessibilityState={{
+                disabled: !draft.trim() || sending || overCap,
+              }}
+              style={[
+                styles.sendBtn,
+                (!draft.trim() || sending || overCap) && styles.sendBtnDisabled,
+              ]}
               onPress={onSend}
-              disabled={!draft.trim() || sending}
+              disabled={!draft.trim() || sending || overCap}
             >
               {sending ? (
                 <ActivityIndicator color="#fff" size="small" />
@@ -678,6 +877,13 @@ export function ChannelScreenContent({
               )}
             </TouchableOpacity>
           </View>
+          <Text
+            testID="channelByteCap"
+            accessibilityLabel={byteLabel}
+            style={[styles.byteCap, overCap && styles.byteCapOver]}
+          >
+            {byteLabel}. {COPY.messageByteCap}
+          </Text>
         </KeyboardAvoidingView>
       ) : null}
     </SafeAreaView>
@@ -730,8 +936,10 @@ const styles = StyleSheet.create({
   bubbleText: { fontSize: 15, lineHeight: 20 },
   mineText: { color: '#fff' },
   theirsText: { color: '#f9fafb' },
-  meta: { flexDirection: 'row', marginTop: 4 },
+  meta: { flexDirection: 'row', marginTop: 4, flexWrap: 'wrap', alignItems: 'center', gap: 6 },
   time: { fontSize: 10, color: 'rgba(255,255,255,0.4)' },
+  statusFailed: { color: '#fca5a5' },
+  retry: { fontSize: 12, color: '#c4b5fd', fontWeight: '700', textDecorationLine: 'underline' },
   reactionRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 6 },
   reactionChip: { fontSize: 12, color: '#e5e7eb' },
   actionRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 6 },
@@ -755,8 +963,36 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     color: '#f9fafb',
     fontSize: 15,
-    maxHeight: 120,
+    maxHeight: 160,
   },
+  plusBtn: {
+    ...minHitStyle,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#1f1f1f',
+  },
+  plusIcon: { color: '#c4b5fd', fontSize: 22, fontWeight: '700', marginTop: -2 },
+  byteCap: { color: '#808692', fontSize: 12, paddingHorizontal: 16, paddingBottom: 8 },
+  byteCapOver: { color: '#fca5a5' },
+  notice: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 16,
+    paddingTop: 8,
+  },
+  noticeText: { flex: 1, color: '#fca5a5', fontSize: 13 },
+  destBanner: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#1a1a1a',
+    gap: 4,
+  },
+  destMeta: { color: '#c4b5fd', fontSize: 12, fontWeight: '700' },
+  destLine: { color: '#808692', fontSize: 13, lineHeight: 18 },
+  destWarning: { color: '#fbbf24', fontSize: 12, lineHeight: 16 },
   sendBtn: {
     minWidth: 44,
     minHeight: 44,

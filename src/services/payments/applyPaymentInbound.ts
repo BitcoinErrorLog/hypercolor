@@ -17,8 +17,11 @@ import {
   decodePrivatePaymentListEnvelope,
   expectedStatusesForAction,
   isProposalExpired,
+  isSupportedV1PaymentAmount,
   peekPaymentKind,
   rfc3339ZToUnixMs,
+  PROOF_REASON_AMOUNT_MISMATCH,
+  type OwnInvoiceHashRecord,
   type PaymentAction,
   type PaymentDirection,
   type PaymentRequestRecord,
@@ -26,7 +29,8 @@ import {
 } from '../../types/payment';
 import { StorageService } from '../StorageService';
 import { validateTipEndpoint } from './endpointValidation';
-import { extractBolt11Preimage, verifyBolt11Preimage } from './proofVerify';
+import { invoiceAmountRelation, invoiceExpiredBeforeRequest } from './invoiceAmountBind';
+import { bolt11PreimagePaymentHash, extractBolt11Preimage } from './proofVerify';
 
 export type PaymentInboundOutcome =
   | { action: 'applied'; request: PaymentRequestRecord | null }
@@ -62,10 +66,6 @@ export async function applyPaymentInbound(input: {
   const conversationId = buildDmConversationId(input.peerPubky);
   const kind = peekPaymentKind(input.rawJson);
 
-  if (kind === PAYKIT_PRIVATE_PAYMENT_LIST_KIND) {
-    return applyTipList(input, conversationId);
-  }
-
   const eventId = peekEventId(input.rawJson);
   if (
     eventId &&
@@ -77,6 +77,10 @@ export async function applyPaymentInbound(input: {
     ))
   ) {
     return { action: 'ignored' };
+  }
+
+  if (kind === PAYKIT_PRIVATE_PAYMENT_LIST_KIND) {
+    return applyTipList(input, conversationId, eventId);
   }
 
   if (kind === PAYKIT_PAYMENT_REQUEST_KIND) {
@@ -106,13 +110,15 @@ async function applyTipList(
     receivedAt: number;
   },
   conversationId: string,
+  eventId: string | null,
 ): Promise<PaymentInboundOutcome> {
   const envelope = decodePrivatePaymentListEnvelope(input.rawJson);
+  const markerId = envelope?.event_id ?? eventId;
   if (!envelope) {
     await markSeen(
       input,
       conversationId,
-      `tip:${input.receivedAt}`,
+      markerId ?? `tip:${input.receivedAt}`,
       PAYKIT_PRIVATE_PAYMENT_LIST_KIND,
       null,
       false,
@@ -122,7 +128,7 @@ async function applyTipList(
   const endpoints = Object.entries(envelope.payment_endpoints).map(([identifier, payload]) =>
     validateTipEndpoint(identifier, payload),
   );
-  await StorageService.replaceTipEndpoints(
+  const changed = await StorageService.replaceTipEndpoints(
     input.ownerPubky,
     input.senderPubky,
     endpoints,
@@ -131,10 +137,10 @@ async function applyTipList(
   await markSeen(
     input,
     conversationId,
-    `list:${input.receivedAt}`,
+    markerId ?? `list:${input.receivedAt}`,
     PAYKIT_PRIVATE_PAYMENT_LIST_KIND,
     null,
-    true,
+    changed,
   );
   return { action: 'applied', request: null };
 }
@@ -192,6 +198,18 @@ async function applyRequest(
       false,
     );
     return { action: 'ignored' };
+  }
+
+  if (!isSupportedV1PaymentAmount(envelope.request.amount)) {
+    await markSeen(
+      input,
+      conversationId,
+      envelope.event_id,
+      envelope.kind,
+      envelope.payment_request_id,
+      false,
+    );
+    return { action: 'rejected' };
   }
 
   const expiresAt =
@@ -413,47 +431,89 @@ async function applyProof(
   }
 
   const preimage = extractBolt11Preimage(decoded.proof);
-  let paymentHash = row.displayedPaymentHash;
-  if (!paymentHash) {
-    const ownTip = await StorageService.getTipEndpoint(
-      input.ownerPubky,
-      input.ownerPubky,
-      decoded.payment_endpoint_identifier,
-    );
-    paymentHash = ownTip?.paymentHash ?? null;
-  }
   let proofVerified: boolean | null = null;
-  if (preimage && paymentHash) {
-    proofVerified = await verifyBolt11Preimage(preimage, paymentHash);
+  let rebindHash: string | undefined;
+  let proofReason: string | undefined;
+  if (preimage) {
+    const h = await bolt11PreimagePaymentHash(preimage);
+    if (h !== null) {
+      const reused = await StorageService.hasVerifiedPaymentHash(
+        input.ownerPubky,
+        h,
+        decoded.payment_request_id,
+      );
+      if (reused) {
+        proofVerified = false;
+      } else {
+        let invoice = await StorageService.getOwnInvoiceHash(
+          input.ownerPubky,
+          decoded.payment_endpoint_identifier,
+          h,
+        );
+        if (invoice?.paymentRequestId && invoice.paymentRequestId !== decoded.payment_request_id) {
+          await StorageService.releaseOwnInvoiceBindingIfInactive(
+            input.ownerPubky,
+            invoice.paymentRequestId,
+            nowMs,
+          );
+          invoice = await StorageService.getOwnInvoiceHash(
+            input.ownerPubky,
+            decoded.payment_endpoint_identifier,
+            h,
+          );
+        }
+        const bound = bindProofToRequest(row, h, invoice);
+        proofVerified = bound.proofVerified;
+        if (bound.rebindHash) rebindHash = bound.rebindHash;
+        if (bound.proofReason) proofReason = bound.proofReason;
+      }
+    }
   }
 
-  const applied = await StorageService.compareAndSetPaymentRequest(
+  const nextStatus: PaymentStatus = proofVerified === true ? 'proof_received' : row.status;
+  const casOk = await StorageService.compareAndSetPaymentRequest(
     input.ownerPubky,
     input.senderPubky,
     decoded.payment_request_id,
     expectedStatusesForAction('proof'),
     {
-      status: 'proof_received',
+      status: nextStatus,
       proofJson: JSON.stringify(decoded.proof),
-      proofVerified,
-      ...(paymentHash ? { displayedPaymentHash: paymentHash } : {}),
+      ...(proofVerified !== null ? { proofVerified } : {}),
+      ...(rebindHash ? { displayedPaymentHash: rebindHash } : {}),
+      ...(proofReason ? { reason: proofReason } : {}),
     },
   );
-  await markSeen(
-    input,
-    conversationId,
-    decoded.event_id,
-    decoded.kind,
-    decoded.payment_request_id,
-    applied,
-  );
-  if (!applied) {
+  if (!casOk) {
+    await markSeen(
+      input,
+      conversationId,
+      decoded.event_id,
+      decoded.kind,
+      decoded.payment_request_id,
+      false,
+    );
     return { action: 'ignored' };
   }
   const updated = await StorageService.getPaymentRequest(
     input.ownerPubky,
     input.senderPubky,
     decoded.payment_request_id,
+  );
+  // No-op self-loops (`accepted→accepted`, including junk and replayed
+  // preimages) still yield changes()=1 because CAS always touches
+  // updated_at. Mark them applied=0 so pruneUnappliedPaymentEvents covers
+  // them. A second cap on applied rows would also evict durable
+  // request/accept/successful-proof markers; this is the smaller blast
+  // radius. Reprocessing after eviction is idempotent for every kind.
+  const durableApply = updated !== null && updated.status !== row.status;
+  await markSeen(
+    input,
+    conversationId,
+    decoded.event_id,
+    decoded.kind,
+    decoded.payment_request_id,
+    durableApply,
   );
   return { action: 'applied', request: updated };
 }
@@ -476,6 +536,59 @@ async function markSeen(
     applied,
     receivedAt: input.receivedAt,
   });
+}
+
+function bindProofToRequest(
+  row: PaymentRequestRecord,
+  paymentHash: string,
+  invoice: OwnInvoiceHashRecord | null,
+): {
+  proofVerified: boolean | null;
+  rebindHash?: string;
+  proofReason?: string;
+} {
+  if (!invoice) return { proofVerified: null };
+  if (invoice.displayContext === 'tip') return { proofVerified: null };
+  if (invoice.paymentRequestId !== null && invoice.paymentRequestId !== row.paymentRequestId) {
+    return { proofVerified: null };
+  }
+  if (invoiceExpiredBeforeRequest(invoice.invoiceExpiresAt, row.createdAt)) {
+    return { proofVerified: null };
+  }
+
+  const displayed = row.displayedPaymentHash;
+  if (displayed !== null && paymentHash === displayed) {
+    return amountBindResult(invoice, row, null);
+  }
+
+  // Snapshot mismatch (wallet rotated the invoice after create) or
+  // recordFailed (no snapshot): corroborate h only when first seen at or
+  // after this request. Rebind writes h so the verified-hash unique index
+  // tracks the paid invoice, not the stale snapshot. Tip context, a
+  // different request id, expiry-at-creation, under-amount, and a hash
+  // already verified on another request remain closed above and in
+  // applyProof (hasVerifiedPaymentHash + the partial unique index).
+  if (invoice.firstSeenAt < row.createdAt) return { proofVerified: null };
+  return amountBindResult(invoice, row, paymentHash);
+}
+
+function amountBindResult(
+  invoice: OwnInvoiceHashRecord,
+  row: PaymentRequestRecord,
+  rebindHash: string | null,
+): {
+  proofVerified: boolean | null;
+  rebindHash?: string;
+  proofReason?: string;
+} {
+  const relation = invoiceAmountRelation(invoice.invoiceAmountMsat, row.amountValue);
+  if (relation === 'satisfies') {
+    return rebindHash ? { proofVerified: true, rebindHash } : { proofVerified: true };
+  }
+  if (relation === 'mismatch') {
+    return { proofVerified: null, proofReason: PROOF_REASON_AMOUNT_MISMATCH };
+  }
+  return { proofVerified: null };
 }
 
 function peekEventId(rawJson: string): string | null {

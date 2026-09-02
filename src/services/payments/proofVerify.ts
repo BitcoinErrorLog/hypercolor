@@ -24,6 +24,16 @@ export function extractBolt11Preimage(proof: Record<string, unknown>): string | 
   return proof.data.toLowerCase();
 }
 
+export async function bolt11PreimagePaymentHash(preimageHex: string): Promise<string | null> {
+  if (!HEX64.test(preimageHex)) return null;
+  const bytes = hexToBytes(preimageHex.toLowerCase());
+  const digest = await Crypto.digest(
+    Crypto.CryptoDigestAlgorithm.SHA256,
+    bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer,
+  );
+  return bytesToHex(new Uint8Array(digest));
+}
+
 /**
  * Verify a bolt11 preimage against a payment_hash we already possess from a
  * decoded invoice that was exchanged or displayed. Uses expo-crypto SHA-256
@@ -33,12 +43,7 @@ export async function verifyBolt11Preimage(
   preimageHex: string,
   paymentHashHex: string,
 ): Promise<boolean> {
-  if (!HEX64.test(preimageHex) || !HEX64.test(paymentHashHex)) return false;
-  const bytes = hexToBytes(preimageHex.toLowerCase());
-  const digest = await Crypto.digest(
-    Crypto.CryptoDigestAlgorithm.SHA256,
-    bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer,
-  );
-  const hashHex = bytesToHex(new Uint8Array(digest));
-  return hashHex === paymentHashHex.toLowerCase();
+  if (!HEX64.test(paymentHashHex)) return false;
+  const hashHex = await bolt11PreimagePaymentHash(preimageHex);
+  return hashHex !== null && hashHex === paymentHashHex.toLowerCase();
 }

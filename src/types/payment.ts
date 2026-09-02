@@ -67,6 +67,7 @@ const PROOF_KEYS = [
   'proof',
 ] as const;
 const LIST_KEYS = ['version', 'kind', 'payment_endpoints'] as const;
+const LIST_OPTIONAL_KEYS = ['event_id'] as const;
 const RECURRENCE_REQUIRED = ['every', 'unit', 'starts_at', 'anchor', 'ends_at'] as const;
 const BILLING_PERIOD_KEYS = ['starts_at', 'ends_at'] as const;
 const RECURRENCE_UNITS = new Set(['minute', 'hour', 'day', 'week', 'month', 'year']);
@@ -83,12 +84,17 @@ export type PaymentAction = 'accept' | 'reject' | 'cancel' | 'proof';
  * | state          | accept | reject | cancel | proof                                      |
  * |----------------|--------|--------|--------|--------------------------------------------|
  * | pending        | payer* | payer  | payee  | — (inbound: mark seen, do not apply)       |
- * | accepted       | —      | —      | payee  | payer                                      |
+ * | accepted       | —      | —      | payee  | payer (including after a replayed,         |
+ * |                |        |        |        | junk, or unverifiable proof — those stay   |
+ * |                |        |        |        | accepted so a later proof or cancel can    |
+ * |                |        |        |        | still land)                                |
  * | rejected       | —      | —      | —      | —                                          |
  * | cancelled      | —      | —      | —      | —                                          |
  * | proof_received | —      | —      | —      | —                                          |
  *
  * Terminal states (rejected / cancelled / proof_received) are never overwritten.
+ * `proof_received` is only written when `proofVerified === true`. A replayed
+ * preimage (`proofVerified === false`) stays `accepted`.
  * Crossing accept/cancel resolves to whichever compare-and-set applied first
  * locally; the later transition is a no-op (inbound: seen-marker; local:
  * `already transitioned`).
@@ -102,8 +108,13 @@ export type PaymentAction = 'accept' | 'reject' | 'cancel' | 'proof';
  *
  * Wire policy (emit-strict / accept-lenient):
  * - Outbound amounts are canonical positive `btc` decimals only.
- * - Inbound amounts accept official Paykit decimals (`.5`, `10.`, any
- *   non-empty asset without controls) and store a normalized value.
+ * - Inbound amounts decode official Paykit decimals (`.5`, `10.`, any
+ *   non-empty asset without controls). App v1 persists a request only
+ *   when `asset === btc` and the normalized value is a positive BTC
+ *   amount (millisatoshi precision, up to 11 decimals); otherwise the
+ *   event is marked unapplied. Lightning handoff stays msat-exact.
+ *   On-chain BIP21 `amount=` is sat-denominated, so destinations are
+ *   excluded when `btcDecimalToSats` is null rather than rounding.
  * - Inbound `proof` is an opaque JSON object (official Paykit JsonMap).
  *   Empty `{}` decodes. Render is neutral "Payment claimed" unless a
  *   bolt11 preimage is verified against a displayed invoice hash.
@@ -189,6 +200,7 @@ export interface PaymentProofEnvelope {
 export interface PrivatePaymentListEnvelope {
   version: 1;
   kind: typeof PAYKIT_PRIVATE_PAYMENT_LIST_KIND;
+  event_id?: string;
   payment_endpoints: Record<string, string>;
 }
 
@@ -219,13 +231,19 @@ export interface PaymentRequestRecord {
   pendingEventId: string | null;
   displayedPaymentHash: string | null;
   proofVerified: boolean | null;
+  /** Local-only. True when create-time snapshot matched any prior request's displayed hash. */
+  invoiceReused: boolean;
 }
 
 export const EMPTY_PAYMENT_RECORD_EXTRAS = {
   pendingEventId: null,
   displayedPaymentHash: null,
   proofVerified: null,
+  invoiceReused: false,
 } as const;
+
+/** Local-only proof apply reason. Never serialized on a payment envelope. */
+export const PROOF_REASON_AMOUNT_MISMATCH = 'amount_mismatch';
 
 export type PaymentRequestPatch = {
   status: PaymentStatus;
@@ -259,6 +277,22 @@ export interface TipEndpointRecord {
   invoiceAmount: string | null;
   invoiceExpiresAt: number | null;
   paymentHash: string | null;
+}
+
+export type OwnInvoiceDisplayContext = 'request' | 'tip';
+
+export interface OwnInvoiceHashRecord {
+  ownerPubky: string;
+  endpointIdentifier: string;
+  paymentHash: string;
+  firstSeenAt: number;
+  /** Bolt11 msat, `amountless`, `unknown`, or null if not yet repaired. */
+  invoiceAmountMsat: string | null;
+  invoiceExpiresAt: number | null;
+  /** `tip` never corroborates a request. Null until first display. */
+  displayContext: OwnInvoiceDisplayContext | null;
+  /** Request this invoice was displayed for, if any. */
+  paymentRequestId: string | null;
 }
 
 export class PaymentError extends Error {
@@ -345,6 +379,15 @@ export function isPositiveBtcAmount(value: string): boolean {
   return !isZeroAmount(value);
 }
 
+/**
+ * App v1 chat payments: persist positive bitcoin amounts, including
+ * millisatoshi-exact values that are not whole sats. Do not use this
+ * as the on-chain BIP21 gate — that requires `btcDecimalToSats`.
+ */
+export function isSupportedV1PaymentAmount(amount: PaymentAmount): boolean {
+  return amount.asset === PAYMENT_ASSET_BTC && isPositiveBtcAmount(amount.value);
+}
+
 function isZeroAmount(value: string): boolean {
   const parts = value.split('.');
   const whole = parts[0] ?? '';
@@ -364,11 +407,20 @@ function isBtcAtMostCap(value: string): boolean {
   return true;
 }
 
+function isBidiOrIsolateControl(ch: string): boolean {
+  const code = ch.codePointAt(0);
+  if (code === undefined) return false;
+  if (code >= 0x202a && code <= 0x202e) return true;
+  if (code >= 0x2066 && code <= 0x2069) return true;
+  return false;
+}
+
 export function isValidPaymentReference(value: string): boolean {
   if (value.length === 0) return false;
   if ([...value].length > PAYMENT_REFERENCE_MAX_LEN) return false;
   for (const ch of value) {
     if (ch < ' ' || ch === '\u007f') return false;
+    if (isBidiOrIsolateControl(ch)) return false;
   }
   return true;
 }
@@ -409,6 +461,27 @@ export function satsToBtcDecimal(sats: number): string {
   return `${whole}.${frac.toString().padStart(8, '0').replace(/0+$/, '')}`;
 }
 
+/** Whole sats for a BTC decimal, or null when the amount is not sat-exact. */
+export function btcDecimalToSats(value: string): number | null {
+  const trimmed = value.trim();
+  if (!isLenientAmountValue(trimmed)) return null;
+  const normalized = normalizeAmountValue(trimmed);
+  if (normalized === null) return null;
+  const parts = normalized.split('.');
+  const whole = parts[0] ?? '0';
+  const fracRaw = parts[1] ?? '';
+  if (fracRaw.length > 8 && /[1-9]/.test(fracRaw.slice(8))) return null;
+  const frac = (fracRaw + '00000000').slice(0, 8);
+  if (!/^\d+$/.test(whole) || !/^\d+$/.test(frac)) return null;
+  const sats = BigInt(whole) * 100_000_000n + BigInt(frac);
+  if (sats < 0n) return null;
+  const maxSats = BigInt(PAYMENT_BTC_MAX) * 100_000_000n;
+  if (sats > maxSats) return null;
+  const asNumber = Number(sats);
+  if (!Number.isSafeInteger(asNumber)) return null;
+  return asNumber;
+}
+
 export function serializedPaymentBytes(value: unknown): number {
   return new TextEncoder().encode(JSON.stringify(value)).byteLength;
 }
@@ -433,10 +506,10 @@ export function displayPaymentStatus(
   nowMs: number,
   extras?: { pendingEventId?: string | null; proofVerified?: boolean | null },
 ): PaymentDisplayStatus {
-  if (extras?.pendingEventId) return 'sending';
   if (status === 'proof_received') {
     return extras?.proofVerified === true ? 'verified' : 'claimed';
   }
+  if (extras?.pendingEventId) return 'sending';
   if (status === 'pending' && isProposalExpired(expiresAt, nowMs)) return 'expired';
   return status;
 }
@@ -945,8 +1018,13 @@ export function decodePrivatePaymentListEnvelope(
   rawJson: string,
 ): PrivatePaymentListEnvelope | null {
   const candidate = parseObject(rawJson);
-  if (!candidate || !hasExactKeys(candidate, LIST_KEYS)) return null;
+  if (!candidate || !hasExactKeys(candidate, LIST_KEYS, LIST_OPTIONAL_KEYS)) return null;
   if (candidate.version !== 1 || candidate.kind !== PAYKIT_PRIVATE_PAYMENT_LIST_KIND) return null;
+  let eventId: string | undefined;
+  if (Object.prototype.hasOwnProperty.call(candidate, 'event_id')) {
+    if (typeof candidate.event_id !== 'string' || !isUuidV4(candidate.event_id)) return null;
+    eventId = candidate.event_id;
+  }
   const map = asRecord(candidate.payment_endpoints);
   if (!map) return null;
   const payment_endpoints: Record<string, string> = {};
@@ -958,11 +1036,13 @@ export function decodePrivatePaymentListEnvelope(
     if (typeof payload !== 'string') return null;
     payment_endpoints[identifier] = payload;
   }
-  return {
+  const envelope: PrivatePaymentListEnvelope = {
     version: 1,
     kind: PAYKIT_PRIVATE_PAYMENT_LIST_KIND,
     payment_endpoints,
   };
+  if (eventId !== undefined) envelope.event_id = eventId;
+  return envelope;
 }
 
 export function decodePaymentEnvelope(rawJson: string): PaymentEnvelope | null {

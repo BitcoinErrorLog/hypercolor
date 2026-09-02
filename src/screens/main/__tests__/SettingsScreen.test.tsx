@@ -5,10 +5,13 @@ import SettingsScreen from '../SettingsScreen';
 import { BackupService } from '../../../services/backup/BackupService';
 import { setLastBackupAt } from '../../../stores/backupMetaStore';
 import { COPY } from '../../../copy/uxCopy';
+import { scrollSettingsToSection, focusSettingsSection } from '../../../ui/settingsSectionFocus';
 
 const mockGoBack = jest.fn();
 const mockDispatch = jest.fn();
 const mockSetOptions = jest.fn();
+const mockSetParams = jest.fn();
+const mockRoute = { params: {} as { section?: 'backup' | 'payments' } };
 let preventRemoveEnabled = false;
 let preventRemoveCallback: ((args: { data: { action: { type: string } } }) => void) | undefined;
 let mockVisitedActions = new WeakSet<object>();
@@ -28,6 +31,10 @@ jest.mock('@react-navigation/native', () => ({
     goBack: () => mockAttemptAction({ type: 'GO_BACK' }),
     dispatch: (action: { type: string }) => mockAttemptAction(action),
     setOptions: mockSetOptions,
+    setParams: (params: { section?: 'backup' | 'payments' }) => {
+      mockSetParams(params);
+      mockRoute.params = { ...mockRoute.params, ...params };
+    },
   }),
   usePreventRemove: (
     enabled: boolean,
@@ -36,6 +43,7 @@ jest.mock('@react-navigation/native', () => ({
     preventRemoveEnabled = enabled;
     preventRemoveCallback = cb;
   },
+  useRoute: () => mockRoute,
 }));
 
 jest.mock('../../../flags', () => ({
@@ -102,15 +110,21 @@ function mockLeaveAlert(): {
   });
   return { captured, spy };
 }
+jest.mock('../../../ui/settingsSectionFocus', () => ({
+  scrollSettingsToSection: jest.fn(),
+  focusSettingsSection: jest.fn(),
+}));
 
 describe('SettingsScreen recovery gate', () => {
   beforeEach(() => {
     mockGoBack.mockReset();
     mockDispatch.mockReset();
     mockSetOptions.mockReset();
+    mockSetParams.mockReset();
     preventRemoveEnabled = false;
     preventRemoveCallback = undefined;
     mockVisitedActions = new WeakSet<object>();
+    mockRoute.params = {};
     (setLastBackupAt as jest.Mock).mockReset();
     (BackupService.exportBackup as jest.Mock).mockResolvedValue({
       recoveryCode: 'alpha-bravo-charlie',
@@ -514,6 +528,100 @@ describe('SettingsScreen backup KeyStoreNotReady', () => {
     expect(tree.root.findByProps({ testID: 'errorDetailsBody' }).props.children).toBe(
       '[host]: encrypted store is not ready',
     );
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+});
+
+describe('SettingsScreen section routes', () => {
+  beforeEach(() => {
+    mockRoute.params = {};
+    mockSetParams.mockReset();
+    jest.mocked(scrollSettingsToSection).mockClear();
+    jest.mocked(focusSettingsSection).mockClear();
+    (BackupService.exportBackup as jest.Mock).mockResolvedValue({
+      recoveryCode: 'alpha-bravo-charlie',
+    });
+  });
+
+  it('scrolls and marks Encrypted backup when opened with section=backup', async () => {
+    mockRoute.params = { section: 'backup' };
+    let tree!: ReactTestRenderer;
+    await act(async () => {
+      tree = create(<SettingsScreen />);
+    });
+    await act(async () => {
+      tree.root
+        .findByProps({ testID: 'settingsFocusBackup' })
+        .props.onLayout({ nativeEvent: { layout: { y: 240, x: 0, width: 320, height: 400 } } });
+    });
+    expect(
+      tree.root.findByProps({ testID: 'settingsFocusBackup' }).props.accessibilityState.selected,
+    ).toBe(true);
+    expect(
+      tree.root.findByProps({ testID: 'settingsFocusPayments' }).props.accessibilityState.selected,
+    ).toBe(false);
+    expect(scrollSettingsToSection).toHaveBeenCalledWith(expect.anything(), 240, false);
+    expect(focusSettingsSection).toHaveBeenCalled();
+    expect(mockSetParams).toHaveBeenCalledWith({ section: undefined });
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('scrolls and marks tip endpoints when opened with section=payments', async () => {
+    mockRoute.params = { section: 'payments' };
+    let tree!: ReactTestRenderer;
+    await act(async () => {
+      tree = create(<SettingsScreen />);
+    });
+    await act(async () => {
+      tree.root
+        .findByProps({ testID: 'settingsFocusPayments' })
+        .props.onLayout({ nativeEvent: { layout: { y: 720, x: 0, width: 320, height: 200 } } });
+    });
+    expect(
+      tree.root.findByProps({ testID: 'settingsFocusPayments' }).props.accessibilityState.selected,
+    ).toBe(true);
+    expect(
+      tree.root.findByProps({ testID: 'settingsFocusBackup' }).props.accessibilityState.selected,
+    ).toBe(false);
+    expect(scrollSettingsToSection).toHaveBeenCalledWith(expect.anything(), 720, false);
+    expect(focusSettingsSection).toHaveBeenCalled();
+    expect(mockSetParams).toHaveBeenCalledWith({ section: undefined });
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('does not steal focus after Backup now opens the recovery gate', async () => {
+    mockRoute.params = { section: 'backup' };
+    let tree!: ReactTestRenderer;
+    await act(async () => {
+      tree = create(<SettingsScreen />);
+    });
+    await act(async () => {
+      tree.root
+        .findByProps({ testID: 'settingsFocusBackup' })
+        .props.onLayout({ nativeEvent: { layout: { y: 240, x: 0, width: 320, height: 400 } } });
+    });
+    expect(focusSettingsSection).toHaveBeenCalled();
+    jest.mocked(focusSettingsSection).mockClear();
+    jest.mocked(scrollSettingsToSection).mockClear();
+
+    await act(async () => {
+      tree.root.findByProps({ accessibilityLabel: 'Backup now' }).props.onPress();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await act(async () => {
+      tree.root
+        .findByProps({ testID: 'settingsFocusBackup' })
+        .props.onLayout({ nativeEvent: { layout: { y: 240, x: 0, width: 320, height: 640 } } });
+    });
+    expect(focusSettingsSection).not.toHaveBeenCalled();
+    expect(scrollSettingsToSection).not.toHaveBeenCalled();
     await act(async () => {
       tree.unmount();
     });

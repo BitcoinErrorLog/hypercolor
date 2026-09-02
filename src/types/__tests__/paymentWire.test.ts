@@ -30,12 +30,14 @@ import {
   isCanonicalThreePartEndpointId,
   isLenientAmountValue,
   isPositiveBtcAmount,
+  isSupportedV1PaymentAmount,
   isValidBolt11,
   isValidOnchainAddress,
   isValidPaymentEndpointIdentifier,
   isValidPaymentReference,
   normalizeAmountValue,
   satsToBtcDecimal,
+  btcDecimalToSats,
 } from '../payment';
 import {
   MAINNET_BOLT11_20U,
@@ -189,6 +191,11 @@ describe('payment wire contracts', () => {
     ).toEqual(OFFICIAL_LIST);
   });
 
+  it('accepts an optional event_id on private_payment_list', () => {
+    const withId = { ...OFFICIAL_LIST, event_id: EVENT_ID };
+    expect(decodePrivatePaymentListEnvelope(JSON.stringify(withId))).toEqual(withId);
+  });
+
   it('omits reason on rejection/cancellation when absent and rejects null reason', () => {
     const noReason = buildPaymentRejectionEnvelope({
       eventId: REJECT_EVENT,
@@ -290,6 +297,12 @@ describe('payment wire contracts', () => {
       'verified',
     );
     expect(displayPaymentStatus('accepted', null, 1, { pendingEventId: EVENT_ID })).toBe('sending');
+    expect(
+      displayPaymentStatus('proof_received', null, 1, {
+        pendingEventId: EVENT_ID,
+        proofVerified: true,
+      }),
+    ).toBe('verified');
   });
 
   it('encodes the state machine: pending accept/reject/cancel; proof only from accepted', () => {
@@ -332,6 +345,10 @@ describe('payment reference validation', () => {
     expect(isValidPaymentReference('invoice\u0007ref')).toBe(false);
     expect(isValidPaymentReference('r'.repeat(256))).toBe(true);
     expect(isValidPaymentReference('r'.repeat(257))).toBe(false);
+    expect(isValidPaymentReference('pay\u202Eevil')).toBe(false);
+    expect(isValidPaymentReference('pay\u202Aevil')).toBe(false);
+    expect(isValidPaymentReference('pay\u2066evil')).toBe(false);
+    expect(isValidPaymentReference('pay\u2069evil')).toBe(false);
   });
 
   it('refuses to build a payment_request with an empty reference', () => {
@@ -364,6 +381,10 @@ describe('amount validation', () => {
     expect(isPositiveBtcAmount('21000000.00000001')).toBe(false);
     expect(isPositiveBtcAmount('0')).toBe(false);
     expect(isPositiveBtcAmount('0.0')).toBe(false);
+    expect(isSupportedV1PaymentAmount({ value: '0.001', asset: 'btc' })).toBe(true);
+    expect(isSupportedV1PaymentAmount({ value: '0.000000001', asset: 'btc' })).toBe(true);
+    expect(isSupportedV1PaymentAmount({ value: '1', asset: 'usd' })).toBe(false);
+    expect(isSupportedV1PaymentAmount({ value: '0', asset: 'btc' })).toBe(false);
     expect(isCanonicalAmountValue('1e-3')).toBe(false);
     expect(isCanonicalAmountValue('-1')).toBe(false);
     expect(isCanonicalAmountValue('')).toBe(false);
@@ -375,6 +396,14 @@ describe('amount validation', () => {
     expect(normalizeAmountValue('10.')).toBe('10');
     expect(satsToBtcDecimal(1000)).toBe('0.00001');
     expect(satsToBtcDecimal(100_000_000)).toBe('1');
+    expect(btcDecimalToSats('0.00001')).toBe(1000);
+    expect(btcDecimalToSats('1')).toBe(100_000_000);
+    expect(btcDecimalToSats('0.001')).toBe(100_000);
+    expect(btcDecimalToSats('0.00000001')).toBe(1);
+    expect(btcDecimalToSats('0.000000001')).toBeNull();
+    expect(btcDecimalToSats('21000000')).toBe(2_100_000_000_000_000);
+    expect(btcDecimalToSats('50000000')).toBeNull();
+    expect(btcDecimalToSats('21000000.00000001')).toBeNull();
   });
 
   it('accepts lenient inbound amounts and any asset on decode, emits remain strict', () => {

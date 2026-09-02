@@ -1,7 +1,6 @@
 import { v4 as uuidv4 } from 'uuid';
 import type { PubkyKey } from '../../types';
 import {
-  ENDPOINT_BITCOIN_P2TR,
   ENDPOINT_LIGHTNING_BOLT11,
   PAYKIT_PAYMENT_PROOF_KIND,
   PAYKIT_PAYMENT_REQUEST_KIND,
@@ -50,6 +49,10 @@ export const PaymentService = {
     const eventId = uuidv4();
     const paymentRequestId = uuidv4();
     const sentAt = Date.now();
+    const displayedPaymentHash = await snapshotOwnInvoiceHash(owner, endpointIds);
+    const invoiceReused =
+      displayedPaymentHash !== null &&
+      (await StorageService.hasDisplayedPaymentHash(owner, displayedPaymentHash));
     const built = buildPaymentRequestEnvelope({
       eventId,
       paymentRequestId,
@@ -75,8 +78,9 @@ export const PaymentService = {
       proofJson: null,
       reason: null,
       pendingEventId: eventId,
-      displayedPaymentHash: null,
+      displayedPaymentHash,
       proofVerified: null,
+      invoiceReused,
     };
     const queueId = uuidv4();
     const sendIntent = buildPreparedSendIntent({
@@ -116,6 +120,20 @@ export const PaymentService = {
     });
     const stored = await StorageService.getPaymentRequest(owner, peer, paymentRequestId);
     if (!stored) throw new PaymentError('not-found', 'payment request missing after create');
+    if (stored.displayedPaymentHash) {
+      const lightningId =
+        endpointIds.find(id => schemeForEndpointIdentifier(id) === 'lightning') ??
+        endpointIds[0] ??
+        ENDPOINT_LIGHTNING_BOLT11;
+      await StorageService.recordOwnInvoiceDisplay({
+        ownerPubky: owner,
+        endpointIdentifier: lightningId,
+        paymentHash: stored.displayedPaymentHash,
+        context: 'request',
+        paymentRequestId,
+        firstSeenAt: sentAt,
+      });
+    }
     return stored;
   },
 
@@ -232,9 +250,30 @@ export const PaymentService = {
     peer: PubkyKey,
     paymentRequestId: string,
     paymentHash: string,
+    endpointIdentifier: string = ENDPOINT_LIGHTNING_BOLT11,
   ): Promise<void> {
     const owner = requireOwner();
     await StorageService.setDisplayedPaymentHash(owner, peer, paymentRequestId, paymentHash);
+    await StorageService.recordOwnInvoiceDisplay({
+      ownerPubky: owner,
+      endpointIdentifier,
+      paymentHash,
+      context: 'request',
+      paymentRequestId,
+      firstSeenAt: Date.now(),
+    });
+  },
+
+  async recordDisplayedTipInvoice(endpointIdentifier: string, paymentHash: string): Promise<void> {
+    const owner = requireOwner();
+    await StorageService.recordOwnInvoiceDisplay({
+      ownerPubky: owner,
+      endpointIdentifier,
+      paymentHash,
+      context: 'tip',
+      paymentRequestId: null,
+      firstSeenAt: Date.now(),
+    });
   },
 
   async setMyTipEndpoints(
@@ -466,13 +505,20 @@ function validateLocalTipEndpoints(
   return cleaned;
 }
 
+async function snapshotOwnInvoiceHash(
+  owner: PubkyKey,
+  endpointIds: readonly string[],
+): Promise<string | null> {
+  for (const identifier of endpointIds) {
+    if (schemeForEndpointIdentifier(identifier) !== 'lightning') continue;
+    const tip = await StorageService.getTipEndpoint(owner, owner, identifier);
+    if (tip?.paymentHash) return tip.paymentHash;
+  }
+  return null;
+}
+
 function requireOwner(): PubkyKey {
   const owner = KeyStore.getPubky();
   if (!owner) throw new PaymentError('validation', 'No local pubky');
   return owner;
 }
-
-export const DEFAULT_TIP_IDENTIFIERS = {
-  lightning: ENDPOINT_LIGHTNING_BOLT11,
-  onchain: ENDPOINT_BITCOIN_P2TR,
-} as const;

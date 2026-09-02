@@ -578,6 +578,72 @@ export function buildGroupMessageEnvelope(input: {
   return { envelope, json, byteSize };
 }
 
+export function buildPublicChannelMessageDocument(input: {
+  channelId: string;
+  eventId: string;
+  sentAt: number;
+  body: string;
+  author: string;
+  replyTo?: string;
+  replyToAuthor?: string;
+}): { document: PublicChannelMessageDocument; json: string; byteSize: number } {
+  if (!UUID_PATTERN.test(input.eventId)) {
+    throw new GroupServiceError(
+      'invalid-input',
+      `${PUBLIC_CHANNEL_MESSAGE_KIND} event_id must be a UUID`,
+    );
+  }
+  if (!isLinkSentAtUnixMs(input.sentAt)) {
+    throw new GroupServiceError(
+      'invalid-input',
+      `${PUBLIC_CHANNEL_MESSAGE_KIND} sent_at must be a positive Unix-millisecond integer`,
+    );
+  }
+  const body = input.body.trim();
+  if (body.length === 0) {
+    throw new GroupServiceError(
+      'invalid-input',
+      `${PUBLIC_CHANNEL_MESSAGE_KIND} body must not be empty`,
+    );
+  }
+  if (input.author.length !== PUBKY_LENGTH) {
+    throw new GroupServiceError(
+      'invalid-input',
+      `${PUBLIC_CHANNEL_MESSAGE_KIND} author is invalid`,
+    );
+  }
+  if (input.replyTo !== undefined && !UUID_PATTERN.test(input.replyTo)) {
+    throw new GroupServiceError(
+      'invalid-input',
+      `${PUBLIC_CHANNEL_MESSAGE_KIND} reply_to must be a UUID`,
+    );
+  }
+  if (input.replyToAuthor !== undefined && input.replyToAuthor.length !== PUBKY_LENGTH) {
+    throw new GroupServiceError(
+      'invalid-input',
+      `${PUBLIC_CHANNEL_MESSAGE_KIND} reply_to_author is invalid`,
+    );
+  }
+  const document: PublicChannelMessageDocument = {
+    version: 1,
+    kind: PUBLIC_CHANNEL_MESSAGE_KIND,
+    channel_id: input.channelId,
+    event_id: input.eventId,
+    sent_at: input.sentAt,
+    body,
+    author: input.author,
+  };
+  if (input.replyTo !== undefined) {
+    document.reply_to = input.replyTo;
+  }
+  if (input.replyToAuthor !== undefined) {
+    document.reply_to_author = input.replyToAuthor;
+  }
+  const json = JSON.stringify(document);
+  const byteSize = assertSerializedSize(json, PUBLIC_CHANNEL_MESSAGE_KIND);
+  return { document, json, byteSize };
+}
+
 export function buildGroupReactionEnvelope(input: {
   channelId: string;
   eventId: string;
