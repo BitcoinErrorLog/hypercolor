@@ -17,7 +17,8 @@ import { PaykitLinkNative } from '../PaykitLinkNative';
 import { StorageService } from '../../StorageService';
 import { KeyStore } from '../../KeyStore';
 import { RetryQueue } from '../../RetryQueue';
-import { resetPaintOverlayForBoot } from '../../paintedOwner';
+import { paintOwner, resetPaintOverlayForBoot } from '../../paintedOwner';
+import { wireSignOutMarkerMocks } from '../../__tests__/wireSignOutMarkerMocks';
 import {
   CHAT_MESSAGE_KIND,
   LINK_MESSAGE_MAX_BYTES,
@@ -127,6 +128,7 @@ jest.mock('../../StorageService', () => ({
     clearAccountData: jest.fn(),
     persistSignOutIncompleteJournal: jest.fn().mockResolvedValue(undefined),
     hasSignOutIncompleteJournal: jest.fn().mockResolvedValue(false),
+    getSignOutIncompleteJournalOwner: jest.fn().mockResolvedValue(null),
     clearSignOutIncompleteJournal: jest.fn().mockResolvedValue(undefined),
     retryPendingCleanup: jest.fn(),
     markGroupEventSeen: jest.fn(),
@@ -204,6 +206,7 @@ jest.mock('../../KeyStore', () => ({
     deleteLinkSession: jest.fn(),
     markSignOutIncomplete: jest.fn(),
     isSignOutIncomplete: jest.fn(() => false),
+    getSignOutIncompleteOwner: jest.fn(() => null),
     clearSignOutIncomplete: jest.fn(),
     setAttachmentSecret: jest.fn(),
     getAttachmentSecret: jest.fn(),
@@ -417,6 +420,8 @@ function expectedJson(eventId = EVENT_ID, body = 'hello'): string {
 describe('LinkService', () => {
   beforeEach(async () => {
     jest.resetAllMocks();
+    resetLinkServiceHarnessState();
+    resetPaintOverlayForBoot();
     jest.spyOn(Date, 'now').mockReturnValue(NOW);
     mockedUuid.mockReturnValueOnce(EVENT_ID).mockReturnValue(QUEUE_ID);
 
@@ -433,6 +438,7 @@ describe('LinkService', () => {
       capabilitiesJson: '{}',
     });
     mockedKeyStore.getPubky.mockReturnValue(OWNER);
+    wireSignOutMarkerMocks(mockedKeyStore, mockedStorage);
     mockedStorage.getLinkReceiver.mockResolvedValue(receiverRow);
     mockedStorage.getLink.mockResolvedValue(null);
     mockedStorage.getAllLinks.mockResolvedValue([]);
@@ -482,7 +488,10 @@ describe('LinkService', () => {
     );
 
     await LinkService.clearSession();
+    mockedKeyStore.clearSignOutIncomplete();
+    await mockedStorage.clearSignOutIncompleteJournal();
     await LinkService.signinWithSecret('signin-secret-hex');
+    paintOwner(OWNER);
   });
 
   afterEach(() => {
@@ -2835,6 +2844,10 @@ describe('LinkService', () => {
       mockedStorage.getAllLinks.mockResolvedValue([
         storedLink({ status: 'established', snapshot: 'est-1' }),
       ]);
+      mockedNative.closeLink.mockClear();
+      mockedNative.removeReceiverMarker.mockClear();
+      mockedNative.signOutSession.mockClear();
+      mockedNative.clearAllNativeSecrets.mockClear();
       mockedStorage.listDeliveryQueue.mockResolvedValue([
         {
           id: 'q-mine',

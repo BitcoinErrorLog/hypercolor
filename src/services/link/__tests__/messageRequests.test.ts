@@ -4,6 +4,7 @@ import { StorageService } from '../../StorageService';
 import { KeyStore } from '../../KeyStore';
 import { RetryQueue } from '../../RetryQueue';
 import { FollowsImportSettings } from '../../contacts/followsImportSettings';
+import { wireSignOutMarkerMocks } from '../../__tests__/wireSignOutMarkerMocks';
 import { LINK_RECEIVER_PATH, type LinkReceiver, type LinkRecord } from '../../../types/link';
 import { buildGroupMembershipEnvelope } from '../../../types/group';
 import type { Contact, MessageRequest } from '../../../types';
@@ -76,6 +77,7 @@ jest.mock('../../StorageService', () => ({
     clearAccountData: jest.fn(),
     persistSignOutIncompleteJournal: jest.fn().mockResolvedValue(undefined),
     hasSignOutIncompleteJournal: jest.fn().mockResolvedValue(false),
+    getSignOutIncompleteJournalOwner: jest.fn().mockResolvedValue(null),
     clearSignOutIncompleteJournal: jest.fn().mockResolvedValue(undefined),
     retryPendingCleanup: jest.fn(),
     markGroupEventSeen: jest.fn(),
@@ -125,6 +127,7 @@ jest.mock('../../KeyStore', () => ({
     deleteLinkSession: jest.fn(),
     markSignOutIncomplete: jest.fn(),
     isSignOutIncomplete: jest.fn(() => false),
+    getSignOutIncompleteOwner: jest.fn(() => null),
     clearSignOutIncomplete: jest.fn(),
   },
 }));
@@ -205,6 +208,7 @@ describe('LinkService message requests', () => {
     });
     mockedNative.receivePrivateMessages.mockResolvedValue({ messages: [], snapshot: 'est-in' });
     mockedKeyStore.getPubky.mockReturnValue(OWNER);
+    wireSignOutMarkerMocks(mockedKeyStore, mockedStorage);
     mockedStorage.getLinkReceiver.mockResolvedValue(receiverRow);
     mockedStorage.getLink.mockResolvedValue(null);
     mockedStorage.getAllLinks.mockResolvedValue([]);
@@ -222,6 +226,8 @@ describe('LinkService message requests', () => {
     mockedRetryQueue.getDue.mockResolvedValue([]);
 
     await LinkService.clearSession();
+    mockedKeyStore.clearSignOutIncomplete();
+    await mockedStorage.clearSignOutIncompleteJournal();
     await LinkService.signinWithSecret('signin-secret-hex');
   });
 

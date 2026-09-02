@@ -16,6 +16,7 @@ import { defaultRandomBytes, identitySecretHex } from '../../services/link/liveP
 import { STAGING_HOMESERVER_PUBKY } from '../../services/homeserverOrigin';
 import { saveE2eIdentity } from '../../navigation/e2eSignupResult';
 import { completeDebugSignup, type DebugSignupResult } from './debugSignupController';
+import { PubkyService } from '../../services/PubkyService';
 
 function errorMessage(err: unknown): string {
   if (err instanceof Error && err.message.length > 0) return err.message;
@@ -45,6 +46,7 @@ export function DebugSignupPanel({
     setError(null);
     setResult(null);
     try {
+      await PubkyService.awaitSignOutWipe();
       const next = await completeDebugSignup(
         {
           signupWithSecret: (secret, homeserver, token) =>

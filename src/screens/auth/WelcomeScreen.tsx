@@ -17,6 +17,7 @@ import { COPY } from '../../copy/uxCopy';
 import { CustodyLine } from '../../ui/CustodyLine';
 import { ErrorDetails } from '../../ui/ErrorDetails';
 import { sanitizeError } from '../../ui/sanitizedError';
+import { PubkyService } from '../../services/PubkyService';
 import {
   finishConnectDelegation,
   tryBeginConnectDelegation,
@@ -56,6 +57,7 @@ export default function WelcomeScreen() {
     setLoading(true);
     setError(null);
     try {
+      await PubkyService.awaitSignOutWipe();
       const deviceId = `hypercolor-${Date.now().toString(16)}`;
       const { url, expiresAt, generation } = await PubkyRingAuthService.requestDelegation(deviceId);
       nav.navigate('AwaitingRingAuth', { ringAuthUrl: url, expiresAt, generation });

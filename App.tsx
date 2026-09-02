@@ -20,6 +20,7 @@ import { handleE2eDeepLink } from './src/navigation/e2eDeepLinks';
 import { loadMainTabIconFont } from './src/navigation/tabBarIcons';
 import { KeyStore } from './src/services/KeyStore';
 import { LinkService, startLinkRetryDrain } from './src/services/link/LinkService';
+import { paintNeedsSignIn, shouldHoldPreAuthWork } from './src/services/paintedOwner';
 import { hydratePersistedAuth } from './src/stores/hydrateAuthSession';
 import { ReduceMotionProvider } from './src/ui/reduceMotion';
 
@@ -82,11 +83,13 @@ export default function App() {
     // Foreground notification strategy: see docs/NOTIFICATIONS.md.
     // AppState 'active' restarts the retry drain and syncs the Encrypted-Link inbox.
     const recoverAndDrain = async () => {
+      if (shouldHoldPreAuthWork()) return;
       try {
         await LinkService.restorePersistedSession();
       } catch {
         // Alias is kept on network failure; auth failure is handled inside restore.
       }
+      if (shouldHoldPreAuthWork()) return;
       try {
         await LinkService.recoverPendingSends();
         await LinkService.drainRetries();
@@ -101,6 +104,7 @@ export default function App() {
     const onAppState = (state: AppStateStatus) => {
       if (disposed) return;
       if (state === 'active') {
+        if (shouldHoldPreAuthWork()) return;
         stopDrain?.();
         stopDrain = startLinkRetryDrain();
         void recoverAndDrain();
@@ -131,11 +135,13 @@ export default function App() {
         try {
           await hydratePersistedAuth();
         } catch {
-          // Auth hydrate is best-effort; Welcome is still the right screen.
+          paintNeedsSignIn();
         }
         if (disposed || myEpoch !== initEpochRef.current) return;
-        void recoverAndDrain();
-        stopDrain = startLinkRetryDrain();
+        if (!shouldHoldPreAuthWork()) {
+          void recoverAndDrain();
+          stopDrain = startLinkRetryDrain();
+        }
         afterIconFont(markReady);
       })
       .catch(() => afterIconFont(markReady))

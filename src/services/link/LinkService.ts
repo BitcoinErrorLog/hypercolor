@@ -60,8 +60,10 @@ import { CONTACTS_COPY } from '../../ui/contacts/contactsCopy';
 import { stripSensitive } from '../../ui/sanitizedError';
 import {
   activeOwnerAtCommit,
+  ensureSignOutPaint,
+  invalidateSignOutRestore,
   paintOwner,
-  paintSigningOut,
+  pendingWipeInFlight,
   restorePaintedOwner,
   SIGNING_OUT,
 } from '../paintedOwner';
@@ -232,6 +234,8 @@ export const LinkService = {
    * alias. The secret is not persisted in JS.
    */
   async signinWithSecret(identitySecretHex: string): Promise<{ pubky: string }> {
+    const pendingWipe = pendingWipeInFlight();
+    if (pendingWipe) await pendingWipe;
     const { sessionAlias, pubky } = await PaykitLinkNative.signinWithSecret(identitySecretHex);
     KeyStore.setPubky(pubky);
     KeyStore.setLinkSession(sessionAlias);
@@ -284,28 +288,39 @@ export const LinkService = {
    * native session out, wipe every native-owned secret (receivers, sessions,
    * snapshot key), and drop every account-scoped Encrypted-Link row.
    */
-  async clearSession(): Promise<void> {
-    const previousOwner = session?.pubky ?? KeyStore.getPubky();
-    paintSigningOut();
-    stopLinkRetryDrain();
+  async clearSession(opts?: { owner?: PubkyKey }): Promise<void> {
+    const previousOwner = opts?.owner ?? session?.pubky ?? KeyStore.getPubky() ?? null;
+    if (!previousOwner) {
+      throw new Error('sign-out requires an owner');
+    }
     const owner = previousOwner;
-    const alias = session?.alias ?? KeyStore.getLinkSession();
+    const generation = ensureSignOutPaint();
+    stopLinkRetryDrain();
+    const alias =
+      session?.pubky === owner
+        ? session.alias
+        : KeyStore.getPubky() === owner
+          ? KeyStore.getLinkSession()
+          : null;
     let markerPath = LINK_RECEIVER_PATH;
     try {
-      if (owner) {
-        const receiver = await StorageService.getLinkReceiver(owner);
-        if (receiver) markerPath = coerceReceiverPath(receiver.receiverPath);
-        const links = await StorageService.getAllLinks(owner);
-        for (const link of links) {
-          const live = liveHandles.get(linkKey(owner, link.peerPubky));
-          if (live) await closeQuietly(live.linkId);
-        }
+      const receiver = await StorageService.getLinkReceiver(owner);
+      if (receiver) markerPath = coerceReceiverPath(receiver.receiverPath);
+      const links = await StorageService.getAllLinks(owner);
+      for (const link of links) {
+        const live = liveHandles.get(linkKey(owner, link.peerPubky));
+        if (live) await closeQuietly(live.linkId);
       }
     } catch (err) {
-      if (previousOwner) restorePaintedOwner(previousOwner);
+      restorePaintedOwner(owner, generation);
       throw err;
     }
-    await commitSignOutWipe({ owner: owner ?? null, alias: alias ?? null, markerPath });
+    try {
+      await commitSignOutWipe({ owner, alias, markerPath });
+    } catch (err) {
+      restorePaintedOwner(owner, generation);
+      throw err;
+    }
   },
 
   /**
@@ -314,6 +329,8 @@ export const LinkService = {
    * other parties' live handles. Used to switch A/B/C on one process.
    */
   async adoptHarnessSession(sessionAlias: string, pubky: string): Promise<void> {
+    const pendingWipe = pendingWipeInFlight();
+    if (pendingWipe) await pendingWipe;
     const alias = sessionAlias.trim();
     const id = pubky.trim();
     if (alias.length === 0 || id.length === 0) {
@@ -350,6 +367,8 @@ export const LinkService = {
    * is launched) and stops it from `awaitEnabled` finally / `cancel`.
    */
   async enable(): Promise<LinkEnableFlow> {
+    const pendingWipe = pendingWipeInFlight();
+    if (pendingWipe) await pendingWipe;
     if (!PaykitLinkNative.isAvailable()) {
       throw createLinkNativeError('unavailable', 'PaykitLinkModule native module is not available');
     }
@@ -382,6 +401,8 @@ export const LinkService = {
         void stopKeepalive();
       },
       awaitEnabled: async () => {
+        const pendingWipe = pendingWipeInFlight();
+        if (pendingWipe) await pendingWipe;
         try {
           if (cancelled) {
             throw new Error('LinkService.enable: the messaging enable flow was cancelled');
@@ -1074,6 +1095,7 @@ export function linkQueueEntryCountForTests(): number {
  */
 export function resetLinkServiceHarnessState(): void {
   session = null;
+  restoreInFlight = null;
   liveHandles.clear();
   queues.clear();
 }
@@ -3065,21 +3087,59 @@ async function closeQuietly(linkId: string): Promise<void> {
   }
 }
 
-async function persistSignOutIncompleteMarker(owner: string | null): Promise<void> {
+const SIGN_OUT_MARKER_WRITE_FAILED = 'sign-out marker write failed';
+
+async function persistAndVerifySignOutIncompleteMarker(owner: PubkyKey): Promise<void> {
   try {
-    KeyStore.markSignOutIncomplete();
+    KeyStore.markSignOutIncomplete(owner);
   } catch {
-    // MMKV may already be the failing store; SQL journal is the fallback.
+    throw new Error(SIGN_OUT_MARKER_WRITE_FAILED);
   }
-  if (!owner) return;
+  if (KeyStore.getSignOutIncompleteOwner() !== owner) {
+    try {
+      KeyStore.clearSignOutIncomplete();
+    } catch {
+      // Best-effort rollback of a partial MMKV write.
+    }
+    throw new Error(SIGN_OUT_MARKER_WRITE_FAILED);
+  }
   try {
     await StorageService.persistSignOutIncompleteJournal(owner);
   } catch {
-    // Best-effort durable marker.
+    try {
+      KeyStore.clearSignOutIncomplete();
+    } catch {
+      // Best-effort rollback.
+    }
+    throw new Error(SIGN_OUT_MARKER_WRITE_FAILED);
+  }
+  let journalOwner: string | null;
+  try {
+    journalOwner = await StorageService.getSignOutIncompleteJournalOwner();
+  } catch {
+    try {
+      KeyStore.clearSignOutIncomplete();
+    } catch {
+      // Best-effort rollback.
+    }
+    throw new Error(SIGN_OUT_MARKER_WRITE_FAILED);
+  }
+  if (journalOwner !== owner) {
+    try {
+      KeyStore.clearSignOutIncomplete();
+    } catch {
+      // Best-effort rollback.
+    }
+    try {
+      await StorageService.clearSignOutIncompleteJournal(owner);
+    } catch {
+      // Best-effort rollback.
+    }
+    throw new Error(SIGN_OUT_MARKER_WRITE_FAILED);
   }
 }
 
-function deleteLinkSessionWithRetry(): void {
+function deleteLinkSessionWithRetry(owner: PubkyKey): void {
   try {
     KeyStore.deleteLinkSession();
   } catch {
@@ -3087,7 +3147,7 @@ function deleteLinkSessionWithRetry(): void {
       KeyStore.deleteLinkSession();
     } catch (err) {
       try {
-        KeyStore.markSignOutIncomplete();
+        KeyStore.markSignOutIncomplete(owner);
       } catch {
         // Marker write may fail on the same store.
       }
@@ -3097,11 +3157,12 @@ function deleteLinkSessionWithRetry(): void {
 }
 
 async function commitSignOutWipe(input: {
-  owner: string | null;
+  owner: PubkyKey;
   alias: string | null;
   markerPath: string;
 }): Promise<void> {
-  await persistSignOutIncompleteMarker(input.owner);
+  await persistAndVerifySignOutIncompleteMarker(input.owner);
+  invalidateSignOutRestore();
   const errors: unknown[] = [];
   const capture = async (work: () => Promise<void>): Promise<void> => {
     try {
@@ -3111,9 +3172,7 @@ async function commitSignOutWipe(input: {
     }
   };
 
-  if (input.owner) {
-    await capture(() => StorageService.clearAccountData(input.owner!));
-  }
+  await capture(() => StorageService.clearAccountData(input.owner));
   if (input.alias) {
     try {
       await PaykitLinkNative.removeReceiverMarker(input.alias, input.markerPath);
@@ -3126,18 +3185,33 @@ async function commitSignOutWipe(input: {
       // Native may already have dropped the bearer.
     }
   }
-  try {
-    await PaykitLinkNative.clearAllNativeSecrets();
-  } catch {
-    // Best-effort: leftover receiver/session aliases must not survive a switch.
+  const current = KeyStore.getPubky();
+  if (current === input.owner) {
+    try {
+      await PaykitLinkNative.clearAllNativeSecrets();
+    } catch {
+      // Best-effort: leftover receiver/session aliases must not survive a switch.
+    }
   }
-  session = null;
-  liveHandles.clear();
-  queues.clear();
-  try {
-    deleteLinkSessionWithRetry();
-  } catch (err) {
-    errors.push(err);
+  if (session?.pubky === input.owner) {
+    session = null;
+  }
+  const ownerPrefix = `${input.owner}:`;
+  for (const key of [...liveHandles.keys()]) {
+    if (key.startsWith(ownerPrefix)) liveHandles.delete(key);
+  }
+  for (const key of [...queues.keys()]) {
+    if (key.startsWith(ownerPrefix)) queues.delete(key);
+  }
+  if (KeyStore.getPubky() === input.owner) {
+    const storedAlias = KeyStore.getLinkSession();
+    if (storedAlias == null || storedAlias === input.alias) {
+      try {
+        deleteLinkSessionWithRetry(input.owner);
+      } catch (err) {
+        errors.push(err);
+      }
+    }
   }
   if (errors.length > 0) throw errors[0];
 }

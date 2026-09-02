@@ -65,4 +65,18 @@ describe('hydratePersistedAuth', () => {
     expect(mockCompleteInterrupted).toHaveBeenCalled();
     expect(mockSetAuthenticated).not.toHaveBeenCalled();
   });
+
+  it('does not paint or complete a wipe when the marker cannot be read', async () => {
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    mockHasInterrupted.mockRejectedValue(new Error('mmkv read'));
+    mockHasPersistedSession.mockResolvedValue(true);
+    mockGetPubky.mockReturnValue('owner-pubky');
+    mockGetHomeserver.mockReturnValue('homeserver-pk');
+
+    await expect(hydratePersistedAuth()).resolves.toBe(false);
+    expect(mockCompleteInterrupted).not.toHaveBeenCalled();
+    expect(mockSetAuthenticated).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith('interrupted sign-out marker unreadable');
+    warn.mockRestore();
+  });
 });

@@ -317,7 +317,7 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
         id: 'q-1',
         messageId: '00000000-0000-4000-8000-000000000002',
         recipientPubky: PEER,
-        payload: '{"type":"link.chat.message","rawJson":"{\\"exact\\":true}"}',
+        payload: `{"type":"link.chat.message","ownerPubky":"${OWNER}","rawJson":"{\\"exact\\":true}"}`,
         attempts: 0,
         nextRetryAt: 20,
         createdAt: 20,
@@ -1663,6 +1663,72 @@ describe('link schema v15 — durable handshake abuse budget (real SQL)', () => 
     await StorageService.removeFromQueue('q-race');
     expect(await StorageService.hasQueueItem('q-race')).toBe(false);
   });
+
+  it('no-ops incrementAttempt when the queue row is absent and throws when payload is not a string', async () => {
+    const db = openMemoryDb();
+    setDbForTests(db);
+    await runMigrations(db);
+    await expect(StorageService.incrementAttempt('missing', 2)).resolves.toBe(false);
+    db.executeSync(
+      `INSERT INTO delivery_queue (id, message_id, recipient_pubky, payload, attempts, next_retry_at, created_at)
+       VALUES ('q-bad-payload', ?, ?, 1, 0, 1, 1)`,
+      [EVENT, PEER],
+    );
+    await expect(StorageService.incrementAttempt('q-bad-payload', 2)).rejects.toEqual(
+      expect.objectContaining({ name: 'LinkSendError', code: 'owner-changed' }),
+    );
+    await StorageService.enqueue({
+      id: 'q-ok',
+      messageId: EVENT,
+      recipientPubky: PEER,
+      payload: JSON.stringify({
+        type: 'link.chat.message',
+        ownerPubky: OWNER,
+        peerPubky: PEER,
+        senderPubky: OWNER,
+        kind: CHAT_MESSAGE_KIND,
+        eventId: EVENT,
+        rawJson: '{}',
+      }),
+      attempts: 0,
+      nextRetryAt: 1,
+      createdAt: 1,
+    });
+    await expect(StorageService.incrementAttempt('q-ok', 2)).resolves.toBe(true);
+  });
+
+  it('clears malformed JSON queue rows during clearAccountData', async () => {
+    const db = openMemoryDb();
+    setDbForTests(db);
+    await runMigrations(db);
+    db.executeSync(
+      `INSERT INTO delivery_queue (id, message_id, recipient_pubky, payload, attempts, next_retry_at, created_at)
+       VALUES ('q-malformed', ?, ?, 'not-json', 0, 1, 1)`,
+      [EVENT, PEER],
+    );
+    await asOwner(OTHER, () =>
+      StorageService.enqueue({
+        id: 'q-other',
+        messageId: EVENT,
+        recipientPubky: PEER,
+        payload: JSON.stringify({
+          type: 'link.chat.message',
+          ownerPubky: OTHER,
+          peerPubky: PEER,
+          senderPubky: OTHER,
+          kind: CHAT_MESSAGE_KIND,
+          eventId: EVENT,
+          rawJson: '{}',
+        }),
+        attempts: 0,
+        nextRetryAt: 1,
+        createdAt: 1,
+      }),
+    );
+    await StorageService.clearAccountData(OWNER);
+    expect(await StorageService.hasQueueItem('q-malformed')).toBe(false);
+    expect(await StorageService.hasQueueItem('q-other')).toBe(true);
+  });
 });
 
 describe('link schema v16 — per-recipient group fan-out outcomes (real SQL)', () => {
@@ -1863,7 +1929,7 @@ describe('link schema v16 — per-recipient group fan-out outcomes (real SQL)', 
           id: 'q-fan-1',
           messageId: eventId,
           recipientPubky: PEER,
-          payload: '{}',
+          payload: JSON.stringify({ ownerPubky: OWNER }),
           attempts: 0,
           nextRetryAt: 1,
           createdAt: 1,
@@ -1872,7 +1938,7 @@ describe('link schema v16 — per-recipient group fan-out outcomes (real SQL)', 
           id: 'q-fan-2',
           messageId: eventId,
           recipientPubky: OTHER,
-          payload: '{}',
+          payload: JSON.stringify({ ownerPubky: OWNER }),
           attempts: 0,
           nextRetryAt: 1,
           createdAt: 1,
@@ -1945,7 +2011,7 @@ describe('link schema v16 — per-recipient group fan-out outcomes (real SQL)', 
           id: 'q-fan-1',
           messageId: eventId,
           recipientPubky: PEER,
-          payload: '{}',
+          payload: JSON.stringify({ ownerPubky: OWNER }),
           attempts: 0,
           nextRetryAt: 1,
           createdAt: 1,
@@ -1954,7 +2020,7 @@ describe('link schema v16 — per-recipient group fan-out outcomes (real SQL)', 
           id: 'q-fan-2',
           messageId: eventId,
           recipientPubky: OTHER,
-          payload: '{}',
+          payload: JSON.stringify({ ownerPubky: OWNER }),
           attempts: 0,
           nextRetryAt: 1,
           createdAt: 1,
@@ -1979,7 +2045,7 @@ describe('link schema v16 — per-recipient group fan-out outcomes (real SQL)', 
           id: 'q-fan-3',
           messageId: eventId,
           recipientPubky: PEER,
-          payload: '{}',
+          payload: JSON.stringify({ ownerPubky: OWNER }),
           attempts: 0,
           nextRetryAt: 2,
           createdAt: 2,
@@ -1988,7 +2054,7 @@ describe('link schema v16 — per-recipient group fan-out outcomes (real SQL)', 
           id: 'q-fan-4',
           messageId: eventId,
           recipientPubky: OTHER,
-          payload: '{}',
+          payload: JSON.stringify({ ownerPubky: OWNER }),
           attempts: 0,
           nextRetryAt: 2,
           createdAt: 2,

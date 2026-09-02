@@ -4,6 +4,7 @@ import { StorageService } from '../../StorageService';
 import { KeyStore } from '../../KeyStore';
 import { RetryQueue } from '../../RetryQueue';
 import { FollowsImportSettings } from '../../contacts/followsImportSettings';
+import { wireSignOutMarkerMocks } from '../../__tests__/wireSignOutMarkerMocks';
 import { subscribeGroupEvents } from '../../group/groupEvents';
 import {
   CHAT_MESSAGE_KIND,
@@ -119,6 +120,7 @@ jest.mock('../../StorageService', () => ({
     clearAccountData: jest.fn(),
     persistSignOutIncompleteJournal: jest.fn().mockResolvedValue(undefined),
     hasSignOutIncompleteJournal: jest.fn().mockResolvedValue(false),
+    getSignOutIncompleteJournalOwner: jest.fn().mockResolvedValue(null),
     clearSignOutIncompleteJournal: jest.fn().mockResolvedValue(undefined),
     retryPendingCleanup: jest.fn(),
     listDeliveryQueue: jest.fn(),
@@ -182,6 +184,7 @@ jest.mock('../../KeyStore', () => ({
     deleteLinkSession: jest.fn(),
     markSignOutIncomplete: jest.fn(),
     isSignOutIncomplete: jest.fn(() => false),
+    getSignOutIncompleteOwner: jest.fn(() => null),
     clearSignOutIncomplete: jest.fn(),
     setAttachmentSecret: jest.fn(),
     deleteAttachmentSecrets: jest.fn(),
@@ -525,10 +528,13 @@ describe('group accept gate', () => {
     });
     mockedNative.receivePrivateMessages.mockResolvedValue({ messages: [], snapshot: 'est-in' });
     mockedKeyStore.getPubky.mockReturnValue(OWNER);
+    wireSignOutMarkerMocks(mockedKeyStore, mockedStorage);
     mockedRetryQueue.getDue.mockResolvedValue([]);
     wireInMemoryStorage();
 
     await LinkService.clearSession();
+    mockedKeyStore.clearSignOutIncomplete();
+    await mockedStorage.clearSignOutIncompleteJournal();
     await LinkService.signinWithSecret('signin-secret-hex');
   });
 

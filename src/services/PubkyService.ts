@@ -8,10 +8,11 @@ import { KeyStore } from './KeyStore';
 import { LinkService } from './link/LinkService';
 import { StorageService } from './StorageService';
 import {
-  activeOwnerAtCommit,
-  paintSigningOut,
+  ensureSignOutPaint,
+  paintNeedsSignIn,
   restorePaintedOwner,
-  SIGNING_OUT,
+  trackWipeInFlight,
+  waitForWipeInFlight,
 } from './paintedOwner';
 import type { UserProfile, PubkyKey } from '../types';
 
@@ -31,6 +32,9 @@ export type HomeserverListResult = { ok: true; urls: string[] } | { ok: false; m
 
 const APP_PATH = '/pub/hypercolor.app/v1';
 
+/** Fixed log string when the interrupted-sign-out marker cannot be read. */
+export const INTERRUPTED_SIGN_OUT_MARKER_UNREADABLE = 'interrupted sign-out marker unreadable';
+
 // ─── Path builders ────────────────────────────────────────────────────────────
 
 function profilePath(pubky: PubkyKey): string {
@@ -44,20 +48,28 @@ function unwrap<T>(result: { isOk(): boolean; value?: T; error?: Error }): T {
   return result.value as T;
 }
 
-async function finishIdentityClear(): Promise<void> {
+async function readInterruptedSignOutOwner(): Promise<PubkyKey | null> {
+  const fromMmkv = KeyStore.getSignOutIncompleteOwner();
+  if (fromMmkv) return fromMmkv;
+  return StorageService.getSignOutIncompleteJournalOwner();
+}
+
+async function finishIdentityClear(owner: PubkyKey): Promise<void> {
   try {
-    await KeyStore.clear();
-    KeyStore.clearSignOutIncomplete();
+    await KeyStore.clearIfPubky(owner);
+    if (KeyStore.getSignOutIncompleteOwner() === owner) {
+      KeyStore.clearSignOutIncomplete();
+    }
     try {
-      await StorageService.clearSignOutIncompleteJournal();
+      await StorageService.clearSignOutIncompleteJournal(owner);
     } catch {
-      // Journal clear is best-effort once identity is gone.
+      // Journal clear is best-effort once the wipe completed.
     }
   } catch (err) {
     try {
-      KeyStore.markSignOutIncomplete();
+      KeyStore.markSignOutIncomplete(owner);
     } catch {
-      // Boot still has getPubky(); the SQL journal may already be set.
+      // Boot still has the SQL journal or getPubky().
     }
     throw err;
   }
@@ -69,48 +81,70 @@ export const PubkyService = {
   // ── Auth ──────────────────────────────────────────────────────────────────
 
   async signOut(): Promise<void> {
+    await waitForWipeInFlight();
     const previousOwner = KeyStore.getPubky();
-    paintSigningOut();
-    try {
-      const sessionSecret = KeyStore.getSessionSecret();
-      if (sessionSecret) {
-        try {
-          unwrap(await rnSignOut(sessionSecret));
-        } catch {
-          // Best-effort
-        }
-      }
-      // Full messaging teardown (KeyStore attachment keys, cache, SQL) while
-      // the current-owner identity is still readable. Identity clear is last.
-      await LinkService.clearSession();
-    } catch (err) {
-      if (activeOwnerAtCommit() === SIGNING_OUT) {
-        await finishIdentityClear();
-      } else if (previousOwner) {
-        restorePaintedOwner(previousOwner);
-      }
-      throw err;
+    if (!previousOwner) {
+      throw new Error('sign-out requires an owner');
     }
-    await finishIdentityClear();
+    const generation = ensureSignOutPaint();
+    const run = async (): Promise<void> => {
+      try {
+        const sessionSecret = KeyStore.getSessionSecret();
+        if (sessionSecret) {
+          try {
+            unwrap(await rnSignOut(sessionSecret));
+          } catch {
+            // Best-effort
+          }
+        }
+        // Full messaging teardown while the current-owner identity is still
+        // readable. Identity clear runs only after a zero-error wipe.
+        await LinkService.clearSession({ owner: previousOwner });
+      } catch (err) {
+        restorePaintedOwner(previousOwner, generation);
+        throw err;
+      }
+      await finishIdentityClear(previousOwner);
+    };
+    await trackWipeInFlight(run());
   },
 
   async hasInterruptedSignOut(): Promise<boolean> {
-    if (KeyStore.isSignOutIncomplete()) return true;
     try {
+      if (KeyStore.isSignOutIncomplete()) return true;
       return await StorageService.hasSignOutIncompleteJournal();
-    } catch {
-      return false;
+    } catch (err) {
+      throw err instanceof Error ? err : new Error(INTERRUPTED_SIGN_OUT_MARKER_UNREADABLE);
     }
   },
 
   async completeInterruptedSignOut(): Promise<void> {
-    paintSigningOut();
+    await waitForWipeInFlight();
+    const owner = await readInterruptedSignOutOwner();
+    if (!owner) return;
+    const run = async (): Promise<void> => {
+      ensureSignOutPaint();
+      await LinkService.clearSession({ owner });
+      await finishIdentityClear(owner);
+      paintNeedsSignIn();
+    };
+    await trackWipeInFlight(run());
+  },
+
+  /**
+   * Sign-in paths wait here so a boot wipe cannot clear a freshly written
+   * identity. Shows the existing Welcome loading state while it awaits.
+   */
+  async awaitSignOutWipe(): Promise<void> {
+    await waitForWipeInFlight();
+    let interrupted: boolean;
     try {
-      await LinkService.clearSession();
+      interrupted = await PubkyService.hasInterruptedSignOut();
     } catch {
-      // Finish identity even if a commit step threw.
+      throw new Error(INTERRUPTED_SIGN_OUT_MARKER_UNREADABLE);
     }
-    await finishIdentityClear();
+    if (!interrupted) return;
+    await PubkyService.completeInterruptedSignOut();
   },
 
   // ── Profile ────────────────────────────────────────────────────────────────

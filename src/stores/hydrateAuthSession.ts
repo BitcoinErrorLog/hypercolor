@@ -1,7 +1,9 @@
 import { KeyStore } from '../services/KeyStore';
 import { PubkyService } from '../services/PubkyService';
-import { resetPaintOverlayForBoot } from '../services/paintedOwner';
+import { paintNeedsSignIn, resetPaintOverlayForBoot } from '../services/paintedOwner';
 import { useAuthStore } from './authStore';
+
+const INTERRUPTED_SIGN_OUT_MARKER_UNREADABLE = 'interrupted sign-out marker unreadable';
 
 /**
  * After `KeyStore.initKeyStore()`, restore `isAuthenticated` from the
@@ -10,8 +12,20 @@ import { useAuthStore } from './authStore';
  * Completes an interrupted sign-out before painting any owner.
  */
 export async function hydratePersistedAuth(): Promise<boolean> {
-  if (await PubkyService.hasInterruptedSignOut()) {
-    await PubkyService.completeInterruptedSignOut();
+  let interrupted: boolean;
+  try {
+    interrupted = await PubkyService.hasInterruptedSignOut();
+  } catch {
+    console.warn(INTERRUPTED_SIGN_OUT_MARKER_UNREADABLE);
+    paintNeedsSignIn();
+    return false;
+  }
+  if (interrupted) {
+    try {
+      await PubkyService.completeInterruptedSignOut();
+    } catch {
+      // Wipe failed: keep identity, keep markers, leave signing-out paint.
+    }
     return false;
   }
   resetPaintOverlayForBoot();

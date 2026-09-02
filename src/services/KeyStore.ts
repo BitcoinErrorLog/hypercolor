@@ -257,15 +257,26 @@ export function deleteLinkSession(): void {
 
 /**
  * Durable flag that an irreversible sign-out started but identity clear
- * did not finish. Survives `clear()` so boot can complete the wipe before
- * painting any owner. Cleared only after a successful identity wipe.
+ * did not finish. Value is the owner pubky so boot can retry
+ * `clearAccountData(owner)` even if the KeyStore identity is gone.
+ * Survives `clear()` / `clearIfPubky()` so boot can complete the wipe
+ * before painting any owner. Cleared only after a zero-error wipe.
  */
-export function markSignOutIncomplete(): void {
-  store().set(SIGN_OUT_INCOMPLETE_KEY, '1');
+export function markSignOutIncomplete(ownerPubky: string): void {
+  if (ownerPubky.length === 0) {
+    throw new Error('KeyStore.markSignOutIncomplete: owner is required');
+  }
+  store().set(SIGN_OUT_INCOMPLETE_KEY, ownerPubky);
 }
 
 export function isSignOutIncomplete(): boolean {
-  return store().getString(SIGN_OUT_INCOMPLETE_KEY) === '1';
+  const value = store().getString(SIGN_OUT_INCOMPLETE_KEY);
+  return typeof value === 'string' && value.length > 0;
+}
+
+export function getSignOutIncompleteOwner(): string | null {
+  const value = store().getString(SIGN_OUT_INCOMPLETE_KEY);
+  return typeof value === 'string' && value.length > 0 ? value : null;
 }
 
 export function clearSignOutIncomplete(): void {
@@ -534,11 +545,7 @@ export async function isAppCertValid(): Promise<boolean> {
 
 // ─── Clear all ────────────────────────────────────────────────────────────────
 
-export async function clear(): Promise<void> {
-  const owner = getPubky();
-  if (owner) {
-    await clearAttachmentSecretsForOwner(owner);
-  }
+async function resetIdentityKeychain(): Promise<void> {
   await Promise.all([
     deleteAppKeypair(),
     Keychain.resetGenericPassword({ service: INBOX_KEY_SERVICE }),
@@ -547,13 +554,39 @@ export async function clear(): Promise<void> {
     Keychain.resetGenericPassword({ service: LEGACY_LINK_RECEIVER_SECRET_SERVICE }),
     Keychain.resetGenericPassword({ service: RING_PENDING_SERVICE }),
   ]);
-  if (owner) {
-    store().remove(attachmentIndexKey(owner));
-  }
+}
+
+function removeIdentityMetadata(): void {
   store().remove(PUBKY_KEY);
   store().remove(HOMESERVER_KEY);
   store().remove(SESSION_SECRET_KEY);
   store().remove(LINK_SESSION_KEY);
+}
+
+/**
+ * Compare-and-clear: wipe identity material only while KeyStore still names
+ * `expectedPubky`. Returns false without touching another owner's secrets.
+ * The sign-out-incomplete marker is not removed.
+ */
+export async function clearIfPubky(expectedPubky: string): Promise<boolean> {
+  if (getPubky() !== expectedPubky) return false;
+  await clearAttachmentSecretsForOwner(expectedPubky);
+  if (getPubky() !== expectedPubky) return false;
+  await resetIdentityKeychain();
+  if (getPubky() !== expectedPubky) return false;
+  store().remove(attachmentIndexKey(expectedPubky));
+  removeIdentityMetadata();
+  return true;
+}
+
+export async function clear(): Promise<void> {
+  const owner = getPubky();
+  if (owner) {
+    await clearIfPubky(owner);
+    return;
+  }
+  await resetIdentityKeychain();
+  removeIdentityMetadata();
 }
 
 export const KeyStore = {
@@ -575,6 +608,7 @@ export const KeyStore = {
   deleteLinkSession,
   markSignOutIncomplete,
   isSignOutIncomplete,
+  getSignOutIncompleteOwner,
   clearSignOutIncomplete,
   setPendingRingHandoff,
   getPendingRingHandoff,
@@ -601,4 +635,5 @@ export const KeyStore = {
   // Session
   hasPersistedSession,
   clear,
+  clearIfPubky,
 };

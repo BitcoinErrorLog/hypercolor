@@ -23,6 +23,7 @@ jest.mock('../../KeyStore', () => ({
     deleteLinkSession: jest.fn(),
     markSignOutIncomplete: jest.fn(),
     isSignOutIncomplete: jest.fn(() => false),
+    getSignOutIncompleteOwner: jest.fn(() => null),
     clearSignOutIncomplete: jest.fn(),
     deleteAttachmentSecrets: jest.fn().mockResolvedValue([]),
     clearAttachmentSecretsForOwner: jest.fn().mockResolvedValue([]),
@@ -95,6 +96,7 @@ import { PaykitLinkNative } from '../PaykitLinkNative';
 import { CHAT_MESSAGE_KIND, LINK_RECEIVER_PATH, buildDmConversationId } from '../../../types/link';
 import { GROUP_MESSAGE_KIND } from '../../../types/group';
 import { CONTACTS_COPY } from '../../../ui/contacts/contactsCopy';
+import { wireSignOutMarkerMocks } from '../../__tests__/wireSignOutMarkerMocks';
 import { formatGroupFanoutAggregate } from '../../../ui/groupFanoutStatus';
 
 const mockedNative = jest.mocked(PaykitLinkNative);
@@ -159,6 +161,7 @@ describe('declined peer outbound (real LinkService + storage)', () => {
     mockedNative.receivePrivateMessages.mockResolvedValue({ messages: [], snapshot: 'est-in' });
     mockedKeyStore.getPubky.mockReturnValue(OWNER);
     mockedKeyStore.getLinkSession.mockReturnValue(SESSION_ALIAS);
+    wireSignOutMarkerMocks(mockedKeyStore);
 
     await seedMessaging();
     await LinkService.signinWithSecret('signin-secret-hex');

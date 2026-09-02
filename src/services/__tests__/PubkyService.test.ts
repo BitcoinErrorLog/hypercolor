@@ -20,7 +20,9 @@ jest.mock('../KeyStore', () => ({
     clear: jest.fn(),
     markSignOutIncomplete: jest.fn(),
     isSignOutIncomplete: jest.fn(() => false),
+    getSignOutIncompleteOwner: jest.fn(() => null),
     clearSignOutIncomplete: jest.fn(),
+    clearIfPubky: jest.fn(),
   },
 }));
 
@@ -28,6 +30,7 @@ jest.mock('../StorageService', () => ({
   StorageService: {
     persistSignOutIncompleteJournal: jest.fn().mockResolvedValue(undefined),
     hasSignOutIncompleteJournal: jest.fn().mockResolvedValue(false),
+    getSignOutIncompleteJournalOwner: jest.fn().mockResolvedValue(null),
     clearSignOutIncompleteJournal: jest.fn().mockResolvedValue(undefined),
   },
 }));

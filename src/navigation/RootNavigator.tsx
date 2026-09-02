@@ -21,6 +21,7 @@ import { useAuthStore } from '../stores/authStore';
 import ThreadScreen from '../screens/main/ThreadScreen';
 import ChannelScreen from '../screens/main/ChannelScreen';
 import { PubkyRingAuthService } from '../services/PubkyRingAuthService';
+import { PubkyService } from '../services/PubkyService';
 import { GroupService, setPendingPublicJoin } from '../services/group/GroupService';
 import { parsePublicChannelRef } from '../types/group';
 import { sanitizeError } from '../ui/sanitizedError';
@@ -132,6 +133,7 @@ export function RootNavigator() {
       if (!url.startsWith('hypercolor://ring-callback')) return;
 
       try {
+        await PubkyService.awaitSignOutWipe();
         const { pubky, homeserver } = await PubkyRingAuthService.handleRingCallback(url);
         setAuthenticated(pubky as import('../types').PubkyKey, homeserver);
         notifyEnableMessagingResume();

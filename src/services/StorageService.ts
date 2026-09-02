@@ -476,8 +476,8 @@ export const StorageService = {
     return (result.rows ?? []).map(rowToQueueItem);
   },
 
-  async incrementAttempt(id: string, nextRetryAt: number): Promise<void> {
-    await mutateOwnedQueueRow(id, (db, owner) => {
+  async incrementAttempt(id: string, nextRetryAt: number): Promise<boolean> {
+    return mutateOwnedQueueRow(id, (db, owner) => {
       db.executeSync(
         `UPDATE delivery_queue SET attempts = attempts + 1, next_retry_at = ?
          WHERE id = ? AND json_extract(payload, '$.ownerPubky') = ?`,
@@ -486,8 +486,8 @@ export const StorageService = {
     });
   },
 
-  async deferQueueItem(id: string, nextRetryAt: number): Promise<void> {
-    await mutateOwnedQueueRow(id, (db, owner) => {
+  async deferQueueItem(id: string, nextRetryAt: number): Promise<boolean> {
+    return mutateOwnedQueueRow(id, (db, owner) => {
       db.executeSync(
         `UPDATE delivery_queue SET next_retry_at = ?
          WHERE id = ? AND json_extract(payload, '$.ownerPubky') = ?`,
@@ -513,8 +513,8 @@ export const StorageService = {
     return (result.rows?.length ?? 0) > 0;
   },
 
-  async removeFromQueue(id: string): Promise<void> {
-    await mutateOwnedQueueRow(id, (db, owner) => {
+  async removeFromQueue(id: string): Promise<boolean> {
+    return mutateOwnedQueueRow(id, (db, owner) => {
       db.executeSync(
         `DELETE FROM delivery_queue WHERE id = ? AND json_extract(payload, '$.ownerPubky') = ?`,
         [id, owner],
@@ -1337,14 +1337,17 @@ export const StorageService = {
           `DELETE FROM delivery_queue
            WHERE id = ?
              AND (
-               json_extract(payload, '$.ownerPubky') = ?
+               json_valid(payload) = 0
+               OR json_extract(payload, '$.ownerPubky') = ?
                OR json_extract(payload, '$.ownerPubky') IS NULL
              )`,
           [id, ownerPubky],
         );
       }
       db.executeSync(
-        `DELETE FROM delivery_queue WHERE json_extract(payload, '$.ownerPubky') IS NULL`,
+        `DELETE FROM delivery_queue
+         WHERE json_valid(payload) = 0
+            OR json_extract(payload, '$.ownerPubky') IS NULL`,
       );
       db.executeSync('DELETE FROM attachments WHERE owner_pubky = ?', [ownerPubky]);
       db.executeSync('DELETE FROM payment_events WHERE owner_pubky = ?', [ownerPubky]);
@@ -1407,12 +1410,17 @@ export const StorageService = {
 
   async persistSignOutIncompleteJournal(ownerPubky: PubkyKey): Promise<void> {
     const db = await getDb();
-    db.executeSync(
-      `INSERT OR IGNORE INTO pending_cleanup
-        (owner_pubky, target_kind, target, created_at)
-       VALUES (?, ?, ?, ?)`,
-      [ownerPubky, SIGN_OUT_INCOMPLETE_KIND, SIGN_OUT_INCOMPLETE_TARGET, now()],
-    );
+    transact(db, () => {
+      db.executeSync(`DELETE FROM pending_cleanup WHERE target_kind = ?`, [
+        SIGN_OUT_INCOMPLETE_KIND,
+      ]);
+      db.executeSync(
+        `INSERT INTO pending_cleanup
+          (owner_pubky, target_kind, target, created_at)
+         VALUES (?, ?, ?, ?)`,
+        [ownerPubky, SIGN_OUT_INCOMPLETE_KIND, SIGN_OUT_INCOMPLETE_TARGET, now()],
+      );
+    });
   },
 
   async hasSignOutIncompleteJournal(): Promise<boolean> {
@@ -1423,8 +1431,25 @@ export const StorageService = {
     return (result.rows?.length ?? 0) > 0;
   },
 
-  async clearSignOutIncompleteJournal(): Promise<void> {
+  async getSignOutIncompleteJournalOwner(): Promise<PubkyKey | null> {
     const db = await getDb();
+    const result = db.executeSync(
+      `SELECT owner_pubky FROM pending_cleanup WHERE target_kind = ? LIMIT 1`,
+      [SIGN_OUT_INCOMPLETE_KIND],
+    );
+    const owner = result.rows?.[0]?.owner_pubky;
+    return typeof owner === 'string' && owner.length > 0 ? owner : null;
+  },
+
+  async clearSignOutIncompleteJournal(ownerPubky?: PubkyKey): Promise<void> {
+    const db = await getDb();
+    if (ownerPubky) {
+      db.executeSync(`DELETE FROM pending_cleanup WHERE target_kind = ? AND owner_pubky = ?`, [
+        SIGN_OUT_INCOMPLETE_KIND,
+        ownerPubky,
+      ]);
+      return;
+    }
     db.executeSync(`DELETE FROM pending_cleanup WHERE target_kind = ?`, [SIGN_OUT_INCOMPLETE_KIND]);
   },
 
@@ -2854,10 +2879,13 @@ function bindQueueItemToOwner(item: DeliveryQueueItem, expectedOwner: PubkyKey):
     throw new LinkSendError('owner-changed', 'StorageService: queue payload owner mismatch');
   }
   const existing = parsed.ownerPubky;
-  if (typeof existing === 'string' && existing.length > 0 && existing !== expectedOwner) {
+  if (typeof existing !== 'string' || existing.length === 0) {
+    throw new LinkSendError('owner-changed', 'StorageService: queue payload missing owner');
+  }
+  if (existing !== expectedOwner) {
     throw new LinkSendError('owner-changed', 'StorageService: queue payload owner mismatch');
   }
-  return { ...item, payload: JSON.stringify({ ...parsed, ownerPubky: expectedOwner }) };
+  return item;
 }
 
 function insertQueueItem(db: SqlExecutor, item: DeliveryQueueItem, expectedOwner: PubkyKey): void {
@@ -3124,17 +3152,22 @@ function queueOwnerFromPayload(payload: string): PubkyKey | null {
 async function mutateOwnedQueueRow(
   id: string,
   fn: (db: SqlExecutor, owner: PubkyKey) => void,
-): Promise<void> {
+): Promise<boolean> {
   const db = await getDb();
   const result = db.executeSync('SELECT payload FROM delivery_queue WHERE id = ? LIMIT 1', [id]);
-  const raw = result.rows?.[0]?.payload;
-  if (typeof raw !== 'string') return;
+  const row = result.rows?.[0];
+  if (!row) return false;
+  const raw = row.payload;
+  if (typeof raw !== 'string') {
+    throw new LinkSendError('owner-changed', 'StorageService: queue payload is not a string');
+  }
   const owner = queueOwnerFromPayload(raw);
   if (!owner) {
     throw new LinkSendError('owner-changed', 'StorageService: queue payload missing owner');
   }
   assertOwnerAtCommit(owner);
   fn(db, owner);
+  return true;
 }
 
 function persistQueuePayload(payload: string): string {

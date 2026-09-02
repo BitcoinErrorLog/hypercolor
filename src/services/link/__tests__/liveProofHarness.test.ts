@@ -73,6 +73,7 @@ jest.mock('../../KeyStore', () => ({
     deleteLinkSession: jest.fn(),
     markSignOutIncomplete: jest.fn(),
     isSignOutIncomplete: jest.fn(() => false),
+    getSignOutIncompleteOwner: jest.fn(() => null),
     clearSignOutIncomplete: jest.fn(),
     isAppCertValid: jest.fn(),
     getAttachmentSecret: jest.fn(),

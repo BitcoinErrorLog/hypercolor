@@ -34,12 +34,28 @@ jest.mock('../KeyStore', () => ({
     deleteLinkSession: jest.fn(),
     markSignOutIncomplete: jest.fn(),
     isSignOutIncomplete: jest.fn(() => false),
+    getSignOutIncompleteOwner: jest.fn(() => null),
     clearSignOutIncomplete: jest.fn(),
     clear: jest.fn(),
+    clearIfPubky: jest.fn(),
     getSessionSecret: jest.fn(),
+    getHomeserver: jest.fn(() => 'homeserver-pk'),
+    hasPersistedSession: jest.fn(),
     deleteAttachmentSecrets: jest.fn().mockResolvedValue([]),
     clearAttachmentSecretsForOwner: jest.fn().mockResolvedValue([]),
     deleteAttachmentSecretByService: jest.fn().mockResolvedValue(true),
+  },
+}));
+
+jest.mock('../../stores/authStore', () => ({
+  useAuthStore: {
+    getState: () => ({
+      setAuthenticated: (pubky: string) => {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const { paintOwner } = require('../paintedOwner') as typeof import('../paintedOwner');
+        paintOwner(pubky);
+      },
+    }),
   },
 }));
 
@@ -112,7 +128,7 @@ import { runMigrations } from '../../db/migrations';
 import { openMemoryDb } from '../../db/__tests__/betterSqliteAdapter';
 import { StorageService } from '../StorageService';
 import { KeyStore } from '../KeyStore';
-import { PubkyService } from '../PubkyService';
+import { INTERRUPTED_SIGN_OUT_MARKER_UNREADABLE, PubkyService } from '../PubkyService';
 import { FollowsImportSettings } from '../contacts/followsImportSettings';
 import {
   LinkService,
@@ -126,11 +142,12 @@ import { CHAT_MESSAGE_KIND, LINK_RECEIVER_PATH, buildDmConversationId } from '..
 import { GROUP_MESSAGE_KIND } from '../../types/group';
 import {
   activeOwnerAtCommit,
+  isNeedsSignInPaint,
   paintOwner,
   paintSigningOut,
-  resetPaintOverlayForBoot,
   SIGNING_OUT,
 } from '../paintedOwner';
+import { hydratePersistedAuth } from '../../stores/hydrateAuthSession';
 import {
   EMPTY_PAYMENT_RECORD_EXTRAS,
   ENDPOINT_LIGHTNING_BOLT11,
@@ -191,35 +208,44 @@ function switchPaintedOwner(): void {
   paintOwner(OTHER);
 }
 
-function wireSignOutIncomplete(): { isSet: () => boolean } {
-  let incomplete = false;
-  mockedKeyStore.markSignOutIncomplete.mockImplementation(() => {
-    incomplete = true;
+function wireSignOutIncomplete(): { isSet: () => boolean; owner: () => string | null } {
+  let incompleteOwner: string | null = null;
+  mockedKeyStore.markSignOutIncomplete.mockImplementation((owner: string) => {
+    incompleteOwner = owner;
   });
-  mockedKeyStore.isSignOutIncomplete.mockImplementation(() => incomplete);
+  mockedKeyStore.isSignOutIncomplete.mockImplementation(
+    () => typeof incompleteOwner === 'string' && incompleteOwner.length > 0,
+  );
+  mockedKeyStore.getSignOutIncompleteOwner.mockImplementation(() => incompleteOwner);
   mockedKeyStore.clearSignOutIncomplete.mockImplementation(() => {
-    incomplete = false;
+    incompleteOwner = null;
   });
   mockedKeyStore.deleteLinkSession.mockImplementation(() => {
     mockedKeyStore.getLinkSession.mockReturnValue(null);
   });
-  mockedKeyStore.clear.mockImplementation(async () => {
+  mockedKeyStore.clearIfPubky.mockImplementation(async (expected: string) => {
+    if (mockedKeyStore.getPubky() !== expected) return false;
     mockedKeyStore.getPubky.mockReturnValue(null);
     mockedKeyStore.getLinkSession.mockReturnValue(null);
-    mockedKeyStore.getSessionSecret?.mockReturnValue?.(null);
+    mockedKeyStore.getSessionSecret.mockReturnValue(null);
+    mockedKeyStore.hasPersistedSession.mockResolvedValue(false);
+    return true;
   });
-  return { isSet: () => incomplete };
+  mockedKeyStore.clear.mockImplementation(async () => {
+    const current = mockedKeyStore.getPubky();
+    if (typeof current === 'string' && current.length > 0) {
+      await mockedKeyStore.clearIfPubky(current);
+    }
+  });
+  mockedKeyStore.hasPersistedSession.mockImplementation(
+    async () => mockedKeyStore.getPubky() != null,
+  );
+  return { isSet: () => incompleteOwner != null, owner: () => incompleteOwner };
 }
 
 async function simulateRelaunch(): Promise<void> {
   resetLinkServiceHarnessState();
-  resetPaintOverlayForBoot();
-  if (
-    mockedKeyStore.isSignOutIncomplete() ||
-    (await StorageService.hasSignOutIncompleteJournal())
-  ) {
-    await PubkyService.completeInterruptedSignOut();
-  }
+  await hydratePersistedAuth();
 }
 
 describe('owner-conditional persist at commit time', () => {
@@ -779,6 +805,9 @@ describe('owner-conditional persist at commit time', () => {
     spy.mockRestore();
     expect(activeOwnerAtCommit()).toBe(SIGNING_OUT);
     expect(mockedKeyStore.getLinkSession()).toBeNull();
+    expect(mockedKeyStore.getPubky()).toBe(OWNER);
+    expect(mockedKeyStore.isSignOutIncomplete()).toBe(true);
+    expect(await StorageService.hasSignOutIncompleteJournal()).toBe(true);
     await expect(
       StorageService.upsertContact({
         pubky: PEER,
@@ -792,7 +821,8 @@ describe('owner-conditional persist at commit time', () => {
       }),
     ).rejects.toEqual(expect.objectContaining({ name: 'LinkSendError', code: 'owner-changed' }));
     await simulateRelaunch();
-    expect(activeOwnerAtCommit()).toBe(SIGNING_OUT);
+    expect(activeOwnerAtCommit()).toBeNull();
+    expect(isNeedsSignInPaint()).toBe(true);
     expect(mockedKeyStore.getPubky()).toBeNull();
   });
 
@@ -827,9 +857,13 @@ describe('owner-conditional persist at commit time', () => {
   });
 
   it('retries deleteLinkSession and leaves a marker when it keeps failing', async () => {
-    mockedKeyStore.deleteLinkSession.mockImplementation(() => {
-      throw new Error('mmkv remove failed');
-    });
+    mockedKeyStore.deleteLinkSession
+      .mockImplementationOnce(() => {
+        throw new Error('mmkv remove failed');
+      })
+      .mockImplementationOnce(() => {
+        throw new Error('mmkv remove failed');
+      });
     await expect(LinkService.clearSession()).rejects.toThrow('mmkv remove failed');
     expect(activeOwnerAtCommit()).toBe(SIGNING_OUT);
     expect(mockedKeyStore.deleteLinkSession.mock.calls.length).toBeGreaterThanOrEqual(2);
@@ -849,18 +883,20 @@ describe('owner-conditional persist at commit time', () => {
     ).rejects.toEqual(expect.objectContaining({ name: 'LinkSendError', code: 'owner-changed' }));
     await simulateRelaunch();
     expect(mockedKeyStore.getPubky()).toBeNull();
-    expect(activeOwnerAtCommit()).toBe(SIGNING_OUT);
+    expect(activeOwnerAtCommit()).toBeNull();
+    expect(isNeedsSignInPaint()).toBe(true);
   });
 
-  it('does not restore paint when KeyStore.clear throws after teardown', async () => {
-    mockedKeyStore.clear.mockRejectedValueOnce(new Error('keystore clear'));
+  it('does not restore paint when KeyStore.clearIfPubky throws after teardown', async () => {
+    mockedKeyStore.clearIfPubky.mockRejectedValueOnce(new Error('keystore clear'));
     await expect(PubkyService.signOut()).rejects.toThrow('keystore clear');
     expect(activeOwnerAtCommit()).toBe(SIGNING_OUT);
     expect(mockedKeyStore.isSignOutIncomplete()).toBe(true);
     expect(await StorageService.getLink(OWNER, PEER)).toBeNull();
     await simulateRelaunch();
     expect(mockedKeyStore.getPubky()).toBeNull();
-    expect(activeOwnerAtCommit()).toBe(SIGNING_OUT);
+    expect(activeOwnerAtCommit()).toBeNull();
+    expect(isNeedsSignInPaint()).toBe(true);
   });
 
   it('rolls back persistLinkSendIntent when the queue payload names a different owner', async () => {
@@ -954,5 +990,236 @@ describe('owner-conditional persist at commit time', () => {
       [],
     );
     expect(await StorageService.hasQueueItem('q-group-forged')).toBe(false);
+  });
+
+  it('keeps identity and both markers when PubkyService.signOut wipe fails, then retries', async () => {
+    await StorageService.saveLinkMessage({
+      ownerPubky: OWNER,
+      eventId: '00000000-0000-4000-8000-00000000r111',
+      conversationId: buildDmConversationId(PEER),
+      peerPubky: PEER,
+      senderPubky: OWNER,
+      direction: 'sent',
+      kind: CHAT_MESSAGE_KIND,
+      rawJson: '{}',
+      body: 'keep-me',
+      sentAt: NOW,
+      receivedAt: null,
+      deliveryState: 'sent',
+    });
+    const spy = jest
+      .spyOn(StorageService, 'clearAccountData')
+      .mockRejectedValueOnce(new Error('sql locked'));
+    await expect(PubkyService.signOut()).rejects.toThrow('sql locked');
+    spy.mockRestore();
+    expect(mockedKeyStore.getPubky()).toBe(OWNER);
+    expect(mockedKeyStore.isSignOutIncomplete()).toBe(true);
+    expect(mockedKeyStore.getSignOutIncompleteOwner()).toBe(OWNER);
+    expect(await StorageService.hasSignOutIncompleteJournal()).toBe(true);
+    expect(await StorageService.getSignOutIncompleteJournalOwner()).toBe(OWNER);
+    expect(activeOwnerAtCommit()).toBe(SIGNING_OUT);
+    expect(
+      await StorageService.hasLinkMessage(
+        OWNER,
+        OWNER,
+        CHAT_MESSAGE_KIND,
+        '00000000-0000-4000-8000-00000000r111',
+      ),
+    ).toBe(true);
+    await PubkyService.signOut();
+    expect(mockedKeyStore.getPubky()).toBeNull();
+    expect(mockedKeyStore.isSignOutIncomplete()).toBe(false);
+    expect(await StorageService.hasSignOutIncompleteJournal()).toBe(false);
+    expect(
+      await StorageService.hasLinkMessage(
+        OWNER,
+        OWNER,
+        CHAT_MESSAGE_KIND,
+        '00000000-0000-4000-8000-00000000r111',
+      ),
+    ).toBe(false);
+    expect(await StorageService.getLink(OWNER, PEER)).toBeNull();
+  });
+
+  it('retries the wipe from the marker owner on relaunch and paints nothing', async () => {
+    await StorageService.saveLinkMessage({
+      ownerPubky: OWNER,
+      eventId: '00000000-0000-4000-8000-00000000r112',
+      conversationId: buildDmConversationId(PEER),
+      peerPubky: PEER,
+      senderPubky: OWNER,
+      direction: 'sent',
+      kind: CHAT_MESSAGE_KIND,
+      rawJson: '{}',
+      body: 'wipe-me',
+      sentAt: NOW,
+      receivedAt: null,
+      deliveryState: 'sent',
+    });
+    const spy = jest
+      .spyOn(StorageService, 'clearAccountData')
+      .mockRejectedValueOnce(new Error('sql locked'));
+    await expect(PubkyService.signOut()).rejects.toThrow('sql locked');
+    spy.mockRestore();
+    expect(mockedKeyStore.getSignOutIncompleteOwner()).toBe(OWNER);
+    mockedKeyStore.getPubky.mockReturnValue(null);
+    await simulateRelaunch();
+    expect(
+      await StorageService.hasLinkMessage(
+        OWNER,
+        OWNER,
+        CHAT_MESSAGE_KIND,
+        '00000000-0000-4000-8000-00000000r112',
+      ),
+    ).toBe(false);
+    expect(mockedKeyStore.getPubky()).toBeNull();
+    expect(activeOwnerAtCommit()).toBeNull();
+    expect(isNeedsSignInPaint()).toBe(true);
+  });
+
+  it('does not restore paint A when the prelude throws after paintOwner(B)', async () => {
+    const spy = jest.spyOn(StorageService, 'getAllLinks').mockImplementation(async () => {
+      paintOwner(OTHER);
+      throw new Error('sql locked');
+    });
+    await expect(LinkService.clearSession()).rejects.toThrow('sql locked');
+    spy.mockRestore();
+    expect(activeOwnerAtCommit()).toBe(OTHER);
+  });
+
+  it('does not clear B native aliases when a boot wipe runs after B is painted', async () => {
+    mockedNative.clearAllNativeSecrets.mockClear();
+    mockedNative.signOutSession.mockClear();
+    let releaseWipe = (): void => undefined;
+    let startedWipe = (): void => undefined;
+    const started = new Promise<void>(resolve => {
+      startedWipe = resolve;
+    });
+    const held = new Promise<void>(resolve => {
+      releaseWipe = resolve;
+    });
+    const realClear = StorageService.clearAccountData.bind(StorageService);
+    const spy = jest.spyOn(StorageService, 'clearAccountData').mockImplementation(async owner => {
+      startedWipe();
+      await held;
+      spy.mockRestore();
+      return realClear(owner);
+    });
+    const pending = PubkyService.signOut();
+    await started;
+    mockedKeyStore.getPubky.mockReturnValue(OTHER);
+    mockedKeyStore.getLinkSession.mockReturnValue('session-b');
+    paintOwner(OTHER);
+    releaseWipe();
+    await pending;
+    expect(mockedNative.signOutSession).toHaveBeenCalledWith(SESSION_ALIAS);
+    expect(mockedNative.signOutSession).not.toHaveBeenCalledWith('session-b');
+    expect(mockedNative.clearAllNativeSecrets).not.toHaveBeenCalled();
+    expect(mockedKeyStore.getPubky()).toBe(OTHER);
+    expect(mockedKeyStore.getLinkSession()).toBe('session-b');
+  });
+
+  it('waits for an in-flight wipe before signing in as B', async () => {
+    mockedNative.signinWithSecret.mockClear();
+    mockedNative.signinWithSecret.mockResolvedValue({ sessionAlias: 'session-b', pubky: OTHER });
+    mockedKeyStore.setPubky.mockImplementation((pubky: string) => {
+      mockedKeyStore.getPubky.mockReturnValue(pubky);
+    });
+    mockedKeyStore.setLinkSession.mockImplementation((alias: string) => {
+      mockedKeyStore.getLinkSession.mockReturnValue(alias);
+    });
+    let releaseWipe = (): void => undefined;
+    let startedWipe = (): void => undefined;
+    const started = new Promise<void>(resolve => {
+      startedWipe = resolve;
+    });
+    const held = new Promise<void>(resolve => {
+      releaseWipe = resolve;
+    });
+    const realClear = StorageService.clearAccountData.bind(StorageService);
+    const spy = jest.spyOn(StorageService, 'clearAccountData').mockImplementation(async owner => {
+      startedWipe();
+      await held;
+      spy.mockRestore();
+      return realClear(owner);
+    });
+    const pendingWipe = PubkyService.signOut();
+    await started;
+    const pendingSignin = LinkService.signinWithSecret('b-secret');
+    expect(mockedNative.signinWithSecret).not.toHaveBeenCalled();
+    releaseWipe();
+    await pendingWipe;
+    await pendingSignin;
+    expect(mockedNative.signinWithSecret).toHaveBeenCalledWith('b-secret');
+    expect(mockedKeyStore.getPubky()).toBe(OTHER);
+    expect(mockedKeyStore.getLinkSession()).toBe('session-b');
+  });
+
+  it('does not paint or wipe when the interrupted-sign-out marker cannot be read', async () => {
+    mockedKeyStore.isSignOutIncomplete.mockImplementation(() => {
+      throw new Error('mmkv read');
+    });
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    await expect(hydratePersistedAuth()).resolves.toBe(false);
+    expect(warn).toHaveBeenCalledWith(INTERRUPTED_SIGN_OUT_MARKER_UNREADABLE);
+    warn.mockRestore();
+    expect(activeOwnerAtCommit()).toBeNull();
+    expect(isNeedsSignInPaint()).toBe(true);
+    expect(mockedKeyStore.getPubky()).toBe(OWNER);
+    expect(await StorageService.getLink(OWNER, PEER)).not.toBeNull();
+    expect(mockedNative.clearAllNativeSecrets).not.toHaveBeenCalled();
+  });
+
+  it('aborts sign-out before destruction when the marker write cannot be verified', async () => {
+    mockedKeyStore.markSignOutIncomplete.mockImplementation(() => {
+      throw new Error('mmkv down');
+    });
+    await expect(PubkyService.signOut()).rejects.toThrow('sign-out marker write failed');
+    expect(activeOwnerAtCommit()).toBe(OWNER);
+    expect(mockedKeyStore.getPubky()).toBe(OWNER);
+    expect(await StorageService.getLink(OWNER, PEER)).not.toBeNull();
+    expect(mockedKeyStore.isSignOutIncomplete()).toBe(false);
+  });
+
+  it('rolls back persistLinkSendIntent when the queue payload omits ownerPubky', async () => {
+    const eventId = '00000000-0000-4000-8000-00000000ccc3';
+    await expect(
+      StorageService.persistLinkSendIntent({
+        message: {
+          ownerPubky: OWNER,
+          eventId,
+          conversationId: buildDmConversationId(PEER),
+          peerPubky: PEER,
+          senderPubky: OWNER,
+          direction: 'sent',
+          kind: CHAT_MESSAGE_KIND,
+          rawJson: '{}',
+          body: 'hello',
+          sentAt: NOW,
+          receivedAt: null,
+          deliveryState: 'sending',
+        },
+        queueItem: {
+          id: 'q-missing-owner',
+          messageId: eventId,
+          recipientPubky: PEER,
+          payload: JSON.stringify({
+            type: 'link.chat.message',
+            peerPubky: PEER,
+            senderPubky: OWNER,
+            kind: CHAT_MESSAGE_KIND,
+            eventId,
+            rawJson: '{}',
+          }),
+          attempts: 0,
+          nextRetryAt: NOW,
+          createdAt: NOW,
+        },
+      }),
+    ).rejects.toEqual(expect.objectContaining({ name: 'LinkSendError', code: 'owner-changed' }));
+    expect(await StorageService.hasLinkMessage(OWNER, OWNER, CHAT_MESSAGE_KIND, eventId)).toBe(
+      false,
+    );
+    expect(await StorageService.hasQueueItem('q-missing-owner')).toBe(false);
   });
 });

@@ -199,22 +199,36 @@ describe('KeyStore session and Ring pending', () => {
     await expect(hasPersistedSession()).resolves.toBe(true);
   });
 
-  it('keeps the sign-out-incomplete marker across KeyStore.clear', async () => {
+  it('keeps the sign-out-incomplete owner across KeyStore.clear', async () => {
     const {
       initKeyStore,
       setPubky,
       markSignOutIncomplete,
       isSignOutIncomplete,
+      getSignOutIncompleteOwner,
       clear,
       clearSignOutIncomplete,
     } = await freshKeyStore();
     await initKeyStore();
     setPubky('pubky-owner');
-    markSignOutIncomplete();
+    markSignOutIncomplete('pubky-owner');
     expect(isSignOutIncomplete()).toBe(true);
+    expect(getSignOutIncompleteOwner()).toBe('pubky-owner');
     await clear();
     expect(isSignOutIncomplete()).toBe(true);
+    expect(getSignOutIncompleteOwner()).toBe('pubky-owner');
     clearSignOutIncomplete();
     expect(isSignOutIncomplete()).toBe(false);
+    expect(getSignOutIncompleteOwner()).toBeNull();
+  });
+
+  it('compare-and-clears identity only while KeyStore still names that owner', async () => {
+    const { initKeyStore, setPubky, getPubky, clearIfPubky } = await freshKeyStore();
+    await initKeyStore();
+    setPubky('pubky-a');
+    await expect(clearIfPubky('pubky-b')).resolves.toBe(false);
+    expect(getPubky()).toBe('pubky-a');
+    await expect(clearIfPubky('pubky-a')).resolves.toBe(true);
+    expect(getPubky()).toBeNull();
   });
 });

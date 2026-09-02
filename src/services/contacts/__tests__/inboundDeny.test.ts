@@ -8,6 +8,7 @@ import { StorageService } from '../../StorageService';
 import { KeyStore } from '../../KeyStore';
 import { RetryQueue } from '../../RetryQueue';
 import { FollowsImportSettings } from '../followsImportSettings';
+import { wireSignOutMarkerMocks } from '../../__tests__/wireSignOutMarkerMocks';
 import { blockPeer, unblockPeer } from '../blockPeer';
 import {
   LINK_RECEIVER_PATH,
@@ -87,6 +88,7 @@ jest.mock('../../StorageService', () => ({
     clearAccountData: jest.fn(),
     persistSignOutIncompleteJournal: jest.fn().mockResolvedValue(undefined),
     hasSignOutIncompleteJournal: jest.fn().mockResolvedValue(false),
+    getSignOutIncompleteJournalOwner: jest.fn().mockResolvedValue(null),
     clearSignOutIncompleteJournal: jest.fn().mockResolvedValue(undefined),
     retryPendingCleanup: jest.fn(),
     markGroupEventSeen: jest.fn(),
@@ -145,6 +147,7 @@ jest.mock('../../KeyStore', () => ({
     deleteLinkSession: jest.fn(),
     markSignOutIncomplete: jest.fn(),
     isSignOutIncomplete: jest.fn(() => false),
+    getSignOutIncompleteOwner: jest.fn(() => null),
     clearSignOutIncomplete: jest.fn(),
   },
 }));
@@ -219,6 +222,7 @@ describe('inbound deny is authoritative', () => {
     });
     mockedNative.receivePrivateMessages.mockResolvedValue({ messages: [], snapshot: 'est-in' });
     mockedKeyStore.getPubky.mockReturnValue(OWNER);
+    wireSignOutMarkerMocks(mockedKeyStore, mockedStorage);
     mockedStorage.getLinkReceiver.mockResolvedValue(receiverRow);
     mockedStorage.getLink.mockResolvedValue(null);
     mockedStorage.getAllLinks.mockResolvedValue([]);
@@ -269,6 +273,8 @@ describe('inbound deny is authoritative', () => {
     mockedStorage.failLinkMessageAndDequeue.mockResolvedValue(undefined);
 
     await LinkService.clearSession();
+    mockedKeyStore.clearSignOutIncomplete();
+    await mockedStorage.clearSignOutIncompleteJournal();
     await LinkService.signinWithSecret('signin-secret-hex');
   });
 

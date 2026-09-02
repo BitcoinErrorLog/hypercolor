@@ -2,6 +2,7 @@ import React from 'react';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import WelcomeScreen from '../WelcomeScreen';
 import { PubkyRingAuthService } from '../../../services/PubkyRingAuthService';
+import { PubkyService } from '../../../services/PubkyService';
 import { COPY } from '../../../copy/uxCopy';
 import {
   finishConnectDelegation,
@@ -34,6 +35,12 @@ jest.mock('../../../services/PubkyRingAuthService', () => ({
   },
 }));
 
+jest.mock('../../../services/PubkyService', () => ({
+  PubkyService: {
+    awaitSignOutWipe: jest.fn().mockResolvedValue(undefined),
+  },
+}));
+
 jest.mock('../DebugSignupPanel', () => ({
   DebugSignupPanel: () => null,
 }));
@@ -46,6 +53,7 @@ describe('WelcomeScreen', () => {
     resetConnectDelegationForTests();
     (PubkyRingAuthService.requestDelegation as jest.Mock).mockReset();
     (PubkyRingAuthService.isStaleDelegationRequestError as jest.Mock).mockReturnValue(false);
+    jest.mocked(PubkyService.awaitSignOutWipe).mockResolvedValue(undefined);
   });
 
   it('shows the custody line and never uses pubky-ring hyphenation', async () => {
@@ -77,9 +85,14 @@ describe('WelcomeScreen', () => {
       tree.root.findByProps({ testID: 'welcomeConnectRing' }).props.onPress();
     });
 
+    expect(PubkyService.awaitSignOutWipe).toHaveBeenCalled();
     expect(PubkyRingAuthService.requestDelegation).toHaveBeenCalledWith(
       expect.stringMatching(/^hypercolor-[0-9a-f]+$/),
     );
+    const wipeOrder = jest.mocked(PubkyService.awaitSignOutWipe).mock.invocationCallOrder[0]!;
+    const requestOrder = jest.mocked(PubkyRingAuthService.requestDelegation).mock
+      .invocationCallOrder[0]!;
+    expect(wipeOrder).toBeLessThan(requestOrder);
     expect(mockNavigate).toHaveBeenCalledWith('AwaitingRingAuth', {
       ringAuthUrl: PAYKIT_CONNECT_URL,
       expiresAt,
