@@ -9,6 +9,7 @@ import {
   ScrollView,
   Linking,
   BackHandler,
+  AppState,
 } from 'react-native';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -88,7 +89,8 @@ export default function AwaitingRingAuthScreen() {
   }, [nav]);
 
   const startNewDelegation = useCallback(async () => {
-    if (!tryBeginConnectDelegation()) return;
+    const token = tryBeginConnectDelegation();
+    if (token == null) return;
     setDelegationBusy(true);
     try {
       await PubkyRingAuthService.cancelPendingDelegation();
@@ -108,7 +110,7 @@ export default function AwaitingRingAuthScreen() {
         setPhase('offline');
       }
     } finally {
-      finishConnectDelegation();
+      finishConnectDelegation(token);
       setDelegationBusy(false);
     }
   }, [nav]);
@@ -147,6 +149,16 @@ export default function AwaitingRingAuthScreen() {
     }, remaining);
     return () => clearTimeout(timer);
   }, [phase, expiresAt]);
+
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', next => {
+      if (next !== 'active') return;
+      if (Date.now() >= expiresAt) {
+        setPhase(current => (current === 'waiting' ? 'expired' : current));
+      }
+    });
+    return () => sub.remove();
+  }, [expiresAt]);
 
   const title =
     phase === 'expired'

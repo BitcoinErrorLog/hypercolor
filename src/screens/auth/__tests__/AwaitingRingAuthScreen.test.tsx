@@ -1,10 +1,15 @@
 import React from 'react';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
+import { AppState } from 'react-native';
 import AwaitingRingAuthScreen from '../AwaitingRingAuthScreen';
 import { COPY, ENABLE_AUTH_TTL_MS } from '../../../copy/uxCopy';
 import { PubkyRingAuthService } from '../../../services/PubkyRingAuthService';
 import { notifyConnectAuthFeedback } from '../../../ui/connectAuthFeedback';
-import { finishConnectDelegation } from '../../../ui/connectDelegationStart';
+import {
+  finishConnectDelegation,
+  resetConnectDelegationForTests,
+  tryBeginConnectDelegation,
+} from '../../../ui/connectDelegationStart';
 
 const PAYKIT_CONNECT_URL =
   'pubkyring://paykit-connect?deviceId=hypercolor-sim&callback=hypercolor%3A%2F%2Fring-callback&ephemeralPk=aabbcc&caps=%2Fpub%2Fpaykit%2F%3Arw%2C%2Fpub%2Fhypercolor.app%2Fv1%2F%3Arw';
@@ -51,7 +56,7 @@ describe('AwaitingRingAuthScreen', () => {
     mockSetString.mockReset();
     mockGoBack.mockReset();
     mockSetParams.mockReset();
-    finishConnectDelegation();
+    resetConnectDelegationForTests();
     mockUseRoute.mockReturnValue({
       params: {
         ringAuthUrl: PAYKIT_CONNECT_URL,
@@ -200,6 +205,68 @@ describe('AwaitingRingAuthScreen', () => {
     expect(tree.root.findAllByProps({ testID: 'authQr' })).toHaveLength(0);
     expect(tree.root.findByProps({ testID: 'awaitingRingAuthGenerateNew' })).toBeTruthy();
     expect(tree.root.findAllByProps({ testID: 'awaitingRingAuthOpenRing' })).toHaveLength(0);
+    await unmount(tree);
+  });
+
+  it("does not release Welcome's later token from Awaiting finally", async () => {
+    let resolveRequest!: (value: { url: string; expiresAt: number; generation: number }) => void;
+    (PubkyRingAuthService.requestDelegation as jest.Mock).mockImplementation(
+      () =>
+        new Promise(resolve => {
+          resolveRequest = resolve;
+        }),
+    );
+    const tree = await render(<AwaitingRingAuthScreen />);
+    await act(async () => {
+      notifyConnectAuthFeedback('denied');
+    });
+    await act(async () => {
+      tree.root.findByProps({ testID: 'awaitingRingAuthTryAgain' }).props.onPress();
+    });
+    const awaitingToken = 1;
+    await act(async () => {
+      resolveRequest({
+        url: `${PAYKIT_CONNECT_URL}&retry=1`,
+        expiresAt: Date.now() + ENABLE_AUTH_TTL_MS,
+        generation: 2,
+      });
+    });
+    const welcomeToken = tryBeginConnectDelegation();
+    expect(welcomeToken).not.toBeNull();
+    finishConnectDelegation(awaitingToken);
+    expect(tryBeginConnectDelegation()).toBeNull();
+    finishConnectDelegation(welcomeToken as number);
+    await unmount(tree);
+  });
+
+  it('expires immediately when AppState becomes active past TTL without waiting for the timer', async () => {
+    jest.useFakeTimers();
+    const startedAt = Date.now();
+    mockUseRoute.mockReturnValue({
+      params: {
+        ringAuthUrl: PAYKIT_CONNECT_URL,
+        expiresAt: startedAt + ENABLE_AUTH_TTL_MS,
+        generation: 1,
+      },
+    });
+    let onAppState: ((state: string) => void) | undefined;
+    const addSpy = jest.spyOn(AppState, 'addEventListener').mockImplementation((event, handler) => {
+      if (event === 'change') onAppState = handler as (state: string) => void;
+      return { remove: jest.fn() };
+    });
+    const tree = await render(<AwaitingRingAuthScreen />);
+    expect(tree.root.findAllByProps({ testID: 'authQr' }).length).toBeGreaterThan(0);
+
+    jest.setSystemTime(startedAt + ENABLE_AUTH_TTL_MS + 1);
+    await act(async () => {
+      onAppState?.('active');
+    });
+
+    expect(JSON.stringify(tree.toJSON())).toContain(COPY.authorizationExpired);
+    expect(tree.root.findAllByProps({ testID: 'authQr' })).toHaveLength(0);
+    expect(tree.root.findByProps({ testID: 'awaitingRingAuthGenerateNew' })).toBeTruthy();
+    addSpy.mockRestore();
+    jest.useRealTimers();
     await unmount(tree);
   });
 });
