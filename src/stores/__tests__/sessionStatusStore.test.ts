@@ -112,6 +112,8 @@ describe('sessionStatusStore', () => {
     });
     (LinkService.getEnableStatus as jest.Mock).mockResolvedValue('session-offline');
     (StorageService.getLinkReceiver as jest.Mock).mockRejectedValue(new Error('disk'));
+    (StorageService.countPendingMessageRequests as jest.Mock).mockRejectedValue(new Error('disk'));
+    (StorageService.countUnreadGroupMessages as jest.Mock).mockRejectedValue(new Error('disk'));
     await useSessionStatusStore.getState().refresh();
     expect(useSessionStatusStore.getState().kind).toBe('offline');
     expect(useSessionStatusStore.getState().enableStatus).toBe('session-offline');
@@ -139,5 +141,17 @@ describe('sessionStatusStore', () => {
     expect(useSessionStatusStore.getState().kind).toBe('enabled');
     expect(useSessionStatusStore.getState().refreshing).toBe(false);
     expect(useSessionStatusStore.getState().lastError).toBeNull();
+  });
+
+  it('keeps revoked when the receiver is published and a count query rejects', async () => {
+    (LinkService.getEnableStatus as jest.Mock).mockResolvedValue('needs-enable');
+    (StorageService.getLinkReceiver as jest.Mock).mockResolvedValue({ markerPublished: true });
+    (StorageService.countPendingMessageRequests as jest.Mock).mockRejectedValue(new Error('disk'));
+    (StorageService.countUnreadGroupMessages as jest.Mock).mockResolvedValue(2);
+    await useSessionStatusStore.getState().refresh();
+    expect(useSessionStatusStore.getState().kind).toBe('revoked');
+    expect(useSessionStatusStore.getState().kind).not.toBe('needs-enable');
+    expect(useSessionStatusStore.getState().enableStatus).toBe('needs-enable');
+    expect(useSessionStatusStore.getState().groupUnreadCount).toBe(2);
   });
 });
