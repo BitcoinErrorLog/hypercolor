@@ -2553,7 +2553,12 @@ describe('schema v16 — own invoice history and verified-hash unique index', ()
   it('adds invoice_reused on an already-v16 payment_requests table without bumping user_version', async () => {
     const db = openMemoryDb();
     applyThroughV15(db);
+    // W2b-shaped v16 fixture: CREATE only. The following ALTER is for
+    // pre-column tables and is PRAGMA-guarded in applyStatement — raw
+    // executeSync would throw duplicate-column on the CREATE that already
+    // includes cleanup_pending.
     for (const statement of SCHEMA_V16_STATEMENTS) {
+      if (/ALTER TABLE/i.test(statement)) continue;
       db.executeSync(statement);
     }
     db.executeSync('PRAGMA user_version = 16');
@@ -2576,6 +2581,7 @@ describe('schema v16 — own invoice history and verified-hash unique index', ()
     const db = openMemoryDb();
     applyThroughV15(db);
     for (const statement of SCHEMA_V16_STATEMENTS) {
+      if (/ALTER TABLE/i.test(statement)) continue;
       db.executeSync(statement);
     }
     db.executeSync('PRAGMA user_version = 16');

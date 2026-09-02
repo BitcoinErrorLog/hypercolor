@@ -100,11 +100,18 @@ export const PAYMENT_REQUESTS_VERIFIED_HASH_INDEX_SQL = `CREATE UNIQUE INDEX IF 
  * re-applied so devices that stamped W2c's v16 still gain fan-out outcomes and
  * blocked_peers.
  */
+/**
+ * Versioned v17 body is CREATE-only. Seed / verified-hash dedup+index run in
+ * `repairOwnInvoiceHashes` (own transaction, never startup-fatal) so that:
+ * - devices without `tip_endpoints` yet (bare v16 stamp tests, mid-upgrade)
+ *   do not fail the version bump on the SEED SELECT;
+ * - `invoice_reused` can commit before a later index statement throws, matching
+ *   W2c's repair isolation.
+ * W2b CREATE IF NOT EXISTS statements are re-applied so a W2c-shaped v16 still
+ * gains fan-out outcomes and blocked_peers.
+ */
 export const SCHEMA_V17_STATEMENTS: readonly string[] = [
   OWN_INVOICE_HASHES_CREATE_SQL,
-  OWN_INVOICE_HASHES_SEED_SQL,
-  PAYMENT_REQUESTS_VERIFIED_HASH_DEDUP_SQL,
-  PAYMENT_REQUESTS_VERIFIED_HASH_INDEX_SQL,
   `CREATE TABLE IF NOT EXISTS group_fanout_outcomes (
     owner_pubky      TEXT NOT NULL,
     channel_id       TEXT NOT NULL,

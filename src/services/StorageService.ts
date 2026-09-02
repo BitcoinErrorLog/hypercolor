@@ -2937,22 +2937,8 @@ export const StorageService = {
         [record.ownerPubky, record.conversationId, record.senderPubky, record.eventId],
       );
       if ((before.rows?.length ?? 0) > 0) return false;
-      db.executeSync(
-        `INSERT OR IGNORE INTO payment_events
-        (owner_pubky, conversation_id, sender_pubky, event_id, kind,
-         payment_request_id, applied, received_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-        [
-          record.ownerPubky,
-          record.conversationId,
-          record.senderPubky,
-          record.eventId,
-          record.kind,
-          record.paymentRequestId,
-          record.applied ? 1 : 0,
-          record.receivedAt,
-        ],
-      );
+      // insertPaymentEvent also prunes unapplied rows per sender (W2c hazard).
+      insertPaymentEvent(db, record);
       return true;
     });
   },

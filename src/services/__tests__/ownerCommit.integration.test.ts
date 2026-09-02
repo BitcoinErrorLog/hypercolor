@@ -27,11 +27,14 @@ jest.mock('@op-engineering/op-sqlite', () => ({
 
 jest.mock('../KeyStore', () => ({
   KeyStore: {
+    isInitialized: jest.fn(() => true),
     getPubky: jest.fn(),
     setPubky: jest.fn(),
-    getLinkSession: jest.fn(),
+    getLinkSession: jest.fn(() => null),
     setLinkSession: jest.fn(),
     deleteLinkSession: jest.fn(),
+    deleteLinkSessionIfAlias: jest.fn(() => true),
+    readLinkSession: jest.fn(() => ({ ok: true, alias: null })),
     markSignOutIncomplete: jest.fn(),
     isSignOutIncomplete: jest.fn(() => false),
     getSignOutIncompleteOwner: jest.fn(() => null),
@@ -80,6 +83,7 @@ jest.mock('../link/PaykitLinkNative', () => ({
     awaitAuthApproval: jest.fn(),
     stopAuthKeepalive: jest.fn(),
     signinWithSecret: jest.fn(),
+    adoptAuthSession: jest.fn().mockResolvedValue(undefined),
     signupWithSecret: jest.fn(),
     restoreSession: jest.fn(),
     signOutSession: jest.fn(),
