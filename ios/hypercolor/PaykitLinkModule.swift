@@ -37,11 +37,23 @@ class PaykitLinkModule: NSObject {
     private var client: ChatClient?
     private var sessions: [String: ChatSession] = [:]
     private var flows: [String: ChatAuthFlow] = [:]
-    private var cancelledFlowIds = Set<String>()
+    /// Mirrors `AuthFlowCancelRegistry` cancelled tombstones.
+    private var cancelledFlowIds: [String: CancelledTombstone] = [:]
     private var surfacedFlowIds = Set<String>()
+    /// reserved(lease): admitted owner, not yet inside `awaitApproval`.
+    private var reservedFlowIds = Set<String>()
+    /// awaiting(lease): owner is inside the non-abortable FFI wait.
     private var awaitingFlowIds = Set<String>()
+    private var awaitLeases: [String: UInt64] = [:]
     private var awaitTasks: [String: Task<Void, Never>] = [:]
+    private var leaseSeq: UInt64 = 0
     private var handles: [String: LinkHandle] = [:]
+
+    /// Kotlin `AuthFlowCancelRegistry` cancelled map: `null` lease = no owner.
+    private enum CancelledTombstone {
+        case noOwner
+        case owner(UInt64)
+    }
 
     @objc static func requiresMainQueueSetup() -> Bool { false }
 
@@ -102,30 +114,76 @@ class PaykitLinkModule: NSObject {
         resolver resolve: @escaping RCTPromiseResolveBlock,
         rejecter reject: @escaping RCTPromiseRejectBlock
     ) {
-        let id = flowId.trimmingCharacters(in: .whitespacesAndNewlines)
-        let task: Task<Void, Never>
         lock.lock()
-        task = Task.detached(priority: .userInitiated) { [weak self] in
+        // Admission is atomic under this lock (Kotlin `startAwait`):
+        // idle → reserved(lease); reserved/awaiting/cancelled-with-owner →
+        // validation "already awaiting"; cancelled-no-owner → this caller
+        // prunes and rejects auth_flow_cancelled; missing/surfaced →
+        // validation. A task is created only for an accepted owner. Never
+        // overwrite awaitTasks[id]: a duplicate handle would let cancel
+        // abort the wrong waiter, which could consume the tombstone and
+        // persist the original's session (P1-1). Invalid calls store
+        // nothing, so cancel of an unknown/consumed id stays a no-op and
+        // the next await remains validation (P2-1).
+        let trimmed = flowId.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            lock.unlock()
+            reject("validation", "flowId is required", nil)
+            return
+        }
+        if surfacedFlowIds.contains(trimmed) {
+            lock.unlock()
+            reject("validation", "unknown auth flow", nil)
+            return
+        }
+        if let tombstone = cancelledFlowIds[trimmed] {
+            switch tombstone {
+            case .owner:
+                lock.unlock()
+                reject("validation", "already awaiting", nil)
+                return
+            case .noOwner:
+                cancelledFlowIds.removeValue(forKey: trimmed)
+                lock.unlock()
+                reject(
+                    "auth_flow_cancelled",
+                    Self.staticMessage("auth_flow_cancelled"),
+                    nil
+                )
+                return
+            }
+        }
+        if reservedFlowIds.contains(trimmed)
+            || awaitingFlowIds.contains(trimmed)
+            || awaitTasks[trimmed] != nil
+            || awaitLeases[trimmed] != nil
+        {
+            lock.unlock()
+            reject("validation", "already awaiting", nil)
+            return
+        }
+        guard let flow = flows[trimmed] else {
+            lock.unlock()
+            reject("validation", "unknown auth flow", nil)
+            return
+        }
+        leaseSeq += 1
+        let lease = leaseSeq
+        let id = trimmed
+        reservedFlowIds.insert(id)
+        awaitLeases[id] = lease
+        let task = Task.detached(priority: .userInitiated) { [weak self] in
             guard let self else {
                 reject("unavailable", "unavailable", nil)
                 return
             }
             do {
-                let value = try await self.performAwaitAuthApproval(flowId)
+                let value = try await self.performAwaitAuthApproval(id: id, lease: lease, flow: flow)
                 resolve(value)
             } catch {
                 let mapped = Self.mapError(error)
                 reject(mapped.code, mapped.message, nil)
             }
-        }
-        if id.isEmpty {
-            lock.unlock()
-            return
-        }
-        if cancelledFlowIds.contains(id) {
-            lock.unlock()
-            task.cancel()
-            return
         }
         awaitTasks[id] = task
         lock.unlock()
@@ -158,14 +216,31 @@ class PaykitLinkModule: NSObject {
         runAsync(resolve, reject) {
             let id = try Self.requireText(flowId, name: "flowId")
             let task = self.lock.withLock { () -> Task<Void, Never>? in
+                // Unknown/consumed ids must not be tombstoned. A stale
+                // awaitTasks handle would make the next await
+                // auth_flow_cancelled instead of validation (P2-1).
                 if self.surfacedFlowIds.contains(id) {
                     return nil
                 }
-                if self.flows[id] == nil && self.awaitTasks[id] == nil && !self.awaitingFlowIds.contains(id) {
+                if self.cancelledFlowIds[id] != nil {
                     return nil
                 }
-                self.cancelledFlowIds.insert(id)
+                let hasFlow = self.flows[id] != nil
+                let hasOwner = self.awaitLeases[id] != nil
+                    || self.reservedFlowIds.contains(id)
+                    || self.awaitingFlowIds.contains(id)
+                    || self.awaitTasks[id] != nil
+                if !hasFlow && !hasOwner {
+                    return nil
+                }
+                if let lease = self.awaitLeases[id] {
+                    self.cancelledFlowIds[id] = .owner(lease)
+                } else {
+                    self.cancelledFlowIds[id] = .noOwner
+                }
                 self.flows.removeValue(forKey: id)
+                self.reservedFlowIds.remove(id)
+                self.awaitingFlowIds.remove(id)
                 return self.awaitTasks.removeValue(forKey: id)
             }
             task?.cancel()
@@ -247,7 +322,9 @@ class PaykitLinkModule: NSObject {
                 self.flows.removeAll()
                 self.cancelledFlowIds.removeAll()
                 self.surfacedFlowIds.removeAll()
+                self.reservedFlowIds.removeAll()
                 self.awaitingFlowIds.removeAll()
+                self.awaitLeases.removeAll()
                 for task in self.awaitTasks.values {
                     task.cancel()
                 }
@@ -768,38 +845,49 @@ class PaykitLinkModule: NSObject {
 
     // MARK: - Internals
 
-    private func performAwaitAuthApproval(_ flowId: String) async throws -> [String: String] {
-        let id = try Self.requireText(flowId, name: "flowId")
-        let flow: ChatAuthFlow = try lock.withLock {
-            if cancelledFlowIds.contains(id) {
-                cancelledFlowIds.remove(id)
+    private func performAwaitAuthApproval(
+        id: String,
+        lease: UInt64,
+        flow: ChatAuthFlow
+    ) async throws -> [String: String] {
+        defer {
+            // Owner-only prune. A mismatched lease is a no-op, so a
+            // duplicate can never consume this id's tombstone or surfaced
+            // flag (Kotlin `finishAwait(id, lease)`).
+            finishAwait(id, lease: lease)
+        }
+        try lock.withLock {
+            // reserved(lease) → awaiting(lease). Fail closed if this wait
+            // was tombstoned before FFI; do not persist and do not prune
+            // here — defer finishAwait is the owner prune.
+            if cancelledFlowIds[id] != nil {
                 throw PaykitLinkBridgeError(
                     code: "auth_flow_cancelled",
                     message: Self.staticMessage("auth_flow_cancelled")
                 )
             }
-            if awaitingFlowIds.contains(id) {
-                throw PaykitLinkBridgeError(code: "validation", message: "unknown auth flow")
+            guard awaitLeases[id] == lease else {
+                throw PaykitLinkBridgeError(
+                    code: "auth_flow_cancelled",
+                    message: Self.staticMessage("auth_flow_cancelled")
+                )
             }
-            guard let flow = flows[id] else {
-                throw PaykitLinkBridgeError(code: "validation", message: "unknown auth flow")
-            }
+            reservedFlowIds.remove(id)
             awaitingFlowIds.insert(id)
-            return flow
-        }
-        defer {
-            lock.withLock {
-                awaitingFlowIds.remove(id)
-                awaitTasks.removeValue(forKey: id)
-                cancelledFlowIds.remove(id)
-                surfacedFlowIds.remove(id)
-                flows.removeValue(forKey: id)
-            }
         }
         try Task.checkCancellation()
         let session = try await flow.awaitApproval()
         try lock.withLock {
-            if cancelledFlowIds.contains(id) {
+            // Post-FFI fail-closed: tombstone ⇒ do not persist. Releasing
+            // `flow` when this function returns is the UniFFI close (deinit);
+            // Android calls ChatAuthFlow.close() at the same point.
+            if cancelledFlowIds[id] != nil {
+                throw PaykitLinkBridgeError(
+                    code: "auth_flow_cancelled",
+                    message: Self.staticMessage("auth_flow_cancelled")
+                )
+            }
+            guard awaitLeases[id] == lease else {
                 throw PaykitLinkBridgeError(
                     code: "auth_flow_cancelled",
                     message: Self.staticMessage("auth_flow_cancelled")
@@ -807,9 +895,33 @@ class PaykitLinkModule: NSObject {
             }
             surfacedFlowIds.insert(id)
             flows.removeValue(forKey: id)
+            reservedFlowIds.remove(id)
+            awaitingFlowIds.remove(id)
             awaitTasks.removeValue(forKey: id)
         }
         return try persistSession(session)
+    }
+
+    private func finishAwait(_ id: String, lease: UInt64) {
+        lock.withLock {
+            let leaseMatches = awaitLeases[id] == lease
+            let cancelledOwnerMatches: Bool
+            if case .owner(let owner) = cancelledFlowIds[id], owner == lease {
+                cancelledOwnerMatches = true
+            } else {
+                cancelledOwnerMatches = false
+            }
+            guard leaseMatches || cancelledOwnerMatches else {
+                return
+            }
+            cancelledFlowIds.removeValue(forKey: id)
+            surfacedFlowIds.remove(id)
+            reservedFlowIds.remove(id)
+            awaitingFlowIds.remove(id)
+            awaitLeases.removeValue(forKey: id)
+            awaitTasks.removeValue(forKey: id)
+            flows.removeValue(forKey: id)
+        }
     }
 
     private func runAsync(

@@ -141,65 +141,23 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
     fun awaitAuthApproval(flowId: String, promise: Promise) {
         launch(promise) {
             val id = requireText(flowId, "flowId")
-            val flow = when (val start = flows.startAwait(id)) {
-                is AuthFlowAwaitStart.Cancelled -> {
-                    flows.finishAwait(id)
-                    throw PaykitLinkBridgeError(
-                        "auth_flow_cancelled",
-                        staticMessage("auth_flow_cancelled"),
-                    )
-                }
-                is AuthFlowAwaitStart.Missing ->
-                    throw PaykitLinkBridgeError("validation", "unknown auth flow")
-                is AuthFlowAwaitStart.Ready -> start.flow
+            val session = try {
+                AuthFlowAwait.execute(
+                    flows = flows,
+                    id = id,
+                    awaitFfi = { flow -> flow.awaitApproval() },
+                    closeFlow = { leftover ->
+                        // Await already spawned: Paykit's wait finishes; close after
+                        // the FFI return so the UniFFI clone can drop and the poll stop.
+                        closeAuthFlow(leftover)
+                    },
+                    onOwnerStart = { startAuthKeepalive(id) },
+                    onOwnerFinish = { releaseAuthKeepalive(id) },
+                )
+            } catch (error: AuthFlowBridgeReject) {
+                throw PaykitLinkBridgeError(error.code, error.message)
             }
-            try {
-                startAuthKeepalive(id)
-                val job = kotlin.coroutines.coroutineContext[Job]
-                if (job != null) {
-                    flows.attachCancellable(id, AuthFlowCancellable { job.cancel() })
-                }
-                if (flows.isCancelled(id)) {
-                    throw PaykitLinkBridgeError(
-                        "auth_flow_cancelled",
-                        staticMessage("auth_flow_cancelled"),
-                    )
-                }
-                val session = flow.awaitApproval()
-                if (!flows.markSurfaced(id)) {
-                    throw PaykitLinkBridgeError(
-                        "auth_flow_cancelled",
-                        staticMessage("auth_flow_cancelled"),
-                    )
-                }
-                persistSession(session, promise)
-            } catch (error: Throwable) {
-                if (error is PaykitLinkBridgeError && error.code == "auth_flow_cancelled") {
-                    throw error
-                }
-                // Registry-cancelled ids stay auth_flow_cancelled even when the
-                // throw is IllegalStateException (pre-clone close) or any other
-                // coroutine site — not only CancellationException inside awaitApproval.
-                if (flows.isCancelled(id) || isCoroutineCancellation(error)) {
-                    throw PaykitLinkBridgeError(
-                        "auth_flow_cancelled",
-                        staticMessage("auth_flow_cancelled"),
-                    )
-                }
-                throw error
-            } finally {
-                flows.detachCancellable(id)
-                releaseAuthKeepalive(id)
-                val cancelled = flows.isCancelled(id)
-                val leftover = flows.finishAwait(id)
-                if (leftover != null) {
-                    closeAuthFlow(leftover)
-                } else if (cancelled) {
-                    // Await already spawned: Paykit's wait finishes; close after
-                    // the FFI return so the UniFFI clone can drop and the poll stop.
-                    closeAuthFlow(flow)
-                }
-            }
+            persistSession(session, promise)
         }
     }
 
@@ -218,9 +176,11 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
      * runs to completion inside Paykit and cannot be aborted. After that FFI
      * await returns, [awaitAuthApproval] closes the handle so the poll can
      * stop. Cancels an in-flight coroutine, stops keepalive, and marks the id
-     * so a later [awaitAuthApproval] rejects with `auth_flow_cancelled`.
-     * Unknown ids and a second cancel are no-ops. A flow whose approval was
-     * already surfaced to JS is left untouched.
+     * so a later [awaitAuthApproval] rejects with `auth_flow_cancelled`
+     * when that caller is the tombstone owner. A duplicate await of a live
+     * owner rejects `validation` / "already awaiting" and must not prune
+     * the owner's lease. Unknown ids and a second cancel are no-ops. A flow
+     * whose approval was already surfaced to JS is left untouched.
      */
     @ReactMethod
     fun cancelAuthFlow(flowId: String, promise: Promise) {

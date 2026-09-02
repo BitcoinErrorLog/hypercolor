@@ -13,6 +13,21 @@ package com.hypercolor
  * the module closes the handle after that FFI await returns so the poll
  * can stop. Unknown ids and a second cancel are no-ops. A flow whose
  * approval has already been surfaced to JS is left untouched.
+ *
+ * Await ownership is lease-gated. States:
+ * - idle: live flow, no owner
+ * - reserved(lease): first await admitted, not yet in the FFI wait
+ * - awaiting(lease): owner is inside `awaitApproval`
+ * - cancelled-with-owner: tombstone whose lease still belongs to the
+ *   admitted owner (that owner alone may prune)
+ * - cancelled-no-owner: cancel-before-await tombstone; the next await
+ *   becomes the unique owner and may prune
+ * - surfaced: approval handed to JS; cancel is a no-op
+ *
+ * A second await while reserved, awaiting, or cancelled-with-owner is
+ * [AuthFlowAwaitStart.AlreadyAwaiting] (`validation` / "already awaiting")
+ * and must never call [finishAwait]. Post-FFI [markSurfaced] fails closed
+ * on a tombstone so a cancelled owner cannot persist a session.
  */
 internal fun interface AuthFlowCancellable {
     fun cancel()
@@ -32,16 +47,19 @@ internal data class AuthFlowCancelOutcome<T>(
 )
 
 internal sealed class AuthFlowAwaitStart<out T> {
-    data class Ready<T>(val flow: T) : AuthFlowAwaitStart<T>()
-    data object Cancelled : AuthFlowAwaitStart<Nothing>()
+    data class Ready<T>(val flow: T, val lease: Long) : AuthFlowAwaitStart<T>()
+    data class Cancelled(val lease: Long) : AuthFlowAwaitStart<Nothing>()
+    data object AlreadyAwaiting : AuthFlowAwaitStart<Nothing>()
     data object Missing : AuthFlowAwaitStart<Nothing>()
 }
 
 internal class AuthFlowCancelRegistry<T> {
     private val lock = Any()
     private val slots = HashMap<String, Slot<T>>()
-    private val cancelled = HashSet<String>()
-    private val surfaced = HashSet<String>()
+    /** Cancelled tombstones: `null` lease is cancelled-no-owner. */
+    private val cancelled = HashMap<String, Long?>()
+    private val surfaced = HashMap<String, Long>()
+    private var nextLease = 1L
 
     fun put(id: String, flow: T) {
         synchronized(lock) {
@@ -51,9 +69,9 @@ internal class AuthFlowCancelRegistry<T> {
 
     fun peek(id: String): T? = synchronized(lock) { slots[id]?.flow }
 
-    fun isCancelled(id: String): Boolean = synchronized(lock) { id in cancelled }
+    fun isCancelled(id: String): Boolean = synchronized(lock) { cancelled.containsKey(id) }
 
-    fun isSurfaced(id: String): Boolean = synchronized(lock) { id in surfaced }
+    fun isSurfaced(id: String): Boolean = synchronized(lock) { surfaced.containsKey(id) }
 
     fun abandon(id: String): T? {
         synchronized(lock) {
@@ -63,18 +81,42 @@ internal class AuthFlowCancelRegistry<T> {
 
     fun startAwait(id: String): AuthFlowAwaitStart<T> {
         synchronized(lock) {
-            if (id in cancelled) {
-                return AuthFlowAwaitStart.Cancelled
-            }
-            if (id in surfaced) {
+            if (surfaced.containsKey(id)) {
                 return AuthFlowAwaitStart.Missing
+            }
+            if (cancelled.containsKey(id)) {
+                val owner = cancelled[id]
+                if (owner != null) {
+                    // cancelled-with-owner: secondary must not take the lease
+                    // or prune the tombstone while the original is settling.
+                    return AuthFlowAwaitStart.AlreadyAwaiting
+                }
+                val lease = allocLeaseLocked()
+                cancelled[id] = lease
+                return AuthFlowAwaitStart.Cancelled(lease)
             }
             val slot = slots[id] ?: return AuthFlowAwaitStart.Missing
-            if (slot.awaiting) {
-                return AuthFlowAwaitStart.Missing
+            if (slot.phase != Phase.Idle || slot.lease != null) {
+                return AuthFlowAwaitStart.AlreadyAwaiting
             }
-            slot.awaiting = true
-            return AuthFlowAwaitStart.Ready(slot.flow)
+            val lease = allocLeaseLocked()
+            slot.lease = lease
+            slot.phase = Phase.Reserved
+            return AuthFlowAwaitStart.Ready(slot.flow, lease)
+        }
+    }
+
+    fun markAwaiting(id: String, lease: Long): Boolean {
+        synchronized(lock) {
+            val slot = slots[id] ?: return false
+            if (slot.lease != lease) {
+                return false
+            }
+            if (slot.phase == Phase.Idle) {
+                return false
+            }
+            slot.phase = Phase.Awaiting
+            return true
         }
     }
 
@@ -92,15 +134,19 @@ internal class AuthFlowCancelRegistry<T> {
     }
 
     /**
-     * @return false when [id] was cancelled, so the caller must drop the
-     * session and must not resolve JS.
+     * @return false when [id] was cancelled or [lease] is not the owner, so
+     * the caller must drop the session and must not resolve JS.
      */
-    fun markSurfaced(id: String): Boolean {
+    fun markSurfaced(id: String, lease: Long): Boolean {
         synchronized(lock) {
-            if (id in cancelled) {
+            if (cancelled.containsKey(id)) {
                 return false
             }
-            surfaced.add(id)
+            val slot = slots[id] ?: return false
+            if (slot.lease != lease) {
+                return false
+            }
+            surfaced[id] = lease
             slots.remove(id)
             return true
         }
@@ -108,17 +154,17 @@ internal class AuthFlowCancelRegistry<T> {
 
     fun cancel(id: String): AuthFlowCancelOutcome<T> {
         synchronized(lock) {
-            if (id in surfaced) {
+            if (surfaced.containsKey(id)) {
                 return AuthFlowCancelOutcome(AuthFlowCancelKind.AlreadySurfaced)
             }
-            if (id in cancelled) {
+            if (cancelled.containsKey(id)) {
                 return AuthFlowCancelOutcome(AuthFlowCancelKind.AlreadyCancelled)
             }
             val slot = slots.remove(id)
             if (slot == null) {
                 return AuthFlowCancelOutcome(AuthFlowCancelKind.Unknown)
             }
-            cancelled.add(id)
+            cancelled[id] = slot.lease
             return AuthFlowCancelOutcome(
                 AuthFlowCancelKind.Cancelled,
                 droppedFlow = slot.flow,
@@ -128,14 +174,34 @@ internal class AuthFlowCancelRegistry<T> {
     }
 
     /**
-     * Called when [id]'s JS await promise is settling. Prunes [cancelled] /
-     * [surfaced] and returns a leftover live flow so the caller can close it
-     * (failed await). Cancel already dropped the slot; this only prunes the id.
+     * Called when [id]'s JS await promise is settling. Only [lease]'s owner
+     * may prune [cancelled] / [surfaced]. Returns a leftover live flow so
+     * the caller can close it (failed await). Cancel already dropped the
+     * slot; this only prunes matching owner state.
      */
-    fun finishAwait(id: String): T? {
+    fun finishAwait(id: String, lease: Long): T? {
         synchronized(lock) {
-            cancelled.remove(id)
-            surfaced.remove(id)
+            if (cancelled.containsKey(id)) {
+                val owner = cancelled[id]
+                if (owner != lease) {
+                    return null
+                }
+                cancelled.remove(id)
+                surfaced.remove(id)
+                return slots.remove(id)?.flow
+            }
+            val surfacedLease = surfaced[id]
+            if (surfacedLease != null) {
+                if (surfacedLease != lease) {
+                    return null
+                }
+                surfaced.remove(id)
+                return slots.remove(id)?.flow
+            }
+            val slot = slots[id] ?: return null
+            if (slot.lease != lease) {
+                return null
+            }
             return slots.remove(id)?.flow
         }
     }
@@ -150,9 +216,22 @@ internal class AuthFlowCancelRegistry<T> {
         }
     }
 
+    private fun allocLeaseLocked(): Long {
+        val lease = nextLease
+        nextLease += 1L
+        return lease
+    }
+
+    private enum class Phase {
+        Idle,
+        Reserved,
+        Awaiting,
+    }
+
     private class Slot<T>(
         val flow: T,
-        var awaiting: Boolean = false,
+        var phase: Phase = Phase.Idle,
+        var lease: Long? = null,
         var cancellable: AuthFlowCancellable? = null,
     )
 }

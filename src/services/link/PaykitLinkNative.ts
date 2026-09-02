@@ -169,10 +169,14 @@ export interface PaykitLinkNativeApi {
   getReceiverPublicKey(receiverAlias: string): Promise<string>;
   startAuthFlow(capabilities: string, relayUrl?: string): Promise<AuthFlowStart>;
   /**
-   * Suspend until Ring approves `flowId`. A second call for the same live
-   * `flowId` is rejected (`validation` / unknown auth flow) — there is no
-   * retry-in-place. After a failed, cancelled, or successful await the native
-   * flow is gone; start a new `startAuthFlow` to try again.
+   * Suspend until Ring approves `flowId`. Native admits one owner lease per
+   * live flow. A second call while that owner is reserved, awaiting, or still
+   * settling a cancellation is rejected (`validation` / "already awaiting") —
+   * there is no retry-in-place. Only that owner may prune cancellation or
+   * surfaced state. Cancel-before-await rejects `auth_flow_cancelled` and that
+   * caller is the owner who prunes the tombstone. After a failed, cancelled,
+   * or successful await the native flow is gone; start a new `startAuthFlow`
+   * to try again.
    */
   awaitAuthApproval(flowId: string): Promise<AuthSessionResult>;
   /**
@@ -184,13 +188,16 @@ export interface PaykitLinkNativeApi {
   /**
    * Retire `flowId`'s native waiter. Paykit FFI has no auth-flow cancel
    * primitive. Native discard cancels the await job, drops a not-yet-awaited
-   * flow so its relay subscription stops, stops keepalive, and rejects a
-   * later `awaitAuthApproval` with `auth_flow_cancelled`. A wait already
-   * spawned by `awaitApproval` runs to completion inside Paykit and cannot
-   * be aborted; after that FFI await returns, native closes the handle so
-   * the poll can stop. Unknown ids and a second cancel are no-ops. A flow
-   * whose approval was already surfaced to JS is left untouched. No-op when
-   * the native method is missing (older builds).
+   * flow so its relay subscription stops, stops keepalive, and marks a
+   * tombstone the await owner (lease) must observe. A wait already spawned
+   * by `awaitApproval` runs to completion inside Paykit and cannot be
+   * aborted; after that FFI await returns, native must not persist, must
+   * `close()` the handle, and rejects `auth_flow_cancelled`. Cancel-before-await
+   * rejects the later `awaitAuthApproval` with `auth_flow_cancelled`. A
+   * duplicate await of a live owner is `validation` / "already awaiting" and
+   * cannot consume the tombstone. Unknown ids and a second cancel are no-ops.
+   * A flow whose approval was already surfaced to JS is left untouched. No-op
+   * when the native method is missing (older builds).
    */
   cancelAuthFlow(flowId: string): Promise<void>;
   /**
