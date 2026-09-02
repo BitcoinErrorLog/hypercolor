@@ -19,6 +19,9 @@ export function finishConnectDelegation(token: number): void {
 }
 
 export function resetConnectDelegationForTests(): void {
+  if (process.env.NODE_ENV !== 'test' && !(typeof __DEV__ !== 'undefined' && __DEV__)) {
+    return;
+  }
   owner = null;
   nextToken = 0;
 }

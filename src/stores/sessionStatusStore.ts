@@ -29,6 +29,9 @@ let refreshGeneration = 0;
 let lastReceiverPublished: { pubky: string; published: boolean } | null = null;
 
 export function resetSessionStatusReceiverEvidence(): void {
+  if (process.env.NODE_ENV !== 'test' && !(typeof __DEV__ !== 'undefined' && __DEV__)) {
+    return;
+  }
   lastReceiverPublished = null;
 }
 
