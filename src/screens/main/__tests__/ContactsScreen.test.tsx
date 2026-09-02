@@ -11,6 +11,10 @@ import {
 } from '../contacts/ContactsScreenContent';
 import { CONSENT_TITLE } from '../../../ui/contacts/FollowsConsentSheet';
 
+jest.mock('react-native-safe-area-context', () => ({
+  useSafeAreaInsets: () => ({ top: 0, bottom: 12, left: 0, right: 0 }),
+}));
+
 const OWNER = 'operrr8wsbpr3ue9d4qj41ge1kcc6r7fdiy6o3ugjrrhi4y77rdo';
 const ALICE = 'pxnu33x7jtpx9ar1ytsi4yxbp6a5o36gwhffs8zoxmbuptici1jy';
 const BOB = 'kyp7qac797z86bngq9g3ajqbrsgsb3tibayndqi6fe4cqi3gb6ry';
@@ -186,6 +190,30 @@ describe('ContactsScreenContent', () => {
       tree.root.findByProps({ testID: 'contactsUseFollows' }).props.onPress();
     });
     expect(onUseFollows).toHaveBeenCalled();
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('announces a suggestion with shortPubky and claims-to-be, not the claimed name as primary', async () => {
+    const suggestion = contact({
+      pubky: BOB,
+      displayName: 'Bob',
+      addedManually: false,
+      isFollowing: true,
+    });
+    const tree = await render(
+      <ContactsScreenContent
+        {...contentProps({
+          suggestions: [suggestion],
+          followsImportEnabled: true,
+        })}
+      />,
+    );
+    const row = tree.root.findByProps({ testID: 'suggestionContactRow' });
+    expect(row.props.accessibilityLabel).toContain('Open suggestion');
+    expect(row.props.accessibilityLabel).toContain('claims to be Bob');
+    expect(row.props.accessibilityLabel.startsWith('Open contact Bob')).toBe(false);
     await act(async () => {
       tree.unmount();
     });

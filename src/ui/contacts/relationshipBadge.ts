@@ -1,7 +1,7 @@
 import type { Contact } from '../../types';
 
-export type RelationshipChip = 'Mutual' | 'Following' | 'Follower';
-export type RelationshipLabel = RelationshipChip | 'No relationship';
+type RelationshipChip = 'Mutual' | 'Following' | 'Follower';
+type RelationshipLabel = RelationshipChip | 'No relationship';
 
 /**
  * Following / Mutual / Follower chips exist only after follows import is on.

@@ -30,13 +30,12 @@ export const CONTACTS_EMPTY_BODY =
   'Add someone by pubky, or use your public pubky.app follows to recognise people you already know.';
 export const CONTACTS_EMPTY_PRIMARY = 'Add someone by pubky';
 export const CONTACTS_EMPTY_SECONDARY = 'Use my follows';
-export const SUGGESTIONS_HEADER = 'Suggestions from your follows';
-export const SUGGESTIONS_SUBCOPY =
+const SUGGESTIONS_HEADER = 'Suggestions from your follows';
+const SUGGESTIONS_SUBCOPY =
   'Not your contact list. Add one to keep them. Hypercolor never writes a follow.';
-export const FOLLOWS_SECTION_TITLE = 'pubky.app follows';
+const FOLLOWS_SECTION_TITLE = 'pubky.app follows';
 export const IMPORT_OFF_NOTE = 'Import is off. Imported suggestions were cleared.';
-export const NEXUS_FALLBACK_NOTE =
-  'Read from the public index and re-checked against your homeserver.';
+const NEXUS_FALLBACK_NOTE = 'Read from the public index and re-checked against your homeserver.';
 export const IMPORT_FAILED = 'Could not read your follows.';
 export const LOAD_FAILED = 'Could not load contacts.';
 
@@ -315,7 +314,13 @@ function ContactRow({
     <Pressable
       testID={suggestion ? 'suggestionContactRow' : 'contactRow'}
       accessibilityRole="button"
-      accessibilityLabel={contactRowAccessLabel(contact.displayName, contact.pubky)}
+      accessibilityLabel={contactRowAccessLabel({
+        addedManually: contact.addedManually,
+        displayName: contact.displayName,
+        pubky: contact.pubky,
+        primary,
+        secondary,
+      })}
       onPress={onPress}
       style={[styles.row, suggestion && styles.suggestionInner]}
     >

@@ -14,7 +14,17 @@ export function groupedPubky(pubky: string): string {
   return `${head} … ${tail}`;
 }
 
-export function contactRowAccessLabel(displayName: string | undefined, pubky: string): string {
-  const identity = displayName && displayName.length > 0 ? displayName : shortPubky(pubky);
-  return `Open contact ${identity}, identifier ${groupedPubky(pubky)}`;
+export function contactRowAccessLabel(args: {
+  addedManually: boolean;
+  displayName: string | undefined;
+  pubky: string;
+  primary: string;
+  secondary: string | null;
+}): string {
+  const identifier = groupedPubky(args.pubky);
+  if (!args.addedManually) {
+    const claim = args.secondary ? `, ${args.secondary}` : '';
+    return `Open suggestion ${args.primary}${claim}, identifier ${identifier}`;
+  }
+  return `Open contact ${args.primary}, identifier ${identifier}`;
 }

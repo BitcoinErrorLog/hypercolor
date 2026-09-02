@@ -21,8 +21,7 @@ import {
   MIN_TARGET,
 } from '../../../ui/contacts/tokens';
 
-export const CONTACT_SEARCH_VALIDATION =
-  'Must be a 52-character z-base-32 pubky (no 0, 2, l, or v).';
+const CONTACT_SEARCH_VALIDATION = 'Must be a 52-character z-base-32 pubky (no 0, 2, l, or v).';
 
 export function ContactSearchView({
   loading,

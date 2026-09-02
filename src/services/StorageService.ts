@@ -207,6 +207,38 @@ export const StorageService = {
     ]);
   },
 
+  /**
+   * A complete homeserver follows listing is authoritative for follow-derived
+   * rows. Deletes suggestions no longer in the listing and clears
+   * `is_following` / `is_mutual` on retained manual contacts. Does not create
+   * rows — callers upsert current followees separately.
+   */
+  async reconcileFollowSuggestions(ownerPubky: PubkyKey, followees: PubkyKey[]): Promise<void> {
+    const db = await getDb();
+    const keep = new Set(followees);
+    transact(db, () => {
+      const result = db.executeSync('SELECT * FROM contacts WHERE owner_pubky = ?', [ownerPubky]);
+      const ts = now();
+      for (const raw of result.rows ?? []) {
+        const row = rowToContact(raw);
+        if (keep.has(row.pubky)) continue;
+        if (!row.addedManually) {
+          db.executeSync('DELETE FROM contacts WHERE owner_pubky = ? AND pubky = ?', [
+            ownerPubky,
+            row.pubky,
+          ]);
+          continue;
+        }
+        db.executeSync(
+          `UPDATE contacts
+           SET is_following = 0, is_mutual = 0, updated_at = ?
+           WHERE owner_pubky = ? AND pubky = ?`,
+          [ts, ownerPubky, row.pubky],
+        );
+      }
+    });
+  },
+
   async updateTrustScore(pubky: PubkyKey, delta: number, ownerPubky?: PubkyKey): Promise<void> {
     const db = await getDb();
     const ts = now();
