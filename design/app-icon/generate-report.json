@@ -1,0 +1,26 @@
+{
+  "master": "design/app-icon/hypercolor-icon-master.svg",
+  "foregroundContrast": 3.474,
+  "brandOnCanvasContrast": 3.474,
+  "fgBounds": {
+    "minX": 286,
+    "minY": 237,
+    "maxX": 737,
+    "maxY": 786,
+    "count": 175289
+  },
+  "monochromeColors": [
+    "255,255,255"
+  ],
+  "previews": [
+    "preview-android-circle-dark.png",
+    "preview-android-circle-light.png",
+    "preview-android-rounded-square-dark.png",
+    "preview-android-rounded-square-light.png",
+    "preview-android-squircle-dark.png",
+    "preview-android-squircle-light.png",
+    "preview-ios-mask-dark.png",
+    "preview-ios-mask-light.png",
+    "preview-unmasked.png"
+  ]
+}

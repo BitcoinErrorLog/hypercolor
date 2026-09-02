@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <title>Alternate B  hex frame</title>
+  <rect width="256" height="256" fill="#0A0A0A"/>
+  <polygon points="128,28 210,76 210,180 128,228 46,180 46,76" fill="none" stroke="#7C3AED" stroke-width="22" stroke-linejoin="round"/>
+  <polygon points="128,78 176,106 176,150 128,178 80,150 80,106" fill="#C4B5FD"/>
+</svg>

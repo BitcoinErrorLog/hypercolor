@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-label="Hypercolor">
+  <title>Hypercolor</title>
+  <desc>Dark canvas with a faceted violet crystal. No letterforms.</desc>
+  <defs>
+    <polygon id="icon-silhouette" points="512,244 712,378 712,646 512,780 312,646 312,378"/>
+  </defs>
+  
+  <g id="icon-rot" transform="rotate(-8 512 512)">
+    <g id="icon-mark">
+      <polygon points="512,244 312,378 312,646 512,780" fill="#7C3AED"/>
+      <polygon points="512,244 712,378 712,646 512,780" fill="#A78BFA"/>
+      <polygon points="512,244 712,378 640,430 548,310" fill="#E9D5FF"/>
+      <polygon points="600,420 712,378 712,646 630,610" fill="#C4B5FD"/>
+      <polygon points="512,244 712,378 712,646 512,780 312,646 312,378" fill="none" stroke="#C4B5FD" stroke-width="18" stroke-linejoin="round"/>
+    </g>
+  </g>
+</svg>

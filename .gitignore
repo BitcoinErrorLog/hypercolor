@@ -64,6 +64,10 @@ yarn-error.*
 # Jest
 coverage/
 
+# VRT candidates, diffs, and generated Maestro flows (baselines are tracked)
+vrt/output/
+.maestro/vrt/generated/
+
 # Lock files (keep package-lock.json, ignore others)
 yarn.lock
 

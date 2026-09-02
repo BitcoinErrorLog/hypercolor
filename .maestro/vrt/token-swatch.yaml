@@ -1,0 +1,19 @@
+# Example Maestro flow for the token-swatch proof scene.
+# Regenerated copies live in .maestro/vrt/generated/ (gitignored).
+# This file is the human-readable template. It cannot pass until Part 2
+# mounts the VRT catalog behind E2E_VRT=1.
+#
+# Android: do not use openLink. Write
+#   HC_E2E:hypercolor://e2e/vrt?scene=design-system.token-swatch.default
+# to the e2e clipboard file channel (singleTask drops VIEW intents).
+# iOS may use a launch argument or the same deep link.
+
+appId: ${APP_ID}
+name: VRT design-system token-swatch
+---
+- launchApp
+- extendedWaitUntil:
+    visible:
+      id: vrtSceneReady
+    timeout: 20000
+- takeScreenshot: design-system_token-swatch_default
