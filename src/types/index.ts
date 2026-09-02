@@ -1,3 +1,5 @@
+import type { NavigatorScreenParams } from '@react-navigation/native';
+
 // ─── Core Identity Types ───────────────────────────────────────────────────
 
 export type PubkyKey = string; // z-base-32 encoded Ed25519 public key
@@ -101,7 +103,7 @@ export type MainTabParamList = {
 
 export type RootStackParamList = {
   Auth: undefined;
-  Main: undefined;
+  Main: NavigatorScreenParams<MainTabParamList> | undefined;
   Thread: { threadId: string; participantPubky: PubkyKey };
   ChannelScreen: { channelId: string };
   ContactSearch: undefined;
