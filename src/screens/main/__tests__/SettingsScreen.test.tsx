@@ -11,11 +11,22 @@ const mockDispatch = jest.fn();
 const mockSetOptions = jest.fn();
 let preventRemoveEnabled = false;
 let preventRemoveCallback: ((args: { data: { action: { type: string } } }) => void) | undefined;
+let mockVisitedActions = new WeakSet<object>();
+
+function mockAttemptAction(action: { type: string }): void {
+  if (preventRemoveEnabled && !mockVisitedActions.has(action)) {
+    mockVisitedActions.add(action);
+    preventRemoveCallback?.({ data: { action } });
+    return;
+  }
+  mockDispatch(action);
+  if (action.type === 'GO_BACK') mockGoBack();
+}
 
 jest.mock('@react-navigation/native', () => ({
   useNavigation: () => ({
-    goBack: mockGoBack,
-    dispatch: mockDispatch,
+    goBack: () => mockAttemptAction({ type: 'GO_BACK' }),
+    dispatch: (action: { type: string }) => mockAttemptAction(action),
     setOptions: mockSetOptions,
   }),
   usePreventRemove: (
@@ -67,6 +78,24 @@ jest.mock('../../../utils/copyText', () => ({
   copyText: jest.fn(),
 }));
 
+type AlertButton = { text?: string; onPress?: () => void };
+
+async function exportRecovery(tree: ReactTestRenderer): Promise<void> {
+  await act(async () => {
+    tree.root.findByProps({ accessibilityLabel: 'Backup now' }).props.onPress();
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+}
+
+function mockLeaveAlert(): { captured: { buttons: AlertButton[] }; spy: jest.SpyInstance } {
+  const captured: { buttons: AlertButton[] } = { buttons: [] };
+  const spy = jest.spyOn(Alert, 'alert').mockImplementation((_title, _message, next) => {
+    captured.buttons = (next ?? []) as AlertButton[];
+  });
+  return { captured, spy };
+}
+
 describe('SettingsScreen recovery gate', () => {
   beforeEach(() => {
     mockGoBack.mockReset();
@@ -74,6 +103,7 @@ describe('SettingsScreen recovery gate', () => {
     mockSetOptions.mockReset();
     preventRemoveEnabled = false;
     preventRemoveCallback = undefined;
+    mockVisitedActions = new WeakSet<object>();
     (setLastBackupAt as jest.Mock).mockReset();
     (BackupService.exportBackup as jest.Mock).mockResolvedValue({
       recoveryCode: 'alpha-bravo-charlie',
@@ -86,11 +116,7 @@ describe('SettingsScreen recovery gate', () => {
       tree = create(<SettingsScreen />);
     });
 
-    await act(async () => {
-      tree.root.findByProps({ accessibilityLabel: 'Backup now' }).props.onPress();
-      await Promise.resolve();
-      await Promise.resolve();
-    });
+    await exportRecovery(tree);
 
     expect(setLastBackupAt).not.toHaveBeenCalled();
     const done = tree.root.findByProps({ testID: 'settingsRecoveryDone' });
@@ -116,11 +142,7 @@ describe('SettingsScreen recovery gate', () => {
     await act(async () => {
       tree = create(<SettingsScreen />);
     });
-    await act(async () => {
-      tree.root.findByProps({ accessibilityLabel: 'Backup now' }).props.onPress();
-      await Promise.resolve();
-      await Promise.resolve();
-    });
+    await exportRecovery(tree);
 
     await act(async () => {
       tree.root.findByProps({ testID: 'settingsBack' }).props.onPress();
@@ -147,11 +169,7 @@ describe('SettingsScreen recovery gate', () => {
     await act(async () => {
       tree = create(<SettingsScreen />);
     });
-    await act(async () => {
-      tree.root.findByProps({ accessibilityLabel: 'Backup now' }).props.onPress();
-      await Promise.resolve();
-      await Promise.resolve();
-    });
+    await exportRecovery(tree);
 
     expect(preventRemoveEnabled).toBe(true);
     expect(mockSetOptions).toHaveBeenCalledWith({ gestureEnabled: false });
@@ -186,11 +204,7 @@ describe('SettingsScreen recovery gate', () => {
     await act(async () => {
       tree = create(<SettingsScreen />);
     });
-    await act(async () => {
-      tree.root.findByProps({ accessibilityLabel: 'Backup now' }).props.onPress();
-      await Promise.resolve();
-      await Promise.resolve();
-    });
+    await exportRecovery(tree);
     const resetAction = { type: 'RESET' };
     await act(async () => {
       preventRemoveCallback?.({ data: { action: resetAction } });
@@ -219,11 +233,7 @@ describe('SettingsScreen recovery gate', () => {
     await act(async () => {
       tree = create(<SettingsScreen />);
     });
-    await act(async () => {
-      tree.root.findByProps({ accessibilityLabel: 'Backup now' }).props.onPress();
-      await Promise.resolve();
-      await Promise.resolve();
-    });
+    await exportRecovery(tree);
     expect(backPress?.()).toBe(true);
     expect(Alert.alert).toHaveBeenCalledWith(
       COPY.leaveRecoveryTitle,
@@ -233,6 +243,123 @@ describe('SettingsScreen recovery gate', () => {
     expect(mockGoBack).not.toHaveBeenCalled();
     addSpy.mockRestore();
     alertSpy.mockRestore();
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('header Back Leave anyway removes once without a second prompt', async () => {
+    const alert = mockLeaveAlert();
+    let tree!: ReactTestRenderer;
+    await act(async () => {
+      tree = create(<SettingsScreen />);
+    });
+    await exportRecovery(tree);
+    await act(async () => {
+      tree.root.findByProps({ testID: 'settingsBack' }).props.onPress();
+    });
+    expect(alert.spy).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      alert.captured.buttons.find(button => button.text === COPY.leaveAnyway)?.onPress?.();
+    });
+    expect(alert.spy).toHaveBeenCalledTimes(1);
+    expect(mockDispatch).toHaveBeenCalledTimes(1);
+    expect(mockDispatch.mock.calls[0][0]).toEqual(expect.objectContaining({ type: 'GO_BACK' }));
+    expect(mockGoBack).toHaveBeenCalledTimes(1);
+    expect(preventRemoveEnabled).toBe(false);
+    alert.spy.mockRestore();
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('header Back Go back leaves the gate armed for the next removal', async () => {
+    const alert = mockLeaveAlert();
+    let tree!: ReactTestRenderer;
+    await act(async () => {
+      tree = create(<SettingsScreen />);
+    });
+    await exportRecovery(tree);
+    await act(async () => {
+      tree.root.findByProps({ testID: 'settingsBack' }).props.onPress();
+    });
+    expect(alert.spy).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      alert.captured.buttons.find(button => button.text === COPY.goBack)?.onPress?.();
+    });
+    expect(preventRemoveEnabled).toBe(true);
+    expect(mockDispatch).not.toHaveBeenCalled();
+    expect(mockGoBack).not.toHaveBeenCalled();
+    await act(async () => {
+      tree.root.findByProps({ testID: 'settingsBack' }).props.onPress();
+    });
+    expect(alert.spy).toHaveBeenCalledTimes(2);
+    expect(mockDispatch).not.toHaveBeenCalled();
+    expect(preventRemoveEnabled).toBe(true);
+    alert.spy.mockRestore();
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('hardware Back Leave anyway removes once without a second prompt', async () => {
+    const alert = mockLeaveAlert();
+    let backPress: (() => boolean) | undefined;
+    const addSpy = jest
+      .spyOn(BackHandler, 'addEventListener')
+      .mockImplementation((event, handler) => {
+        if (event === 'hardwareBackPress') backPress = handler as () => boolean;
+        return { remove: jest.fn() };
+      });
+    let tree!: ReactTestRenderer;
+    await act(async () => {
+      tree = create(<SettingsScreen />);
+    });
+    await exportRecovery(tree);
+    expect(backPress?.()).toBe(true);
+    expect(alert.spy).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      alert.captured.buttons.find(button => button.text === COPY.leaveAnyway)?.onPress?.();
+    });
+    expect(alert.spy).toHaveBeenCalledTimes(1);
+    expect(mockDispatch).toHaveBeenCalledTimes(1);
+    expect(mockDispatch.mock.calls[0][0]).toEqual(expect.objectContaining({ type: 'GO_BACK' }));
+    expect(mockGoBack).toHaveBeenCalledTimes(1);
+    expect(preventRemoveEnabled).toBe(false);
+    addSpy.mockRestore();
+    alert.spy.mockRestore();
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('hardware Back Go back leaves the gate armed for the next removal', async () => {
+    const alert = mockLeaveAlert();
+    let backPress: (() => boolean) | undefined;
+    const addSpy = jest
+      .spyOn(BackHandler, 'addEventListener')
+      .mockImplementation((event, handler) => {
+        if (event === 'hardwareBackPress') backPress = handler as () => boolean;
+        return { remove: jest.fn() };
+      });
+    let tree!: ReactTestRenderer;
+    await act(async () => {
+      tree = create(<SettingsScreen />);
+    });
+    await exportRecovery(tree);
+    expect(backPress?.()).toBe(true);
+    expect(alert.spy).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      alert.captured.buttons.find(button => button.text === COPY.goBack)?.onPress?.();
+    });
+    expect(preventRemoveEnabled).toBe(true);
+    expect(mockDispatch).not.toHaveBeenCalled();
+    expect(backPress?.()).toBe(true);
+    expect(alert.spy).toHaveBeenCalledTimes(2);
+    expect(mockDispatch).not.toHaveBeenCalled();
+    expect(preventRemoveEnabled).toBe(true);
+    addSpy.mockRestore();
+    alert.spy.mockRestore();
     await act(async () => {
       tree.unmount();
     });

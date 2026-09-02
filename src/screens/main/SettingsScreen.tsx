@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -54,6 +54,7 @@ export default function SettingsScreen() {
   const [restoreCode, setRestoreCode] = useState('');
   const [restoreNote, setRestoreNote] = useState<string | null>(null);
   const [restoreError, setRestoreError] = useState<string | null>(null);
+  const leavingRef = useRef(false);
 
   const leaveSettings = useCallback(
     (action?: NavigationAction) => {
@@ -68,6 +69,10 @@ export default function SettingsScreen() {
 
   const requestLeave = useCallback(
     (action?: NavigationAction) => {
+      if (leavingRef.current) {
+        leaveSettings(action);
+        return;
+      }
       if (!recoveryGateActive) {
         leaveSettings(action);
         return;
@@ -78,6 +83,7 @@ export default function SettingsScreen() {
           text: COPY.leaveAnyway,
           style: 'destructive',
           onPress: () => {
+            leavingRef.current = true;
             setRecoveryGateActive(false);
             setRecoveryCode(null);
             setRecoveryConfirmed(false);
@@ -90,6 +96,10 @@ export default function SettingsScreen() {
   );
 
   usePreventRemove(recoveryGateActive, ({ data }) => {
+    if (leavingRef.current) {
+      nav.dispatch(data.action);
+      return;
+    }
     requestLeave(data.action);
   });
 
