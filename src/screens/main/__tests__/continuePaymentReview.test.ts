@@ -1,6 +1,7 @@
 import { COPY } from '../../../copy/uxCopy';
 import type { PaymentReviewRequest } from '../../../components/PaymentRequestBubble';
 import {
+  EMPTY_PAYMENT_RECORD_EXTRAS,
   ENDPOINT_BITCOIN_P2TR,
   ENDPOINT_LIGHTNING_BOLT11,
   type PaymentRequestRecord,
@@ -50,9 +51,7 @@ function record(): PaymentRequestRecord {
     updatedAt: 1,
     proofJson: null,
     reason: null,
-    pendingEventId: null,
-    displayedPaymentHash: null,
-    proofVerified: null,
+    ...EMPTY_PAYMENT_RECORD_EXTRAS,
   };
 }
 

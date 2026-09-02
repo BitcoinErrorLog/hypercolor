@@ -49,6 +49,10 @@ export const PaymentService = {
     const eventId = uuidv4();
     const paymentRequestId = uuidv4();
     const sentAt = Date.now();
+    const displayedPaymentHash = await snapshotOwnInvoiceHash(owner, endpointIds);
+    const invoiceReused =
+      displayedPaymentHash !== null &&
+      (await StorageService.hasNonTerminalDisplayedPaymentHash(owner, displayedPaymentHash));
     const built = buildPaymentRequestEnvelope({
       eventId,
       paymentRequestId,
@@ -74,8 +78,9 @@ export const PaymentService = {
       proofJson: null,
       reason: null,
       pendingEventId: eventId,
-      displayedPaymentHash: await snapshotOwnInvoiceHash(owner, endpointIds),
+      displayedPaymentHash,
       proofVerified: null,
+      invoiceReused,
     };
     const queueId = uuidv4();
     const sendIntent = buildPreparedSendIntent({

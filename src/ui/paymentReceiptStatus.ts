@@ -19,7 +19,13 @@ export type PaymentReceiptView = {
 
 export type PaymentReceiptRecord = Pick<
   PaymentRequestRecord,
-  'status' | 'expiresAt' | 'pendingEventId' | 'proofVerified' | 'proofJson' | 'reason'
+  | 'status'
+  | 'expiresAt'
+  | 'pendingEventId'
+  | 'proofVerified'
+  | 'proofJson'
+  | 'reason'
+  | 'invoiceReused'
 >;
 
 /**
@@ -38,30 +44,35 @@ export function formatPaymentReceipt(
   record: PaymentReceiptRecord,
   nowMs: number,
 ): PaymentReceiptView {
+  let view: PaymentReceiptView;
   if (record.status === 'proof_received' && record.proofVerified === true) {
-    return { word: COPY.paymentPaid, note: null };
+    view = { word: COPY.paymentPaid, note: null };
+  } else if (record.proofVerified === false) {
+    view = { word: COPY.paymentRequested, note: COPY.proofAlreadyUsed };
+  } else if (record.reason === PROOF_REASON_AMOUNT_MISMATCH) {
+    view = { word: COPY.paymentRequested, note: COPY.proofAmountMismatch };
+  } else {
+    const unverifiableOnAccepted =
+      record.status === 'accepted' && record.proofJson !== null && record.proofVerified !== true;
+    if (record.status === 'proof_received' || unverifiableOnAccepted) {
+      view = { word: COPY.paymentRequested, note: COPY.proofNotVerified };
+    } else {
+      const status: PaymentDisplayStatus = displayPaymentStatus(
+        record.status,
+        record.expiresAt,
+        nowMs,
+        {
+          pendingEventId: record.pendingEventId,
+          proofVerified: record.proofVerified,
+        },
+      );
+      view = { word: receiptWordForDisplay(status), note: null };
+    }
   }
-  if (record.proofVerified === false) {
-    return { word: COPY.paymentRequested, note: COPY.proofAlreadyUsed };
+  if (record.invoiceReused === true && view.word === COPY.paymentRequested) {
+    return { word: COPY.paymentRequested, note: COPY.invoiceAlreadyAttachedRotate };
   }
-  if (record.reason === PROOF_REASON_AMOUNT_MISMATCH) {
-    return { word: COPY.paymentRequested, note: COPY.proofAmountMismatch };
-  }
-  const unverifiableOnAccepted =
-    record.status === 'accepted' && record.proofJson !== null && record.proofVerified !== true;
-  if (record.status === 'proof_received' || unverifiableOnAccepted) {
-    return { word: COPY.paymentRequested, note: COPY.proofNotVerified };
-  }
-  const status: PaymentDisplayStatus = displayPaymentStatus(
-    record.status,
-    record.expiresAt,
-    nowMs,
-    {
-      pendingEventId: record.pendingEventId,
-      proofVerified: record.proofVerified,
-    },
-  );
-  return { word: receiptWordForDisplay(status), note: null };
+  return view;
 }
 
 export function receiptWordForDisplay(status: PaymentDisplayStatus): PaymentReceiptWord {

@@ -4,10 +4,12 @@
  * Proof verification binds to THIS request first: `sha256(preimage)` must
  * equal `payment_requests.displayed_payment_hash` (recorded before wallet
  * open). `own_invoice_hashes` supplies amount/expiry metadata for that hash.
- * When no displayed hash was recorded, history may corroborate only an
- * invoice whose `first_seen_at >= request.created_at` and that was not
- * displayed for a different request or as a tip (`display_context = 'tip'`
- * never corroborates a request).
+ * When no displayed hash was recorded, or the snapshot no longer matches
+ * the paid invoice (wallet rotation after create), history may corroborate
+ * only an invoice whose `first_seen_at >= request.created_at` and that was
+ * not displayed for a different request or as a tip (`display_context =
+ * 'tip'` never corroborates a request). A successful mismatch bind rewrites
+ * `displayed_payment_hash` to the paid invoice.
  *
  * `invoice_amount_msat` is the bolt11 msat string, the sentinel `amountless`
  * (only after a valid amountless mainnet bolt11 decode), `unknown` (repair

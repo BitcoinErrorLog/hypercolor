@@ -27,6 +27,7 @@ function record(
     pendingEventId: null,
     displayedPaymentHash: null,
     proofVerified: null,
+    invoiceReused: false,
     ...partial,
   };
 }
@@ -164,5 +165,36 @@ describe('formatPaymentReceiptStatus', () => {
     expect(receiptWordForDisplay('claimed')).toBe(COPY.paymentRequested);
     expect(receiptWordForDisplay('proof_received')).toBe(COPY.paymentRequested);
     expect(receiptWordForDisplay('verified')).toBe(COPY.paymentPaid);
+  });
+
+  it('maps invoice reuse to the rotate-invoice note while staying requested', () => {
+    const now = 1_000_000;
+    expect(formatPaymentReceipt(record({ status: 'accepted', invoiceReused: true }), now)).toEqual({
+      word: COPY.paymentRequested,
+      note: COPY.invoiceAlreadyAttachedRotate,
+    });
+    expect(
+      formatPaymentReceipt(
+        record({
+          status: 'accepted',
+          invoiceReused: true,
+          proofJson: '{"data":"aa"}',
+          proofVerified: null,
+        }),
+        now,
+      ),
+    ).toEqual({
+      word: COPY.paymentRequested,
+      note: COPY.invoiceAlreadyAttachedRotate,
+    });
+    expect(
+      formatPaymentReceipt(
+        record({ status: 'proof_received', proofVerified: true, invoiceReused: true }),
+        now,
+      ),
+    ).toEqual({ word: COPY.paymentPaid, note: null });
+    expect(formatPaymentReceipt(record({ status: 'cancelled', invoiceReused: true }), now)).toEqual(
+      { word: COPY.paymentFailed, note: null },
+    );
   });
 });

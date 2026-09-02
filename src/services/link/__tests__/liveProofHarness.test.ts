@@ -823,6 +823,7 @@ describe('product live-proof step machines', () => {
         pendingEventId: null,
         displayedPaymentHash: null,
         proofVerified: null,
+        invoiceReused: false,
       })),
     };
     const closed = await runPaymentHandoffLiveProof(TWO, {

@@ -457,7 +457,7 @@ async function applyProof(
   }
 
   const nextStatus: PaymentStatus = proofVerified === true ? 'proof_received' : row.status;
-  const applied = await StorageService.compareAndSetPaymentRequest(
+  const casOk = await StorageService.compareAndSetPaymentRequest(
     input.ownerPubky,
     input.senderPubky,
     decoded.payment_request_id,
@@ -470,21 +470,36 @@ async function applyProof(
       ...(proofReason ? { reason: proofReason } : {}),
     },
   );
-  await markSeen(
-    input,
-    conversationId,
-    decoded.event_id,
-    decoded.kind,
-    decoded.payment_request_id,
-    applied,
-  );
-  if (!applied) {
+  if (!casOk) {
+    await markSeen(
+      input,
+      conversationId,
+      decoded.event_id,
+      decoded.kind,
+      decoded.payment_request_id,
+      false,
+    );
     return { action: 'ignored' };
   }
   const updated = await StorageService.getPaymentRequest(
     input.ownerPubky,
     input.senderPubky,
     decoded.payment_request_id,
+  );
+  // No-op self-loops (`accepted→accepted`, including junk and replayed
+  // preimages) still yield changes()=1 because CAS always touches
+  // updated_at. Mark them applied=0 so pruneUnappliedPaymentEvents covers
+  // them. A second cap on applied rows would also evict durable
+  // request/accept/successful-proof markers; this is the smaller blast
+  // radius. Reprocessing after eviction is idempotent for every kind.
+  const durableApply = updated !== null && updated.status !== row.status;
+  await markSeen(
+    input,
+    conversationId,
+    decoded.event_id,
+    decoded.kind,
+    decoded.payment_request_id,
+    durableApply,
   );
   return { action: 'applied', request: updated };
 }
@@ -528,12 +543,17 @@ function bindProofToRequest(
   }
 
   const displayed = row.displayedPaymentHash;
-  if (displayed !== null) {
-    if (paymentHash !== displayed) return { proofVerified: null };
+  if (displayed !== null && paymentHash === displayed) {
     return amountBindResult(invoice, row, null);
   }
 
-  // recordFailed path: no displayed hash was recorded for this request.
+  // Snapshot mismatch (wallet rotated the invoice after create) or
+  // recordFailed (no snapshot): corroborate h only when first seen at or
+  // after this request. Rebind writes h so the verified-hash unique index
+  // tracks the paid invoice, not the stale snapshot. Tip context, a
+  // different request id, expiry-at-creation, under-amount, and a hash
+  // already verified on another request remain closed above and in
+  // applyProof (hasVerifiedPaymentHash + the partial unique index).
   if (invoice.firstSeenAt < row.createdAt) return { proofVerified: null };
   return amountBindResult(invoice, row, paymentHash);
 }

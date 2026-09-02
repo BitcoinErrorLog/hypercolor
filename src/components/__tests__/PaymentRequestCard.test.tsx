@@ -127,4 +127,38 @@ describe('PaymentRequestCard', () => {
       tree.unmount();
     });
   });
+
+  it('shows the rotate-invoice note on a payee request that reused an invoice', async () => {
+    let tree!: ReactTestRenderer;
+    await act(async () => {
+      tree = create(
+        <PaymentRequestCard
+          record={record({
+            direction: 'sent',
+            status: 'accepted',
+            invoiceReused: true,
+          })}
+          isPayee
+          nowMs={1_000}
+          busy={false}
+          proofDraft=""
+          onChangeProofDraft={noop}
+          onAccept={noop}
+          onReject={noop}
+          onCancel={noop}
+          onPayInWallet={noop}
+          onSubmitProof={noop}
+        />,
+      );
+    });
+    expect(tree.root.findByProps({ testID: 'paymentRequestStatus' }).props.accessibilityLabel).toBe(
+      COPY.paymentRequested,
+    );
+    expect(tree.root.findByProps({ testID: 'paymentRequestProofNote' }).props.children).toBe(
+      COPY.invoiceAlreadyAttachedRotate,
+    );
+    await act(async () => {
+      tree.unmount();
+    });
+  });
 });

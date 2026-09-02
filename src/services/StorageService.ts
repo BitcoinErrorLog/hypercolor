@@ -2330,6 +2330,30 @@ export const StorageService = {
     return (result.rows?.length ?? 0) > 0;
   },
 
+  /**
+   * True when this owner already has a non-terminal request whose displayed
+   * invoice hash is `paymentHash`. Used to flag a new request that reused
+   * an in-flight invoice.
+   */
+  async hasNonTerminalDisplayedPaymentHash(
+    ownerPubky: PubkyKey,
+    paymentHash: string,
+  ): Promise<boolean> {
+    const db = await getDb();
+    const result = db.executeSync(
+      `SELECT 1 FROM payment_requests
+       WHERE owner_pubky = ?
+         AND displayed_payment_hash = ?
+         AND (
+           status IN ('pending', 'accepted')
+           OR (status = 'proof_received' AND (proof_verified IS NULL OR proof_verified != 1))
+         )
+       LIMIT 1`,
+      [ownerPubky, paymentHash],
+    );
+    return (result.rows?.length ?? 0) > 0;
+  },
+
   async hasOwnInvoiceHash(
     ownerPubky: PubkyKey,
     endpointIdentifier: string,
@@ -2895,6 +2919,7 @@ function rowToPaymentRequest(row: any): PaymentRequestRecord {
     displayedPaymentHash:
       typeof row.displayed_payment_hash === 'string' ? row.displayed_payment_hash : null,
     proofVerified: row.proof_verified === 1 ? true : row.proof_verified === 0 ? false : null,
+    invoiceReused: row.invoice_reused === 1,
   };
 }
 
@@ -2916,6 +2941,11 @@ function rowToTipEndpoint(row: any): TipEndpointRecord {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function rowToOwnInvoiceHash(row: any): OwnInvoiceHashRecord {
   const contextRaw = typeof row.display_context === 'string' ? row.display_context : null;
+  // Unknown display_context values (anything other than `tip` / `request`)
+  // normalize to NULL and remain corroboration-eligible. Writers are
+  // first-party (display records, seed, owner-trusted backup restore). A
+  // third context must be added to OwnInvoiceDisplayContext and this
+  // normalizer together.
   const displayContext: OwnInvoiceDisplayContext | null =
     contextRaw === 'tip' || contextRaw === 'request' ? contextRaw : null;
   return {
@@ -3105,8 +3135,8 @@ function insertPaymentRequest(db: SqlExecutor, record: PaymentRequestRecord): vo
       (owner_pubky, peer_pubky, direction, payment_request_id, event_id,
        amount_value, amount_asset, payment_reference, endpoint_ids, expires_at,
        status, created_at, updated_at, proof_json, reason,
-       pending_event_id, displayed_payment_hash, proof_verified)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       pending_event_id, displayed_payment_hash, proof_verified, invoice_reused)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       record.ownerPubky,
       record.peerPubky,
@@ -3126,6 +3156,7 @@ function insertPaymentRequest(db: SqlExecutor, record: PaymentRequestRecord): vo
       record.pendingEventId,
       record.displayedPaymentHash,
       record.proofVerified === null ? null : record.proofVerified ? 1 : 0,
+      record.invoiceReused === true ? 1 : null,
     ],
   );
 }

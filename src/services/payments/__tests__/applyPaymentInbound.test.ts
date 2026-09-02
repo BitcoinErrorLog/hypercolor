@@ -551,15 +551,61 @@ describe('applyPaymentInbound authorization (S2)', () => {
     expect(store.requests.get(requestKey(OWNER, PEER_A, REQUEST_ID))?.proofVerified).toBe(true);
   });
 
-  it('does not mark paid when a stale snapshot is not the paid invoice', async () => {
+  it('marks paid when a later rotated invoice is paid against a stale snapshot', async () => {
+    // Previous name (`does not mark paid when a stale snapshot is not the paid
+    // invoice`) pinned the rotation dead-end as intended. N1 restores
+    // corroboration of X when firstSeenAt >= createdAt and the other F1
+    // guards hold, so both receipts agree on `paid`.
     const preimage = 'ab'.repeat(32);
     const rotatedHash = createHash('sha256').update(Buffer.from(preimage, 'hex')).digest('hex');
     const staleHash = '11'.repeat(32);
     store.requests.set(
       requestKey(OWNER, PEER_A, REQUEST_ID),
-      sentRow({ status: 'accepted', displayedPaymentHash: staleHash }),
+      sentRow({ status: 'accepted', displayedPaymentHash: staleHash, createdAt: NOW }),
     );
-    putOwnInvoice(store, rotatedHash);
+    putOwnInvoice(store, rotatedHash, REQUEST_MSAT, NOW + 86_400_000, {
+      firstSeenAt: NOW + 1,
+      displayContext: null,
+      paymentRequestId: null,
+    });
+    const proof = buildPaymentProofEnvelope({
+      eventId: EVENT_PRF,
+      paymentRequestId: REQUEST_ID,
+      paymentReference: 'invoice-2026-0001',
+      paymentEndpointIdentifier: ENDPOINT_LIGHTNING_BOLT11,
+      proofData: preimage,
+    });
+    expect((await inbound(PEER_A, proof.json)).action).toBe('applied');
+    const payee = store.requests.get(requestKey(OWNER, PEER_A, REQUEST_ID));
+    expect(payee?.proofVerified).toBe(true);
+    expect(payee?.status).toBe('proof_received');
+    expect(payee?.displayedPaymentHash).toBe(rotatedHash);
+    expect(formatPaymentReceipt(payee!, NOW)).toEqual({ word: COPY.paymentPaid, note: null });
+    const payer = sentRow({
+      direction: 'received',
+      status: 'proof_received',
+      displayedPaymentHash: rotatedHash,
+      proofVerified: true,
+    });
+    expect(formatPaymentReceipt(payer, NOW)).toEqual({ word: COPY.paymentPaid, note: null });
+    expect(store.events.get(eventKey(OWNER, `dm:${PEER_A}`, PEER_A, EVENT_PRF))?.applied).toBe(
+      true,
+    );
+  });
+
+  it('does not mark paid from an old invoice first seen before createdAt when the snapshot rotated', async () => {
+    const preimage = 'ab'.repeat(32);
+    const oldHash = createHash('sha256').update(Buffer.from(preimage, 'hex')).digest('hex');
+    const staleHash = '11'.repeat(32);
+    store.requests.set(
+      requestKey(OWNER, PEER_A, REQUEST_ID),
+      sentRow({ status: 'accepted', displayedPaymentHash: staleHash, createdAt: NOW }),
+    );
+    putOwnInvoice(store, oldHash, REQUEST_MSAT, NOW + 86_400_000, {
+      firstSeenAt: NOW - 1,
+      displayContext: 'request',
+      paymentRequestId: REQUEST_ID,
+    });
     const proof = buildPaymentProofEnvelope({
       eventId: EVENT_PRF,
       paymentRequestId: REQUEST_ID,
@@ -572,6 +618,131 @@ describe('applyPaymentInbound authorization (S2)', () => {
     expect(row?.proofVerified).not.toBe(true);
     expect(row?.status).toBe('accepted');
     expect(row?.displayedPaymentHash).toBe(staleHash);
+  });
+
+  it('does not mark paid from a tip-context invoice when the snapshot rotated', async () => {
+    const preimage = 'ab'.repeat(32);
+    const tipHash = createHash('sha256').update(Buffer.from(preimage, 'hex')).digest('hex');
+    const staleHash = '11'.repeat(32);
+    store.requests.set(
+      requestKey(OWNER, PEER_A, REQUEST_ID),
+      sentRow({ status: 'accepted', displayedPaymentHash: staleHash }),
+    );
+    putOwnInvoice(store, tipHash, REQUEST_MSAT, NOW + 86_400_000, {
+      firstSeenAt: NOW + 1,
+      displayContext: 'tip',
+      paymentRequestId: null,
+    });
+    const proof = buildPaymentProofEnvelope({
+      eventId: EVENT_PRF,
+      paymentRequestId: REQUEST_ID,
+      paymentReference: 'invoice-2026-0001',
+      paymentEndpointIdentifier: ENDPOINT_LIGHTNING_BOLT11,
+      proofData: preimage,
+    });
+    expect((await inbound(PEER_A, proof.json)).action).toBe('applied');
+    const row = store.requests.get(requestKey(OWNER, PEER_A, REQUEST_ID));
+    expect(row?.proofVerified).not.toBe(true);
+    expect(row?.status).toBe('accepted');
+    expect(row?.displayedPaymentHash).toBe(staleHash);
+  });
+
+  it('does not mark paid from an invoice bound to another request when the snapshot rotated', async () => {
+    const preimage = 'ab'.repeat(32);
+    const otherHash = createHash('sha256').update(Buffer.from(preimage, 'hex')).digest('hex');
+    const staleHash = '11'.repeat(32);
+    const otherId = 'c7f9c2a1-6d43-4b0e-a8d4-0fe2c712ab44';
+    store.requests.set(
+      requestKey(OWNER, PEER_A, REQUEST_ID),
+      sentRow({ status: 'accepted', displayedPaymentHash: staleHash }),
+    );
+    putOwnInvoice(store, otherHash, REQUEST_MSAT, NOW + 86_400_000, {
+      firstSeenAt: NOW + 1,
+      displayContext: 'request',
+      paymentRequestId: otherId,
+    });
+    const proof = buildPaymentProofEnvelope({
+      eventId: EVENT_PRF,
+      paymentRequestId: REQUEST_ID,
+      paymentReference: 'invoice-2026-0001',
+      paymentEndpointIdentifier: ENDPOINT_LIGHTNING_BOLT11,
+      proofData: preimage,
+    });
+    expect((await inbound(PEER_A, proof.json)).action).toBe('applied');
+    const row = store.requests.get(requestKey(OWNER, PEER_A, REQUEST_ID));
+    expect(row?.proofVerified).not.toBe(true);
+    expect(row?.status).toBe('accepted');
+    expect(row?.displayedPaymentHash).toBe(staleHash);
+  });
+
+  it('does not mark paid from an under-amount invoice when the snapshot rotated', async () => {
+    const preimage = 'ab'.repeat(32);
+    const smallHash = createHash('sha256').update(Buffer.from(preimage, 'hex')).digest('hex');
+    const staleHash = '11'.repeat(32);
+    store.requests.set(
+      requestKey(OWNER, PEER_A, REQUEST_ID),
+      sentRow({
+        status: 'accepted',
+        displayedPaymentHash: staleHash,
+        amountValue: '0.001',
+      }),
+    );
+    putOwnInvoice(store, smallHash, '1000', NOW + 86_400_000, {
+      firstSeenAt: NOW + 1,
+      displayContext: 'request',
+      paymentRequestId: REQUEST_ID,
+    });
+    const proof = buildPaymentProofEnvelope({
+      eventId: EVENT_PRF,
+      paymentRequestId: REQUEST_ID,
+      paymentReference: 'invoice-2026-0001',
+      paymentEndpointIdentifier: ENDPOINT_LIGHTNING_BOLT11,
+      proofData: preimage,
+    });
+    expect((await inbound(PEER_A, proof.json)).action).toBe('applied');
+    const row = store.requests.get(requestKey(OWNER, PEER_A, REQUEST_ID));
+    expect(row?.proofVerified).not.toBe(true);
+    expect(row?.status).toBe('accepted');
+    expect(row?.displayedPaymentHash).toBe(staleHash);
+    expect(row?.reason).toBe(PROOF_REASON_AMOUNT_MISMATCH);
+  });
+
+  it('does not mark a second request paid by reusing a hash already verified on another request', async () => {
+    const preimage = 'ab'.repeat(32);
+    const verifiedHash = createHash('sha256').update(Buffer.from(preimage, 'hex')).digest('hex');
+    const staleHash = '11'.repeat(32);
+    const otherId = 'c7f9c2a1-6d43-4b0e-a8d4-0fe2c712ab44';
+    store.requests.set(
+      requestKey(OWNER, PEER_A, otherId),
+      sentRow({
+        paymentRequestId: otherId,
+        status: 'proof_received',
+        displayedPaymentHash: verifiedHash,
+        proofVerified: true,
+      }),
+    );
+    store.requests.set(
+      requestKey(OWNER, PEER_A, REQUEST_ID),
+      sentRow({ status: 'accepted', displayedPaymentHash: staleHash }),
+    );
+    putOwnInvoice(store, verifiedHash, REQUEST_MSAT, NOW + 86_400_000, {
+      firstSeenAt: NOW + 1,
+      displayContext: 'request',
+      paymentRequestId: REQUEST_ID,
+    });
+    const proof = buildPaymentProofEnvelope({
+      eventId: EVENT_PRF,
+      paymentRequestId: REQUEST_ID,
+      paymentReference: 'invoice-2026-0001',
+      paymentEndpointIdentifier: ENDPOINT_LIGHTNING_BOLT11,
+      proofData: preimage,
+    });
+    expect((await inbound(PEER_A, proof.json)).action).toBe('applied');
+    const row = store.requests.get(requestKey(OWNER, PEER_A, REQUEST_ID));
+    expect(row?.proofVerified).toBe(false);
+    expect(row?.status).toBe('accepted');
+    expect(row?.displayedPaymentHash).toBe(staleHash);
+    expect(store.requests.get(requestKey(OWNER, PEER_A, otherId))?.proofVerified).toBe(true);
   });
 
   it('marks paid when the rotated invoice was recorded for this request', async () => {
@@ -667,6 +838,9 @@ describe('applyPaymentInbound authorization (S2)', () => {
     expect((await inbound(PEER_A, proof.json)).action).toBe('applied');
     const row = store.requests.get(requestKey(OWNER, PEER_A, REQUEST_ID));
     expect(row?.proofVerified).toBe(true);
+    expect(store.events.get(eventKey(OWNER, `dm:${PEER_A}`, PEER_A, EVENT_PRF))?.applied).toBe(
+      true,
+    );
   });
 
   it('marks paid after a junk preimage then a matching preimage', async () => {
@@ -690,6 +864,9 @@ describe('applyPaymentInbound authorization (S2)', () => {
     expect(afterJunk?.status).toBe('accepted');
     expect(afterJunk?.proofVerified).toBeNull();
     expect(formatPaymentReceipt(afterJunk!, NOW).note).toBe(COPY.proofNotVerified);
+    expect(store.events.get(eventKey(OWNER, `dm:${PEER_A}`, PEER_A, EVENT_PRF))?.applied).toBe(
+      false,
+    );
 
     const good = buildPaymentProofEnvelope({
       eventId: EVENT_PRF_2,
@@ -730,6 +907,12 @@ describe('applyPaymentInbound authorization (S2)', () => {
     expect(row?.status).toBe('accepted');
     expect(row?.proofVerified).toBeNull();
     expect(formatPaymentReceipt(row!, NOW).word).toBe(COPY.paymentRequested);
+    expect(store.events.get(eventKey(OWNER, `dm:${PEER_A}`, PEER_A, EVENT_PRF))?.applied).toBe(
+      false,
+    );
+    expect(store.events.get(eventKey(OWNER, `dm:${PEER_A}`, PEER_A, EVENT_PRF_2))?.applied).toBe(
+      false,
+    );
     expect(canTransition(row!.status, 'proof', false)).toBe(true);
     expect(canTransition(row!.status, 'cancel', false)).toBe(true);
   });

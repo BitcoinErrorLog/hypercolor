@@ -187,6 +187,8 @@ export const COPY = {
   proofNotVerified: 'Payment proof could not be verified yet',
   proofAlreadyUsed: 'This proof was already used',
   proofAmountMismatch: "This proof does not match this request's amount",
+  invoiceAlreadyAttachedRotate:
+    'This invoice is already attached to another request — rotate your invoice',
   paymentSending: 'Sending…',
   invoiceNotRecorded:
     'Your wallet opened, but this invoice was not recorded on this device. Tap Open wallet again to record it. Proof verification here may not work until then — the receipt stays requested until a matching proof can be verified.',

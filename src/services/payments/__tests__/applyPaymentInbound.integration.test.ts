@@ -328,4 +328,88 @@ describe('payment_events unapplied prune', () => {
       ).rows ?? [];
     expect(newest[0]?.event_id).toBe('evt-104');
   });
+
+  it('keeps 200 junk proofs against one accepted request at the unapplied cap', async () => {
+    const db = openMemoryDb();
+    setDbForTests(db);
+    await runMigrations(db);
+    const requestId = 'b7f9c2a1-6d43-4b0e-a8d4-0fe2c712ab33';
+    await StorageService.savePaymentRequest(sentAccepted(PEER_A, requestId, 'aa'.repeat(32)));
+    const conversationId = `dm:${PEER_A}`;
+    for (let i = 0; i < 200; i += 1) {
+      const eventId = `8a0d8b4c-913f-4e31-9f2c-${i.toString(16).padStart(12, '0')}`;
+      const proof = buildPaymentProofEnvelope({
+        eventId,
+        paymentRequestId: requestId,
+        paymentReference: 'invoice-2026-0001',
+        paymentEndpointIdentifier: ENDPOINT_LIGHTNING_BOLT11,
+        proofData: '00'.repeat(32),
+      });
+      const result = await applyPaymentInbound({
+        ownerPubky: OWNER,
+        senderPubky: PEER_A,
+        peerPubky: PEER_A,
+        rawJson: proof.json,
+        receivedAt: NOW + i,
+        nowMs: NOW + i,
+      });
+      expect(result.action).toBe('applied');
+    }
+    const total =
+      db.executeSync(
+        `SELECT COUNT(*) AS n FROM payment_events
+          WHERE owner_pubky = ? AND conversation_id = ? AND sender_pubky = ?`,
+        [OWNER, conversationId, PEER_A],
+      ).rows ?? [];
+    expect(Number(total[0]?.n)).toBeLessThanOrEqual(100);
+    const applied =
+      db.executeSync(
+        `SELECT COUNT(*) AS n FROM payment_events
+          WHERE owner_pubky = ? AND conversation_id = ? AND sender_pubky = ?
+            AND applied = 1`,
+        [OWNER, conversationId, PEER_A],
+      ).rows ?? [];
+    expect(Number(applied[0]?.n)).toBe(0);
+    const row = await StorageService.getPaymentRequest(OWNER, PEER_A, requestId);
+    expect(row?.status).toBe('accepted');
+  });
+});
+
+describe('invoice reuse detection', () => {
+  afterEach(() => {
+    setDbForTests(null);
+  });
+
+  it('detects a snapshot hash already displayed on a non-terminal request', async () => {
+    const db = openMemoryDb();
+    setDbForTests(db);
+    await runMigrations(db);
+    const hash = 'ab'.repeat(32);
+    const idA = 'b7f9c2a1-6d43-4b0e-a8d4-0fe2c712ab33';
+    const idB = 'c7f9c2a1-6d43-4b0e-a8d4-0fe2c712ab44';
+    await StorageService.savePaymentRequest(sentAccepted(PEER_A, idA, hash));
+    expect(await StorageService.hasNonTerminalDisplayedPaymentHash(OWNER, hash)).toBe(true);
+    await StorageService.savePaymentRequest({
+      ...sentAccepted(PEER_B, idB, hash),
+      invoiceReused: true,
+    });
+    const reused = await StorageService.getPaymentRequest(OWNER, PEER_B, idB);
+    expect(reused?.invoiceReused).toBe(true);
+    expect(formatPaymentReceipt(reused!, NOW)).toEqual({
+      word: COPY.paymentRequested,
+      note: COPY.invoiceAlreadyAttachedRotate,
+    });
+  });
+
+  it('does not treat a cancelled request as occupying the invoice', async () => {
+    const db = openMemoryDb();
+    setDbForTests(db);
+    await runMigrations(db);
+    const hash = 'cd'.repeat(32);
+    await StorageService.savePaymentRequest({
+      ...sentAccepted(PEER_A, 'b7f9c2a1-6d43-4b0e-a8d4-0fe2c712ab33', hash),
+      status: 'cancelled',
+    });
+    expect(await StorageService.hasNonTerminalDisplayedPaymentHash(OWNER, hash)).toBe(false);
+  });
 });

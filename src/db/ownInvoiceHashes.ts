@@ -76,6 +76,20 @@ function tableExists(db: SqlExecutor, name: string): boolean {
   return rows.length > 0;
 }
 
+/**
+ * Additive v16 column on `payment_requests`. Idempotent; no version bump.
+ * Integration owns schema numbering at merge.
+ */
+export function ensurePaymentRequestInvoiceReusedColumn(db: SqlExecutor): void {
+  if (!tableExists(db, 'payment_requests')) return;
+  const cols = new Set(
+    (db.executeSync('PRAGMA table_info(payment_requests)').rows ?? []).map(row => String(row.name)),
+  );
+  if (!cols.has('invoice_reused')) {
+    db.executeSync('ALTER TABLE payment_requests ADD COLUMN invoice_reused INTEGER');
+  }
+}
+
 export function logMissingOwnInvoiceHashTableOnce(): void {
   if (loggedMissingTable) return;
   loggedMissingTable = true;
@@ -232,6 +246,7 @@ export function repairOwnInvoiceHashes(db: SqlExecutor): void {
     db.executeSync(OWN_INVOICE_HASHES_SEED_SQL);
   }
   if (tableExists(db, 'payment_requests')) {
+    ensurePaymentRequestInvoiceReusedColumn(db);
     db.executeSync(PAYMENT_REQUESTS_VERIFIED_HASH_DEDUP_SQL);
     db.executeSync(PAYMENT_REQUESTS_VERIFIED_HASH_INDEX_SQL);
   }

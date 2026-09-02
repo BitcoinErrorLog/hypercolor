@@ -59,6 +59,7 @@ import {
   SCHEMA_V13_STATEMENTS,
   SCHEMA_V14_STATEMENTS,
   SCHEMA_V15_STATEMENTS,
+  SCHEMA_V16_STATEMENTS,
 } from '../schema';
 import { StorageService } from '../../services/StorageService';
 import { KeyStore } from '../../services/KeyStore';
@@ -1214,7 +1215,12 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
       col => col.name,
     );
     expect(paymentCols).toEqual(
-      expect.arrayContaining(['pending_event_id', 'displayed_payment_hash', 'proof_verified']),
+      expect.arrayContaining([
+        'pending_event_id',
+        'displayed_payment_hash',
+        'proof_verified',
+        'invoice_reused',
+      ]),
     );
     expect(
       db.executeSync(
@@ -1879,6 +1885,28 @@ describe('schema v16 — own invoice history and verified-hash unique index', ()
     };
     await runMigrations(db);
     expect(scans).toHaveLength(0);
+  });
+
+  it('adds invoice_reused on an already-v16 payment_requests table without bumping user_version', async () => {
+    const db = openMemoryDb();
+    applyThroughV15(db);
+    for (const statement of SCHEMA_V16_STATEMENTS) {
+      db.executeSync(statement);
+    }
+    db.executeSync('PRAGMA user_version = 16');
+    const before = (db.executeSync('PRAGMA table_info(payment_requests)').rows ?? []).map(col =>
+      String(col.name),
+    );
+    expect(before).not.toContain('invoice_reused');
+    setDbForTests(db);
+    await runMigrations(db);
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(
+      CURRENT_SCHEMA_VERSION,
+    );
+    const after = (db.executeSync('PRAGMA table_info(payment_requests)').rows ?? []).map(col =>
+      String(col.name),
+    );
+    expect(after).toContain('invoice_reused');
   });
 });
 

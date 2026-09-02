@@ -229,12 +229,15 @@ export interface PaymentRequestRecord {
   pendingEventId: string | null;
   displayedPaymentHash: string | null;
   proofVerified: boolean | null;
+  /** Local-only. True when create-time snapshot matched another open request. */
+  invoiceReused: boolean;
 }
 
 export const EMPTY_PAYMENT_RECORD_EXTRAS = {
   pendingEventId: null,
   displayedPaymentHash: null,
   proofVerified: null,
+  invoiceReused: false,
 } as const;
 
 /** Local-only proof apply reason. Never serialized on a payment envelope. */

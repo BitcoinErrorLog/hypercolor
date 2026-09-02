@@ -914,9 +914,12 @@ primary.
      `displayedPaymentHash` (recorded by `continuePaymentReview` →
      `recordDisplayedInvoice` before wallet open). `own_invoice_hashes`
      supplies amount/expiry metadata for that hash. When no displayed hash
-     was recorded (recordFailed path), history may corroborate only an
-     invoice whose `firstSeenAt >= request.createdAt` and that was not
-     displayed for a different request or as a tip. A tip invoice
+     was recorded (recordFailed path), or the snapshot no longer matches the
+     paid invoice (the payee wallet rotated after create), history may
+     corroborate only an invoice whose `firstSeenAt >= request.createdAt`
+     and that was not displayed for a different request or as a tip. A
+     successful mismatch bind rewrites `displayedPaymentHash` to the paid
+     invoice so both receipts show `paid`. A tip invoice
      (`display_context = 'tip'`) never corroborates a request. The bound
      invoice amount must satisfy the request: invoice millisatoshis ≥ request
      millisatoshis. Over-payment is `paid`. Under-payment is not. An amountless
@@ -953,6 +956,10 @@ primary.
      - `This proof was already used` when `proofVerified === false` (replayed
        preimage; the request stays `accepted` so a later valid proof or Cancel
        can still land).
+     - `This invoice is already attached to another request — rotate your invoice`
+       when the request was created with a snapshot hash already displayed on
+       another non-terminal request (`invoiceReused`). The receipt word stays
+       `requested` (or `failed` / `expired` / `paid` when those apply).
 
 ### D.13 Backup / recovery-code gate
 
