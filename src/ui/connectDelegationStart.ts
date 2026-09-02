@@ -2,14 +2,23 @@
  * Synchronous in-flight owner for every Connect delegation start
  * (Welcome Connect and Awaiting "Try again").
  */
-let inFlight = false;
+let owner: number | null = null;
+let nextToken = 0;
 
-export function tryBeginConnectDelegation(): boolean {
-  if (inFlight) return false;
-  inFlight = true;
-  return true;
+export function tryBeginConnectDelegation(): number | null {
+  if (owner != null) return null;
+  nextToken += 1;
+  owner = nextToken;
+  return owner;
 }
 
-export function finishConnectDelegation(): void {
-  inFlight = false;
+export function finishConnectDelegation(token: number): void {
+  if (owner === token) {
+    owner = null;
+  }
+}
+
+export function resetConnectDelegationForTests(): void {
+  owner = null;
+  nextToken = 0;
 }

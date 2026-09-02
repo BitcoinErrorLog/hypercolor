@@ -3,7 +3,11 @@ import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import WelcomeScreen from '../WelcomeScreen';
 import { PubkyRingAuthService } from '../../../services/PubkyRingAuthService';
 import { COPY } from '../../../copy/uxCopy';
-import { finishConnectDelegation } from '../../../ui/connectDelegationStart';
+import {
+  finishConnectDelegation,
+  resetConnectDelegationForTests,
+  tryBeginConnectDelegation,
+} from '../../../ui/connectDelegationStart';
 
 const PAYKIT_CONNECT_URL =
   'pubkyring://paykit-connect?deviceId=hypercolor-sim&callback=hypercolor%3A%2F%2Fring-callback&ephemeralPk=aabbcc&caps=%2Fpub%2Fpaykit%2F%3Arw%2C%2Fpub%2Fhypercolor.app%2Fv1%2F%3Arw';
@@ -39,7 +43,7 @@ describe('WelcomeScreen', () => {
     mockNavigate.mockReset();
     mockFocusCallback = undefined;
     mockLastFocusEffect = undefined;
-    finishConnectDelegation();
+    resetConnectDelegationForTests();
     (PubkyRingAuthService.requestDelegation as jest.Mock).mockReset();
     (PubkyRingAuthService.isStaleDelegationRequestError as jest.Mock).mockReturnValue(false);
   });
@@ -159,6 +163,26 @@ describe('WelcomeScreen', () => {
     const serialized = JSON.stringify(tree.toJSON());
     expect(serialized).not.toContain('https://evil.example');
     expect(serialized).toContain(COPY.couldNotStartAuthorization);
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('does not release an Awaiting-owned latch on focus', async () => {
+    const awaitingToken = tryBeginConnectDelegation();
+    expect(awaitingToken).not.toBeNull();
+
+    let tree!: ReactTestRenderer;
+    await act(async () => {
+      tree = create(<WelcomeScreen />);
+    });
+    await act(async () => {
+      mockFocusCallback?.();
+    });
+    expect(tryBeginConnectDelegation()).toBeNull();
+    finishConnectDelegation(awaitingToken as number);
+    expect(tryBeginConnectDelegation()).not.toBeNull();
+    resetConnectDelegationForTests();
     await act(async () => {
       tree.unmount();
     });

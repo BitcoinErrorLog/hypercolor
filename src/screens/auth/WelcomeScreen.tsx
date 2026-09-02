@@ -1,4 +1,4 @@
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -28,20 +28,25 @@ export default function WelcomeScreen() {
   const nav = useNavigation<Nav>();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<{ message: string; details: string | null } | null>(null);
+  const connectTokenRef = useRef<number | null>(null);
 
   useFocusEffect(
     useCallback(() => {
-      finishConnectDelegation();
       setLoading(false);
       return () => {
-        finishConnectDelegation();
+        const token = connectTokenRef.current;
+        if (token != null) {
+          finishConnectDelegation(token);
+        }
       };
     }, []),
   );
 
   async function handleConnect() {
     if (loading) return;
-    if (!tryBeginConnectDelegation()) return;
+    const token = tryBeginConnectDelegation();
+    if (token == null) return;
+    connectTokenRef.current = token;
     setLoading(true);
     setError(null);
     try {
@@ -54,7 +59,10 @@ export default function WelcomeScreen() {
         setError({ message: sanitized.message, details: sanitized.details });
       }
     } finally {
-      finishConnectDelegation();
+      finishConnectDelegation(token);
+      if (connectTokenRef.current === token) {
+        connectTokenRef.current = null;
+      }
       setLoading(false);
     }
   }
