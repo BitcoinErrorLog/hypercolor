@@ -79,6 +79,7 @@ jest.mock('../../../utils/copyText', () => ({
 }));
 
 type AlertButton = { text?: string; onPress?: () => void };
+type AlertOptions = { cancelable?: boolean; onDismiss?: () => void };
 
 async function exportRecovery(tree: ReactTestRenderer): Promise<void> {
   await act(async () => {
@@ -88,10 +89,16 @@ async function exportRecovery(tree: ReactTestRenderer): Promise<void> {
   });
 }
 
-function mockLeaveAlert(): { captured: { buttons: AlertButton[] }; spy: jest.SpyInstance } {
-  const captured: { buttons: AlertButton[] } = { buttons: [] };
-  const spy = jest.spyOn(Alert, 'alert').mockImplementation((_title, _message, next) => {
+function mockLeaveAlert(): {
+  captured: { buttons: AlertButton[]; options?: AlertOptions };
+  spy: jest.SpyInstance;
+} {
+  const captured: { buttons: AlertButton[]; options?: AlertOptions } = { buttons: [] };
+  const spy = jest.spyOn(Alert, 'alert').mockImplementation((_title, _message, next, options) => {
     captured.buttons = (next ?? []) as AlertButton[];
+    if (options) {
+      captured.options = options as AlertOptions;
+    }
   });
   return { captured, spy };
 }
@@ -155,6 +162,7 @@ describe('SettingsScreen recovery gate', () => {
         expect.objectContaining({ text: COPY.goBack }),
         expect.objectContaining({ text: COPY.leaveAnyway }),
       ]),
+      expect.objectContaining({ cancelable: true, onDismiss: expect.any(Function) }),
     );
     expect(mockGoBack).not.toHaveBeenCalled();
     alertSpy.mockRestore();
@@ -185,6 +193,7 @@ describe('SettingsScreen recovery gate', () => {
         expect.objectContaining({ text: COPY.goBack }),
         expect.objectContaining({ text: COPY.leaveAnyway }),
       ]),
+      expect.objectContaining({ cancelable: true, onDismiss: expect.any(Function) }),
     );
     expect(mockDispatch).not.toHaveBeenCalled();
     expect(mockGoBack).not.toHaveBeenCalled();
@@ -239,6 +248,7 @@ describe('SettingsScreen recovery gate', () => {
       COPY.leaveRecoveryTitle,
       COPY.leaveRecoveryBody,
       expect.any(Array),
+      expect.objectContaining({ cancelable: true, onDismiss: expect.any(Function) }),
     );
     expect(mockGoBack).not.toHaveBeenCalled();
     addSpy.mockRestore();
@@ -406,6 +416,34 @@ describe('SettingsScreen recovery gate', () => {
       preventRemoveCallback?.({ data: { action: resetAction } });
     });
     expect(alert.spy).toHaveBeenCalledTimes(1);
+    expect(mockDispatch).not.toHaveBeenCalled();
+    alert.spy.mockRestore();
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('prompts again after the leave alert is dismissed without a button', async () => {
+    const alert = mockLeaveAlert();
+    let tree!: ReactTestRenderer;
+    await act(async () => {
+      tree = create(<SettingsScreen />);
+    });
+    await exportRecovery(tree);
+    await act(async () => {
+      tree.root.findByProps({ testID: 'settingsBack' }).props.onPress();
+    });
+    expect(alert.spy).toHaveBeenCalledTimes(1);
+    expect(alert.spy.mock.calls[0]?.[3]).toEqual(
+      expect.objectContaining({ cancelable: true, onDismiss: expect.any(Function) }),
+    );
+    await act(async () => {
+      alert.captured.options?.onDismiss?.();
+    });
+    await act(async () => {
+      tree.root.findByProps({ testID: 'settingsBack' }).props.onPress();
+    });
+    expect(alert.spy).toHaveBeenCalledTimes(2);
     expect(mockDispatch).not.toHaveBeenCalled();
     alert.spy.mockRestore();
     await act(async () => {

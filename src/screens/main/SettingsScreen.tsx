@@ -70,9 +70,6 @@ export default function SettingsScreen() {
 
   const requestLeave = useCallback(
     (action?: NavigationAction) => {
-      if (alertVisibleRef.current) {
-        return;
-      }
       if (leavingRef.current) {
         leavingRef.current = false;
         leaveSettings(action);
@@ -82,28 +79,41 @@ export default function SettingsScreen() {
         leaveSettings(action);
         return;
       }
+      if (alertVisibleRef.current) {
+        return;
+      }
       alertVisibleRef.current = true;
-      Alert.alert(COPY.leaveRecoveryTitle, COPY.leaveRecoveryBody, [
+      Alert.alert(
+        COPY.leaveRecoveryTitle,
+        COPY.leaveRecoveryBody,
+        [
+          {
+            text: COPY.goBack,
+            style: 'cancel',
+            onPress: () => {
+              alertVisibleRef.current = false;
+            },
+          },
+          {
+            text: COPY.leaveAnyway,
+            style: 'destructive',
+            onPress: () => {
+              alertVisibleRef.current = false;
+              leavingRef.current = true;
+              setRecoveryGateActive(false);
+              setRecoveryCode(null);
+              setRecoveryConfirmed(false);
+              leaveSettings(action);
+            },
+          },
+        ],
         {
-          text: COPY.goBack,
-          style: 'cancel',
-          onPress: () => {
+          cancelable: true,
+          onDismiss: () => {
             alertVisibleRef.current = false;
           },
         },
-        {
-          text: COPY.leaveAnyway,
-          style: 'destructive',
-          onPress: () => {
-            alertVisibleRef.current = false;
-            leavingRef.current = true;
-            setRecoveryGateActive(false);
-            setRecoveryCode(null);
-            setRecoveryConfirmed(false);
-            leaveSettings(action);
-          },
-        },
-      ]);
+      );
     },
     [leaveSettings, recoveryGateActive],
   );
