@@ -16,6 +16,12 @@ jest.mock('@op-engineering/op-sqlite', () => ({
 
 jest.mock('../../KeyStore', () => ({
   KeyStore: {
+    isInitialized: jest.fn(() => true),
+    deleteLinkSessionIfAlias: jest.fn(() => true),
+    deleteLinkSession: jest.fn(),
+    getLinkSession: jest.fn(() => null),
+    setLinkSession: jest.fn(),
+    readLinkSession: jest.fn(() => ({ ok: true, alias: null })),
     getPubky: jest.fn(),
     setPubky: jest.fn(),
     getLinkSession: jest.fn(),

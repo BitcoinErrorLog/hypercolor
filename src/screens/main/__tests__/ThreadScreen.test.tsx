@@ -66,6 +66,7 @@ jest.mock('../../../stores/authStore', () => ({
   useAuthStore: (select: (state: { pubky: null }) => unknown) => select({ pubky: null }),
 }));
 
+const OWNER = 'operrr8wsbpr3ue9d4qj41ge1kcc6r7fdiy6o3ugjrrhi4y77rdo';
 const PEER = 'pxnu33x7jtpx9ar1ytsi4yxbp6a5o36gwhffs8zoxmbuptici1jy';
 const noop = () => undefined;
 
@@ -74,11 +75,26 @@ function contentProps(
 ): React.ComponentProps<typeof ThreadScreenContent> {
   return {
     participantPubky: PEER,
-    localPubky: 'a'.repeat(52),
-    draft: '',
+    localPubky: OWNER,
+    draft: 'hello',
     sending: false,
     loading: false,
-    linkMessages: [],
+    linkMessages: [
+      {
+        ownerPubky: OWNER,
+        eventId: 'evt-1',
+        conversationId: `dm:${PEER}`,
+        peerPubky: PEER,
+        senderPubky: OWNER,
+        direction: 'sent',
+        kind: 'chat.message.v0',
+        rawJson: '{}',
+        body: 'queued while blocked',
+        sentAt: 1,
+        receivedAt: null,
+        deliveryState: 'failed',
+      },
+    ],
     attachments: [],
     payments: [],
     tipEndpoints: [],

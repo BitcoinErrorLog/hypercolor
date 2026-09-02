@@ -33,6 +33,7 @@ import { setDbForTests } from '../../../db';
 import { runMigrations } from '../../../db/migrations';
 import { openMemoryDb } from '../../../db/__tests__/betterSqliteAdapter';
 import { StorageService } from '../../StorageService';
+import { paintOwner, resetPaintedOwnerModuleForTests } from '../../paintedOwner';
 import { applyPaymentInbound } from '../applyPaymentInbound';
 import { COPY } from '../../../copy/uxCopy';
 import { formatPaymentReceipt } from '../../../ui/paymentReceiptStatus';
@@ -80,8 +81,13 @@ function sentAccepted(
 }
 
 describe('applyPaymentInbound verified-hash unique index', () => {
+  beforeEach(() => {
+    resetPaintedOwnerModuleForTests();
+    paintOwner(OWNER);
+  });
   afterEach(() => {
     setDbForTests(null);
+    resetPaintedOwnerModuleForTests();
   });
 
   // Promise.all is scheduling-deterministic on better-sqlite3 (sync adapter).
@@ -91,6 +97,7 @@ describe('applyPaymentInbound verified-hash unique index', () => {
     const db = openMemoryDb();
     setDbForTests(db);
     await runMigrations(db);
+    paintOwner(OWNER);
 
     const preimage = 'ab'.repeat(32);
     const paymentHash = createHash('sha256').update(Buffer.from(preimage, 'hex')).digest('hex');
@@ -161,6 +168,10 @@ describe('applyPaymentInbound verified-hash unique index', () => {
 });
 
 describe('applyPaymentInbound invoice amount binding', () => {
+  beforeEach(() => {
+    resetPaintedOwnerModuleForTests();
+    paintOwner(OWNER);
+  });
   afterEach(() => {
     setDbForTests(null);
   });
@@ -169,6 +180,7 @@ describe('applyPaymentInbound invoice amount binding', () => {
     const db = openMemoryDb();
     setDbForTests(db);
     await runMigrations(db);
+    paintOwner(OWNER);
 
     const smallPreimage = 'ab'.repeat(32);
     const smallHash = createHash('sha256').update(Buffer.from(smallPreimage, 'hex')).digest('hex');
@@ -216,6 +228,10 @@ describe('applyPaymentInbound invoice amount binding', () => {
 });
 
 describe('applyPaymentInbound missing own_invoice_hashes table', () => {
+  beforeEach(() => {
+    resetPaintedOwnerModuleForTests();
+    paintOwner(OWNER);
+  });
   afterEach(() => {
     setDbForTests(null);
   });
@@ -224,6 +240,7 @@ describe('applyPaymentInbound missing own_invoice_hashes table', () => {
     const db = openMemoryDb();
     setDbForTests(db);
     await runMigrations(db);
+    paintOwner(OWNER);
     db.executeSync('DROP TABLE own_invoice_hashes');
 
     const preimage = 'ab'.repeat(32);
@@ -270,6 +287,10 @@ describe('applyPaymentInbound missing own_invoice_hashes table', () => {
 });
 
 describe('setDisplayedPaymentHash write-once after verification', () => {
+  beforeEach(() => {
+    resetPaintedOwnerModuleForTests();
+    paintOwner(OWNER);
+  });
   afterEach(() => {
     setDbForTests(null);
   });
@@ -278,6 +299,7 @@ describe('setDisplayedPaymentHash write-once after verification', () => {
     const db = openMemoryDb();
     setDbForTests(db);
     await runMigrations(db);
+    paintOwner(OWNER);
     const verifiedHash = 'aa'.repeat(32);
     const idA = 'b7f9c2a1-6d43-4b0e-a8d4-0fe2c712ab33';
     await StorageService.savePaymentRequest({
@@ -293,6 +315,10 @@ describe('setDisplayedPaymentHash write-once after verification', () => {
 });
 
 describe('payment_events unapplied prune', () => {
+  beforeEach(() => {
+    resetPaintedOwnerModuleForTests();
+    paintOwner(OWNER);
+  });
   afterEach(() => {
     setDbForTests(null);
   });
@@ -301,6 +327,7 @@ describe('payment_events unapplied prune', () => {
     const db = openMemoryDb();
     setDbForTests(db);
     await runMigrations(db);
+    paintOwner(OWNER);
     const conversationId = `dm:${PEER_A}`;
     for (let i = 0; i < 105; i += 1) {
       await StorageService.savePaymentEvent({
@@ -337,6 +364,7 @@ describe('payment_events unapplied prune', () => {
     const db = openMemoryDb();
     setDbForTests(db);
     await runMigrations(db);
+    paintOwner(OWNER);
     const requestId = 'b7f9c2a1-6d43-4b0e-a8d4-0fe2c712ab33';
     await StorageService.savePaymentRequest(sentAccepted(PEER_A, requestId, 'aa'.repeat(32)));
     const conversationId = `dm:${PEER_A}`;
@@ -380,6 +408,10 @@ describe('payment_events unapplied prune', () => {
 });
 
 describe('invoice reuse and terminal unbind', () => {
+  beforeEach(() => {
+    resetPaintedOwnerModuleForTests();
+    paintOwner(OWNER);
+  });
   afterEach(() => {
     setDbForTests(null);
   });
@@ -388,6 +420,7 @@ describe('invoice reuse and terminal unbind', () => {
     const db = openMemoryDb();
     setDbForTests(db);
     await runMigrations(db);
+    paintOwner(OWNER);
     const hash = 'ab'.repeat(32);
     const idA = 'b7f9c2a1-6d43-4b0e-a8d4-0fe2c712ab33';
     const idB = 'c7f9c2a1-6d43-4b0e-a8d4-0fe2c712ab44';
@@ -409,6 +442,7 @@ describe('invoice reuse and terminal unbind', () => {
     const db = openMemoryDb();
     setDbForTests(db);
     await runMigrations(db);
+    paintOwner(OWNER);
     const preimage = 'ab'.repeat(32);
     const paymentHash = createHash('sha256').update(Buffer.from(preimage, 'hex')).digest('hex');
     const idA = 'b7f9c2a1-6d43-4b0e-a8d4-0fe2c712ab33';
@@ -479,6 +513,7 @@ describe('invoice reuse and terminal unbind', () => {
     const db = openMemoryDb();
     setDbForTests(db);
     await runMigrations(db);
+    paintOwner(OWNER);
     const preimage = 'ab'.repeat(32);
     const paymentHash = createHash('sha256').update(Buffer.from(preimage, 'hex')).digest('hex');
     const idA = 'b7f9c2a1-6d43-4b0e-a8d4-0fe2c712ab33';
@@ -556,6 +591,7 @@ describe('invoice reuse and terminal unbind', () => {
     const db = openMemoryDb();
     setDbForTests(db);
     await runMigrations(db);
+    paintOwner(OWNER);
     const hash = 'cd'.repeat(32);
     await StorageService.savePaymentRequest({
       ...sentAccepted(PEER_A, 'b7f9c2a1-6d43-4b0e-a8d4-0fe2c712ab33', hash),
@@ -566,6 +602,10 @@ describe('invoice reuse and terminal unbind', () => {
 });
 
 describe('invoice_reused column repair isolation', () => {
+  beforeEach(() => {
+    resetPaintedOwnerModuleForTests();
+    paintOwner(OWNER);
+  });
   afterEach(() => {
     setDbForTests(null);
   });
@@ -574,6 +614,7 @@ describe('invoice_reused column repair isolation', () => {
     const db = openMemoryDb();
     setDbForTests(db);
     await runMigrations(db);
+    paintOwner(OWNER);
     db.executeSync('ALTER TABLE payment_requests DROP COLUMN invoice_reused');
     expect(
       (db.executeSync('PRAGMA table_info(payment_requests)').rows ?? []).map(col =>
@@ -618,6 +659,7 @@ describe('invoice_reused column repair isolation', () => {
     const db = openMemoryDb();
     setDbForTests(db);
     await runMigrations(db);
+    paintOwner(OWNER);
     db.executeSync('ALTER TABLE payment_requests DROP COLUMN invoice_reused');
     const original = db.executeSync.bind(db);
     db.executeSync = (query, params) => {
@@ -669,6 +711,10 @@ describe('invoice_reused column repair isolation', () => {
 });
 
 describe('tip-list payment_events markers', () => {
+  beforeEach(() => {
+    resetPaintedOwnerModuleForTests();
+    paintOwner(OWNER);
+  });
   afterEach(() => {
     setDbForTests(null);
   });
@@ -677,6 +723,7 @@ describe('tip-list payment_events markers', () => {
     const db = openMemoryDb();
     setDbForTests(db);
     await runMigrations(db);
+    paintOwner(OWNER);
     const built = buildPrivatePaymentListEnvelope({
       paymentEndpoints: { [ENDPOINT_LIGHTNING_BOLT11]: MAINNET_BOLT11_20U },
     });
@@ -714,6 +761,7 @@ describe('tip-list payment_events markers', () => {
     const db = openMemoryDb();
     setDbForTests(db);
     await runMigrations(db);
+    paintOwner(OWNER);
     const built = buildPrivatePaymentListEnvelope({
       paymentEndpoints: { [ENDPOINT_LIGHTNING_BOLT11]: MAINNET_BOLT11_20U },
     });

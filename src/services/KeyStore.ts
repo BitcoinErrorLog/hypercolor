@@ -2,6 +2,7 @@ import { hkdf } from '@noble/hashes/hkdf';
 import { sha256 } from '@noble/hashes/sha2';
 import * as Keychain from 'react-native-keychain';
 import { createMMKV, type MMKV } from 'react-native-mmkv';
+import { isValidPubky } from '../utils/pubkyId';
 
 /**
  * KeyStore — two-tier storage for delegated identity data.
@@ -865,7 +866,7 @@ export async function isAppCertValid(): Promise<boolean> {
  * through `requireStore` so they throw `KeyStoreNotReady` before init.
  */
 export function markSignOutIncomplete(ownerPubky: string): void {
-  if (!ownerPubky || ownerPubky.length === 0) {
+  if (!isValidPubky(ownerPubky)) {
     throw new Error('KeyStore.markSignOutIncomplete: owner is required');
   }
   requireStore('markSignOutIncomplete').set(SIGN_OUT_INCOMPLETE_KEY, ownerPubky);
@@ -878,7 +879,7 @@ export function isSignOutIncomplete(): boolean {
 export function getSignOutIncompleteOwner(): string | null {
   const value = requireStore('getSignOutIncompleteOwner').getString(SIGN_OUT_INCOMPLETE_KEY);
   if (typeof value !== 'string' || value.length === 0) return null;
-  return value;
+  return isValidPubky(value) ? value : null;
 }
 
 export function markSignOutIncompleteAlias(alias: string): void {
@@ -900,7 +901,7 @@ export function clearSignOutIncomplete(): void {
 }
 
 export function setSignOutWipeFailureCount(ownerPubky: string, count: number): void {
-  if (!ownerPubky || ownerPubky.length === 0 || !Number.isInteger(count) || count < 0) {
+  if (!isValidPubky(ownerPubky) || !Number.isInteger(count) || count < 0) {
     throw new Error('KeyStore.setSignOutWipeFailureCount: owner and count required');
   }
   requireStore('setSignOutWipeFailureCount').set(

@@ -5,6 +5,29 @@ import { COPY } from '../../../copy/uxCopy';
 import { PRIVATE_GROUP_MEMBER_CAP } from '../../../flags/config';
 import { GROUP_MESSAGE_KIND, type GroupChannel, type GroupMessage } from '../../../types/group';
 import { sendingNofM, sentToNofM } from '../../../ui/groupFanoutStatus';
+
+jest.mock('../../../services/link/LinkService', () => ({
+  LinkService: {},
+  startLinkRetryDrain: jest.fn(() => () => undefined),
+}));
+
+jest.mock('../../../services/KeyStore', () => ({
+  KeyStore: {
+    isInitialized: jest.fn(() => true),
+    getPubky: jest.fn(() => null),
+    getLinkSession: jest.fn(() => null),
+  },
+}));
+
+jest.mock('../../../services/StorageService', () => ({
+  StorageService: {},
+}));
+
+jest.mock('../../../services/group/GroupService', () => ({
+  GroupService: {},
+  subscribeGroupEvents: jest.fn(() => () => undefined),
+}));
+
 import { ChannelScreenContent } from '../ChannelScreen';
 
 jest.mock('react-native-safe-area-context', () => ({
