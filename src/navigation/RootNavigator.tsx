@@ -21,7 +21,7 @@ import { useAuthStore } from '../stores/authStore';
 import ThreadScreen from '../screens/main/ThreadScreen';
 import ChannelScreen from '../screens/main/ChannelScreen';
 import { PubkyRingAuthService } from '../services/PubkyRingAuthService';
-import { setPendingPublicJoin } from '../services/group/GroupService';
+import { setPendingPublicJoin, peekPendingPublicJoin } from '../services/group/GroupService';
 import { parsePublicChannelRef } from '../types/group';
 import { sanitizeError } from '../ui/sanitizedError';
 import { COPY } from '../copy/uxCopy';
@@ -139,6 +139,12 @@ export function RootNavigator() {
     },
     [isAuthenticated, setAuthenticated],
   );
+
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    if (!peekPendingPublicJoin()) return;
+    navigateRoot(PUBLIC_CHANNELS_ROUTE.name, PUBLIC_CHANNELS_ROUTE.params);
+  }, [isAuthenticated]);
 
   useEffect(() => {
     if (__DEV__) {

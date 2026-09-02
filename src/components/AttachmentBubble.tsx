@@ -2,33 +2,34 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { View, Text, Image, TouchableOpacity, ActivityIndicator, StyleSheet } from 'react-native';
 import type { AttachmentRecord } from '../types/attachment';
 import { isImageContentType } from '../types/attachment';
-import { AttachmentError } from '../types/attachment';
 import { AttachmentService } from '../services/attachments/AttachmentService';
 import { COPY } from '../copy/uxCopy';
 import { HIT_SLOP_44 } from '../ui/hitTarget';
+import { ErrorDetails } from '../ui/ErrorDetails';
+import { sanitizeError } from '../ui/sanitizedError';
 
 export function AttachmentBubble({
   record,
   isMine,
+  onRetrySend,
 }: {
   record: AttachmentRecord;
   isMine: boolean;
+  onRetrySend?: () => void;
 }) {
   const [uri, setUri] = useState<string | null>(record.localCachePath);
   const [thumbUri, setThumbUri] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(
-    record.resolveState === 'failed'
-      ? 'Could not decrypt this attachment'
-      : record.resolveState === 'unavailable-from-backup'
-        ? 'Unavailable from backup — ask the sender to re-share'
-        : null,
+    record.resolveState === 'failed' ? COPY.couldNotDownloadAttachment : null,
   );
+  const [errorDetails, setErrorDetails] = useState<string | null>(null);
 
   const resolveFull = useCallback(async () => {
     if (loading) return;
     setLoading(true);
     setError(null);
+    setErrorDetails(null);
     try {
       const path = await AttachmentService.resolveAttachment(
         record.ownerPubky,
@@ -37,13 +38,9 @@ export function AttachmentBubble({
       );
       setUri(path);
     } catch (err) {
-      const message =
-        err instanceof AttachmentError && err.code === 'decrypt-failed'
-          ? 'Decrypt failed — the file may be corrupt or the key does not match'
-          : err instanceof Error
-            ? err.message
-            : 'Download failed';
-      setError(message);
+      const sanitized = sanitizeError(err, COPY.couldNotDownloadAttachment);
+      setError(COPY.couldNotDownloadAttachment);
+      setErrorDetails(sanitized.details);
     } finally {
       setLoading(false);
     }
@@ -100,6 +97,18 @@ export function AttachmentBubble({
       >
         <Text style={[styles.meta, styles.error, { color: textColor }]}>{COPY.failed}</Text>
         <Text style={[styles.meta, { color: textColor }]}>{fileLabel(record.contentType)}</Text>
+        {onRetrySend ? (
+          <TouchableOpacity
+            testID="attachmentRetrySend"
+            accessibilityRole="button"
+            accessibilityLabel={COPY.retry}
+            hitSlop={HIT_SLOP_44}
+            onPress={onRetrySend}
+            style={styles.retry}
+          >
+            <Text style={styles.retryText}>{COPY.retry}</Text>
+          </TouchableOpacity>
+        ) : null}
       </View>
     );
   }
@@ -146,6 +155,7 @@ export function AttachmentBubble({
           <View accessibilityRole="alert" style={styles.errorRow}>
             <Text style={styles.errorIcon}>!</Text>
             <Text style={styles.error}>{error}</Text>
+            <ErrorDetails details={errorDetails} />
             <TouchableOpacity
               accessibilityRole="button"
               accessibilityLabel={COPY.retry}
@@ -193,6 +203,7 @@ export function AttachmentBubble({
         <View accessibilityRole="alert" style={styles.errorRow}>
           <Text style={styles.errorIcon}>!</Text>
           <Text style={styles.error}>{error}</Text>
+          <ErrorDetails details={errorDetails} />
           <TouchableOpacity
             accessibilityRole="button"
             accessibilityLabel={COPY.retry}

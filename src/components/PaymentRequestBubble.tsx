@@ -97,7 +97,7 @@ export function PaymentRequestBubble({
               amountAsset: record.amountAsset,
               reference: record.paymentReference,
               destinations: matches,
-              selected: matches[0] ?? null,
+              selected: matches.length === 1 ? (matches[0] ?? null) : null,
             });
           });
         }}

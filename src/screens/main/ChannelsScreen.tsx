@@ -57,7 +57,6 @@ export default function ChannelsScreen() {
   const [joinOpen, setJoinOpen] = useState(false);
   const [createPublicDefault, setCreatePublicDefault] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [publicReads, setPublicReads] = useState(0);
 
   const reload = useCallback(async () => {
     if (!ownerPubky) {
@@ -82,7 +81,6 @@ export default function ChannelsScreen() {
     if (!mayReadPublicGraph(publicOptIn)) return;
     const pending = takePendingPublicJoin();
     if (!pending) return;
-    setPublicReads(n => n + 1);
     void GroupService.joinPublicChannel(pending)
       .then(ch => {
         nav.navigate('ChannelScreen', { channelId: ch.channelId });
@@ -116,7 +114,6 @@ export default function ChannelsScreen() {
       contacts={contacts}
       mode={mode}
       publicOptIn={publicOptIn}
-      publicReads={publicReads}
       createOpen={createOpen}
       joinOpen={joinOpen}
       createPublicDefault={createPublicDefault}
@@ -150,7 +147,6 @@ export default function ChannelsScreen() {
       }}
       onCreatePublic={async name => {
         setBusy(true);
-        setPublicReads(n => n + 1);
         try {
           const channel = await GroupService.createPublicChannel(name);
           setCreateOpen(false);
@@ -165,7 +161,6 @@ export default function ChannelsScreen() {
       onJoinPublic={async ref => {
         if (!mayReadPublicGraph(publicOptIn)) return;
         setBusy(true);
-        setPublicReads(n => n + 1);
         try {
           const channel = await GroupService.joinPublicChannel(ref);
           setJoinOpen(false);
@@ -187,7 +182,6 @@ export function ChannelsScreenContent({
   contacts,
   mode,
   publicOptIn,
-  publicReads,
   createOpen,
   joinOpen,
   createPublicDefault,
@@ -208,7 +202,6 @@ export function ChannelsScreenContent({
   contacts: Contact[];
   mode: ChannelMode;
   publicOptIn: boolean;
-  publicReads: number;
   createOpen: boolean;
   joinOpen: boolean;
   createPublicDefault: boolean;
@@ -396,10 +389,6 @@ export function ChannelsScreenContent({
           ) : null}
         </View>
       ) : null}
-
-      <Text testID="channelsPublicReadCount" style={styles.readProbe}>
-        {String(publicReads)}
-      </Text>
 
       {visible.length === 0 ? (
         mode === 'private' ? (
@@ -639,7 +628,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   loadBtnText: { color: '#fff', fontSize: 15, fontWeight: '700' },
-  readProbe: { height: 0, opacity: 0, overflow: 'hidden' },
   list: { paddingVertical: 4 },
   row: {
     flexDirection: 'row',

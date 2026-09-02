@@ -162,9 +162,11 @@ export const COPY = {
   openSettings: 'Open settings',
   messageByteCap: 'Messages are capped at 1000 bytes.',
   reviewBeforePaying: 'Review before paying',
-  continueInBitkit: 'Continue in Bitkit',
   openWallet: 'Open wallet',
   copyPaymentUri: 'Copy payment URI',
+  choosePaymentDestination: 'Choose a destination',
+  tipAmountTitle: 'Send a tip',
+  continueToReview: 'Continue',
   noMatchingDestination: 'This peer has no destination that matches this request.',
   invoiceExpired: 'This invoice expired.',
   noWalletForLink: 'No app on this device can open that payment link.',
@@ -172,6 +174,12 @@ export const COPY = {
   paymentPaid: 'paid',
   paymentExpired: 'expired',
   paymentFailed: 'failed',
+  proofNotVerified: 'Proof not verified',
+  networkBitcoinMainnet: 'Bitcoin mainnet',
+  networkLightningMainnet: 'Lightning on Bitcoin mainnet',
+  networkLightningRegtest: 'Lightning on Bitcoin regtest',
+  networkLightningTestnet: 'Lightning on Bitcoin testnet',
+  couldNotDownloadAttachment: 'Could not download/decrypt this attachment',
   encryptedBackup: 'Encrypted backup',
   myTipEndpoints: 'My tip endpoints',
 } as const;
@@ -182,6 +190,17 @@ export function publicGraphWarning(): string {
 
 export function invoiceAmountMismatchWarning(invoiceBtc: string, requestedBtc: string): string {
   return `The invoice is for ${invoiceBtc} BTC, not the ${requestedBtc} BTC that was requested.`;
+}
+
+export function paymentNetworkLabel(
+  scheme: 'lightning' | 'bitcoin' | null,
+  network: 'bitcoin' | 'testnet' | 'regtest' | 'unknown' | null,
+): string | null {
+  if (scheme === 'bitcoin') return COPY.networkBitcoinMainnet;
+  if (scheme !== 'lightning') return null;
+  if (network === 'regtest') return COPY.networkLightningRegtest;
+  if (network === 'testnet') return COPY.networkLightningTestnet;
+  return COPY.networkLightningMainnet;
 }
 
 export function messageByteCountLabel(used: number, cap: number): string {

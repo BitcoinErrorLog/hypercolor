@@ -13,6 +13,8 @@ import {
   Alert,
   ScrollView,
   BackHandler,
+  AccessibilityInfo,
+  findNodeHandle,
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
@@ -29,6 +31,7 @@ import { PRIVATE_GROUP_MEMBER_CAP } from '../../flags/config';
 import { useAuthStore } from '../../stores/authStore';
 import { StorageService } from '../../services/StorageService';
 import { GroupService, subscribeGroupEvents } from '../../services/group/GroupService';
+import { LinkService } from '../../services/link/LinkService';
 import { AttachmentBubble } from '../../components/AttachmentBubble';
 import {
   pickAndSendFile,
@@ -42,7 +45,12 @@ import { peerIdentity } from '../../ui/peerIdentity';
 import { COPY, messageByteCountLabel, publicGraphWarning } from '../../copy/uxCopy';
 import { sanitizeError } from '../../ui/sanitizedError';
 import { useSessionStatusStore } from '../../stores/sessionStatusStore';
-import { composerActionItems, draftByteSize, draftExceedsByteCap } from '../../ui/composerActions';
+import {
+  composerActionItems,
+  draftEnvelopeByteSize,
+  draftExceedsByteCap,
+  type DraftEnvelopeContext,
+} from '../../ui/composerActions';
 import { LINK_MESSAGE_MAX_BYTES } from '../../types/link';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'ChannelScreen'>;
@@ -121,12 +129,17 @@ export default function ChannelScreen({ route }: Props) {
 
   const handleSend = useCallback(async () => {
     const text = draft.trim();
-    if (!text || sending || !channel || draftExceedsByteCap(text)) return;
-    setDraft('');
+    if (!text || sending || !channel) return;
+    const envelopeCtx: DraftEnvelopeContext = {
+      surface: channel.isPublic ? 'public-topic' : 'private-group',
+      channelId: channel.channelId,
+    };
+    if (localPubky) envelopeCtx.authorPubky = localPubky;
+    if (replyTo?.eventId) envelopeCtx.replyToEventId = replyTo.eventId;
+    if (replyTo?.senderPubky) envelopeCtx.replyToAuthorPubky = replyTo.senderPubky;
+    if (draftExceedsByteCap(text, envelopeCtx)) return;
     const reply = replyTo;
     const editId = editingEventId;
-    setReplyTo(null);
-    setEditingEventId(null);
     setSending(true);
     try {
       const replyTarget = reply
@@ -145,13 +158,16 @@ export default function ChannelScreen({ route }: Props) {
       } else {
         await GroupService.sendGroupMessage(channelId, text);
       }
+      setDraft('');
+      setReplyTo(null);
+      setEditingEventId(null);
       await reload();
     } catch (err) {
       alertSanitized(err, COPY.couldNotSendMessage);
     } finally {
       setSending(false);
     }
-  }, [draft, sending, channel, channelId, replyTo, editingEventId, reload]);
+  }, [draft, sending, channel, channelId, replyTo, editingEventId, localPubky, reload]);
 
   return (
     <ChannelScreenContent
@@ -258,6 +274,17 @@ export default function ChannelScreen({ route }: Props) {
           alertSanitized(err, COPY.couldNotRefreshChannel);
         }
       }}
+      onRetryFailed={() => {
+        void (async () => {
+          try {
+            await LinkService.recoverPendingSends();
+            await LinkService.drainRetries();
+          } catch {
+            // Bubble stays Failed until a drain succeeds.
+          }
+          await reload();
+        })();
+      }}
     />
   );
 }
@@ -297,6 +324,7 @@ export function ChannelScreenContent({
   onRemoveMember,
   onLeave,
   onRefreshPublic,
+  onRetryFailed,
 }: {
   channel: GroupChannel | null;
   messages: GroupMessage[];
@@ -334,8 +362,11 @@ export function ChannelScreenContent({
   onRemoveMember: (pubky: string) => void;
   onLeave: () => void;
   onRefreshPublic: () => void;
+  onRetryFailed: () => void;
 }) {
   const flatListRef = useRef<FlatList<GroupMessage>>(null);
+  const plusRef = useRef<View>(null);
+  const menuWasOpen = useRef(false);
   const byAuthorEvent = useMemo(() => {
     const map = new Map<string, GroupMessage>();
     for (const msg of messages) map.set(`${msg.senderPubky}:${msg.eventId}`, msg);
@@ -365,6 +396,29 @@ export function ChannelScreenContent({
   const visible = messages.filter(isGroupTimelineVisible);
   const activeMembers = members.filter(m => m.status === 'active');
   const isPublic = channel?.isPublic === true;
+  const envelopeCtx: DraftEnvelopeContext = {
+    surface: isPublic ? 'public-topic' : 'private-group',
+  };
+  if (channel?.channelId) envelopeCtx.channelId = channel.channelId;
+  if (localPubky) envelopeCtx.authorPubky = localPubky;
+  if (replyTo?.eventId) envelopeCtx.replyToEventId = replyTo.eventId;
+  if (replyTo?.senderPubky) envelopeCtx.replyToAuthorPubky = replyTo.senderPubky;
+  const overCap = draftExceedsByteCap(draft, envelopeCtx);
+  const byteLabel = messageByteCountLabel(
+    draftEnvelopeByteSize(draft, envelopeCtx),
+    LINK_MESSAGE_MAX_BYTES,
+  );
+
+  useEffect(() => {
+    if (actionMenuOpen) {
+      menuWasOpen.current = true;
+      return;
+    }
+    if (!menuWasOpen.current) return;
+    menuWasOpen.current = false;
+    const tag = findNodeHandle(plusRef.current);
+    if (tag != null) AccessibilityInfo.setAccessibilityFocus(tag);
+  }, [actionMenuOpen]);
 
   const renderMessage = useCallback(
     ({ item }: { item: GroupMessage }) => {
@@ -403,7 +457,7 @@ export function ChannelScreenContent({
             </Text>
           ) : null}
           {item.kind === CHAT_ATTACHMENT_KIND && attachment && !item.deleted ? (
-            <AttachmentBubble record={attachment} isMine={isMine} />
+            <AttachmentBubble record={attachment} isMine={isMine} onRetrySend={onRetryFailed} />
           ) : (
             <Text style={[styles.bubbleText, isMine ? styles.mineText : styles.theirsText]}>
               {item.deleted ? 'Message deleted' : item.body}
@@ -490,6 +544,7 @@ export function ChannelScreenContent({
       onReact,
       onEdit,
       onDelete,
+      onRetryFailed,
     ],
   );
 
@@ -685,6 +740,7 @@ export function ChannelScreenContent({
               onClose={onCloseActionMenu}
             />
             <TouchableOpacity
+              ref={plusRef}
               testID="channelComposerPlus"
               accessibilityRole="button"
               accessibilityLabel={COPY.composerAttach}
@@ -707,14 +763,14 @@ export function ChannelScreenContent({
               accessibilityRole="button"
               accessibilityLabel="Send message"
               accessibilityState={{
-                disabled: !draft.trim() || sending || draftExceedsByteCap(draft),
+                disabled: !draft.trim() || sending || overCap,
               }}
               style={[
                 styles.sendBtn,
-                (!draft.trim() || sending || draftExceedsByteCap(draft)) && styles.sendBtnDisabled,
+                (!draft.trim() || sending || overCap) && styles.sendBtnDisabled,
               ]}
               onPress={onSend}
-              disabled={!draft.trim() || sending || draftExceedsByteCap(draft)}
+              disabled={!draft.trim() || sending || overCap}
             >
               {sending ? (
                 <ActivityIndicator color="#fff" size="small" />
@@ -725,11 +781,10 @@ export function ChannelScreenContent({
           </View>
           <Text
             testID="channelByteCap"
-            accessibilityLabel={messageByteCountLabel(draftByteSize(draft), LINK_MESSAGE_MAX_BYTES)}
-            style={[styles.byteCap, draftExceedsByteCap(draft) && styles.byteCapOver]}
+            accessibilityLabel={byteLabel}
+            style={[styles.byteCap, overCap && styles.byteCapOver]}
           >
-            {messageByteCountLabel(draftByteSize(draft), LINK_MESSAGE_MAX_BYTES)}.{' '}
-            {COPY.messageByteCap}
+            {byteLabel}. {COPY.messageByteCap}
           </Text>
         </KeyboardAvoidingView>
       ) : null}

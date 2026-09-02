@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useRef } from 'react';
 import {
   Modal,
   View,
@@ -7,6 +7,8 @@ import {
   StyleSheet,
   Pressable,
   ScrollView,
+  AccessibilityInfo,
+  findNodeHandle,
 } from 'react-native';
 import { COPY } from '../copy/uxCopy';
 import { HIT_SLOP_44 } from '../ui/hitTarget';
@@ -20,6 +22,7 @@ export function PaymentReviewSheet({
   onClose,
   onContinue,
   onCopyUri,
+  onSelectDestination,
 }: {
   visible: boolean;
   review: PaymentReviewView;
@@ -27,9 +30,32 @@ export function PaymentReviewSheet({
   onClose: () => void;
   onContinue: () => void;
   onCopyUri: () => void;
+  onSelectDestination?: (identifier: string) => void;
 }) {
   const reduceMotion = useReduceMotion();
+  const titleRef = useRef<Text>(null);
   const primaryDisabled = busy || !review.primaryEnabled;
+
+  useEffect(() => {
+    if (!visible) return;
+    const timer = setTimeout(() => {
+      const tag = findNodeHandle(titleRef.current);
+      if (tag != null) AccessibilityInfo.setAccessibilityFocus(tag);
+    }, 50);
+    return () => clearTimeout(timer);
+  }, [visible]);
+
+  function handlePrimary() {
+    if (primaryDisabled) return;
+    if (review.primaryAction === 'copy') onCopyUri();
+    else onContinue();
+  }
+
+  function handleSecondary() {
+    if (review.secondaryAction === 'open') onContinue();
+    else onCopyUri();
+  }
+
   return (
     <Modal
       visible={visible}
@@ -39,16 +65,11 @@ export function PaymentReviewSheet({
       accessibilityViewIsModal
     >
       <View style={styles.backdrop}>
-        <Pressable
-          testID="paymentReviewBackdrop"
-          accessibilityRole="button"
-          accessibilityLabel={COPY.cancel}
-          style={StyleSheet.absoluteFill}
-          onPress={onClose}
-        />
         <View testID="paymentReviewSheet" style={styles.sheet}>
           <ScrollView>
-            <Text style={styles.title}>{COPY.reviewBeforePaying}</Text>
+            <Text ref={titleRef} accessibilityRole="header" style={styles.title}>
+              {COPY.reviewBeforePaying}
+            </Text>
             <Text style={styles.label}>Recipient</Text>
             <Text testID="paymentReviewRecipient" style={styles.value}>
               {review.recipientTitle}
@@ -73,7 +94,28 @@ export function PaymentReviewSheet({
                 </Text>
               </>
             ) : null}
-            {review.destinationText ? (
+            {review.destinations.length > 1 ? (
+              <>
+                <Text style={styles.label}>{COPY.choosePaymentDestination}</Text>
+                {review.destinations.map(option => {
+                  const selected = option.identifier === review.selectedIdentifier;
+                  return (
+                    <TouchableOpacity
+                      key={option.identifier}
+                      testID={`paymentReviewDestination-${option.identifier}`}
+                      accessibilityRole="radio"
+                      accessibilityLabel={option.label}
+                      accessibilityState={{ selected, disabled: busy }}
+                      hitSlop={HIT_SLOP_44}
+                      onPress={() => onSelectDestination?.(option.identifier)}
+                      style={[styles.choice, selected && styles.choiceOn]}
+                    >
+                      <Text style={styles.mono}>{option.label}</Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </>
+            ) : review.destinationText ? (
               <>
                 <Text style={styles.label}>Destination</Text>
                 <Text testID="paymentReviewDestination" style={styles.mono}>
@@ -118,11 +160,15 @@ export function PaymentReviewSheet({
             testID="paymentReviewContinue"
             accessibilityRole="button"
             accessibilityLabel={review.primaryLabel}
-            accessibilityHint="Opens Bitkit to complete this payment"
+            accessibilityHint={
+              review.primaryAction === 'copy'
+                ? 'Copies the payment URI'
+                : 'Opens the wallet to complete this payment'
+            }
             accessibilityState={{ disabled: primaryDisabled, busy }}
             hitSlop={HIT_SLOP_44}
             disabled={primaryDisabled}
-            onPress={onContinue}
+            onPress={handlePrimary}
             style={[
               styles.primary,
               review.primaryOutline && styles.primaryOutline,
@@ -133,13 +179,13 @@ export function PaymentReviewSheet({
               {review.primaryLabel}
             </Text>
           </TouchableOpacity>
-          {review.uri && !review.walletUnavailable ? (
+          {review.secondaryLabel ? (
             <TouchableOpacity
               testID="paymentReviewCopy"
               accessibilityRole="button"
               accessibilityLabel={review.secondaryLabel}
               hitSlop={HIT_SLOP_44}
-              onPress={onCopyUri}
+              onPress={handleSecondary}
               style={styles.secondary}
             >
               <Text style={styles.secondaryText}>{review.secondaryLabel}</Text>
@@ -156,6 +202,12 @@ export function PaymentReviewSheet({
             <Text style={styles.cancelText}>{COPY.cancel}</Text>
           </TouchableOpacity>
         </View>
+        <Pressable
+          testID="paymentReviewBackdrop"
+          accessible={false}
+          style={styles.backdropHit}
+          onPress={onClose}
+        />
       </View>
     </Modal>
   );
@@ -167,6 +219,10 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.6)',
     justifyContent: 'flex-end',
   },
+  backdropHit: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 0,
+  },
   sheet: {
     backgroundColor: '#111',
     borderTopLeftRadius: 16,
@@ -174,12 +230,23 @@ const styles = StyleSheet.create({
     padding: 20,
     gap: 10,
     maxHeight: '88%',
+    zIndex: 1,
   },
   title: { color: '#f9fafb', fontSize: 18, fontWeight: '700', marginBottom: 8 },
   label: { color: '#808692', fontSize: 12, fontWeight: '600', marginTop: 8 },
   value: { color: '#f9fafb', fontSize: 16, fontWeight: '600' },
   mono: { color: '#c4b5fd', fontSize: 13, fontFamily: 'monospace' },
   meta: { color: '#808692', fontSize: 13, marginTop: 4 },
+  choice: {
+    minHeight: 44,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#374151',
+    justifyContent: 'center',
+    paddingHorizontal: 12,
+    marginTop: 6,
+  },
+  choiceOn: { borderColor: '#7c3aed', backgroundColor: '#1f1b2e' },
   warningBox: { flexDirection: 'row', gap: 8, alignItems: 'flex-start', marginTop: 8 },
   errorBox: { flexDirection: 'row', gap: 8, alignItems: 'flex-start', marginTop: 8 },
   warningIcon: { color: '#fbbf24', fontSize: 16, fontWeight: '700' },

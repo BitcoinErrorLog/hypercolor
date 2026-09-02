@@ -1,10 +1,15 @@
-import { COPY, invoiceAmountMismatchWarning } from '../copy/uxCopy';
+import { COPY, invoiceAmountMismatchWarning, paymentNetworkLabel } from '../copy/uxCopy';
 import {
   buildPayUri,
   prepareRequestHandoff,
   type RequestHandoffResult,
 } from '../services/payments/walletHandoff';
-import { schemeForEndpointIdentifier, type TipEndpointRecord } from '../types/payment';
+import {
+  isPositiveBtcAmount,
+  schemeForEndpointIdentifier,
+  type TipEndpointRecord,
+} from '../types/payment';
+import { decodeBolt11Invoice } from '../utils/bolt11';
 import { formatTipIdentifierDisplay, payloadPreview } from '../utils/displaySanitize';
 import { peerIdentity, type PeerContactHint } from './peerIdentity';
 import { shortPubky } from './shortPubky';
@@ -19,9 +24,15 @@ export type PaymentReviewInput = {
   amountAsset: string;
   reference: string | null;
   endpoint: TipEndpointRecord | null;
+  destinations: readonly TipEndpointRecord[];
   nowMs: number;
   destinationsEmpty: boolean;
   walletUnavailable: boolean;
+};
+
+export type PaymentReviewDestinationOption = {
+  identifier: string;
+  label: string;
 };
 
 export type PaymentReviewView = {
@@ -40,12 +51,18 @@ export type PaymentReviewView = {
   emptyDestinations: boolean;
   expired: boolean;
   amountMismatch: boolean;
+  requiresDestinationChoice: boolean;
+  destinations: PaymentReviewDestinationOption[];
+  selectedIdentifier: string | null;
   primaryEnabled: boolean;
   primaryOutline: boolean;
   primaryLabel: string;
-  secondaryLabel: string;
+  primaryAction: 'open' | 'copy';
+  secondaryLabel: string | null;
+  secondaryAction: 'copy' | 'open' | null;
   uri: string | null;
   walletUnavailable: boolean;
+  paymentHash: string | null;
 };
 
 export const PAYMENT_COMPOSE_DEFAULT_AMOUNT = '';
@@ -83,9 +100,22 @@ function formatExpiry(expiresAt: number, nowMs: number): string | null {
   return `Expires in ${remaining}s`;
 }
 
-function amountsDiffer(requested: string, invoice: string | null): boolean {
-  if (!invoice) return false;
-  return invoice.trim() !== requested.trim();
+function isAmountMismatch(handoff: RequestHandoffResult | null): boolean {
+  if (!handoff || handoff.ok) return false;
+  return handoff.error.toLowerCase().includes('does not match');
+}
+
+function networkForEndpoint(endpoint: TipEndpointRecord | null): string | null {
+  if (!endpoint) return null;
+  const scheme = schemeForEndpointIdentifier(endpoint.identifier);
+  if (scheme === 'bitcoin') return paymentNetworkLabel(scheme, 'bitcoin');
+  if (scheme !== 'lightning') return null;
+  try {
+    const decoded = decodeBolt11Invoice(endpoint.payload);
+    return paymentNetworkLabel(scheme, decoded.network);
+  } catch {
+    return paymentNetworkLabel(scheme, null);
+  }
 }
 
 /** Maps request/tip + destination into the Payment Review sheet model. */
@@ -94,37 +124,45 @@ export function mapPaymentReview(input: PaymentReviewInput): PaymentReviewView {
   const handoff = handoffFor(input);
   const uri = tryUri(input);
   const invoiceAmount = handoff?.invoiceAmountBtc ?? input.endpoint?.invoiceAmount ?? null;
-  const mismatch = amountsDiffer(input.requestAmountBtc, invoiceAmount);
+  const mismatch = isAmountMismatch(handoff);
   const expiresAt = expiryMs(input, handoff);
   const expired = expiresAt !== null && expiresAt <= input.nowMs;
-  const scheme = input.endpoint ? schemeForEndpointIdentifier(input.endpoint.identifier) : null;
   const handoffError = handoff && !handoff.ok ? handoff.error : null;
-  const mismatchIsOnlyBlock =
-    mismatch && handoffError !== null && handoffError.toLowerCase().includes('does not match');
+  const amountMissing =
+    input.requestAmountBtc.trim().length === 0 || !isPositiveBtcAmount(input.requestAmountBtc);
+  const needsChoice = input.destinations.length > 1 && input.endpoint === null;
 
   let errorText: string | null = null;
   if (input.destinationsEmpty) {
     errorText = COPY.noMatchingDestination;
+  } else if (needsChoice) {
+    errorText = COPY.choosePaymentDestination;
+  } else if (amountMissing) {
+    errorText = 'Enter a valid BTC amount';
   } else if (expired) {
     errorText = COPY.invoiceExpired;
-  } else if (input.walletUnavailable) {
-    errorText = COPY.noWalletForLink;
-  } else if (handoffError && !mismatchIsOnlyBlock) {
+  } else if (handoffError && !mismatch) {
     errorText = handoffError;
   }
 
   const warningText = mismatch
     ? invoiceAmountMismatchWarning(invoiceAmount ?? '', input.requestAmountBtc)
-    : handoff && handoff.ok
-      ? (handoff.warning ?? null)
-      : null;
+    : input.walletUnavailable
+      ? COPY.noWalletForLink
+      : handoff && handoff.ok
+        ? (handoff.warning ?? null)
+        : null;
 
   const primaryEnabled =
     !input.destinationsEmpty &&
+    !needsChoice &&
+    !amountMissing &&
     !expired &&
     errorText === null &&
     uri !== null &&
-    (handoff === null || handoff.ok || mismatchIsOnlyBlock);
+    (handoff === null || handoff.ok || mismatch);
+
+  const copyPrimary = input.walletUnavailable && uri !== null && primaryEnabled;
 
   return {
     recipientTitle: identity.title,
@@ -132,9 +170,13 @@ export function mapPaymentReview(input: PaymentReviewInput): PaymentReviewView {
     amountText: `${input.requestAmountBtc} ${input.amountAsset.toUpperCase()}`.trim(),
     invoiceAmountText: invoiceAmount ? `${invoiceAmount} BTC` : null,
     referenceText: input.reference,
-    destinationText: input.endpoint ? formatTipIdentifierDisplay(input.endpoint.identifier) : null,
+    destinationText: input.endpoint
+      ? formatTipIdentifierDisplay(input.endpoint.identifier)
+      : needsChoice
+        ? COPY.choosePaymentDestination
+        : null,
     payloadText: input.endpoint ? payloadPreview(input.endpoint.payload) : null,
-    networkText: scheme,
+    networkText: networkForEndpoint(input.endpoint),
     feeText: null,
     expiryText: expiresAt !== null ? formatExpiry(expiresAt, input.nowMs) : null,
     warningText,
@@ -142,11 +184,20 @@ export function mapPaymentReview(input: PaymentReviewInput): PaymentReviewView {
     emptyDestinations: input.destinationsEmpty,
     expired,
     amountMismatch: mismatch,
+    requiresDestinationChoice: needsChoice,
+    destinations: input.destinations.map(row => ({
+      identifier: row.identifier,
+      label: formatTipIdentifierDisplay(row.identifier),
+    })),
+    selectedIdentifier: input.endpoint?.identifier ?? null,
     primaryEnabled,
     primaryOutline: mismatch && primaryEnabled,
-    primaryLabel: input.walletUnavailable ? COPY.copyPaymentUri : COPY.continueInBitkit,
-    secondaryLabel: COPY.copyPaymentUri,
+    primaryLabel: copyPrimary ? COPY.copyPaymentUri : COPY.openWallet,
+    primaryAction: copyPrimary ? 'copy' : 'open',
+    secondaryLabel: copyPrimary ? COPY.openWallet : uri ? COPY.copyPaymentUri : null,
+    secondaryAction: copyPrimary ? 'open' : uri ? 'copy' : null,
     uri,
     walletUnavailable: input.walletUnavailable,
+    paymentHash: handoff?.paymentHash ?? input.endpoint?.paymentHash ?? null,
   };
 }

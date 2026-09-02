@@ -11,25 +11,35 @@ export type PaymentReceiptWord =
   | typeof COPY.paymentExpired
   | typeof COPY.paymentFailed;
 
-const RECEIPT_WORDS: readonly PaymentReceiptWord[] = [
-  COPY.paymentRequested,
-  COPY.paymentPaid,
-  COPY.paymentExpired,
-  COPY.paymentFailed,
-];
-
-export function isPaymentReceiptWord(value: string): value is PaymentReceiptWord {
-  return (RECEIPT_WORDS as readonly string[]).includes(value);
-}
+export type PaymentReceiptView = {
+  word: PaymentReceiptWord;
+  note: string | null;
+};
 
 /**
  * In-thread payment receipts. Only requested / paid / expired / failed.
- * Never emits delivered, sending, claimed, or raw enum values.
+ * `paid` is reserved for a PaymentService-verified proof.
  */
 export function formatPaymentReceiptStatus(
   record: Pick<PaymentRequestRecord, 'status' | 'expiresAt' | 'pendingEventId' | 'proofVerified'>,
   nowMs: number,
 ): PaymentReceiptWord {
+  return formatPaymentReceipt(record, nowMs).word;
+}
+
+export function formatPaymentReceipt(
+  record: Pick<PaymentRequestRecord, 'status' | 'expiresAt' | 'pendingEventId' | 'proofVerified'>,
+  nowMs: number,
+): PaymentReceiptView {
+  if (record.status === 'proof_received') {
+    if (record.proofVerified === true) {
+      return { word: COPY.paymentPaid, note: null };
+    }
+    if (record.proofVerified === false) {
+      return { word: COPY.paymentFailed, note: COPY.proofNotVerified };
+    }
+    return { word: COPY.paymentRequested, note: COPY.proofNotVerified };
+  }
   const status: PaymentDisplayStatus = displayPaymentStatus(
     record.status,
     record.expiresAt,
@@ -39,15 +49,16 @@ export function formatPaymentReceiptStatus(
       proofVerified: record.proofVerified,
     },
   );
-  return receiptWordForDisplay(status);
+  return { word: receiptWordForDisplay(status), note: null };
 }
 
 export function receiptWordForDisplay(status: PaymentDisplayStatus): PaymentReceiptWord {
   switch (status) {
     case 'verified':
+      return COPY.paymentPaid;
     case 'claimed':
     case 'proof_received':
-      return COPY.paymentPaid;
+      return COPY.paymentRequested;
     case 'expired':
       return COPY.paymentExpired;
     case 'rejected':

@@ -17,6 +17,7 @@ import {
   buildPrivateChannelId,
   buildPublicChannelId,
   buildPublicChannelInvite,
+  buildPublicChannelMessageDocument,
   decodePublicChannelMessage,
   decodePublicChannelMeta,
   packMembershipCreate,
@@ -28,7 +29,6 @@ import {
   type GroupChannel,
   type GroupMember,
   type GroupMessage,
-  type PublicChannelMessageDocument,
   type PublicChannelMeta,
 } from '../../types/group';
 import { KeyStore } from '../KeyStore';
@@ -37,20 +37,25 @@ import { PubkyService } from '../PubkyService';
 import { LINK_GROUP_FANOUT_PAYLOAD_TYPE } from '../../types/group';
 import { LinkService } from '../link/LinkService';
 import { notifyGroupEvent } from './groupEvents';
+import {
+  peekDeferredPublicJoin,
+  setDeferredPublicJoin,
+  takeDeferredPublicJoin,
+} from '../../stores/deferredPublicJoin';
 
 export { subscribeGroupEvents } from './groupEvents';
 export { PRIVATE_GROUP_MEMBER_CAP };
 
-let pendingPublicJoin: string | null = null;
-
 export function setPendingPublicJoin(ref: string): void {
-  pendingPublicJoin = ref;
+  setDeferredPublicJoin(ref);
+}
+
+export function peekPendingPublicJoin(): string | null {
+  return peekDeferredPublicJoin();
 }
 
 export function takePendingPublicJoin(): string | null {
-  const value = pendingPublicJoin;
-  pendingPublicJoin = null;
-  return value;
+  return takeDeferredPublicJoin();
 }
 
 export const GroupService = {
@@ -530,23 +535,17 @@ export const GroupService = {
     }
     const eventId = uuidv4();
     const sentAt = Date.now();
-    const doc: PublicChannelMessageDocument = {
-      version: 1,
-      kind: PUBLIC_CHANNEL_MESSAGE_KIND,
-      channel_id: channelId,
-      event_id: eventId,
-      sent_at: sentAt,
+    const built = buildPublicChannelMessageDocument({
+      channelId,
+      eventId,
+      sentAt,
       body: text,
       author: owner,
-    };
-    if (replyTo !== undefined) {
-      doc.reply_to = replyTo.eventId;
-      doc.reply_to_author = replyTo.authorPubky;
-    }
-    const json = JSON.stringify(doc);
+      ...(replyTo ? { replyTo: replyTo.eventId, replyToAuthor: replyTo.authorPubky } : {}),
+    });
     await PubkyService.put(
       publicChannelMessageUrl(owner, parsed.hostPubky, parsed.localId, sentAt, eventId),
-      json,
+      built.json,
     );
     const message: GroupMessage = {
       ownerPubky: owner,
@@ -555,7 +554,7 @@ export const GroupService = {
       senderPubky: owner,
       kind: PUBLIC_CHANNEL_MESSAGE_KIND,
       body: text,
-      rawJson: json,
+      rawJson: built.json,
       sentAt,
       receivedAt: null,
       deliveryState: 'sent',

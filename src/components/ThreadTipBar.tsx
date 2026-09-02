@@ -54,7 +54,7 @@ export function ThreadTipBarContent({
                 </Text>
               ) : null}
             </View>
-            <Text style={styles.endpointHint}>{COPY.continueInBitkit}</Text>
+            <Text style={styles.endpointHint}>{COPY.openWallet}</Text>
           </TouchableOpacity>
         );
       })}
@@ -81,5 +81,3 @@ const styles = StyleSheet.create({
   meta: { color: '#9ca3af', fontSize: 11 },
   expired: { color: '#fca5a5', fontSize: 11, fontWeight: '600' },
 });
-
-export const ThreadTipBar = ThreadTipBarContent;

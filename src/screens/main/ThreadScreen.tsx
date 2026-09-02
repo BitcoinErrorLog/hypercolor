@@ -12,6 +12,8 @@ import {
   ActivityIndicator,
   Alert,
   Linking,
+  AccessibilityInfo,
+  findNodeHandle,
 } from 'react-native';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
@@ -39,7 +41,12 @@ import { PaymentReviewSheet } from '../../components/PaymentReviewSheet';
 import { ThreadTipBarContent } from '../../components/ThreadTipBar';
 import { EnableMessagingCta } from '../../components/EnableMessagingCta';
 import { PaymentService } from '../../services/payments/PaymentService';
-import { isPaykitPaymentKind, PaymentError, type PaymentRequestRecord } from '../../types/payment';
+import {
+  isPaykitPaymentKind,
+  PaymentError,
+  isPositiveBtcAmount,
+  type PaymentRequestRecord,
+} from '../../types/payment';
 import type { TipEndpointRecord } from '../../types/payment';
 import { COPY, messageByteCountLabel } from '../../copy/uxCopy';
 import { HIT_SLOP_44, minHitStyle } from '../../ui/hitTarget';
@@ -52,7 +59,11 @@ import { LINK_MESSAGE_MAX_BYTES } from '../../types/link';
 import { StatusBanner } from '../../ui/StatusBanner';
 import { useSessionStatusStore } from '../../stores/sessionStatusStore';
 import { sanitizeError } from '../../ui/sanitizedError';
-import { composerActionItems, draftByteSize, draftExceedsByteCap } from '../../ui/composerActions';
+import {
+  composerActionItems,
+  draftEnvelopeByteSize,
+  draftExceedsByteCap,
+} from '../../ui/composerActions';
 import { mapPaymentReview } from '../../ui/paymentReview';
 import { openBuiltUri } from '../../services/payments/walletHandoff';
 import { useReduceMotion } from '../../ui/reduceMotion';
@@ -82,6 +93,8 @@ export default function ThreadScreen({ route }: Props) {
   const [payments, setPayments] = useState<PaymentRequestRecord[]>([]);
   const [tipEndpoints, setTipEndpoints] = useState<TipEndpointRecord[]>([]);
   const [composePayment, setComposePayment] = useState(false);
+  const [composeIntent, setComposeIntent] = useState<'request' | 'tip'>('request');
+  const [pendingTipEndpoint, setPendingTipEndpoint] = useState<TipEndpointRecord | null>(null);
   const [paymentBusy, setPaymentBusy] = useState(false);
   const [actionMenuOpen, setActionMenuOpen] = useState(false);
   const [tipPickerOpen, setTipPickerOpen] = useState(false);
@@ -142,11 +155,11 @@ export default function ThreadScreen({ route }: Props) {
 
   const handleSend = useCallback(async () => {
     const text = draft.trim();
-    if (!text || sending || draftExceedsByteCap(text)) return;
-    setDraft('');
+    if (!text || sending || draftExceedsByteCap(text, { surface: 'dm' })) return;
     setSending(true);
     try {
       await LinkService.sendDm(participantPubky, text);
+      setDraft('');
       await reloadEncrypted();
     } catch {
       await reloadEncrypted();
@@ -167,6 +180,7 @@ export default function ThreadScreen({ route }: Props) {
       payments={payments}
       tipEndpoints={tipEndpoints}
       composePayment={composePayment}
+      composeIntent={composeIntent}
       paymentBusy={paymentBusy}
       actionMenuOpen={actionMenuOpen}
       tipPickerOpen={tipPickerOpen}
@@ -179,7 +193,9 @@ export default function ThreadScreen({ route }: Props) {
         void handleSend();
       }}
       onOpenActionMenu={() => setActionMenuOpen(true)}
-      onCloseActionMenu={() => setActionMenuOpen(false)}
+      onCloseActionMenu={() => {
+        setActionMenuOpen(false);
+      }}
       onComposerAction={id => {
         setActionMenuOpen(false);
         if (id === 'photo') {
@@ -200,7 +216,10 @@ export default function ThreadScreen({ route }: Props) {
           );
           return;
         }
-        if (id === 'request-payment') setComposePayment(true);
+        if (id === 'request-payment') {
+          setComposeIntent('request');
+          setComposePayment(true);
+        }
         if (id === 'send-tip') setTipPickerOpen(true);
         if (id === 'send-tip-list') {
           void PaymentService.sendTipList(participantPubky)
@@ -218,8 +237,29 @@ export default function ThreadScreen({ route }: Props) {
             });
         }
       }}
-      onClosePaymentCompose={() => setComposePayment(false)}
+      onClosePaymentCompose={() => {
+        setComposePayment(false);
+        setPendingTipEndpoint(null);
+        setComposeIntent('request');
+      }}
       onSubmitPayment={(amountBtc, reference) => {
+        if (composeIntent === 'tip' && pendingTipEndpoint) {
+          if (!isPositiveBtcAmount(amountBtc)) return;
+          setComposePayment(false);
+          setReview({
+            kind: 'tip',
+            record: null,
+            peerPubky: participantPubky,
+            amountBtc,
+            amountAsset: 'btc',
+            reference: null,
+            destinations: [pendingTipEndpoint],
+            selected: pendingTipEndpoint,
+          });
+          setPendingTipEndpoint(null);
+          setComposeIntent('request');
+          return;
+        }
         setPaymentBusy(true);
         void PaymentService.requestPayment(participantPubky, { value: amountBtc }, reference)
           .then(() => {
@@ -250,6 +290,12 @@ export default function ThreadScreen({ route }: Props) {
         setWalletUnavailable(false);
       }}
       onCloseTipPicker={() => setTipPickerOpen(false)}
+      onNeedTipAmount={endpoint => {
+        setPendingTipEndpoint(endpoint);
+        setComposeIntent('tip');
+        setComposePayment(true);
+        setTipPickerOpen(false);
+      }}
       onContinueReview={async uri => {
         if (!review) return;
         const canOpen = await Linking.canOpenURL(uri);
@@ -264,7 +310,9 @@ export default function ThreadScreen({ route }: Props) {
             endpointIdentifier: review.selected.identifier,
             payload: review.selected.payload,
           });
-          if (prepared.ok && prepared.paymentHash) {
+          const mismatchOnly =
+            !prepared.ok && prepared.error.toLowerCase().includes('does not match');
+          if (prepared.paymentHash && (prepared.ok || mismatchOnly)) {
             await PaymentService.recordDisplayedInvoice(
               review.record.peerPubky,
               review.record.paymentRequestId,
@@ -306,6 +354,7 @@ export function ThreadScreenContent({
   payments,
   tipEndpoints,
   composePayment,
+  composeIntent,
   paymentBusy,
   actionMenuOpen,
   tipPickerOpen,
@@ -324,6 +373,7 @@ export function ThreadScreenContent({
   onReview,
   onCloseReview,
   onCloseTipPicker,
+  onNeedTipAmount,
   onContinueReview,
   sessionKind,
   peerContact,
@@ -342,6 +392,7 @@ export function ThreadScreenContent({
   payments: PaymentRequestRecord[];
   tipEndpoints: TipEndpointRecord[];
   composePayment: boolean;
+  composeIntent: 'request' | 'tip';
   paymentBusy: boolean;
   actionMenuOpen: boolean;
   tipPickerOpen: boolean;
@@ -362,6 +413,7 @@ export function ThreadScreenContent({
   onReview: (request: PaymentReviewRequest) => void;
   onCloseReview: () => void;
   onCloseTipPicker: () => void;
+  onNeedTipAmount: (endpoint: TipEndpointRecord) => void;
   onContinueReview: (uri: string) => void;
   sessionKind: 'offline' | 'needs-enable' | 'revoked' | string;
   peerContact: Contact | null;
@@ -371,6 +423,8 @@ export function ThreadScreenContent({
   onCopyPubky: () => void;
 }) {
   const flatListRef = useRef<FlatList<ThreadItem>>(null);
+  const plusRef = useRef<View>(null);
+  const menuWasOpen = useRef(false);
   const reduceMotion = useReduceMotion();
   const items = useMemo(
     () => mergeThreadItems(linkMessages, attachments, payments),
@@ -382,6 +436,17 @@ export function ThreadScreenContent({
       flatListRef.current?.scrollToEnd({ animated: !reduceMotion });
     }
   }, [items.length, reduceMotion]);
+
+  useEffect(() => {
+    if (actionMenuOpen) {
+      menuWasOpen.current = true;
+      return;
+    }
+    if (!menuWasOpen.current) return;
+    menuWasOpen.current = false;
+    const tag = findNodeHandle(plusRef.current);
+    if (tag != null) AccessibilityInfo.setAccessibilityFocus(tag);
+  }, [actionMenuOpen]);
 
   const renderItem = useCallback(
     ({ item }: { item: ThreadItem }) => {
@@ -410,7 +475,7 @@ export function ThreadScreenContent({
         const isMine = item.record.senderPubky === localPubky;
         return (
           <View style={[styles.bubble, isMine ? styles.mine : styles.theirs]}>
-            <AttachmentBubble record={item.record} isMine={isMine} />
+            <AttachmentBubble record={item.record} isMine={isMine} onRetrySend={onRetryFailed} />
             <View style={styles.meta}>
               <Text style={styles.time}>{formatTime(item.sentAt)}</Text>
             </View>
@@ -469,8 +534,11 @@ export function ThreadScreenContent({
     inboxClosed,
     hasTipEndpoints: tipEndpoints.some(row => row.validationStatus !== 'rejected'),
   });
-  const overCap = draftExceedsByteCap(draft);
-  const byteLabel = messageByteCountLabel(draftByteSize(draft), LINK_MESSAGE_MAX_BYTES);
+  const overCap = draftExceedsByteCap(draft, { surface: 'dm' });
+  const byteLabel = messageByteCountLabel(
+    draftEnvelopeByteSize(draft, { surface: 'dm' }),
+    LINK_MESSAGE_MAX_BYTES,
+  );
   const nowMs = useTickingNow();
   const reviewView = review
     ? mapPaymentReview({
@@ -481,6 +549,7 @@ export function ThreadScreenContent({
         amountAsset: review.amountAsset,
         reference: review.reference,
         endpoint: review.selected,
+        destinations: review.destinations,
         nowMs,
         destinationsEmpty: review.destinations.length === 0,
         walletUnavailable,
@@ -581,16 +650,21 @@ export function ThreadScreenContent({
               endpoints={tipEndpoints}
               onTip={identifier => {
                 const match = tipEndpoints.find(row => row.identifier === identifier) ?? null;
-                onReview({
-                  kind: 'tip',
-                  record: null,
-                  peerPubky: participantPubky,
-                  amountBtc: match?.invoiceAmount ?? '0',
-                  amountAsset: 'btc',
-                  reference: null,
-                  destinations: match ? [match] : [],
-                  selected: match,
-                });
+                if (!match) return;
+                if (isPositiveBtcAmount(match.invoiceAmount ?? '')) {
+                  onReview({
+                    kind: 'tip',
+                    record: null,
+                    peerPubky: participantPubky,
+                    amountBtc: match.invoiceAmount ?? '',
+                    amountAsset: 'btc',
+                    reference: null,
+                    destinations: [match],
+                    selected: match,
+                  });
+                  return;
+                }
+                onNeedTipAmount(match);
               }}
             />
           ) : null}
@@ -598,6 +672,7 @@ export function ThreadScreenContent({
             <PaymentComposeSheet
               visible={composePayment}
               busy={paymentBusy}
+              intent={composeIntent}
               onClose={onClosePaymentCompose}
               onSubmit={onSubmitPayment}
             />
@@ -619,9 +694,16 @@ export function ThreadScreenContent({
                 onCopyUri={() => {
                   if (reviewView.uri) copyText(reviewView.uri);
                 }}
+                onSelectDestination={identifier => {
+                  if (!review) return;
+                  const next =
+                    review.destinations.find(row => row.identifier === identifier) ?? null;
+                  onReview({ ...review, selected: next });
+                }}
               />
             ) : null}
             <TouchableOpacity
+              ref={plusRef}
               testID="threadComposerPlus"
               accessibilityRole="button"
               accessibilityLabel={COPY.composerAttach}

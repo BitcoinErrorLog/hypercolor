@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -11,6 +11,8 @@ import {
   ActivityIndicator,
   Alert,
   BackHandler,
+  AccessibilityInfo,
+  findNodeHandle,
 } from 'react-native';
 import { useNavigation, usePreventRemove, useRoute, type NavigationAction } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -58,6 +60,23 @@ export default function SettingsScreen() {
   const [restoreCode, setRestoreCode] = useState('');
   const [restoreNote, setRestoreNote] = useState<string | null>(null);
   const [restoreError, setRestoreError] = useState<string | null>(null);
+  const scrollRef = useRef<ScrollView>(null);
+  const backupRef = useRef<View>(null);
+  const paymentsRef = useRef<View>(null);
+  const backupY = useRef(0);
+  const paymentsY = useRef(0);
+
+  useEffect(() => {
+    if (section !== 'backup' && section !== 'payments') return;
+    const y = section === 'backup' ? backupY.current : paymentsY.current;
+    const node = section === 'backup' ? backupRef.current : paymentsRef.current;
+    const timer = setTimeout(() => {
+      scrollRef.current?.scrollTo({ y, animated: true });
+      const tag = findNodeHandle(node);
+      if (tag != null) AccessibilityInfo.setAccessibilityFocus(tag);
+    }, 50);
+    return () => clearTimeout(timer);
+  }, [section]);
 
   const leaveSettings = useCallback(
     (action?: NavigationAction) => {
@@ -137,7 +156,7 @@ export default function SettingsScreen() {
         <View style={styles.backHit} />
       </View>
 
-      <ScrollView contentContainerStyle={styles.content}>
+      <ScrollView ref={scrollRef} testID="settingsScroll" contentContainerStyle={styles.content}>
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Identity</Text>
           <View style={styles.row}>
@@ -186,8 +205,17 @@ export default function SettingsScreen() {
         </View>
 
         <View
+          ref={backupRef}
           testID="settingsFocusBackup"
           accessibilityState={{ selected: section === 'backup' }}
+          onLayout={event => {
+            backupY.current = event.nativeEvent.layout.y;
+            if (section === 'backup') {
+              scrollRef.current?.scrollTo({ y: event.nativeEvent.layout.y, animated: true });
+              const tag = findNodeHandle(backupRef.current);
+              if (tag != null) AccessibilityInfo.setAccessibilityFocus(tag);
+            }
+          }}
           style={styles.section}
         >
           <Text style={styles.sectionTitle}>Encrypted backup</Text>
@@ -357,8 +385,17 @@ export default function SettingsScreen() {
         </View>
 
         <View
+          ref={paymentsRef}
           testID="settingsFocusPayments"
           accessibilityState={{ selected: section === 'payments' }}
+          onLayout={event => {
+            paymentsY.current = event.nativeEvent.layout.y;
+            if (section === 'payments') {
+              scrollRef.current?.scrollTo({ y: event.nativeEvent.layout.y, animated: true });
+              const tag = findNodeHandle(paymentsRef.current);
+              if (tag != null) AccessibilityInfo.setAccessibilityFocus(tag);
+            }
+          }}
         >
           <TipEndpointsSettings />
         </View>

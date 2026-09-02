@@ -3,7 +3,7 @@ import { View, Text, TouchableOpacity, StyleSheet, TextInput } from 'react-nativ
 import { formatPaymentDisplayText, type PaymentRequestRecord } from '../types/payment';
 import { COPY } from '../copy/uxCopy';
 import { HIT_SLOP_44 } from '../ui/hitTarget';
-import { formatPaymentReceiptStatus } from '../ui/paymentReceiptStatus';
+import { formatPaymentReceipt } from '../ui/paymentReceiptStatus';
 
 export function PaymentRequestCard({
   record,
@@ -30,7 +30,8 @@ export function PaymentRequestCard({
   onPayInWallet: () => void;
   onSubmitProof: () => void;
 }) {
-  const statusWord = formatPaymentReceiptStatus(record, nowMs);
+  const receipt = formatPaymentReceipt(record, nowMs);
+  const statusWord = receipt.word;
   const isPayer = !isPayee;
 
   return (
@@ -46,6 +47,11 @@ export function PaymentRequestCard({
           <ExpiryLabel expiresAt={record.expiresAt} nowMs={nowMs} />
         ) : null}
       </View>
+      {receipt.note ? (
+        <Text testID="paymentRequestProofNote" style={styles.reference}>
+          {receipt.note}
+        </Text>
+      ) : null}
       {isPayer && record.status === 'pending' && statusWord === COPY.paymentRequested ? (
         <View style={styles.actions}>
           <ActionButton label="Accept" onPress={onAccept} disabled={busy} primary />

@@ -1,16 +1,22 @@
 import React, { useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, Modal } from 'react-native';
 import { isPositiveBtcAmount, isValidPaymentReference } from '../types/payment';
+import { COPY } from '../copy/uxCopy';
 import { HIT_SLOP_44 } from '../ui/hitTarget';
 import { PAYMENT_COMPOSE_DEFAULT_AMOUNT } from '../ui/paymentReview';
 import { modalAnimationType, useReduceMotion } from '../ui/reduceMotion';
 
-export function paymentComposeError(amount: string, reference: string): string | null {
+export function paymentComposeError(
+  amount: string,
+  reference: string,
+  intent: 'request' | 'tip' = 'request',
+): string | null {
   const amountValue = amount.trim();
   const referenceValue = reference.trim();
   if (!isPositiveBtcAmount(amountValue)) {
     return 'Enter a valid BTC amount';
   }
+  if (intent === 'tip') return null;
   if (referenceValue.length === 0) {
     return 'Enter a payment reference';
   }
@@ -23,11 +29,13 @@ export function paymentComposeError(amount: string, reference: string): string |
 export function PaymentComposeSheet({
   visible,
   busy,
+  intent = 'request',
   onClose,
   onSubmit,
 }: {
   visible: boolean;
   busy: boolean;
+  intent?: 'request' | 'tip';
   onClose: () => void;
   onSubmit: (amountBtc: string, reference: string) => void;
 }) {
@@ -46,10 +54,12 @@ export function PaymentComposeSheet({
     setError(null);
   }
 
+  const canSubmit = paymentComposeError(amount, reference, intent) === null;
+
   function handleSubmit() {
     const amountValue = amount.trim();
     const referenceValue = reference.trim();
-    const message = paymentComposeError(amountValue, referenceValue);
+    const message = paymentComposeError(amountValue, referenceValue, intent);
     if (message) {
       setError(message);
       return;
@@ -66,7 +76,9 @@ export function PaymentComposeSheet({
     >
       <View style={styles.backdrop}>
         <View testID="paymentComposeSheet" style={styles.sheet}>
-          <Text style={styles.title}>Request payment</Text>
+          <Text style={styles.title}>
+            {intent === 'tip' ? COPY.tipAmountTitle : 'Request payment'}
+          </Text>
           <Text style={styles.label}>Amount (BTC)</Text>
           <TextInput
             testID="paymentComposeAmount"
@@ -79,17 +91,21 @@ export function PaymentComposeSheet({
             placeholderTextColor="#4b5563"
             autoCapitalize="none"
           />
-          <Text style={styles.label}>Reference</Text>
-          <TextInput
-            testID="paymentComposeReference"
-            accessibilityLabel="Payment reference"
-            style={styles.input}
-            value={reference}
-            onChangeText={handleReferenceChange}
-            placeholder="invoice-2026-0001"
-            placeholderTextColor="#4b5563"
-            autoCapitalize="none"
-          />
+          {intent === 'request' ? (
+            <>
+              <Text style={styles.label}>Reference</Text>
+              <TextInput
+                testID="paymentComposeReference"
+                accessibilityLabel="Payment reference"
+                style={styles.input}
+                value={reference}
+                onChangeText={handleReferenceChange}
+                placeholder="invoice-2026-0001"
+                placeholderTextColor="#4b5563"
+                autoCapitalize="none"
+              />
+            </>
+          ) : null}
           {error ? (
             <View
               testID="paymentComposeError"
@@ -105,25 +121,27 @@ export function PaymentComposeSheet({
             <TouchableOpacity
               testID="paymentComposeCancel"
               accessibilityRole="button"
-              accessibilityLabel="Cancel payment request"
+              accessibilityLabel={COPY.cancel}
               style={styles.secondary}
               hitSlop={HIT_SLOP_44}
               onPress={onClose}
               disabled={busy}
             >
-              <Text style={styles.secondaryText}>Cancel</Text>
+              <Text style={styles.secondaryText}>{COPY.cancel}</Text>
             </TouchableOpacity>
             <TouchableOpacity
               testID="paymentComposeSubmit"
               accessibilityRole="button"
-              accessibilityLabel="Send request"
-              accessibilityState={{ disabled: busy, busy }}
-              style={[styles.primary, busy && styles.disabled]}
+              accessibilityLabel={intent === 'tip' ? COPY.continueToReview : 'Send request'}
+              accessibilityState={{ disabled: busy || !canSubmit, busy }}
+              style={[styles.primary, (busy || !canSubmit) && styles.disabled]}
               hitSlop={HIT_SLOP_44}
               onPress={handleSubmit}
-              disabled={busy}
+              disabled={busy || !canSubmit}
             >
-              <Text style={styles.primaryText}>Send request</Text>
+              <Text style={styles.primaryText}>
+                {intent === 'tip' ? COPY.continueToReview : 'Send request'}
+              </Text>
             </TouchableOpacity>
           </View>
         </View>

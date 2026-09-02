@@ -2,11 +2,11 @@ import type { ChannelMode } from './channelList';
 
 export type SettingsSection = 'backup' | 'payments';
 
-export function settingsRouteParams(section: SettingsSection): { section: SettingsSection } {
+function settingsRouteParams(section: SettingsSection): { section: SettingsSection } {
   return { section };
 }
 
-export function channelsRouteParams(mode: ChannelMode): { mode: ChannelMode } {
+function channelsRouteParams(mode: ChannelMode): { mode: ChannelMode } {
   return { mode };
 }
 
