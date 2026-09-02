@@ -1,6 +1,7 @@
 import {
   finishConnectDelegation,
   resetConnectDelegationForTests,
+  subscribeConnectDelegationIdle,
   tryBeginConnectDelegation,
 } from '../connectDelegationStart';
 
@@ -28,5 +29,20 @@ describe('connectDelegationStart', () => {
     expect(tryBeginConnectDelegation()).toBeNull();
     finishConnectDelegation(welcomeToken as number);
     expect(tryBeginConnectDelegation()).not.toBeNull();
+  });
+
+  it('notifies idle listeners when the latch frees', () => {
+    const idle = jest.fn();
+    const unsubscribe = subscribeConnectDelegationIdle(idle);
+    const token = tryBeginConnectDelegation();
+    expect(token).not.toBeNull();
+    finishConnectDelegation(-1);
+    expect(idle).not.toHaveBeenCalled();
+    finishConnectDelegation(token as number);
+    expect(idle).toHaveBeenCalledTimes(1);
+    unsubscribe();
+    const next = tryBeginConnectDelegation();
+    finishConnectDelegation(next as number);
+    expect(idle).toHaveBeenCalledTimes(1);
   });
 });

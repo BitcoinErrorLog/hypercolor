@@ -1,4 +1,4 @@
-import React, { useCallback, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -19,6 +19,7 @@ import { ErrorDetails } from '../../ui/ErrorDetails';
 import { sanitizeError } from '../../ui/sanitizedError';
 import {
   finishConnectDelegation,
+  subscribeConnectDelegationIdle,
   tryBeginConnectDelegation,
 } from '../../ui/connectDelegationStart';
 
@@ -43,6 +44,12 @@ export default function WelcomeScreen() {
       };
     }, []),
   );
+
+  useEffect(() => {
+    return subscribeConnectDelegationIdle(() => {
+      setConnectPending(false);
+    });
+  }, []);
 
   async function handleConnect() {
     if (loading) return;
@@ -103,11 +110,10 @@ export default function WelcomeScreen() {
             }}
             disabled={loading}
           >
-            {loading || connectPending ? (
-              <ActivityIndicator color="#fff" />
-            ) : (
+            <View style={styles.primaryButtonInner}>
+              {loading || connectPending ? <ActivityIndicator color="#fff" /> : null}
               <Text style={styles.primaryButtonText}>{COPY.connectWithPubkyRing}</Text>
-            )}
+            </View>
           </TouchableOpacity>
 
           {__DEV__ ? (
@@ -171,6 +177,12 @@ const styles = StyleSheet.create({
     paddingVertical: 16,
     minHeight: 44,
     alignItems: 'center',
+  },
+  primaryButtonInner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
   },
   buttonDisabled: {
     opacity: 0.6,

@@ -203,7 +203,15 @@ describe('WelcomeScreen', () => {
     expect(
       tree.root.findByProps({ testID: 'welcomeConnectRing' }).props.accessibilityState,
     ).toEqual(expect.objectContaining({ busy: true, disabled: false }));
-    finishConnectDelegation(awaitingToken as number);
+    expect(
+      tree.root.findAllByProps({ children: COPY.connectWithPubkyRing }).length,
+    ).toBeGreaterThan(0);
+    await act(async () => {
+      finishConnectDelegation(awaitingToken as number);
+    });
+    expect(
+      tree.root.findByProps({ testID: 'welcomeConnectRing' }).props.accessibilityState,
+    ).toEqual(expect.objectContaining({ busy: false, disabled: false }));
     resetConnectDelegationForTests();
     await act(async () => {
       tree.unmount();
