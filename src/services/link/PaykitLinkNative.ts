@@ -170,17 +170,18 @@ export interface PaykitLinkNativeApi {
   startAuthFlow(capabilities: string, relayUrl?: string): Promise<AuthFlowStart>;
   /**
    * Suspend until Ring approves `flowId`. Native admits one owner lease per
-   * live flow. A second call while that owner is reserved, awaiting, committing,
-   * or still settling a cancellation is rejected (`validation` / "already awaiting") —
+   * live flow. A second call while that owner is reserved, awaiting, or
+   * still settling a cancellation is rejected (`validation` / "already awaiting") —
    * there is no retry-in-place. Only that owner may prune cancellation or
    * surfaced state. Cancel-before-await rejects `auth_flow_cancelled` and that
    * caller is the owner who prunes the tombstone. Bridge/module invalidation
    * and coroutine-scope teardown reject `unavailable` (not
-   * `auth_flow_cancelled`) and never persist: persist + JS resolve are one
-   * lock-linearized commit while the owner slot is still teardown-visible as
-   * `committing(lease)`. If invalidation wins that race, native writes nothing
-   * and does not resolve. If the commit wins, teardown must not roll back the
-   * adopted session. After invalidation, a later
+   * `auth_flow_cancelled`) and never persist. Approval persists the bearer as
+   * **pending** (teardown-visible + durable marker) and resolves with the alias;
+   * that resolve only *schedules* JS in RN 0.81.5 and is not adoption. JS must
+   * `await adoptAuthSession(alias)` before storing or using the alias. If
+   * invalidation or process death wins before adopt, native deletes the
+   * pending bearer. After invalidation, a later
    * `startAuthFlow` / `awaitAuthApproval` / `cancelAuthFlow` rejects
    * `unavailable` immediately. After a failed, cancelled, torn-down, or
    * successful await the native flow is gone; start a new `startAuthFlow`
@@ -212,24 +213,32 @@ export interface PaykitLinkNativeApi {
    * with `auth_flow_cancelled`. A duplicate await of a live owner is
    * `validation` / "already awaiting" and cannot consume the tombstone.
    * Unknown ids and a second cancel are no-ops. A flow whose approval was
-   * already surfaced to JS is left untouched. After invalidation this method
-   * rejects `unavailable`. No-op when the native method is missing (older
-   * builds).
+   * already confirmed (session may still be pending JS adopt) is left
+   * untouched. After invalidation this method rejects `unavailable`. No-op
+   * when the native method is missing (older builds).
    */
   cancelAuthFlow(flowId: string): Promise<void>;
   /**
+   * JS acknowledgement that it holds `sessionAlias` from
+   * `awaitAuthApproval` / `signinWithSecret` / `signupWithSecret` and will
+   * persist it in KeyStore only after this resolves. Native is the authority:
+   * pending → adopted. Unknown, swept, or already-adopted aliases reject
+   * `unavailable`. Must be awaited before storing or using the alias.
+   */
+  adoptAuthSession(sessionAlias: string): Promise<void>;
+  /**
    * Dev/e2e only — release native builds reject with `unavailable` /
    * "secret import is disabled in release builds". Signs in with an
-   * identity secret; native stores the bearer under `sessionAlias`.
-   * The secret is not persisted in JS.
+   * identity secret; native stores the bearer under `sessionAlias` as
+   * pending until `adoptAuthSession`. The secret is not persisted in JS.
    */
   signinWithSecret(identitySecretHex: string): Promise<AuthSessionResult>;
   /**
    * Dev/e2e only — release native builds reject with `unavailable` /
    * "secret import is disabled in release builds". Signs up a fresh
    * identity on a homeserver with a raw 32-byte secret (64-char hex).
-   * Native stores the bearer under `sessionAlias`. The secret is not
-   * persisted in JS.
+   * Native stores the bearer under `sessionAlias` as pending until
+   * `adoptAuthSession`. The secret is not persisted in JS.
    */
   signupWithSecret(
     identitySecretHex: string,
@@ -249,7 +258,8 @@ export interface PaykitLinkNativeApi {
    * wipes the entire app store. Used on sign-out / account switch.
    * Live auth flows: idle handles close immediately; admitted owners are
    * cancelled and close exactly once after FFI settles; in-flight
-   * `awaitAuthApproval` rejects `auth_flow_cancelled` and must not persist.
+   * `awaitAuthApproval` rejects `auth_flow_cancelled` and must not persist
+   * until JS `adoptAuthSession`.
    */
   clearAllNativeSecrets(): Promise<void>;
   publishReceiverMarker(
@@ -400,6 +410,10 @@ export const PaykitLinkNative: PaykitLinkNativeApi = {
       return Promise.resolve();
     }
     return invoke('cancelAuthFlow', flowId);
+  },
+
+  adoptAuthSession(sessionAlias: string): Promise<void> {
+    return invoke('adoptAuthSession', sessionAlias);
   },
 
   signinWithSecret(identitySecretHex: string): Promise<AuthSessionResult> {

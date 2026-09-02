@@ -109,6 +109,7 @@ jest.mock('../PaykitLinkNative', () => ({
     signinWithSecret: jest.fn(),
     startAuthFlow: jest.fn(),
     awaitAuthApproval: jest.fn(),
+    adoptAuthSession: jest.fn(),
     stopAuthKeepalive: jest.fn(),
     generateReceiverKey: jest.fn(),
     publishReceiverMarker: jest.fn(),
@@ -163,6 +164,7 @@ function clockDeps(): Pick<
 
 function mockSignup(): void {
   mockedNative.isAvailable.mockReturnValue(true);
+  mockedNative.adoptAuthSession.mockResolvedValue(undefined);
   mockedNative.signupWithSecret.mockImplementation(async (_secret, _hs, token) => {
     if (token === 'token-a') return { sessionAlias: 'session-a', pubky: PUBKY_A };
     if (token === 'token-c') return { sessionAlias: 'session-c', pubky: PUBKY_C };

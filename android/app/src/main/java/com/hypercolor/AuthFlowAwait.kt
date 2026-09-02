@@ -3,6 +3,7 @@ package com.hypercolor
 import kotlinx.coroutines.CancellationException as CoroutineCancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.ensureActive
+import java.util.UUID
 import java.util.concurrent.CancellationException as JavaCancellationException
 import kotlin.coroutines.coroutineContext
 
@@ -23,10 +24,15 @@ internal class AuthFlowBridgeReject(
  * Coroutine-scope cancellation without a tombstone is rethrown so the
  * module launcher can map it to `unavailable`.
  *
- * Persist + JS resolve run inside [AuthFlowCancelRegistry.commitApproval]
- * while the owner slot is still teardown-visible (`committing`). There is
- * no gap where invalidation can miss the owner yet still allow a store
- * write or a resolve into a dying React instance.
+ * Persist is two-phase and **not** lock-held:
+ * 1. [AuthFlowCancelRegistry.beginPending] (short lock) records [alias]
+ * 2. [persist] writes the bearer + durable pending marker outside the lock
+ * 3. [AuthFlowCancelRegistry.confirmPending] (short lock) lets the flow
+ *    leave the owner slot; [alias] stays pending
+ * 4. [scheduleResolve] invokes the RN resolver (schedules JS; not adoption)
+ *
+ * Teardown that wins before confirm rolls back via [rollbackPending].
+ * Only [AuthFlowCancelRegistry.adoptPending] removes the alias from pending.
  */
 internal object AuthFlowAwait {
     const val ALREADY_AWAITING_MESSAGE = "already awaiting"
@@ -39,7 +45,10 @@ internal object AuthFlowAwait {
         id: String,
         awaitFfi: suspend (T) -> S,
         closeFlow: (T?) -> Unit,
-        persist: (S) -> Unit = {},
+        persist: (S, String) -> Unit = { _, _ -> },
+        rollbackPending: (String) -> Unit = {},
+        scheduleResolve: (S, String) -> Unit = { _, _ -> },
+        nextAlias: () -> String = { UUID.randomUUID().toString() },
         onBeforeCommit: suspend () -> Unit = {},
         onOwnerStart: () -> Unit = {},
         onOwnerFinish: () -> Unit = {},
@@ -75,12 +84,28 @@ internal object AuthFlowAwait {
                     coroutineContext.ensureActive()
                     val session = awaitFfi(flow)
                     onBeforeCommit()
-                    if (!flows.commitApproval(id, lease) { persist(session) }) {
+                    val alias = nextAlias()
+                    if (!flows.beginPending(id, lease, alias)) {
                         if (flows.isTornDown()) {
                             throw AuthFlowBridgeReject("unavailable", UNAVAILABLE_MESSAGE)
                         }
                         throw AuthFlowBridgeReject("auth_flow_cancelled", CANCELLED_MESSAGE)
                     }
+                    try {
+                        persist(session, alias)
+                    } catch (error: Throwable) {
+                        flows.dropPending(alias)
+                        rollbackPending(alias)
+                        throw error
+                    }
+                    if (!flows.confirmPending(id, lease, alias)) {
+                        rollbackPending(alias)
+                        if (flows.isTornDown()) {
+                            throw AuthFlowBridgeReject("unavailable", UNAVAILABLE_MESSAGE)
+                        }
+                        throw AuthFlowBridgeReject("auth_flow_cancelled", CANCELLED_MESSAGE)
+                    }
+                    scheduleResolve(session, alias)
                     committed = true
                     return session
                 } catch (error: Throwable) {

@@ -47,6 +47,7 @@ jest.mock('../PaykitLinkNative', () => ({
     getReceiverPublicKey: jest.fn(),
     startAuthFlow: jest.fn(),
     awaitAuthApproval: jest.fn(),
+    adoptAuthSession: jest.fn(),
     stopAuthKeepalive: jest.fn(),
     cancelAuthFlow: jest.fn(),
     signinWithSecret: jest.fn(),
@@ -397,6 +398,7 @@ describe('LinkService', () => {
 
     mockedNative.isAvailable.mockReturnValue(true);
     mockedNative.signinWithSecret.mockResolvedValue({ sessionAlias: SESSION_ALIAS, pubky: OWNER });
+    mockedNative.adoptAuthSession.mockResolvedValue(undefined);
     mockedNative.signOutSession.mockResolvedValue(undefined);
     mockedNative.clearAllNativeSecrets.mockResolvedValue(undefined);
     mockedNative.stopAuthKeepalive.mockResolvedValue(undefined);
@@ -452,6 +454,10 @@ describe('LinkService', () => {
   describe('session', () => {
     it('persists the session alias on signinWithSecret (dev/e2e path)', () => {
       expect(mockedNative.signinWithSecret).toHaveBeenCalledWith('signin-secret-hex');
+      expect(mockedNative.adoptAuthSession).toHaveBeenCalledWith(SESSION_ALIAS);
+      const adoptOrder = mockedNative.adoptAuthSession.mock.invocationCallOrder[0]!;
+      const storeOrder = mockedKeyStore.setLinkSession.mock.invocationCallOrder[0]!;
+      expect(adoptOrder).toBeLessThan(storeOrder);
       expect(mockedKeyStore.setLinkSession).toHaveBeenCalledWith(SESSION_ALIAS);
       expect(mockedKeyStore.setPubky).toHaveBeenCalledWith(OWNER);
       expect(LinkService.hasSession()).toBe(true);
@@ -538,6 +544,10 @@ describe('LinkService', () => {
 
       const enabled = await flow.awaitEnabled();
 
+      expect(mockedNative.adoptAuthSession).toHaveBeenCalledWith('alias-2');
+      const adoptOrder = mockedNative.adoptAuthSession.mock.invocationCallOrder.at(-1)!;
+      const storeCalls = mockedKeyStore.setLinkSession.mock.invocationCallOrder;
+      expect(storeCalls[storeCalls.length - 1]).toBeGreaterThan(adoptOrder);
       expect(mockedNative.generateReceiverKey).toHaveBeenCalled();
       expect(mockedStorage.upsertLinkReceiver).toHaveBeenNthCalledWith(
         1,
@@ -561,6 +571,34 @@ describe('LinkService', () => {
         receiverPath: LINK_RECEIVER_PATH,
         noisePublicKey: 'noise-pk',
       });
+    });
+
+    it('does not persist KeyStore when adoptAuthSession rejects', async () => {
+      mockedKeyStore.setLinkSession.mockClear();
+      mockedKeyStore.setPubky.mockClear();
+      mockedNative.signOutSession.mockClear();
+      mockedNative.startAuthFlow.mockResolvedValue({
+        flowId: 'flow-1',
+        authorizationUrl: 'pubkyauth://grant',
+      });
+      mockedNative.awaitAuthApproval.mockResolvedValue({
+        sessionAlias: 'alias-orphan',
+        pubky: OWNER,
+      });
+      mockedNative.adoptAuthSession.mockRejectedValue({
+        code: 'unavailable',
+        message: 'unavailable',
+      });
+
+      const flow = await LinkService.enable();
+      await expect(flow.awaitEnabled()).rejects.toEqual({
+        code: 'unavailable',
+        message: 'unavailable',
+      });
+      expect(mockedKeyStore.setLinkSession).not.toHaveBeenCalled();
+      expect(mockedKeyStore.setPubky).not.toHaveBeenCalled();
+      expect(mockedNative.signOutSession).toHaveBeenCalledWith('alias-orphan');
+      expect(mockedNative.publishReceiverMarker).not.toHaveBeenCalled();
     });
 
     it('reuses an existing receiver alias instead of generating a new key', async () => {

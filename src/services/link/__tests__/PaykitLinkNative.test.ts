@@ -48,18 +48,36 @@ describe('PaykitLinkNative contract', () => {
       | 'clearAllNativeSecrets'
       | 'stopAuthKeepalive'
       | 'cancelAuthFlow'
+      | 'adoptAuthSession'
     > = {
       signinWithSecret: async () => ({ sessionAlias: 'a', pubky: 'b' }),
       signupWithSecret: async () => ({ sessionAlias: 'a', pubky: 'b' }),
       clearAllNativeSecrets: async () => undefined,
       stopAuthKeepalive: async () => undefined,
       cancelAuthFlow: async () => undefined,
+      adoptAuthSession: async () => undefined,
     };
     expect(typeof api.signinWithSecret).toBe('function');
     expect(typeof api.signupWithSecret).toBe('function');
     expect(typeof api.clearAllNativeSecrets).toBe('function');
     expect(typeof api.stopAuthKeepalive).toBe('function');
     expect(typeof api.cancelAuthFlow).toBe('function');
+    expect(typeof api.adoptAuthSession).toBe('function');
+  });
+
+  it('requires adoptAuthSession before JS may store a session alias', () => {
+    expect(SOURCE).toContain('adoptAuthSession(sessionAlias: string): Promise<void>');
+    expect(SOURCE).toMatch(/Must be awaited before storing or using the alias/);
+    expect(SOURCE).toMatch(/pending → adopted/);
+    const adopt = jsdocBefore('adoptAuthSession(sessionAlias: string): Promise<void>');
+    expect(adopt).toMatch(/unavailable/);
+  });
+
+  it('does not treat a missing adoptAuthSession native method as a no-op', () => {
+    expect(SOURCE).toContain("return invoke('adoptAuthSession', sessionAlias)");
+    expect(SOURCE).not.toMatch(
+      /typeof PaykitLinkModule\.adoptAuthSession !== 'function'[\s\S]*return Promise\.resolve\(\)/,
+    );
   });
 
   it('treats a missing stopAuthKeepalive native method as a no-op', () => {

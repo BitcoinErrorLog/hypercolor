@@ -12,38 +12,50 @@ package com.hypercolor
  * `awaitApproval` runs to completion inside Paykit and cannot be aborted;
  * the module closes the handle after that FFI await returns so the poll
  * can stop. Unknown ids and a second cancel are no-ops. A flow whose
- * approval has already been surfaced to JS is left untouched.
+ * approval has already been confirmed ([confirmPending]) is left untouched.
  *
  * Await ownership is lease-gated. States:
  * - idle: live flow, no owner
  * - reserved(lease): first await admitted, not yet in the FFI wait
  * - awaiting(lease): owner is inside `awaitApproval`
- * - committing(lease): FFI returned; persist + JS resolve run while this
- *   registry lock is held so teardown cannot interleave
  * - cancelled-with-owner: tombstone whose lease still belongs to the
  *   admitted owner (that owner alone may prune)
  * - cancelled-no-owner: cancel-before-await tombstone; the next await
  *   becomes the unique owner and may prune
- * - surfaced: persist + resolve completed; cancel is a no-op
+ * - surfaced: owner confirmed the pending persist; cancel is a no-op
  *
- * A second await while reserved, awaiting, committing, or
- * cancelled-with-owner is [AuthFlowAwaitStart.AlreadyAwaiting]
- * (`validation` / "already awaiting") and must never call [finishAwait].
- * Post-FFI [commitApproval] fails closed on torn-down / tombstone so a
- * cancelled or invalidated owner cannot persist a session.
+ * Session adoption is **not** resolver invocation. RN 0.81.5
+ * `promise.resolve` only schedules JS via `CallInvoker::invokeAsync`.
+ * Native is the authority:
+ *
+ *   beginPending(alias)  → alias is teardown-visible (in-memory pending)
+ *   persist bearer + durable pending marker **outside** this lock
+ *   confirmPending        → flow may leave the owner slot; alias stays pending
+ *   resolve(alias)        → schedules JS; not adoption
+ *   adoptPending(alias)   → only this clears pending; session is retained
+ *   teardown / process-death sweep → delete every still-pending alias
+ *
+ * A second await while reserved, awaiting, or cancelled-with-owner is
+ * [AuthFlowAwaitStart.AlreadyAwaiting] (`validation` / "already awaiting")
+ * and must never call [finishAwait]. Post-FFI [beginPending] /
+ * [confirmPending] fail closed on torn-down / tombstone so a cancelled or
+ * invalidated owner cannot persist a session.
  *
  * [teardown] (module `invalidate`) is sticky [isTornDown]: reserved/
- * awaiting/committing owners are cancelled **with their lease** so
- * post-FFI fails closed and never persists; owner metadata stays until
- * that owner's [finishAwait]. Idle flows are returned for an immediate
- * exact-once `close()`. Later start/await/cancel observe
+ * awaiting owners are cancelled **with their lease** so post-FFI fails
+ * closed and never persists; owner metadata stays until that owner's
+ * [finishAwait]. Idle flows are returned for an immediate exact-once
+ * `close()`. Every still-pending alias is returned for delete (bearer,
+ * `sessions`, durable marker). Later start/await/cancel observe
  * [AuthFlowAwaitStart.Unavailable] / [AuthFlowCancelKind.Unavailable]
  * (`unavailable`, not `auth_flow_cancelled`).
  *
  * [drainLive] (`clearAllNativeSecrets`, user sign-out) is not sticky
- * teardown. It returns the same idle/owner split as [teardown]: close idle
- * immediately; cancel owners and let only their `finally` close. In-flight
- * owners reject `auth_flow_cancelled` (user discard) and must not persist.
+ * teardown. It returns the same idle/owner split as [teardown] plus
+ * pending aliases. Caller closes idle immediately; cancel owners and let
+ * only their `finally` close. In-flight owners reject `auth_flow_cancelled`
+ * (user discard) and must not persist. Pending aliases are cleared here so
+ * sign-out cannot leave an unadopted bearer.
  */
 internal fun interface AuthFlowCancellable {
     fun cancel()
@@ -71,6 +83,8 @@ internal data class AuthFlowCancelOutcome<T>(
 internal data class AuthFlowTeardown<T>(
     val idleFlows: List<T>,
     val ownerCancellables: List<AuthFlowCancellable>,
+    /** Aliases still pending JS [adoptPending]; caller must delete them. */
+    val pendingAliases: List<String> = emptyList(),
 )
 
 internal sealed class AuthFlowAwaitStart<out T> {
@@ -87,6 +101,8 @@ internal class AuthFlowCancelRegistry<T> {
     /** Cancelled tombstones: `null` lease is cancelled-no-owner. */
     private val cancelled = HashMap<String, Long?>()
     private val surfaced = HashMap<String, Long>()
+    /** Teardown-visible pending session aliases keyed independently of flow ids. */
+    private val pendingAliases = HashSet<String>()
     private var nextLease = 1L
     private var tornDown = false
 
@@ -105,11 +121,9 @@ internal class AuthFlowCancelRegistry<T> {
         }
     }
 
-    fun peek(id: String): T? = synchronized(lock) { slots[id]?.flow }
-
     fun isCancelled(id: String): Boolean = synchronized(lock) { cancelled.containsKey(id) }
 
-    fun isSurfaced(id: String): Boolean = synchronized(lock) { surfaced.containsKey(id) }
+    fun isPending(alias: String): Boolean = synchronized(lock) { pendingAliases.contains(alias) }
 
     fun abandon(id: String): T? {
         synchronized(lock) {
@@ -175,18 +189,27 @@ internal class AuthFlowCancelRegistry<T> {
     }
 
     /**
-     * Linearized approval commit. The owner slot stays teardown-visible as
-     * [Phase.Committing] until [persist] returns. [persist] (encrypted prefs
-     * + `sessions` insert + JS resolve) runs **inside this lock**, so
-     * [teardown] is excluded for the whole write+resolve. Returns false when
-     * torn down, cancelled, or [lease] is not the owner: [persist] is not
-     * invoked, the caller must not resolve JS, and must reject `unavailable`
-     * if [isTornDown] else `auth_flow_cancelled`.
-     *
-     * If [persist] throws after a store write, the caller rolls back that
-     * alias; this method does not mark surfaced.
+     * Sign-in / sign-up persist with no auth-flow owner. Fails closed when
+     * torn down so invalidation cannot leave a new unadopted bearer.
      */
-    fun commitApproval(id: String, lease: Long, persist: () -> Unit): Boolean {
+    fun registerPending(alias: String): Boolean {
+        synchronized(lock) {
+            if (tornDown) {
+                return false
+            }
+            pendingAliases.add(alias)
+            return true
+        }
+    }
+
+    /**
+     * Owner is still valid: record [alias] as teardown-visible pending.
+     * Secure-store I/O happens **outside** this lock. Returns false when
+     * torn down, cancelled, or [lease] is not the owner: the caller must
+     * not persist, must not resolve JS, and must reject `unavailable` if
+     * [isTornDown] else `auth_flow_cancelled`.
+     */
+    fun beginPending(id: String, lease: Long, alias: String): Boolean {
         synchronized(lock) {
             if (tornDown) {
                 return false
@@ -198,8 +221,32 @@ internal class AuthFlowCancelRegistry<T> {
             if (slot.lease != lease) {
                 return false
             }
-            slot.phase = Phase.Committing
-            persist()
+            pendingAliases.add(alias)
+            return true
+        }
+    }
+
+    /**
+     * Persist succeeded. Flow may leave the owner slot; [alias] stays in
+     * the pending set until [adoptPending]. Returns false when torn down,
+     * cancelled, lease mismatch, or teardown already drained [alias]:
+     * the caller must roll back the store write and must not resolve JS.
+     */
+    fun confirmPending(id: String, lease: Long, alias: String): Boolean {
+        synchronized(lock) {
+            if (tornDown) {
+                return false
+            }
+            if (cancelled.containsKey(id)) {
+                return false
+            }
+            if (!pendingAliases.contains(alias)) {
+                return false
+            }
+            val slot = slots[id] ?: return false
+            if (slot.lease != lease) {
+                return false
+            }
             surfaced[id] = lease
             slots.remove(id)
             return true
@@ -207,10 +254,21 @@ internal class AuthFlowCancelRegistry<T> {
     }
 
     /**
-     * @return false when [id] was cancelled or [lease] is not the owner, so
-     * the caller must drop the session and must not resolve JS.
+     * JS acknowledgement. Only this removes [alias] from pending. Unknown
+     * or already-adopted aliases return false (`unavailable`).
      */
-    fun markSurfaced(id: String, lease: Long): Boolean = commitApproval(id, lease) {}
+    fun adoptPending(alias: String): Boolean {
+        synchronized(lock) {
+            return pendingAliases.remove(alias)
+        }
+    }
+
+    /** Persist failed before confirm, or confirm lost the race: drop in-memory pending. */
+    fun dropPending(alias: String) {
+        synchronized(lock) {
+            pendingAliases.remove(alias)
+        }
+    }
 
     fun cancel(id: String): AuthFlowCancelOutcome<T> {
         synchronized(lock) {
@@ -239,20 +297,17 @@ internal class AuthFlowCancelRegistry<T> {
     }
 
     /**
-     * Bridge/module invalidation. Idempotent. Marks reserved/awaiting/
-     * committing owners cancelled with their lease (do not prune —
-     * [finishAwait] is owner-only), returns idle flows for immediate close,
-     * and detaches owner jobs to cancel **after** this lock is released.
-     *
-     * Persist+resolve run under this same lock via [commitApproval], so a
-     * commit that already adopted JS cannot be rolled back here: that slot
-     * is already in [surfaced] and absent from [slots]. A commit that has
-     * not yet taken the lock fails closed and never writes.
+     * Bridge/module invalidation. Idempotent. Marks reserved/awaiting
+     * owners cancelled with their lease (do not prune — [finishAwait] is
+     * owner-only), returns idle flows for immediate close, detaches owner
+     * jobs to cancel **after** this lock is released, and returns every
+     * still-pending alias for delete. Adopted aliases are absent from
+     * pending and are not rolled back.
      */
     fun teardown(): AuthFlowTeardown<T> {
         synchronized(lock) {
             if (tornDown) {
-                return AuthFlowTeardown(emptyList(), emptyList())
+                return AuthFlowTeardown(emptyList(), emptyList(), emptyList())
             }
             tornDown = true
             return drainOwnersLocked(tombstoneOwners = true, dropStaleTombstones = false)
@@ -264,7 +319,8 @@ internal class AuthFlowCancelRegistry<T> {
      * teardown: a later [put] still succeeds. Same idle/owner split as
      * [teardown] — caller closes idle immediately and cancels owners so
      * only [AuthFlowAwait] `finally` closes. Owners are tombstoned with
-     * their lease and reject `auth_flow_cancelled`.
+     * their lease and reject `auth_flow_cancelled`. Pending aliases are
+     * drained so an unadopted bearer cannot survive sign-out.
      */
     fun drainLive(): AuthFlowTeardown<T> {
         synchronized(lock) {
@@ -276,7 +332,8 @@ internal class AuthFlowCancelRegistry<T> {
      * Called when [id]'s JS await promise is settling. Only [lease]'s owner
      * may prune [cancelled] / [surfaced]. Returns a leftover live flow so
      * the caller can close it (failed await). Cancel already dropped the
-     * slot; this only prunes matching owner state.
+     * slot; this only prunes matching owner state. Does not drop pending
+     * session aliases.
      */
     fun finishAwait(id: String, lease: Long): T? {
         synchronized(lock) {
@@ -335,7 +392,9 @@ internal class AuthFlowCancelRegistry<T> {
             }
         }
         surfaced.clear()
-        return AuthFlowTeardown(idle, ownerCancellables)
+        val pending = pendingAliases.toList()
+        pendingAliases.clear()
+        return AuthFlowTeardown(idle, ownerCancellables, pending)
     }
 
     private fun allocLeaseLocked(): Long {
@@ -348,7 +407,6 @@ internal class AuthFlowCancelRegistry<T> {
         Idle,
         Reserved,
         Awaiting,
-        Committing,
     }
 
     private class Slot<T>(

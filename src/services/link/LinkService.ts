@@ -221,6 +221,16 @@ export const LinkService = {
    */
   async signinWithSecret(identitySecretHex: string): Promise<{ pubky: string }> {
     const { sessionAlias, pubky } = await PaykitLinkNative.signinWithSecret(identitySecretHex);
+    try {
+      await adoptNativeSession(sessionAlias);
+    } catch (err) {
+      try {
+        await PaykitLinkNative.signOutSession(sessionAlias);
+      } catch {
+        // Adopt failed: drop the unusable pending bearer.
+      }
+      throw err;
+    }
     KeyStore.setPubky(pubky);
     KeyStore.setLinkSession(sessionAlias);
     session = { alias: sessionAlias, pubky };
@@ -327,6 +337,12 @@ export const LinkService = {
     if (alias.length === 0 || id.length === 0) {
       throw new Error('LinkService.adoptHarnessSession: sessionAlias and pubky are required');
     }
+    try {
+      await adoptNativeSession(alias);
+    } catch (err) {
+      if (!isLinkNativeError(err) || err.code !== 'unavailable') throw err;
+      await PaykitLinkNative.restoreSession(alias);
+    }
     KeyStore.setPubky(id);
     KeyStore.setLinkSession(alias);
     session = { alias, pubky: id };
@@ -401,6 +417,16 @@ export const LinkService = {
               // Detached flow: drop the unused session.
             }
             throw new Error('LinkService.enable: the messaging enable flow was cancelled');
+          }
+          try {
+            await adoptNativeSession(sessionAlias);
+          } catch (err) {
+            try {
+              await PaykitLinkNative.signOutSession(sessionAlias);
+            } catch {
+              // Adopt failed: drop the unusable pending bearer.
+            }
+            throw err;
           }
           KeyStore.setPubky(pubky);
           KeyStore.setLinkSession(sessionAlias);
@@ -1064,6 +1090,14 @@ async function restoreFromKeyStore(): Promise<SessionLookup> {
 
 function isActiveSession(lookup: SessionLookup): lookup is ActiveSession {
   return lookup !== null && !('status' in lookup);
+}
+
+/**
+ * Native pending → adopted. Must resolve before KeyStore/session use.
+ * Rejection is a typed `LinkNativeError` (typically `unavailable`).
+ */
+async function adoptNativeSession(sessionAlias: string): Promise<void> {
+  await PaykitLinkNative.adoptAuthSession(sessionAlias);
 }
 
 // ─── Enable internals ─────────────────────────────────────────────────────────

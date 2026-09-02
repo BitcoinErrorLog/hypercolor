@@ -356,6 +356,7 @@ export async function signupParty(
   return record(`signup-${party.label.toLowerCase()}`, async () => {
     try {
       const session = await native.signupWithSecret(party.secretHex, homeserverPubky, signupToken);
+      await native.adoptAuthSession(session.sessionAlias);
       party.sessionAlias = session.sessionAlias;
       party.pubky = session.pubky;
       KeyStore.setHomeserver(homeserverPubky);
@@ -363,6 +364,7 @@ export async function signupParty(
     } catch (err) {
       try {
         const session = await native.signinWithSecret(party.secretHex);
+        await native.adoptAuthSession(session.sessionAlias);
         party.sessionAlias = session.sessionAlias;
         party.pubky = session.pubky;
         KeyStore.setHomeserver(homeserverPubky);

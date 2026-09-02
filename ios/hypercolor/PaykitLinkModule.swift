@@ -44,9 +44,6 @@ class PaykitLinkModule: NSObject, RCTInvalidating {
     private var reservedFlowIds = Set<String>()
     /// awaiting(lease): owner is inside the non-abortable FFI wait.
     private var awaitingFlowIds = Set<String>()
-    /// committing(lease): FFI returned; persist + JS resolve run while
-    /// `lock` is held so `teardownNativeAuthState` cannot interleave.
-    private var committingFlowIds = Set<String>()
     private var awaitLeases: [String: UInt64] = [:]
     private var awaitTasks: [String: Task<Void, Never>] = [:]
     private var leaseSeq: UInt64 = 0
@@ -54,6 +51,12 @@ class PaykitLinkModule: NSObject, RCTInvalidating {
     /// Sticky after `invalidate()` / `deinit`. Start/await/cancel reject
     /// `unavailable`. In-flight owners fail closed and never persist.
     private var bridgeTornDown = false
+    /// Teardown-visible pending session aliases. Only `adoptAuthSession`
+    /// removes an alias; invalidate/sweep delete still-pending ones.
+    private var pendingSessionAliases = Set<String>()
+    private var sweptDurablePending = false
+    /// Serializes pending Keychain I/O. Never held together with `lock`.
+    private let pendingIoLock = NSLock()
 
     /// Kotlin `AuthFlowCancelRegistry` cancelled map: `null` lease = no owner.
     private enum CancelledTombstone {
@@ -62,6 +65,11 @@ class PaykitLinkModule: NSObject, RCTInvalidating {
     }
 
     @objc static func requiresMainQueueSetup() -> Bool { false }
+
+    override init() {
+        super.init()
+        sweepDurablePendingIfNeeded()
+    }
 
     /// RN 0.81.5 `RCTCxxBridge` calls `-invalidate` on modules that respond
     /// to the selector (`RCTInvalidating`). Idempotent with `deinit`.
@@ -111,6 +119,7 @@ class PaykitLinkModule: NSObject, RCTInvalidating {
         rejecter reject: @escaping RCTPromiseRejectBlock
     ) {
         runAsync(resolve, reject) {
+            self.sweepDurablePendingIfNeeded()
             let caps = try Self.canonicalizeCapabilities(
                 try Self.requireText(capabilities, name: "capabilities")
             )
@@ -141,14 +150,15 @@ class PaykitLinkModule: NSObject, RCTInvalidating {
         lock.lock()
         // Admission is atomic under this lock (Kotlin `startAwait`):
         // tornDown → unavailable; idle → reserved(lease); reserved/awaiting/
-        // committing/cancelled-with-owner → validation "already awaiting";
+        // cancelled-with-owner → validation "already awaiting";
         // cancelled-no-owner → this caller prunes and rejects
         // auth_flow_cancelled; missing/surfaced → validation. A task is
         // created only for an accepted owner. The task must not strongly
         // retain self across the non-abortable FFI wait: invalidate/deinit
         // has to mark cancelled-owner(lease) so post-FFI fails closed and
-        // never persistSession. Persist+resolve are one lock-held commit
-        // (`completeApprovedAwait`). Never overwrite awaitTasks[id].
+        // never persistSession. Persist is pending until `adoptAuthSession`.
+        // Never overwrite awaitTasks[id].
+        sweepDurablePendingIfNeeded()
         if bridgeTornDown {
             lock.unlock()
             reject("unavailable", Self.staticMessage("unavailable"), nil)
@@ -184,7 +194,6 @@ class PaykitLinkModule: NSObject, RCTInvalidating {
         }
         if reservedFlowIds.contains(trimmed)
             || awaitingFlowIds.contains(trimmed)
-            || committingFlowIds.contains(trimmed)
             || awaitTasks[trimmed] != nil
             || awaitLeases[trimmed] != nil
         {
@@ -264,9 +273,7 @@ class PaykitLinkModule: NSObject, RCTInvalidating {
                         message: Self.staticMessage("unavailable")
                     )
                 }
-                if self.surfacedFlowIds.contains(id) || self.committingFlowIds.contains(id) {
-                    // Committing holds this lock during persist+resolve, so
-                    // this branch is the already-adopted case after unlock.
+                if self.surfacedFlowIds.contains(id) {
                     return nil
                 }
                 if self.cancelledFlowIds[id] != nil {
@@ -276,7 +283,6 @@ class PaykitLinkModule: NSObject, RCTInvalidating {
                 let hasOwner = self.awaitLeases[id] != nil
                     || self.reservedFlowIds.contains(id)
                     || self.awaitingFlowIds.contains(id)
-                    || self.committingFlowIds.contains(id)
                     || self.awaitTasks[id] != nil
                 if !hasFlow && !hasOwner {
                     return nil
@@ -289,7 +295,6 @@ class PaykitLinkModule: NSObject, RCTInvalidating {
                 self.flows.removeValue(forKey: id)
                 self.reservedFlowIds.remove(id)
                 self.awaitingFlowIds.remove(id)
-                self.committingFlowIds.remove(id)
                 return self.awaitTasks.removeValue(forKey: id)
             }
             task?.cancel()
@@ -306,7 +311,7 @@ class PaykitLinkModule: NSObject, RCTInvalidating {
         runAsync(resolve, reject) {
             let secret = try Self.requireText(identitySecretHex, name: "identitySecretHex")
             let session = try await self.chatClient().signinWithSecret(identitySecretKeyHex: secret)
-            return try self.persistSession(session)
+            return try self.persistDetachedPendingSession(session)
         }
         #else
         reject("unavailable", "secret import is disabled in release builds", nil)
@@ -330,11 +335,40 @@ class PaykitLinkModule: NSObject, RCTInvalidating {
                 homeserverPublicKey: homeserver,
                 signupToken: token
             )
-            return try self.persistSession(session)
+            return try self.persistDetachedPendingSession(session)
         }
         #else
         reject("unavailable", "secret import is disabled in release builds", nil)
         #endif
+    }
+
+    @objc func adoptAuthSession(
+        _ sessionAlias: String,
+        resolver resolve: @escaping RCTPromiseResolveBlock,
+        rejecter reject: @escaping RCTPromiseRejectBlock
+    ) {
+        runAsync(resolve, reject) {
+            self.sweepDurablePendingIfNeeded()
+            let alias = try Self.requireText(sessionAlias, name: "sessionAlias")
+            try self.lock.withLock {
+                if self.bridgeTornDown {
+                    throw PaykitLinkBridgeError(
+                        code: "unavailable",
+                        message: Self.staticMessage("unavailable")
+                    )
+                }
+                guard self.pendingSessionAliases.remove(alias) != nil else {
+                    throw PaykitLinkBridgeError(
+                        code: "unavailable",
+                        message: Self.staticMessage("unavailable")
+                    )
+                }
+            }
+            try self.pendingIoLock.withLock {
+                try PaykitLinkStore.delete(account: PaykitLinkStore.pendingAccount(alias))
+            }
+            return NSNull()
+        }
     }
 
     @objc func restoreSession(
@@ -355,8 +389,12 @@ class PaykitLinkModule: NSObject, RCTInvalidating {
     ) {
         runAsync(resolve, reject) {
             let alias = try Self.requireText(sessionAlias, name: "sessionAlias")
-            self.lock.withLock { self.sessions.removeValue(forKey: alias) }
+            self.lock.withLock {
+                self.sessions.removeValue(forKey: alias)
+                self.pendingSessionAliases.remove(alias)
+            }
             try PaykitLinkStore.delete(account: PaykitLinkStore.sessionAccount(alias))
+            try PaykitLinkStore.delete(account: PaykitLinkStore.pendingAccount(alias))
             return NSNull()
         }
     }
@@ -379,13 +417,13 @@ class PaykitLinkModule: NSObject, RCTInvalidating {
                 self.handles.removeAll()
                 self.client = nil
                 self.surfacedFlowIds.removeAll()
+                self.pendingSessionAliases.removeAll()
                 let flowIds = Array(self.flows.keys)
                 for id in flowIds {
                     if let lease = self.awaitLeases[id] {
                         self.cancelledFlowIds[id] = .owner(lease)
                         self.reservedFlowIds.remove(id)
                         self.awaitingFlowIds.remove(id)
-                        self.committingFlowIds.remove(id)
                         self.flows.removeValue(forKey: id)
                         if let task = self.awaitTasks.removeValue(forKey: id) {
                             ownerTasks.append(task)
@@ -921,21 +959,32 @@ class PaykitLinkModule: NSObject, RCTInvalidating {
 
     // MARK: - Internals
 
-    /// Teardown state machine (every mutation of flows / cancelled /
-    /// reserved / awaiting / committing / leases / tasks / `bridgeTornDown`
-    /// is under `lock`; never `await` while holding it):
+    /// Native pending → adopted (JS ack) state machine.
+    /// RN 0.81.5 `resolve` only *schedules* JS via `CallInvoker::invokeAsync`;
+    /// it is not adoption. Native is the authority:
+    ///
+    ///   owner-awaiting --beginPending--> pending (in-memory + durable marker)
+    ///                 --Keychain write outside `lock`-->
+    ///                 --confirmPending--> flow surfaced; alias stays pending
+    ///                 --resolve (async)--> JS receives alias
+    ///   pending --adoptAuthSession--> adopted (marker cleared); invalidate retains
+    ///   pending --invalidate/deinit--> delete bearer, sessions, marker
+    ///   pending --process death--> next init sweep deletes durable pending
+    ///
+    /// Resolver-scheduled is not a state: it happens after confirm, before
+    /// adopt. Only adopt removes an alias from pending.
+    ///
+    /// Teardown mutations of flows / cancelled / reserved / awaiting /
+    /// leases / tasks / pending / `bridgeTornDown` are under `lock`; never
+    /// `await` while holding it:
     /// - live --invalidate/deinit--> tornDown (sticky)
-    /// - reserved/awaiting/committing owners: cancelled-owner(lease);
+    /// - reserved/awaiting owners: cancelled-owner(lease);
     ///   owner metadata stays until that owner's `finishAwait` (never persist)
     /// - idle flows: dropped under lock, released after unlock (UniFFI close)
     /// - awaitTasks detached then cancelled **outside** the lock
+    /// - still-pending aliases: deleted from Keychain + `sessions` after unlock
     /// - in-flight owner rejects `unavailable` (not `auth_flow_cancelled`)
     /// - later start/await/cancel reject `unavailable` immediately
-    ///
-    /// Persist+resolve run under this same lock in `completeApprovedAwait`,
-    /// so a commit that already adopted JS cannot be rolled back here
-    /// (id is already in `surfacedFlowIds`, absent from `flows`). A commit
-    /// that has not yet taken the lock fails closed and never writes.
     private func teardownNativeAuthState() {
         lock.lock()
         let alreadyTornDown = bridgeTornDown
@@ -943,12 +992,19 @@ class PaykitLinkModule: NSObject, RCTInvalidating {
         let tasks = Array(awaitTasks.values)
         awaitTasks.removeAll()
         var idleFlows: [ChatAuthFlow] = []
-        if !alreadyTornDown {
+        let pending: [String]
+        if alreadyTornDown {
+            pending = []
+        } else {
+            pending = Array(pendingSessionAliases)
+            pendingSessionAliases.removeAll()
+            for alias in pending {
+                sessions.removeValue(forKey: alias)
+            }
             for (id, lease) in awaitLeases {
                 cancelledFlowIds[id] = .owner(lease)
                 reservedFlowIds.remove(id)
                 awaitingFlowIds.remove(id)
-                committingFlowIds.remove(id)
                 flows.removeValue(forKey: id)
             }
             idleFlows = Array(flows.values)
@@ -959,6 +1015,12 @@ class PaykitLinkModule: NSObject, RCTInvalidating {
             task.cancel()
         }
         withExtendedLifetime(idleFlows) {}
+        pendingIoLock.withLock {
+            for alias in pending {
+                try? PaykitLinkStore.delete(account: PaykitLinkStore.sessionAccount(alias))
+                try? PaykitLinkStore.delete(account: PaykitLinkStore.pendingAccount(alias))
+            }
+        }
     }
 
     private static func requireModule(_ module: PaykitLinkModule?) throws -> PaykitLinkModule {
@@ -997,38 +1059,42 @@ class PaykitLinkModule: NSObject, RCTInvalidating {
         session: ChatSession,
         resolve: @escaping RCTPromiseResolveBlock
     ) throws {
+        let alias = UUID().uuidString.lowercased()
         try lock.withLock {
-            // Linearized with `teardownNativeAuthState` on this same lock
-            // (Kotlin `commitApproval`):
-            // 1. Fail closed if tornDown / tombstone / lease mismatch —
-            //    no Keychain write, no JS resolve.
-            // 2. Else awaiting(lease) → committing(lease). Slot stays
-            //    teardown-visible until persist+resolve return.
-            // 3. persistSessionLocked (Keychain + sessions[]) then
-            //    resolve(value) BEFORE unlock. Teardown waiting on this
-            //    lock either ran first (this throws unavailable) or runs
-            //    after (JS already adopted; teardown must not roll back).
-            // 4. Exact-once UniFFI close remains the owner task defer /
-            //    Android `finally` — not this method.
             if bridgeTornDown || cancelledFlowIds[id] != nil || awaitLeases[id] != lease {
                 throw failClosedAwaitErrorLocked()
             }
+            pendingSessionAliases.insert(alias)
+        }
+        do {
+            try persistPendingBearer(session, alias: alias)
+        } catch {
+            lock.withLock { pendingSessionAliases.remove(alias) }
+            forgetPendingSession(alias)
+            throw error
+        }
+        let closed: PaykitLinkBridgeError? = lock.withLock {
+            if bridgeTornDown || cancelledFlowIds[id] != nil || awaitLeases[id] != lease
+                || !pendingSessionAliases.contains(alias)
+            {
+                pendingSessionAliases.remove(alias)
+                return failClosedAwaitErrorLocked()
+            }
             awaitingFlowIds.remove(id)
             reservedFlowIds.remove(id)
-            committingFlowIds.insert(id)
-            let value: [String: String]
-            do {
-                value = try persistSessionLocked(session)
-            } catch {
-                committingFlowIds.remove(id)
-                throw error
-            }
             surfacedFlowIds.insert(id)
-            committingFlowIds.remove(id)
             flows.removeValue(forKey: id)
             awaitTasks.removeValue(forKey: id)
-            resolve(value)
+            return nil
         }
+        if let closed {
+            forgetPendingSession(alias)
+            throw closed
+        }
+        resolve([
+            "sessionAlias": alias,
+            "pubky": session.pubky(),
+        ])
     }
 
     private func mapAwaitError(_ error: Error) -> PaykitLinkBridgeError {
@@ -1061,7 +1127,6 @@ class PaykitLinkModule: NSObject, RCTInvalidating {
             surfacedFlowIds.remove(id)
             reservedFlowIds.remove(id)
             awaitingFlowIds.remove(id)
-            committingFlowIds.remove(id)
             awaitLeases.removeValue(forKey: id)
             awaitTasks.removeValue(forKey: id)
             flows.removeValue(forKey: id)
@@ -1098,39 +1163,109 @@ class PaykitLinkModule: NSObject, RCTInvalidating {
         }
     }
 
-    private func persistSession(_ session: ChatSession) throws -> [String: String] {
-        let prepared = try preparePersistedSession(session)
-        lock.withLock { sessions[prepared.alias] = session }
-        return prepared.value
-    }
-
-    /// Caller holds `lock`. Keychain write + in-memory insert. A thrown
-    /// Keychain put is rolled back before this returns; the committer
-    /// must not surface or resolve.
-    private func persistSessionLocked(_ session: ChatSession) throws -> [String: String] {
-        let prepared = try preparePersistedSession(session)
-        sessions[prepared.alias] = session
-        return prepared.value
-    }
-
-    private func preparePersistedSession(_ session: ChatSession) throws -> (alias: String, value: [String: String]) {
+    private func persistDetachedPendingSession(_ session: ChatSession) throws -> [String: String] {
         let alias = UUID().uuidString.lowercased()
+        try lock.withLock {
+            if bridgeTornDown {
+                throw PaykitLinkBridgeError(code: "unavailable", message: Self.staticMessage("unavailable"))
+            }
+            pendingSessionAliases.insert(alias)
+        }
         do {
-            try PaykitLinkStore.put(session.exportSession(), account: PaykitLinkStore.sessionAccount(alias))
+            try persistPendingBearer(session, alias: alias)
         } catch {
-            try? PaykitLinkStore.delete(account: PaykitLinkStore.sessionAccount(alias))
+            lock.withLock { pendingSessionAliases.remove(alias) }
+            forgetPendingSession(alias)
             throw error
         }
-        return (
-            alias,
-            [
-                "sessionAlias": alias,
-                "pubky": session.pubky(),
-            ]
-        )
+        return [
+            "sessionAlias": alias,
+            "pubky": session.pubky(),
+        ]
+    }
+
+    private func persistPendingBearer(_ session: ChatSession, alias: String) throws {
+        let stillPending: Bool = lock.withLock { pendingSessionAliases.contains(alias) }
+        if !stillPending {
+            if lock.withLock({ bridgeTornDown }) {
+                throw PaykitLinkBridgeError(code: "unavailable", message: Self.staticMessage("unavailable"))
+            }
+            throw PaykitLinkBridgeError(
+                code: "auth_flow_cancelled",
+                message: Self.staticMessage("auth_flow_cancelled")
+            )
+        }
+        do {
+            try pendingIoLock.withLock {
+                try PaykitLinkStore.put(session.exportSession(), account: PaykitLinkStore.sessionAccount(alias))
+                try PaykitLinkStore.put("1", account: PaykitLinkStore.pendingAccount(alias))
+            }
+        } catch {
+            pendingIoLock.withLock {
+                try? PaykitLinkStore.delete(account: PaykitLinkStore.sessionAccount(alias))
+                try? PaykitLinkStore.delete(account: PaykitLinkStore.pendingAccount(alias))
+            }
+            throw error
+        }
+        let keep = lock.withLock { () -> Bool in
+            guard pendingSessionAliases.contains(alias) else { return false }
+            sessions[alias] = session
+            return true
+        }
+        if !keep {
+            pendingIoLock.withLock {
+                try? PaykitLinkStore.delete(account: PaykitLinkStore.sessionAccount(alias))
+                try? PaykitLinkStore.delete(account: PaykitLinkStore.pendingAccount(alias))
+            }
+            if lock.withLock({ bridgeTornDown }) {
+                throw PaykitLinkBridgeError(code: "unavailable", message: Self.staticMessage("unavailable"))
+            }
+            throw PaykitLinkBridgeError(
+                code: "auth_flow_cancelled",
+                message: Self.staticMessage("auth_flow_cancelled")
+            )
+        }
+    }
+
+    private func forgetPendingSession(_ alias: String) {
+        lock.withLock {
+            pendingSessionAliases.remove(alias)
+            sessions.removeValue(forKey: alias)
+        }
+        pendingIoLock.withLock {
+            try? PaykitLinkStore.delete(account: PaykitLinkStore.sessionAccount(alias))
+            try? PaykitLinkStore.delete(account: PaykitLinkStore.pendingAccount(alias))
+        }
+    }
+
+    /// Process-death leftovers: durable pending with no live runtime means
+    /// JS never adopted. Delete so an orphan enabled session cannot exist.
+    private func sweepDurablePendingIfNeeded() {
+        let shouldSweep: Bool = lock.withLock {
+            if sweptDurablePending { return false }
+            sweptDurablePending = true
+            return true
+        }
+        guard shouldSweep else { return }
+        let aliases = (try? PaykitLinkStore.listPendingSessionAliases()) ?? []
+        for alias in aliases {
+            lock.withLock {
+                sessions.removeValue(forKey: alias)
+                pendingSessionAliases.remove(alias)
+            }
+            try? PaykitLinkStore.delete(account: PaykitLinkStore.sessionAccount(alias))
+            try? PaykitLinkStore.delete(account: PaykitLinkStore.pendingAccount(alias))
+        }
     }
 
     private func session(_ alias: String) async throws -> ChatSession {
+        let blocked = lock.withLock { pendingSessionAliases.contains(alias) }
+        if blocked {
+            throw PaykitLinkBridgeError(code: "unavailable", message: Self.staticMessage("unavailable"))
+        }
+        if (try? PaykitLinkStore.getString(account: PaykitLinkStore.pendingAccount(alias))) != nil {
+            throw PaykitLinkBridgeError(code: "unavailable", message: Self.staticMessage("unavailable"))
+        }
         if let live = lock.withLock({ sessions[alias] }) {
             return live
         }
@@ -1486,6 +1621,16 @@ enum PaykitLinkStore {
 
     static func receiverAccount(_ alias: String) -> String { "receiver.\(alias)" }
     static func sessionAccount(_ alias: String) -> String { "session.\(alias)" }
+    static func pendingAccount(_ alias: String) -> String { "session.pending.\(alias)" }
+
+    static func listPendingSessionAliases() throws -> [String] {
+        let prefix = "session.pending."
+        let accounts = try listAccounts(forService: service)
+        return accounts.compactMap { account in
+            guard account.hasPrefix(prefix) else { return nil }
+            return String(account.dropFirst(prefix.count))
+        }
+    }
 
     static func put(_ value: String, account: String) throws {
         try put(Data(value.utf8), account: account)
@@ -1608,6 +1753,38 @@ enum PaykitLinkStore {
         #endif
     }
 
+    private static func listAccounts(forService target: String) throws -> [String] {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: target,
+            kSecMatchLimit as String: kSecMatchLimitAll,
+            kSecReturnAttributes as String: true,
+        ]
+        var result: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        if isAbsent(status) {
+            #if DEBUG
+            return listFallbackAccounts()
+            #else
+            return []
+            #endif
+        }
+        if status != errSecSuccess {
+            throw PaykitLinkBridgeError(code: "protocol", message: "keychain read failed")
+        }
+        let items = (result as? [[String: Any]]) ?? []
+        var accounts = items.compactMap { item in
+            item[kSecAttrAccount as String] as? String
+        }
+        #if DEBUG
+        let fallback = listFallbackAccounts()
+        for account in fallback where !accounts.contains(account) {
+            accounts.append(account)
+        }
+        #endif
+        return accounts
+    }
+
     private static func deleteAllAccounts(forService target: String) throws {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -1718,6 +1895,12 @@ enum PaykitLinkStore {
         if FileManager.default.fileExists(atPath: dir.path) {
             try FileManager.default.removeItem(at: dir)
         }
+    }
+
+    private static func listFallbackAccounts() -> [String] {
+        guard let dir = try? fallbackDir() else { return [] }
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
+        return names.filter { !$0.hasPrefix(".") }
     }
     #endif
 

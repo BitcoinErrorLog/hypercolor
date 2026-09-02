@@ -54,6 +54,13 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
     private val scope = CoroutineScope(job + Dispatchers.IO)
     private val store = PaykitLinkStore(reactContext.applicationContext)
     private val clientMutex = Mutex()
+    /**
+     * Serializes pending-session store I/O. Never held together with the
+     * registry monitor: persist/adopt/teardown-delete take this only after
+     * the short state transition. Prevents a write from landing after
+     * teardown already rolled back an alias.
+     */
+    private val pendingIo = Any()
     private var client: ChatClient? = null
     private val sessions = ConcurrentHashMap<String, ChatSession>()
     private val flows = AuthFlowCancelRegistry<ChatAuthFlow>()
@@ -81,15 +88,17 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
         super.initialize()
         PaykitAndroid.initializeOrThrow(reactApplicationContext)
         keepalive.attach()
+        sweepDurablePendingFromPreviousProcess()
     }
 
     override fun invalidate() {
         // Teardown first so in-flight NonCancellable FFI cannot persist.
-        // Persist+resolve run under the registry lock (committing); this
-        // call waits for that lock, so a finished commit is already adopted
-        // and is not rolled back. Owner jobs are cancelled after the lock;
+        // Pending aliases (not JS-adopted) are deleted: bearer, sessions,
+        // durable marker. Adopted aliases are absent from pending and
+        // are retained. Owner jobs are cancelled after the registry lock;
         // idle flows close here; admitted owners close exactly once in
-        // AuthFlowAwait.finally.
+        // AuthFlowAwait.finally. Store I/O runs on pendingIo, not the
+        // registry monitor.
         val snapshot = flows.teardown()
         for (cancellable in snapshot.ownerCancellables) {
             cancellable.cancel()
@@ -97,6 +106,7 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
         for (idle in snapshot.idleFlows) {
             closeAuthFlow(idle)
         }
+        deletePendingAliases(snapshot.pendingAliases)
         try {
             keepalive.releaseAll()
         } catch (error: Throwable) {
@@ -166,7 +176,14 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
                         // Exact-once owner close after the FFI path settles.
                         closeAuthFlow(handle)
                     },
-                    persist = { session -> persistSession(session, promise) },
+                    persist = { session, alias -> persistPendingSession(session, alias) },
+                    rollbackPending = { alias -> forgetPendingSession(alias) },
+                    scheduleResolve = { session, alias ->
+                        resolveMap(promise) {
+                            putString("sessionAlias", alias)
+                            putString("pubky", session.pubky())
+                        }
+                    },
                     onOwnerStart = { startAuthKeepalive(id) },
                     onOwnerFinish = { releaseAuthKeepalive(id) },
                 )
@@ -195,9 +212,10 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
      * when that caller is the tombstone owner. A duplicate await of a live
      * owner rejects `validation` / "already awaiting" and must not prune
      * the owner's lease. Unknown ids and a second cancel are no-ops. A flow
-     * whose approval was already surfaced to JS is left untouched.
-     * Close is exact-once: idle flows close here; an admitted owner closes
-     * after its FFI path settles.
+     * whose approval was already confirmed (flow surfaced; session may
+     * still be pending JS adopt) is left untouched. Close is exact-once:
+     * idle flows close here; an admitted owner closes after its FFI path
+     * settles.
      */
     @ReactMethod
     fun cancelAuthFlow(flowId: String, promise: Promise) {
@@ -224,7 +242,7 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
             return
         }
         launch(promise) {
-            persistSession(
+            persistDetachedPendingSession(
                 chatClient().signinWithSecret(requireText(identitySecretHex, "identitySecretHex")),
                 promise,
             )
@@ -243,7 +261,7 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
             return
         }
         launch(promise) {
-            persistSession(
+            persistDetachedPendingSession(
                 chatClient().signupWithSecret(
                     requireText(identitySecretHex, "identitySecretHex"),
                     requireText(homeserverPublicKey, "homeserverPublicKey"),
@@ -251,6 +269,25 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
                 ),
                 promise,
             )
+        }
+    }
+
+    /**
+     * JS acknowledgement that it holds [sessionAlias] and will persist it
+     * in KeyStore only after this resolves. Pending → adopted. Unknown or
+     * already-adopted aliases reject `unavailable`.
+     */
+    @ReactMethod
+    fun adoptAuthSession(sessionAlias: String, promise: Promise) {
+        launch(promise) {
+            val alias = requireText(sessionAlias, "sessionAlias")
+            if (!flows.adoptPending(alias)) {
+                throw PaykitLinkBridgeError("unavailable", staticMessage("unavailable"))
+            }
+            synchronized(pendingIo) {
+                store.clearPendingMarker(alias)
+            }
+            promise.resolve(null)
         }
     }
 
@@ -266,8 +303,11 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
     fun signOutSession(sessionAlias: String, promise: Promise) {
         launch(promise) {
             val alias = requireText(sessionAlias, "sessionAlias")
-            sessions.remove(alias)
-            store.delete(PaykitLinkStore.sessionKey(alias))
+            flows.dropPending(alias)
+            synchronized(pendingIo) {
+                sessions.remove(alias)
+                store.deleteSession(alias)
+            }
             promise.resolve(null)
         }
     }
@@ -279,6 +319,8 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
             // Sign-out: same idle/owner split as invalidate(). Close idle
             // now; cancel admitted owners and let only AuthFlowAwait.finally
             // close. Owners reject auth_flow_cancelled and must not persist.
+            // drainLive also clears in-memory pending; store.clearAll drops
+            // durable pending markers and bearers.
             val snapshot = flows.drainLive()
             for (cancellable in snapshot.ownerCancellables) {
                 cancellable.cancel()
@@ -796,24 +838,84 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
         }
     }
 
-    private fun persistSession(session: ChatSession, promise: Promise) {
-        val alias = UUID.randomUUID().toString()
-        val key = PaykitLinkStore.sessionKey(alias)
-        store.putString(key, session.exportSession())
-        sessions[alias] = session
-        try {
-            resolveMap(promise) {
-                putString("sessionAlias", alias)
-                putString("pubky", session.pubky())
+    /**
+     * Process-death leftovers: a durable pending marker with no live
+     * runtime means JS never adopted. Delete bearer + marker so an orphan
+     * enabled session cannot exist.
+     */
+    private fun sweepDurablePendingFromPreviousProcess() {
+        val leftovers = store.listPendingSessionAliases()
+        if (leftovers.isEmpty()) return
+        synchronized(pendingIo) {
+            for (alias in leftovers) {
+                sessions.remove(alias)
+                store.deleteSession(alias)
             }
-        } catch (error: Throwable) {
+        }
+    }
+
+    private fun deletePendingAliases(aliases: List<String>) {
+        if (aliases.isEmpty()) return
+        synchronized(pendingIo) {
+            for (alias in aliases) {
+                sessions.remove(alias)
+                store.deleteSession(alias)
+            }
+        }
+    }
+
+    private fun persistPendingSession(session: ChatSession, alias: String) {
+        if (!flows.isPending(alias)) {
+            if (flows.isTornDown()) {
+                throw PaykitLinkBridgeError("unavailable", staticMessage("unavailable"))
+            }
+            throw PaykitLinkBridgeError("auth_flow_cancelled", staticMessage("auth_flow_cancelled"))
+        }
+        synchronized(pendingIo) {
+            store.putPendingSession(alias, session.exportSession())
+            sessions[alias] = session
+        }
+        if (!flows.isPending(alias)) {
+            synchronized(pendingIo) {
+                sessions.remove(alias)
+                store.deleteSession(alias)
+            }
+            if (flows.isTornDown()) {
+                throw PaykitLinkBridgeError("unavailable", staticMessage("unavailable"))
+            }
+            throw PaykitLinkBridgeError("auth_flow_cancelled", staticMessage("auth_flow_cancelled"))
+        }
+    }
+
+    private fun forgetPendingSession(alias: String) {
+        flows.dropPending(alias)
+        synchronized(pendingIo) {
             sessions.remove(alias)
-            store.delete(key)
+            store.deleteSession(alias)
+        }
+    }
+
+    private fun persistDetachedPendingSession(session: ChatSession, promise: Promise) {
+        val alias = UUID.randomUUID().toString()
+        if (!flows.registerPending(alias)) {
+            throw PaykitLinkBridgeError("unavailable", staticMessage("unavailable"))
+        }
+        try {
+            persistPendingSession(session, alias)
+        } catch (error: Throwable) {
+            forgetPendingSession(alias)
             throw error
+        }
+        resolveMap(promise) {
+            putString("sessionAlias", alias)
+            putString("pubky", session.pubky())
         }
     }
 
     private suspend fun session(alias: String): ChatSession {
+        if (flows.isPending(alias) || store.hasPendingMarker(alias)) {
+            throw PaykitLinkBridgeError("unavailable", staticMessage("unavailable"))
+        }
         sessions[alias]?.let { return it }
         val bearer = store.getString(PaykitLinkStore.sessionKey(alias))
             ?: throw PaykitLinkBridgeError("auth", "session alias not found")
@@ -1093,6 +1195,45 @@ private class PaykitLinkStore(context: Context) {
         prefs.edit().putString(key, wrap(value.toByteArray(StandardCharsets.UTF_8), key.toByteArray(StandardCharsets.UTF_8))).apply()
     }
 
+    fun putPendingSession(alias: String, bearer: String) {
+        val sessionPref = sessionKey(alias)
+        val pendingPref = sessionPendingKey(alias)
+        commitEdits { editor ->
+            editor.putString(
+                sessionPref,
+                wrap(bearer.toByteArray(StandardCharsets.UTF_8), sessionPref.toByteArray(StandardCharsets.UTF_8)),
+            )
+            editor.putString(
+                pendingPref,
+                wrap("1".toByteArray(StandardCharsets.UTF_8), pendingPref.toByteArray(StandardCharsets.UTF_8)),
+            )
+        }
+    }
+
+    fun clearPendingMarker(alias: String) {
+        commitEdits { editor ->
+            editor.remove(sessionPendingKey(alias))
+        }
+    }
+
+    fun deleteSession(alias: String) {
+        commitEdits { editor ->
+            editor.remove(sessionKey(alias))
+            editor.remove(sessionPendingKey(alias))
+        }
+    }
+
+    fun hasPendingMarker(alias: String): Boolean {
+        return prefs.contains(sessionPendingKey(alias))
+    }
+
+    fun listPendingSessionAliases(): List<String> {
+        val prefix = PENDING_PREFIX
+        return prefs.all.keys.mapNotNull { key ->
+            if (key.startsWith(prefix)) key.removePrefix(prefix) else null
+        }
+    }
+
     fun getString(key: String): String? {
         val stored = prefs.getString(key, null) ?: return null
         return String(unwrap(stored, key.toByteArray(StandardCharsets.UTF_8)), StandardCharsets.UTF_8)
@@ -1105,11 +1246,11 @@ private class PaykitLinkStore(context: Context) {
     fun clearAll() {
         val keys = prefs.all.keys.toList()
         if (keys.isNotEmpty()) {
-            val editor = prefs.edit()
-            for (key in keys) {
-                editor.remove(key)
+            commitEdits { editor ->
+                for (key in keys) {
+                    editor.remove(key)
+                }
             }
-            editor.apply()
         }
         try {
             val keyStore = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
@@ -1150,6 +1291,14 @@ private class PaykitLinkStore(context: Context) {
             }
         }
         throw last
+    }
+
+    private fun commitEdits(block: (android.content.SharedPreferences.Editor) -> Unit) {
+        val editor = prefs.edit()
+        block(editor)
+        if (!editor.commit()) {
+            throw PaykitLinkBridgeError("protocol", "protocol error")
+        }
     }
 
     private fun wrap(plaintext: ByteArray, aad: ByteArray): String = seal(plaintext, aad)
@@ -1222,5 +1371,7 @@ private class PaykitLinkStore(context: Context) {
 
         fun receiverKey(alias: String): String = "receiver.$alias"
         fun sessionKey(alias: String): String = "session.$alias"
+        fun sessionPendingKey(alias: String): String = "$PENDING_PREFIX$alias"
+        private const val PENDING_PREFIX = "session.pending."
     }
 }

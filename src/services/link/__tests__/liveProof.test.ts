@@ -56,6 +56,7 @@ jest.mock('../PaykitLinkNative', () => ({
     getReceiverPublicKey: jest.fn(),
     startAuthFlow: jest.fn(),
     awaitAuthApproval: jest.fn(),
+    adoptAuthSession: jest.fn(),
     stopAuthKeepalive: jest.fn(),
     signinWithSecret: jest.fn(),
     signupWithSecret: jest.fn(),
@@ -128,6 +129,7 @@ function envelope(eventId: string, body: string, sentAt: number): string {
 
 function mockNativeHappyPath(): void {
   mockedNative.isAvailable.mockReturnValue(true);
+  mockedNative.adoptAuthSession.mockResolvedValue(undefined);
   mockedNative.signupWithSecret.mockImplementation(async (_secret, _hs, token) => {
     if (token === 'token-a') return { sessionAlias: 'session-a', pubky: PUBKY_A };
     return { sessionAlias: 'session-b', pubky: PUBKY_B };
@@ -369,6 +371,8 @@ describe('runLinkLiveProof', () => {
       'cleanup-signout',
     ]);
 
+    expect(mockedNative.adoptAuthSession).toHaveBeenCalledWith('session-a');
+    expect(mockedNative.adoptAuthSession).toHaveBeenCalledWith('session-b');
     expect(mockedNative.signupWithSecret).toHaveBeenCalledTimes(2);
     expect(mockedNative.signupWithSecret).toHaveBeenNthCalledWith(
       1,
@@ -429,6 +433,7 @@ describe('runLinkLiveProof', () => {
 
   it('still signs out after a mid-proof failure', async () => {
     mockedNative.isAvailable.mockReturnValue(true);
+    mockedNative.adoptAuthSession.mockResolvedValue(undefined);
     mockedNative.signupWithSecret
       .mockResolvedValueOnce({ sessionAlias: 'session-a', pubky: PUBKY_A })
       .mockRejectedValueOnce({ code: 'auth', message: 'signup_failed: bad token' });

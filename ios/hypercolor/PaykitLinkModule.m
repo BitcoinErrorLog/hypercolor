@@ -31,6 +31,10 @@ RCT_EXTERN_METHOD(cancelAuthFlow:(NSString *)flowId
                   resolver:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject)
 
+RCT_EXTERN_METHOD(adoptAuthSession:(NSString *)sessionAlias
+                  resolver:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
+
 RCT_EXTERN_METHOD(signinWithSecret:(NSString *)identitySecretHex
                   resolver:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject)

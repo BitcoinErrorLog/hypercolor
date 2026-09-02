@@ -29,7 +29,8 @@ class AuthFlowCancelRegistryTest {
         outcome.droppedCancellable?.cancel()
         assertTrue(cancellable.cancelled)
         assertTrue(registry.isCancelled("flow-a"))
-        assertFalse(registry.markSurfaced("flow-a", ready.lease))
+        assertFalse(registry.beginPending("flow-a", ready.lease, "alias-a"))
+        assertFalse(registry.isPending("alias-a"))
         // cancelled-with-owner: secondary must not become the pruner.
         assertTrue(registry.startAwait("flow-a") is AuthFlowAwaitStart.AlreadyAwaiting)
         assertTrue(registry.isCancelled("flow-a"))
@@ -51,21 +52,22 @@ class AuthFlowCancelRegistryTest {
             fail("expected Cancelled")
             return
         }
-        assertFalse(registry.markSurfaced("flow-a", cancelled.lease))
+        assertFalse(registry.beginPending("flow-a", cancelled.lease, "alias-a"))
         assertNull(registry.finishAwait("flow-a", cancelled.lease))
         assertFalse(registry.isCancelled("flow-a"))
         assertTrue(registry.startAwait("flow-a") is AuthFlowAwaitStart.Missing)
     }
 
     @Test
-    fun cancelAfterApprovalAlreadySurfacedIsNoOp() {
+    fun cancelAfterConfirmPendingIsAlreadySurfaced() {
         val registry = AuthFlowCancelRegistry<String>()
         val cancellable = RecordingCancellable()
         registry.put("flow-a", "auth-flow")
         val ready = registry.startAwait("flow-a") as AuthFlowAwaitStart.Ready
         registry.attachCancellable("flow-a", cancellable)
-        assertTrue(registry.markSurfaced("flow-a", ready.lease))
-        assertTrue(registry.isSurfaced("flow-a"))
+        assertTrue(registry.beginPending("flow-a", ready.lease, "alias-a"))
+        assertTrue(registry.confirmPending("flow-a", ready.lease, "alias-a"))
+        assertTrue(registry.isPending("alias-a"))
 
         val outcome = registry.cancel("flow-a")
         assertEquals(AuthFlowCancelKind.AlreadySurfaced, outcome.kind)
@@ -73,6 +75,7 @@ class AuthFlowCancelRegistryTest {
         assertNull(outcome.droppedCancellable)
         assertFalse(cancellable.cancelled)
         assertFalse(registry.isCancelled("flow-a"))
+        assertTrue(registry.isPending("alias-a"))
     }
 
     @Test
@@ -143,14 +146,16 @@ class AuthFlowCancelRegistryTest {
     }
 
     @Test
-    fun finishAwaitPrunesSurfaced() {
+    fun finishAwaitPrunesSurfacedAndLeavesPending() {
         val registry = AuthFlowCancelRegistry<String>()
         registry.put("flow-a", "auth-flow")
         val ready = registry.startAwait("flow-a") as AuthFlowAwaitStart.Ready
-        assertTrue(registry.markSurfaced("flow-a", ready.lease))
-        assertTrue(registry.isSurfaced("flow-a"))
+        assertTrue(registry.beginPending("flow-a", ready.lease, "alias-a"))
+        assertTrue(registry.confirmPending("flow-a", ready.lease, "alias-a"))
+        assertTrue(registry.isPending("alias-a"))
         assertNull(registry.finishAwait("flow-a", ready.lease))
-        assertFalse(registry.isSurfaced("flow-a"))
+        assertTrue(registry.isPending("alias-a"))
+        assertEquals(AuthFlowCancelKind.Unknown, registry.cancel("flow-a").kind)
     }
 
     @Test
@@ -162,7 +167,7 @@ class AuthFlowCancelRegistryTest {
         assertTrue(registry.isCancelled("flow-a"))
         assertNull(registry.finishAwait("flow-a", ready.lease + 1L))
         assertTrue(registry.isCancelled("flow-a"))
-        assertFalse(registry.markSurfaced("flow-a", ready.lease))
+        assertFalse(registry.beginPending("flow-a", ready.lease, "alias-a"))
         assertTrue(registry.startAwait("flow-a") is AuthFlowAwaitStart.AlreadyAwaiting)
         assertNull(registry.finishAwait("flow-a", ready.lease))
         assertFalse(registry.isCancelled("flow-a"))
@@ -174,12 +179,14 @@ class AuthFlowCancelRegistryTest {
         val registry = AuthFlowCancelRegistry<String>()
         registry.put("flow-a", "auth-flow")
         val ready = registry.startAwait("flow-a") as AuthFlowAwaitStart.Ready
-        assertTrue(registry.markSurfaced("flow-a", ready.lease))
+        assertTrue(registry.beginPending("flow-a", ready.lease, "alias-a"))
+        assertTrue(registry.confirmPending("flow-a", ready.lease, "alias-a"))
         assertNull(registry.finishAwait("flow-a", ready.lease))
         val outcome = registry.cancel("flow-a")
         assertEquals(AuthFlowCancelKind.Unknown, outcome.kind)
         assertFalse(registry.isCancelled("flow-a"))
         assertTrue(registry.startAwait("flow-a") is AuthFlowAwaitStart.Missing)
+        assertTrue(registry.isPending("alias-a"))
     }
 
     @Test
@@ -189,6 +196,7 @@ class AuthFlowCancelRegistryTest {
         val snapshot = registry.teardown()
         assertEquals(listOf("idle-flow"), snapshot.idleFlows)
         assertTrue(snapshot.ownerCancellables.isEmpty())
+        assertTrue(snapshot.pendingAliases.isEmpty())
         assertTrue(registry.isTornDown())
         assertTrue(registry.startAwait("flow-a") is AuthFlowAwaitStart.Unavailable)
         assertEquals(AuthFlowCancelKind.Unavailable, registry.cancel("flow-a").kind)
@@ -196,6 +204,7 @@ class AuthFlowCancelRegistryTest {
         val second = registry.teardown()
         assertTrue(second.idleFlows.isEmpty())
         assertTrue(second.ownerCancellables.isEmpty())
+        assertTrue(second.pendingAliases.isEmpty())
     }
 
     @Test
@@ -212,60 +221,94 @@ class AuthFlowCancelRegistryTest {
         assertTrue(cancellable.cancelled)
         assertTrue(registry.isTornDown())
         assertTrue(registry.isCancelled("flow-a"))
-        assertFalse(registry.markSurfaced("flow-a", ready.lease))
+        assertFalse(registry.beginPending("flow-a", ready.lease, "alias-a"))
         assertTrue(registry.startAwait("flow-a") is AuthFlowAwaitStart.Unavailable)
         assertNull(registry.finishAwait("flow-a", ready.lease))
         assertFalse(registry.isCancelled("flow-a"))
     }
 
     @Test
-    fun commitApprovalSkipsPersistWhenTornDown() {
+    fun beginPendingSkipsWhenTornDown() {
         val registry = AuthFlowCancelRegistry<String>()
         registry.put("flow-a", "auth-flow")
         val ready = registry.startAwait("flow-a") as AuthFlowAwaitStart.Ready
         registry.markAwaiting("flow-a", ready.lease)
         registry.teardown()
-        var persisted = 0
-        assertFalse(registry.commitApproval("flow-a", ready.lease) { persisted += 1 })
-        assertEquals(0, persisted)
+        assertFalse(registry.beginPending("flow-a", ready.lease, "alias-a"))
+        assertFalse(registry.isPending("alias-a"))
     }
 
     @Test
-    fun teardownAfterCommitApprovalDoesNotUnwrite() {
+    fun teardownAfterConfirmDrainsPendingNotAdopted() {
         val registry = AuthFlowCancelRegistry<String>()
         registry.put("flow-a", "auth-flow")
         val ready = registry.startAwait("flow-a") as AuthFlowAwaitStart.Ready
-        var persisted = 0
-        assertTrue(registry.commitApproval("flow-a", ready.lease) { persisted += 1 })
-        assertEquals(1, persisted)
-        assertTrue(registry.isSurfaced("flow-a"))
+        assertTrue(registry.beginPending("flow-a", ready.lease, "alias-a"))
+        assertTrue(registry.confirmPending("flow-a", ready.lease, "alias-a"))
+        assertTrue(registry.isPending("alias-a"))
         val snapshot = registry.teardown()
         assertTrue(snapshot.idleFlows.isEmpty())
         assertTrue(snapshot.ownerCancellables.isEmpty())
-        assertEquals(1, persisted)
+        assertEquals(listOf("alias-a"), snapshot.pendingAliases)
+        assertFalse(registry.isPending("alias-a"))
+        assertFalse(registry.adoptPending("alias-a"))
     }
 
     @Test
-    fun drainLiveSplitsIdleFromAdmittedOwners() {
+    fun adoptThenTeardownDoesNotReturnAlias() {
+        val registry = AuthFlowCancelRegistry<String>()
+        registry.put("flow-a", "auth-flow")
+        val ready = registry.startAwait("flow-a") as AuthFlowAwaitStart.Ready
+        assertTrue(registry.beginPending("flow-a", ready.lease, "alias-a"))
+        assertTrue(registry.confirmPending("flow-a", ready.lease, "alias-a"))
+        assertTrue(registry.adoptPending("alias-a"))
+        assertFalse(registry.isPending("alias-a"))
+        val snapshot = registry.teardown()
+        assertTrue(snapshot.pendingAliases.isEmpty())
+        assertFalse(registry.adoptPending("alias-a"))
+    }
+
+    @Test
+    fun adoptUnknownOrNonPendingIsUnavailable() {
+        val registry = AuthFlowCancelRegistry<String>()
+        assertFalse(registry.adoptPending("missing"))
+        registry.registerPending("alias-a")
+        assertTrue(registry.adoptPending("alias-a"))
+        assertFalse(registry.adoptPending("alias-a"))
+    }
+
+    @Test
+    fun drainLiveSplitsIdleFromAdmittedOwnersAndClearsPending() {
         val registry = AuthFlowCancelRegistry<String>()
         val cancellable = RecordingCancellable()
         registry.put("idle", "idle-flow")
         registry.put("owned", "owned-flow")
         val ready = registry.startAwait("owned") as AuthFlowAwaitStart.Ready
         registry.attachCancellable("owned", cancellable)
+        assertTrue(registry.registerPending("detached-alias"))
         val snapshot = registry.drainLive()
         assertEquals(listOf("idle-flow"), snapshot.idleFlows)
         assertEquals(1, snapshot.ownerCancellables.size)
+        assertTrue(snapshot.pendingAliases.contains("detached-alias"))
         snapshot.ownerCancellables.forEach { it.cancel() }
         assertTrue(cancellable.cancelled)
         assertFalse(registry.isTornDown())
         assertTrue(registry.isCancelled("owned"))
-        assertFalse(registry.markSurfaced("owned", ready.lease))
+        assertFalse(registry.beginPending("owned", ready.lease, "alias-owned"))
+        assertFalse(registry.isPending("detached-alias"))
         assertTrue(registry.startAwait("idle") is AuthFlowAwaitStart.Missing)
         assertTrue(registry.startAwait("owned") is AuthFlowAwaitStart.AlreadyAwaiting)
         assertNull(registry.finishAwait("owned", ready.lease))
         assertFalse(registry.isCancelled("owned"))
         assertTrue(registry.put("flow-b", "after-sign-out"))
+    }
+
+    @Test
+    fun registerPendingFailsWhenTornDown() {
+        val registry = AuthFlowCancelRegistry<String>()
+        registry.teardown()
+        assertFalse(registry.registerPending("alias-a"))
+        assertFalse(registry.isPending("alias-a"))
     }
 
     private class RecordingCancellable : AuthFlowCancellable {

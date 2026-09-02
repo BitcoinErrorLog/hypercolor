@@ -152,6 +152,27 @@ describe('enableMessagingController', () => {
     expect(controller.getState().message).not.toContain('ring denied');
   });
 
+  it('treats awaitEnabled unavailable (adopt failure) as sanitized error without raw native text', async () => {
+    const flow = authFlow({
+      awaitEnabled: jest.fn().mockRejectedValue({
+        code: 'unavailable',
+        message: 'unavailable',
+      }),
+    });
+    const deps = makeDeps({ enable: jest.fn().mockResolvedValue(flow) });
+    const controller = createEnableMessagingController(deps);
+
+    await controller.start();
+    await controller.beginAuth();
+
+    expect(controller.getState().phase).toBe('error');
+    expect(controller.getState().message).toBe(COPY.couldNotStartAuthorization);
+    expect(controller.getState().message).not.toContain('Keychain');
+    expect(controller.getState().message).not.toContain('SharedPreferences');
+    expect(controller.getState().details).toBe('unavailable');
+    expect(controller.getState().details).not.toMatch(/session-[a-f0-9-]+/i);
+  });
+
   it('stays authorizing when auto-open fails because Ring is already in the back stack', async () => {
     const pending = deferred<{ pubky: string; receiverPath: string; noisePublicKey: string }>();
     const flow = authFlow({ awaitEnabled: jest.fn(() => pending.promise) });

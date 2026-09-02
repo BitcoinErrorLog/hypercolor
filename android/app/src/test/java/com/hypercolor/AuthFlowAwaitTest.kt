@@ -311,7 +311,7 @@ class AuthFlowAwaitTest {
                     id = "flow-a",
                     awaitFfi = { flow.awaitApproval() },
                     closeFlow = { it?.close() },
-                    persist = { token ->
+                    persist = { token, _ ->
                         store.write(token)
                         resolves.incrementAndGet()
                     },
@@ -347,11 +347,11 @@ class AuthFlowAwaitTest {
     }
 
     @Test
-    fun commitWinsThenTeardownDoesNotRollbackAdoptedSession() = runBlocking {
+    fun commitLeavesAliasPendingUntilAdoptAndTeardownDrainsIt() = runBlocking {
         val flow = FakeAuthFlow()
         val registry = AuthFlowCancelRegistry<FakeAuthFlow>()
         val store = FakeSessionStore()
-        val resolves = AtomicInteger(0)
+        val scheduled = AtomicInteger(0)
         assertTrue(registry.put("flow-a", flow))
         flow.complete("session-token")
         val session = executeAtBridge(
@@ -359,20 +359,28 @@ class AuthFlowAwaitTest {
             id = "flow-a",
             awaitFfi = { flow.awaitApproval() },
             closeFlow = { it?.close() },
-            persist = { token ->
-                store.write(token)
-                resolves.incrementAndGet()
+            persist = { token, alias ->
+                store.write(alias, token)
             },
+            scheduleResolve = { _, _ ->
+                scheduled.incrementAndGet()
+            },
+            nextAlias = { "alias-1" },
         )
         assertEquals("session-token", session)
-        assertEquals(listOf("session-token"), store.writes)
-        assertEquals(1, resolves.get())
+        assertEquals(mapOf("alias-1" to "session-token"), store.contents)
+        assertEquals(1, scheduled.get())
+        assertTrue(registry.isPending("alias-1"))
         assertEquals(1, flow.closeCount.get())
         val snapshot = registry.teardown()
         snapshot.ownerCancellables.forEach { it.cancel() }
         snapshot.idleFlows.forEach { it.close() }
-        assertEquals(listOf("session-token"), store.writes)
-        assertEquals(1, resolves.get())
+        assertEquals(listOf("alias-1"), snapshot.pendingAliases)
+        for (alias in snapshot.pendingAliases) {
+            store.delete(alias)
+        }
+        assertTrue(store.contents.isEmpty())
+        assertEquals(1, scheduled.get())
         assertEquals(1, flow.closeCount.get())
         assertTrue(registry.isTornDown())
         assertTrue(registry.startAwait("flow-a") is AuthFlowAwaitStart.Unavailable)
@@ -397,7 +405,7 @@ class AuthFlowAwaitTest {
                         flow.awaitApproval()
                     },
                     closeFlow = { it?.close() },
-                    persist = { token ->
+                    persist = { token, _ ->
                         store.write(token)
                         resolves.incrementAndGet()
                     },
@@ -436,7 +444,10 @@ class AuthFlowAwaitTest {
         id: String,
         awaitFfi: suspend (T) -> S,
         closeFlow: (T?) -> Unit,
-        persist: (S) -> Unit = {},
+        persist: (S, String) -> Unit = { _, _ -> },
+        rollbackPending: (String) -> Unit = {},
+        scheduleResolve: (S, String) -> Unit = { _, _ -> },
+        nextAlias: () -> String = { "test-alias" },
         onBeforeCommit: suspend () -> Unit = {},
     ): S {
         return try {
@@ -446,6 +457,9 @@ class AuthFlowAwaitTest {
                 awaitFfi = awaitFfi,
                 closeFlow = closeFlow,
                 persist = persist,
+                rollbackPending = rollbackPending,
+                scheduleResolve = scheduleResolve,
+                nextAlias = nextAlias,
                 onBeforeCommit = onBeforeCommit,
             )
         } catch (error: Throwable) {
@@ -460,10 +474,20 @@ class AuthFlowAwaitTest {
     }
 
     private class FakeSessionStore {
-        val writes = mutableListOf<String>()
+        val contents = linkedMapOf<String, String>()
+        val writes: List<String>
+            get() = contents.values.toList()
 
         fun write(token: String) {
-            writes.add(token)
+            contents["anon"] = token
+        }
+
+        fun write(alias: String, token: String) {
+            contents[alias] = token
+        }
+
+        fun delete(alias: String) {
+            contents.remove(alias)
         }
     }
 
