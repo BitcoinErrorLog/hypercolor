@@ -364,4 +364,52 @@ describe('SettingsScreen recovery gate', () => {
       tree.unmount();
     });
   });
+
+  it('prompts again after Leave anyway then a second Backup now', async () => {
+    const alert = mockLeaveAlert();
+    let tree!: ReactTestRenderer;
+    await act(async () => {
+      tree = create(<SettingsScreen />);
+    });
+    await exportRecovery(tree);
+    await act(async () => {
+      tree.root.findByProps({ testID: 'settingsBack' }).props.onPress();
+    });
+    await act(async () => {
+      alert.captured.buttons.find(button => button.text === COPY.leaveAnyway)?.onPress?.();
+    });
+    expect(alert.spy).toHaveBeenCalledTimes(1);
+    await exportRecovery(tree);
+    await act(async () => {
+      tree.root.findByProps({ testID: 'settingsBack' }).props.onPress();
+    });
+    expect(alert.spy).toHaveBeenCalledTimes(2);
+    alert.spy.mockRestore();
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('drops a second removal while the leave prompt is already visible', async () => {
+    const alert = mockLeaveAlert();
+    let tree!: ReactTestRenderer;
+    await act(async () => {
+      tree = create(<SettingsScreen />);
+    });
+    await exportRecovery(tree);
+    await act(async () => {
+      tree.root.findByProps({ testID: 'settingsBack' }).props.onPress();
+    });
+    expect(alert.spy).toHaveBeenCalledTimes(1);
+    const resetAction = { type: 'RESET' };
+    await act(async () => {
+      preventRemoveCallback?.({ data: { action: resetAction } });
+    });
+    expect(alert.spy).toHaveBeenCalledTimes(1);
+    expect(mockDispatch).not.toHaveBeenCalled();
+    alert.spy.mockRestore();
+    await act(async () => {
+      tree.unmount();
+    });
+  });
 });

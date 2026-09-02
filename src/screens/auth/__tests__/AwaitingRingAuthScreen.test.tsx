@@ -269,4 +269,29 @@ describe('AwaitingRingAuthScreen', () => {
     jest.useRealTimers();
     await unmount(tree);
   });
+
+  it('releases its Connect token on unmount so Welcome can start', async () => {
+    let resolveRequest!: (value: { url: string; expiresAt: number; generation: number }) => void;
+    (PubkyRingAuthService.requestDelegation as jest.Mock).mockImplementation(
+      () =>
+        new Promise(resolve => {
+          resolveRequest = resolve;
+        }),
+    );
+    const tree = await render(<AwaitingRingAuthScreen />);
+    await act(async () => {
+      notifyConnectAuthFeedback('denied');
+    });
+    await act(async () => {
+      tree.root.findByProps({ testID: 'awaitingRingAuthTryAgain' }).props.onPress();
+    });
+    expect(tryBeginConnectDelegation()).toBeNull();
+    await unmount(tree);
+    expect(tryBeginConnectDelegation()).not.toBeNull();
+    resolveRequest({
+      url: `${PAYKIT_CONNECT_URL}&retry=1`,
+      expiresAt: Date.now() + ENABLE_AUTH_TTL_MS,
+      generation: 2,
+    });
+  });
 });

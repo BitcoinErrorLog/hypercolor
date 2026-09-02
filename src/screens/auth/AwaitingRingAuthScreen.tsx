@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -70,6 +70,8 @@ export default function AwaitingRingAuthScreen() {
   const initial = resolveHandoff(route.params);
   const [ringAuthUrl, setRingAuthUrl] = useState(initial?.url ?? '');
   const [expiresAt, setExpiresAt] = useState(initial?.expiresAt ?? 0);
+  const expiresAtRef = useRef(initial?.expiresAt ?? 0);
+  const connectTokenRef = useRef<number | null>(null);
   const [copied, setCopied] = useState(false);
   const [delegationBusy, setDelegationBusy] = useState(false);
   const [phase, setPhase] = useState<AwaitPhase>(() => {
@@ -91,6 +93,7 @@ export default function AwaitingRingAuthScreen() {
   const startNewDelegation = useCallback(async () => {
     const token = tryBeginConnectDelegation();
     if (token == null) return;
+    connectTokenRef.current = token;
     setDelegationBusy(true);
     try {
       await PubkyRingAuthService.cancelPendingDelegation();
@@ -102,6 +105,7 @@ export default function AwaitingRingAuthScreen() {
         generation: next.generation,
       });
       setRingAuthUrl(next.url);
+      expiresAtRef.current = next.expiresAt;
       setExpiresAt(next.expiresAt);
       setCopied(false);
       setPhase(Date.now() >= next.expiresAt ? 'expired' : 'waiting');
@@ -111,6 +115,9 @@ export default function AwaitingRingAuthScreen() {
       }
     } finally {
       finishConnectDelegation(token);
+      if (connectTokenRef.current === token) {
+        connectTokenRef.current = null;
+      }
       setDelegationBusy(false);
     }
   }, [nav]);
@@ -126,6 +133,16 @@ export default function AwaitingRingAuthScreen() {
       await startNewDelegation();
     }
   }, [delegationBusy, phase, startNewDelegation]);
+
+  useEffect(() => {
+    return () => {
+      const token = connectTokenRef.current;
+      if (token != null) {
+        finishConnectDelegation(token);
+        connectTokenRef.current = null;
+      }
+    };
+  }, []);
 
   useEffect(() => {
     const sub = BackHandler.addEventListener('hardwareBackPress', () => {
@@ -153,12 +170,14 @@ export default function AwaitingRingAuthScreen() {
   useEffect(() => {
     const sub = AppState.addEventListener('change', next => {
       if (next !== 'active') return;
-      if (Date.now() >= expiresAt) {
+      if (Date.now() >= expiresAtRef.current) {
         setPhase(current => (current === 'waiting' ? 'expired' : current));
       }
     });
-    return () => sub.remove();
-  }, [expiresAt]);
+    return () => {
+      sub?.remove();
+    };
+  }, []);
 
   const title =
     phase === 'expired'

@@ -55,6 +55,7 @@ export default function SettingsScreen() {
   const [restoreNote, setRestoreNote] = useState<string | null>(null);
   const [restoreError, setRestoreError] = useState<string | null>(null);
   const leavingRef = useRef(false);
+  const alertVisibleRef = useRef(false);
 
   const leaveSettings = useCallback(
     (action?: NavigationAction) => {
@@ -69,7 +70,11 @@ export default function SettingsScreen() {
 
   const requestLeave = useCallback(
     (action?: NavigationAction) => {
+      if (alertVisibleRef.current) {
+        return;
+      }
       if (leavingRef.current) {
+        leavingRef.current = false;
         leaveSettings(action);
         return;
       }
@@ -77,12 +82,20 @@ export default function SettingsScreen() {
         leaveSettings(action);
         return;
       }
+      alertVisibleRef.current = true;
       Alert.alert(COPY.leaveRecoveryTitle, COPY.leaveRecoveryBody, [
-        { text: COPY.goBack, style: 'cancel' },
+        {
+          text: COPY.goBack,
+          style: 'cancel',
+          onPress: () => {
+            alertVisibleRef.current = false;
+          },
+        },
         {
           text: COPY.leaveAnyway,
           style: 'destructive',
           onPress: () => {
+            alertVisibleRef.current = false;
             leavingRef.current = true;
             setRecoveryGateActive(false);
             setRecoveryCode(null);
@@ -97,6 +110,7 @@ export default function SettingsScreen() {
 
   usePreventRemove(recoveryGateActive, ({ data }) => {
     if (leavingRef.current) {
+      leavingRef.current = false;
       nav.dispatch(data.action);
       return;
     }
@@ -210,6 +224,8 @@ export default function SettingsScreen() {
               setRestoreError(null);
               void BackupService.exportBackup()
                 .then(result => {
+                  leavingRef.current = false;
+                  alertVisibleRef.current = false;
                   setRecoveryCode(result.recoveryCode);
                   setRecoveryConfirmed(false);
                   setRecoveryCopied(false);

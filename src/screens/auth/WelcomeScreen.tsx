@@ -27,12 +27,14 @@ type Nav = NativeStackNavigationProp<AuthStackParamList, 'Welcome'>;
 export default function WelcomeScreen() {
   const nav = useNavigation<Nav>();
   const [loading, setLoading] = useState(false);
+  const [connectPending, setConnectPending] = useState(false);
   const [error, setError] = useState<{ message: string; details: string | null } | null>(null);
   const connectTokenRef = useRef<number | null>(null);
 
   useFocusEffect(
     useCallback(() => {
       setLoading(false);
+      setConnectPending(false);
       return () => {
         const token = connectTokenRef.current;
         if (token != null) {
@@ -45,8 +47,12 @@ export default function WelcomeScreen() {
   async function handleConnect() {
     if (loading) return;
     const token = tryBeginConnectDelegation();
-    if (token == null) return;
+    if (token == null) {
+      setConnectPending(true);
+      return;
+    }
     connectTokenRef.current = token;
+    setConnectPending(false);
     setLoading(true);
     setError(null);
     try {
@@ -90,14 +96,14 @@ export default function WelcomeScreen() {
             testID="welcomeConnectRing"
             accessibilityRole="button"
             accessibilityLabel={COPY.connectWithPubkyRing}
-            accessibilityState={{ busy: loading, disabled: loading }}
+            accessibilityState={{ busy: loading || connectPending, disabled: loading }}
             style={[styles.primaryButton, loading && styles.buttonDisabled]}
             onPress={() => {
               void handleConnect();
             }}
             disabled={loading}
           >
-            {loading ? (
+            {loading || connectPending ? (
               <ActivityIndicator color="#fff" />
             ) : (
               <Text style={styles.primaryButtonText}>{COPY.connectWithPubkyRing}</Text>

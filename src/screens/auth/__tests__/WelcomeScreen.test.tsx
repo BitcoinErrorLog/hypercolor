@@ -187,4 +187,26 @@ describe('WelcomeScreen', () => {
       tree.unmount();
     });
   });
+
+  it('shows a busy Connect state when the delegation latch is already held', async () => {
+    const awaitingToken = tryBeginConnectDelegation();
+    expect(awaitingToken).not.toBeNull();
+
+    let tree!: ReactTestRenderer;
+    await act(async () => {
+      tree = create(<WelcomeScreen />);
+    });
+    await act(async () => {
+      tree.root.findByProps({ testID: 'welcomeConnectRing' }).props.onPress();
+    });
+    expect(PubkyRingAuthService.requestDelegation).not.toHaveBeenCalled();
+    expect(
+      tree.root.findByProps({ testID: 'welcomeConnectRing' }).props.accessibilityState,
+    ).toEqual(expect.objectContaining({ busy: true, disabled: false }));
+    finishConnectDelegation(awaitingToken as number);
+    resetConnectDelegationForTests();
+    await act(async () => {
+      tree.unmount();
+    });
+  });
 });
