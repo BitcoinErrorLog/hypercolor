@@ -2,8 +2,9 @@ import type { PubkyKey } from '../../types';
 import { hmacSha256Hex } from './hmacSha256';
 
 /**
- * Per-install opaque correlation id for logs. HMAC-SHA-256 of the peer
- * pubky under a random install salt, truncated to 16 hex chars.
+ * Per-install, per-owner opaque correlation id for logs. HMAC-SHA-256 of
+ * `owner || 0x00 || peer` under a random install salt, truncated to 16 hex
+ * chars. The owner is required at every call — there is no owner-less id.
  *
  * Threat model:
  * - Logs alone (no salt): recovering a random 52-character z32 identity
@@ -12,6 +13,9 @@ import { hmacSha256Hex } from './hmacSha256';
  *   (contacts, public graph, a suspect list): dictionary matching is
  *   cheap and exact. Treat this as log correlation, never as a secret
  *   or a security decision.
+ * - Cross-owner: the same peer under two signed-in identities on one
+ *   install must not share a log id. Domain separation (owner || 0x00 ||
+ *   peer) makes those ids independent given the install salt.
  */
 const SALT_KEY = 'peer-log-salt';
 
@@ -75,11 +79,23 @@ function installSalt(): string | null {
   return memorySalt;
 }
 
-/** Stable per-install id for a peer. Hex, 16 chars — never a 52-char z32 pubky. */
-export function opaquePeerId(pubky: PubkyKey): string {
+/** HMAC message: owner || 0x00 || peer (UTF-8 z32 is ASCII). */
+export function opaquePeerIdMessage(ownerPubky: PubkyKey, peerPubky: PubkyKey): Uint8Array {
+  const enc = new TextEncoder();
+  const ownerBytes = enc.encode(ownerPubky);
+  const peerBytes = enc.encode(peerPubky);
+  const out = new Uint8Array(ownerBytes.length + 1 + peerBytes.length);
+  out.set(ownerBytes, 0);
+  out[ownerBytes.length] = 0x00;
+  out.set(peerBytes, ownerBytes.length + 1);
+  return out;
+}
+
+/** Stable per-install, per-owner id for a peer. Hex, 16 chars — never a 52-char z32 pubky. */
+export function opaquePeerId(ownerPubky: PubkyKey, peerPubky: PubkyKey): string {
   const salt = installSalt();
   if (!salt) return 'unavailable';
-  return hmacSha256Hex(salt, pubky).slice(0, 16);
+  return hmacSha256Hex(salt, opaquePeerIdMessage(ownerPubky, peerPubky)).slice(0, 16);
 }
 
 /** Test-only: drop cached salt so the next lookup re-reads MMKV. */

@@ -10,6 +10,7 @@ import { DebugSignupPanel } from '../auth/DebugSignupPanel';
 import { getE2eIdentity } from '../../navigation/e2eSignupResult';
 import { switchE2eSavedSlotFromUi } from '../../navigation/e2eDeepLinks';
 import { COPY } from '../../copy/uxCopy';
+import { paintSigningOut } from '../../services/paintedOwner';
 import { CustodyLine } from '../../ui/CustodyLine';
 import { SignOutSheet } from '../../ui/SignOutSheet';
 import { HIT_SLOP_44 } from '../../ui/hitTarget';
@@ -57,6 +58,7 @@ export default function ProfileScreen() {
     setSignOutBusy(true);
     setSignOutError(null);
     try {
+      paintSigningOut();
       await PubkyService.signOut();
       clearLastBackupAt();
       clearSession();

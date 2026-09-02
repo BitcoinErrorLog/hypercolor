@@ -75,7 +75,23 @@ jest.mock('../link/PaykitLinkNative', () => ({
   toLinkNativeError: (err: unknown) => err,
 }));
 
-import { setDbForTests, setGetDbGateForTests } from '../../db';
+jest.mock('../../db', () => {
+  const actual = jest.requireActual('../../db') as typeof import('../../db');
+  return {
+    ...actual,
+    getDb: async () => {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { ownerCommitGetDbGate } = require('./ownerCommitGetDbGate') as {
+        ownerCommitGetDbGate: { current: (() => Promise<void>) | null };
+      };
+      if (ownerCommitGetDbGate.current) await ownerCommitGetDbGate.current();
+      return actual.getDb();
+    },
+  };
+});
+
+import { setDbForTests } from '../../db';
+import { ownerCommitGetDbGate } from './ownerCommitGetDbGate';
 import { runMigrations } from '../../db/migrations';
 import { openMemoryDb } from '../../db/__tests__/betterSqliteAdapter';
 import { StorageService } from '../StorageService';
@@ -86,10 +102,13 @@ import {
   LINK_GROUP_FANOUT_PAYLOAD_TYPE,
   resetLinkServiceHarnessState,
   stopLinkRetryDrain,
+  buildPreparedSendIntent,
 } from '../link/LinkService';
 import { PaykitLinkNative } from '../link/PaykitLinkNative';
 import { CHAT_MESSAGE_KIND, LINK_RECEIVER_PATH, buildDmConversationId } from '../../types/link';
 import { GROUP_MESSAGE_KIND } from '../../types/group';
+import { paintOwner, paintSigningOut, clearPaintedOwner } from '../paintedOwner';
+import { PAYKIT_PAYMENT_REQUEST_KIND } from '../../types/payment';
 
 const mockedNative = jest.mocked(PaykitLinkNative);
 const mockedKeyStore = jest.mocked(KeyStore);
@@ -119,13 +138,14 @@ function installGetDbStall(): {
   const hold = new Promise<void>(r => {
     resolveHold = r;
   });
-  setGetDbGateForTests(async () => {
+  ownerCommitGetDbGate.current = async () => {
     if (!armed) return;
     remaining -= 1;
     if (remaining > 0) return;
+    armed = false;
     resolveWaiting();
     await hold;
-  });
+  };
   return {
     armNth(n: number) {
       remaining = n;
@@ -140,6 +160,7 @@ function installGetDbStall(): {
 
 function switchPaintedOwner(): void {
   mockedKeyStore.getPubky.mockReturnValue(OTHER);
+  paintOwner(OTHER);
 }
 
 describe('owner-conditional persist at commit time', () => {
@@ -148,7 +169,8 @@ describe('owner-conditional persist at commit time', () => {
   beforeEach(async () => {
     FollowsImportSettings.resetForTests();
     resetLinkServiceHarnessState();
-    setGetDbGateForTests(null);
+    ownerCommitGetDbGate.current = null;
+    clearPaintedOwner();
     db = openMemoryDb();
     setDbForTests(db);
     await runMigrations(db);
@@ -169,6 +191,7 @@ describe('owner-conditional persist at commit time', () => {
     mockedNative.receivePrivateMessages.mockResolvedValue({ messages: [], snapshot: 'est-in' });
     mockedKeyStore.getPubky.mockReturnValue(OWNER);
     mockedKeyStore.getLinkSession.mockReturnValue(SESSION_ALIAS);
+    paintOwner(OWNER);
 
     await StorageService.upsertLinkReceiver({
       ownerPubky: OWNER,
@@ -194,7 +217,8 @@ describe('owner-conditional persist at commit time', () => {
     stopLinkRetryDrain();
     FollowsImportSettings.resetForTests();
     resetLinkServiceHarnessState();
-    setGetDbGateForTests(null);
+    ownerCommitGetDbGate.current = null;
+    clearPaintedOwner();
     db?.close();
     db = null;
     setDbForTests(null);
@@ -356,6 +380,8 @@ describe('owner-conditional persist at commit time', () => {
       return { snapshot: 'est-out' };
     });
     const pending = LinkService.sendPersistedLinkJson({
+      ownerPubky: OWNER,
+      senderPubky: OWNER,
       peerPubky: PEER_B,
       queueId: 'q-group-1',
       kind: GROUP_MESSAGE_KIND,
@@ -381,5 +407,221 @@ describe('owner-conditional persist at commit time', () => {
     expect(await StorageService.getGroupFanoutAggregate(OTHER, CHANNEL_ID, OTHER, eventId)).toEqual(
       [],
     );
+  });
+
+  it('refuses a stalled persist after full OWNER→null sign-out and leaves tables empty', async () => {
+    await StorageService.upsertContact({
+      pubky: PEER,
+      ownerPubky: OWNER,
+      trustScore: 0,
+      isFollowing: false,
+      isFollower: false,
+      isMutual: false,
+      addedManually: true,
+      firstSeenAt: NOW,
+    });
+    const eventId = '00000000-0000-4000-8000-00000000aaaa';
+    const stall = installGetDbStall();
+    stall.armNth(1);
+    const pending = StorageService.persistLinkSendIntent({
+      message: {
+        ownerPubky: OWNER,
+        eventId,
+        conversationId: buildDmConversationId(PEER),
+        peerPubky: PEER,
+        senderPubky: OWNER,
+        direction: 'sent',
+        kind: CHAT_MESSAGE_KIND,
+        rawJson: '{}',
+        body: 'hello',
+        sentAt: NOW,
+        receivedAt: null,
+        deliveryState: 'sending',
+      },
+      queueItem: {
+        id: 'q-signout-null',
+        messageId: eventId,
+        recipientPubky: PEER,
+        payload: '{}',
+        attempts: 0,
+        nextRetryAt: NOW,
+        createdAt: NOW,
+      },
+    });
+    await stall.waiting;
+    paintSigningOut();
+    await StorageService.clearAccountData(OWNER);
+    mockedKeyStore.getPubky.mockReturnValue(null);
+    clearPaintedOwner();
+    stall.release();
+    await expect(pending).rejects.toEqual(
+      expect.objectContaining({ name: 'LinkSendError', code: 'owner-changed' }),
+    );
+    expect(await StorageService.getContact(PEER, OWNER)).toBeNull();
+    expect(await StorageService.hasLinkMessage(OWNER, OWNER, CHAT_MESSAGE_KIND, eventId)).toBe(
+      false,
+    );
+    expect(await StorageService.hasQueueItem('q-signout-null')).toBe(false);
+  });
+
+  it('refuses a stalled persist after clearAccountData while still signing-out', async () => {
+    await StorageService.upsertContact({
+      pubky: PEER,
+      ownerPubky: OWNER,
+      trustScore: 0,
+      isFollowing: false,
+      isFollower: false,
+      isMutual: false,
+      addedManually: true,
+      firstSeenAt: NOW,
+    });
+    const eventId = '00000000-0000-4000-8000-00000000aaab';
+    const stall = installGetDbStall();
+    stall.armNth(1);
+    const pending = StorageService.persistLinkSendIntent({
+      message: {
+        ownerPubky: OWNER,
+        eventId,
+        conversationId: buildDmConversationId(PEER),
+        peerPubky: PEER,
+        senderPubky: OWNER,
+        direction: 'sent',
+        kind: CHAT_MESSAGE_KIND,
+        rawJson: '{}',
+        body: 'hello',
+        sentAt: NOW,
+        receivedAt: null,
+        deliveryState: 'sending',
+      },
+      queueItem: {
+        id: 'q-signout-teardown',
+        messageId: eventId,
+        recipientPubky: PEER,
+        payload: '{}',
+        attempts: 0,
+        nextRetryAt: NOW,
+        createdAt: NOW,
+      },
+    });
+    await stall.waiting;
+    paintSigningOut();
+    await StorageService.clearAccountData(OWNER);
+    expect(mockedKeyStore.getPubky()).toBe(OWNER);
+    stall.release();
+    await expect(pending).rejects.toEqual(
+      expect.objectContaining({ name: 'LinkSendError', code: 'owner-changed' }),
+    );
+    expect(await StorageService.getContact(PEER, OWNER)).toBeNull();
+    expect(await StorageService.hasLinkMessage(OWNER, OWNER, CHAT_MESSAGE_KIND, eventId)).toBe(
+      false,
+    );
+    expect(await StorageService.hasQueueItem('q-signout-teardown')).toBe(false);
+  });
+
+  it('does not send a persisted group envelope after an identity switch', async () => {
+    const eventId = '00000000-0000-4000-8000-00000000cccc';
+    await StorageService.persistGroupSendIntent({
+      message: {
+        ownerPubky: OWNER,
+        channelId: CHANNEL_ID,
+        eventId,
+        senderPubky: OWNER,
+        kind: GROUP_MESSAGE_KIND,
+        body: 'hi',
+        rawJson: '{}',
+        sentAt: NOW,
+        receivedAt: null,
+        deliveryState: 'sending',
+        replyToEventId: null,
+        replyToAuthorPubky: null,
+        targetEventId: null,
+        targetAuthorPubky: null,
+        editedAt: null,
+        deleted: false,
+      },
+      queueItems: [
+        {
+          id: 'q-group-handoff',
+          messageId: eventId,
+          recipientPubky: PEER,
+          payload: JSON.stringify({
+            type: LINK_GROUP_FANOUT_PAYLOAD_TYPE,
+            ownerPubky: OWNER,
+            peerPubky: PEER,
+            senderPubky: OWNER,
+            kind: GROUP_MESSAGE_KIND,
+            eventId,
+            channelId: CHANNEL_ID,
+            rawJson: '{}',
+          }),
+          attempts: 0,
+          nextRetryAt: NOW,
+          createdAt: NOW,
+        },
+      ],
+    });
+    mockedNative.sendPrivateMessageJson.mockClear();
+    switchPaintedOwner();
+    await expect(
+      LinkService.sendPersistedLinkJson({
+        ownerPubky: OWNER,
+        senderPubky: OWNER,
+        peerPubky: PEER,
+        queueId: 'q-group-handoff',
+        kind: GROUP_MESSAGE_KIND,
+        eventId,
+        rawJson: '{}',
+        channelId: CHANNEL_ID,
+      }),
+    ).rejects.toEqual(expect.objectContaining({ name: 'LinkSendError', code: 'owner-changed' }));
+    expect(mockedNative.sendPrivateMessageJson).not.toHaveBeenCalled();
+    expect(await StorageService.hasQueueItem('q-group-handoff')).toBe(true);
+    expect(await StorageService.getGroupFanoutAggregate(OTHER, CHANNEL_ID, OTHER, eventId)).toEqual(
+      [],
+    );
+    const outcomes = await StorageService.getGroupFanoutAggregate(
+      OWNER,
+      CHANNEL_ID,
+      OWNER,
+      eventId,
+    );
+    expect(outcomes).toHaveLength(1);
+    expect(outcomes[0]?.status).toBe('pending');
+  });
+
+  it('does not send a persisted payment envelope after an identity switch', async () => {
+    const eventId = '00000000-0000-4000-8000-00000000dddd';
+    const sendIntent = buildPreparedSendIntent({
+      ownerPubky: OWNER,
+      peerPubky: PEER,
+      kind: PAYKIT_PAYMENT_REQUEST_KIND,
+      eventId,
+      rawJson: '{}',
+      body: 'pay',
+      sentAt: NOW,
+      queueId: 'q-pay-handoff',
+    });
+    await StorageService.persistLinkSendIntent(sendIntent);
+    mockedNative.sendPrivateMessageJson.mockClear();
+    switchPaintedOwner();
+    await expect(
+      LinkService.attemptPersistedSend({
+        ownerPubky: OWNER,
+        senderPubky: OWNER,
+        peerPubky: PEER,
+        kind: PAYKIT_PAYMENT_REQUEST_KIND,
+        eventId,
+        queueId: 'q-pay-handoff',
+        rawJson: '{}',
+      }),
+    ).rejects.toEqual(expect.objectContaining({ name: 'LinkSendError', code: 'owner-changed' }));
+    expect(mockedNative.sendPrivateMessageJson).not.toHaveBeenCalled();
+    expect(await StorageService.hasQueueItem('q-pay-handoff')).toBe(true);
+    expect(
+      await StorageService.hasLinkMessage(OTHER, OTHER, PAYKIT_PAYMENT_REQUEST_KIND, eventId),
+    ).toBe(false);
+    expect(
+      await StorageService.hasLinkMessage(OWNER, OWNER, PAYKIT_PAYMENT_REQUEST_KIND, eventId),
+    ).toBe(true);
   });
 });

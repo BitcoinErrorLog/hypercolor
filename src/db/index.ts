@@ -6,15 +6,6 @@ export type { SqlExecutor, SqlExecuteResult, SqlParams, SqlValue } from './sql';
 
 let _db: SqlExecutor | null = null;
 let _testDb: SqlExecutor | null = null;
-let _getDbGate: (() => Promise<void>) | null = null;
-
-/**
- * Test seam: run this before returning a handle so identity-switch tests
- * can stall across the `await getDb()` gap. Production never sets this.
- */
-export function setGetDbGateForTests(gate: (() => Promise<void>) | null): void {
-  _getDbGate = gate;
-}
 
 /**
  * Test seam: inject an in-memory executor (better-sqlite3 adapter) so the
@@ -33,7 +24,6 @@ export function setDbForTests(db: SqlExecutor | null): void {
  * All ops use WAL mode for concurrent read performance and safer crash recovery.
  */
 export async function getDb(): Promise<SqlExecutor> {
-  if (_getDbGate) await _getDbGate();
   if (_testDb) return _testDb;
   if (_db) return _db;
 

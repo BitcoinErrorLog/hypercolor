@@ -782,6 +782,8 @@ async function fanOutEnvelope(input: {
     const queueItem = queueItems[i]!;
     try {
       await LinkService.sendPersistedLinkJson({
+        ownerPubky: input.ownerPubky,
+        senderPubky: input.senderPubky,
         peerPubky,
         queueId: queueItem.id,
         kind: input.kind,

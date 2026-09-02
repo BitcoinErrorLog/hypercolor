@@ -81,7 +81,7 @@ const now = () => Date.now();
  */
 function assertOwnerAtCommit(expectedOwner: PubkyKey): void {
   const current = activeOwnerAtCommit();
-  if (current !== null && current !== expectedOwner) {
+  if (current !== expectedOwner) {
     throw new LinkSendError('owner-changed', 'StorageService: owner changed during persist');
   }
 }
@@ -122,10 +122,10 @@ export const StorageService = {
   // ── Contacts ──────────────────────────────────────────────────────────────
 
   async upsertContact(contact: Contact): Promise<void> {
-    const db = await getDb();
-    const ts = now();
-    db.executeSync(
-      `INSERT INTO contacts
+    await ownedWrite(contact.ownerPubky, db => {
+      const ts = now();
+      db.executeSync(
+        `INSERT INTO contacts
         (owner_pubky, pubky, display_name, avatar_hash, homeserver, trust_score,
          is_following, is_follower, is_mutual, added_manually,
          first_seen_at, last_interaction_at, created_at, updated_at)
@@ -141,23 +141,24 @@ export const StorageService = {
          added_manually       = MAX(added_manually, excluded.added_manually),
          last_interaction_at  = COALESCE(excluded.last_interaction_at, last_interaction_at),
          updated_at           = excluded.updated_at`,
-      [
-        contact.ownerPubky,
-        contact.pubky,
-        contact.displayName ?? null,
-        contact.avatarHash ?? null,
-        contact.homeserver ?? null,
-        contact.trustScore,
-        contact.isFollowing ? 1 : 0,
-        contact.isFollower ? 1 : 0,
-        contact.isMutual ? 1 : 0,
-        contact.addedManually ? 1 : 0,
-        contact.firstSeenAt,
-        contact.lastInteractionAt ?? null,
-        contact.firstSeenAt,
-        ts,
-      ],
-    );
+        [
+          contact.ownerPubky,
+          contact.pubky,
+          contact.displayName ?? null,
+          contact.avatarHash ?? null,
+          contact.homeserver ?? null,
+          contact.trustScore,
+          contact.isFollowing ? 1 : 0,
+          contact.isFollower ? 1 : 0,
+          contact.isMutual ? 1 : 0,
+          contact.addedManually ? 1 : 0,
+          contact.firstSeenAt,
+          contact.lastInteractionAt ?? null,
+          contact.firstSeenAt,
+          ts,
+        ],
+      );
+    });
   },
 
   /**
@@ -209,33 +210,39 @@ export const StorageService = {
     pubky: PubkyKey,
     flags: { isFollowing: boolean; isFollower: boolean; isMutual: boolean },
   ): Promise<void> {
-    const db = await getDb();
-    db.executeSync(
-      `UPDATE contacts
+    await ownedWrite(ownerPubky, db => {
+      db.executeSync(
+        `UPDATE contacts
        SET is_following = ?, is_follower = ?, is_mutual = ?, updated_at = ?
        WHERE owner_pubky = ? AND pubky = ?`,
-      [
-        flags.isFollowing ? 1 : 0,
-        flags.isFollower ? 1 : 0,
-        flags.isMutual ? 1 : 0,
-        now(),
-        ownerPubky,
-        pubky,
-      ],
-    );
+        [
+          flags.isFollowing ? 1 : 0,
+          flags.isFollower ? 1 : 0,
+          flags.isMutual ? 1 : 0,
+          now(),
+          ownerPubky,
+          pubky,
+        ],
+      );
+    });
   },
 
   async deleteContact(ownerPubky: PubkyKey, pubky: PubkyKey): Promise<void> {
-    const db = await getDb();
-    db.executeSync('DELETE FROM contacts WHERE owner_pubky = ? AND pubky = ?', [ownerPubky, pubky]);
+    await ownedWrite(ownerPubky, db => {
+      db.executeSync('DELETE FROM contacts WHERE owner_pubky = ? AND pubky = ?', [
+        ownerPubky,
+        pubky,
+      ]);
+    });
   },
 
   /** Drops imported follow suggestions. Manually added contacts are kept. */
   async deleteFollowSuggestions(ownerPubky: PubkyKey): Promise<void> {
-    const db = await getDb();
-    db.executeSync('DELETE FROM contacts WHERE owner_pubky = ? AND added_manually = 0', [
-      ownerPubky,
-    ]);
+    await ownedWrite(ownerPubky, db => {
+      db.executeSync('DELETE FROM contacts WHERE owner_pubky = ? AND added_manually = 0', [
+        ownerPubky,
+      ]);
+    });
   },
 
   /**
@@ -245,9 +252,8 @@ export const StorageService = {
    * rows — callers upsert current followees separately.
    */
   async reconcileFollowSuggestions(ownerPubky: PubkyKey, followees: PubkyKey[]): Promise<void> {
-    const db = await getDb();
     const keep = new Set(followees);
-    transact(db, () => {
+    await ownedTransact(ownerPubky, db => {
       const result = db.executeSync('SELECT * FROM contacts WHERE owner_pubky = ?', [ownerPubky]);
       const ts = now();
       for (const raw of result.rows ?? []) {
@@ -271,47 +277,29 @@ export const StorageService = {
   },
 
   async updateTrustScore(pubky: PubkyKey, delta: number, ownerPubky?: PubkyKey): Promise<void> {
-    const db = await getDb();
-    const ts = now();
-    if (ownerPubky !== undefined && ownerPubky !== '') {
+    if (ownerPubky === undefined || ownerPubky === '') return;
+    await ownedWrite(ownerPubky, db => {
       db.executeSync(
         `UPDATE contacts
          SET trust_score = MAX(0.0, MIN(1.0, trust_score + ?)),
              updated_at = ?
          WHERE owner_pubky = ? AND pubky = ?`,
-        [delta, ts, ownerPubky, pubky],
+        [delta, now(), ownerPubky, pubky],
       );
-      return;
-    }
-    db.executeSync(
-      `UPDATE contacts
-       SET trust_score = MAX(0.0, MIN(1.0, trust_score + ?)),
-           updated_at = ?
-       WHERE pubky = ?
-         AND (SELECT COUNT(*) FROM contacts WHERE pubky = ?) = 1`,
-      [delta, ts, pubky, pubky],
-    );
+    });
   },
 
   async touchContactInteraction(pubky: PubkyKey, ownerPubky?: PubkyKey): Promise<void> {
-    const db = await getDb();
-    const ts = now();
-    if (ownerPubky !== undefined && ownerPubky !== '') {
+    if (ownerPubky === undefined || ownerPubky === '') return;
+    await ownedWrite(ownerPubky, db => {
+      const ts = now();
       db.executeSync(
         `UPDATE contacts
          SET last_interaction_at = ?, updated_at = ?
          WHERE owner_pubky = ? AND pubky = ?`,
         [ts, ts, ownerPubky, pubky],
       );
-      return;
-    }
-    db.executeSync(
-      `UPDATE contacts
-       SET last_interaction_at = ?, updated_at = ?
-       WHERE pubky = ?
-         AND (SELECT COUNT(*) FROM contacts WHERE pubky = ?) = 1`,
-      [ts, ts, pubky, pubky],
-    );
+    });
   },
 
   async countLinkMessagesForPeer(ownerPubky: PubkyKey, peerPubky: PubkyKey): Promise<number> {
@@ -369,11 +357,12 @@ export const StorageService = {
   },
 
   async deleteMessageRequest(ownerPubky: PubkyKey, peerPubky: PubkyKey): Promise<void> {
-    const db = await getDb();
-    db.executeSync('DELETE FROM message_requests WHERE owner_pubky = ? AND peer_pubky = ?', [
-      ownerPubky,
-      peerPubky,
-    ]);
+    await ownedWrite(ownerPubky, db => {
+      db.executeSync('DELETE FROM message_requests WHERE owner_pubky = ? AND peer_pubky = ?', [
+        ownerPubky,
+        peerPubky,
+      ]);
+    });
   },
 
   async getMessageRequest(
@@ -446,18 +435,21 @@ export const StorageService = {
         // Decline still drops the stream rows.
       }
     }
-    db.executeSync('DELETE FROM link_stream_items WHERE owner_pubky = ? AND peer_pubky = ?', [
-      ownerPubky,
-      peerPubky,
-    ]);
+    await ownedWrite(ownerPubky, writeDb => {
+      writeDb.executeSync(
+        'DELETE FROM link_stream_items WHERE owner_pubky = ? AND peer_pubky = ?',
+        [ownerPubky, peerPubky],
+      );
+    });
   },
 
   async deleteLinkMessagesForPeer(ownerPubky: PubkyKey, peerPubky: PubkyKey): Promise<void> {
-    const db = await getDb();
-    db.executeSync('DELETE FROM link_messages WHERE owner_pubky = ? AND peer_pubky = ?', [
-      ownerPubky,
-      peerPubky,
-    ]);
+    await ownedWrite(ownerPubky, db => {
+      db.executeSync('DELETE FROM link_messages WHERE owner_pubky = ? AND peer_pubky = ?', [
+        ownerPubky,
+        peerPubky,
+      ]);
+    });
   },
 
   // ── Delivery Queue ────────────────────────────────────────────────────────
@@ -527,9 +519,9 @@ export const StorageService = {
   // ── Link receivers (Paykit Encrypted Links) ───────────────────────────────
 
   async upsertLinkReceiver(receiver: LinkReceiverInput): Promise<void> {
-    const db = await getDb();
-    db.executeSync(
-      `INSERT INTO link_receivers
+    await ownedWrite(receiver.ownerPubky, db => {
+      db.executeSync(
+        `INSERT INTO link_receivers
         (owner_pubky, receiver_alias, receiver_path, marker_published, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?)
        ON CONFLICT(owner_pubky) DO UPDATE SET
@@ -537,15 +529,16 @@ export const StorageService = {
          receiver_path    = excluded.receiver_path,
          marker_published = excluded.marker_published,
          updated_at       = excluded.updated_at`,
-      [
-        receiver.ownerPubky,
-        receiver.receiverAlias,
-        receiver.receiverPath,
-        receiver.markerPublished ? 1 : 0,
-        now(),
-        now(),
-      ],
-    );
+        [
+          receiver.ownerPubky,
+          receiver.receiverAlias,
+          receiver.receiverPath,
+          receiver.markerPublished ? 1 : 0,
+          now(),
+          now(),
+        ],
+      );
+    });
   },
 
   async getLinkReceiver(ownerPubky: PubkyKey): Promise<LinkReceiver | null> {
@@ -559,8 +552,9 @@ export const StorageService = {
   },
 
   async deleteLinkReceiver(ownerPubky: PubkyKey): Promise<void> {
-    const db = await getDb();
-    db.executeSync('DELETE FROM link_receivers WHERE owner_pubky = ?', [ownerPubky]);
+    await ownedWrite(ownerPubky, db => {
+      db.executeSync('DELETE FROM link_receivers WHERE owner_pubky = ?', [ownerPubky]);
+    });
   },
 
   // ── Links (Paykit Encrypted Links) ────────────────────────────────────────
@@ -767,8 +761,9 @@ export const StorageService = {
   // ── Link messages (Paykit Encrypted Links) ────────────────────────────────
 
   async saveLinkMessage(message: LinkMessage): Promise<void> {
-    const db = await getDb();
-    insertLinkMessage(db, message);
+    await ownedWrite(message.ownerPubky, db => {
+      insertLinkMessage(db, message);
+    });
   },
 
   /**
@@ -947,21 +942,25 @@ export const StorageService = {
     eventId: string,
     state: LinkDeliveryState,
   ): Promise<void> {
-    const db = await getDb();
-    db.executeSync(
-      `UPDATE link_messages
+    await ownedWrite(ownerPubky, db => {
+      db.executeSync(
+        `UPDATE link_messages
        SET delivery_state = ?, updated_at = ?
        WHERE owner_pubky = ? AND sender_pubky = ? AND kind = ? AND event_id = ?`,
-      [state, now(), ownerPubky, senderPubky, kind, eventId],
-    );
+        [state, now(), ownerPubky, senderPubky, kind, eventId],
+      );
+    });
   },
 
   // ── Link stream items (inbound raw, before snapshot) ──────────────────────
 
   async saveLinkStreamItems(items: LinkStreamItemInput[]): Promise<void> {
     if (items.length === 0) return;
-    const db = await getDb();
-    transact(db, () => {
+    const ownerPubky = items[0]!.ownerPubky;
+    if (items.some(item => item.ownerPubky !== ownerPubky)) {
+      throw new LinkSendError('owner-changed', 'StorageService: mixed owners in stream persist');
+    }
+    await ownedTransact(ownerPubky, db => {
       for (const item of items) {
         db.executeSync(
           `INSERT OR IGNORE INTO link_stream_items
@@ -997,7 +996,12 @@ export const StorageService = {
 
   async markLinkStreamItemProcessed(id: string): Promise<void> {
     const db = await getDb();
-    db.executeSync('UPDATE link_stream_items SET processed = 1 WHERE id = ?', [id]);
+    const owner = db.executeSync('SELECT owner_pubky FROM link_stream_items WHERE id = ?', [id])
+      .rows?.[0]?.owner_pubky;
+    if (typeof owner !== 'string' || owner.length === 0) return;
+    await ownedWrite(owner, writeDb => {
+      writeDb.executeSync('UPDATE link_stream_items SET processed = 1 WHERE id = ?', [id]);
+    });
   },
 
   /**
@@ -1016,30 +1020,29 @@ export const StorageService = {
     keepOldestGroup = LINK_HELD_UNPROCESSED_CAP_PER_PEER,
     keepOldestOther = LINK_HELD_NON_GROUP_CAP_PER_PEER,
   ): Promise<number> {
-    const db = await getDb();
-    const result = db.executeSync(
-      `SELECT id, kind, raw_json FROM link_stream_items
+    return ownedWrite(ownerPubky, db => {
+      const result = db.executeSync(
+        `SELECT id, kind, raw_json FROM link_stream_items
        WHERE owner_pubky = ? AND peer_pubky = ? AND processed = 0
        ORDER BY received_at ASC, rowid ASC`,
-      [ownerPubky, peerPubky],
-    );
-    const groupIds: string[] = [];
-    const otherIds: string[] = [];
-    for (const row of result.rows ?? []) {
-      const id = String(row.id);
-      const storedKind = typeof row.kind === 'string' ? row.kind : null;
-      const rawJson = typeof row.raw_json === 'string' ? row.raw_json : '';
-      if (heldStreamItemIsGroup(storedKind, rawJson)) groupIds.push(id);
-      else otherIds.push(id);
-    }
-    const excess = [...groupIds.slice(keepOldestGroup), ...otherIds.slice(keepOldestOther)];
-    if (excess.length === 0) return 0;
-    transact(db, () => {
+        [ownerPubky, peerPubky],
+      );
+      const groupIds: string[] = [];
+      const otherIds: string[] = [];
+      for (const row of result.rows ?? []) {
+        const id = String(row.id);
+        const storedKind = typeof row.kind === 'string' ? row.kind : null;
+        const rawJson = typeof row.raw_json === 'string' ? row.raw_json : '';
+        if (heldStreamItemIsGroup(storedKind, rawJson)) groupIds.push(id);
+        else otherIds.push(id);
+      }
+      const excess = [...groupIds.slice(keepOldestGroup), ...otherIds.slice(keepOldestOther)];
+      if (excess.length === 0) return 0;
       for (const id of excess) {
         db.executeSync('UPDATE link_stream_items SET processed = 1 WHERE id = ?', [id]);
       }
+      return excess.length;
     });
-    return excess.length;
   },
 
   // ── Link read cursors (Paykit Encrypted Links) ────────────────────────────
@@ -1059,15 +1062,16 @@ export const StorageService = {
     conversationId: string,
     lastReadAt: number,
   ): Promise<void> {
-    const db = await getDb();
-    db.executeSync(
-      `INSERT INTO link_read_cursors (owner_pubky, conversation_id, last_read_at, updated_at)
+    await ownedWrite(ownerPubky, db => {
+      db.executeSync(
+        `INSERT INTO link_read_cursors (owner_pubky, conversation_id, last_read_at, updated_at)
        VALUES (?, ?, ?, ?)
        ON CONFLICT(owner_pubky, conversation_id) DO UPDATE SET
          last_read_at = MAX(last_read_at, excluded.last_read_at),
          updated_at   = excluded.updated_at`,
-      [ownerPubky, conversationId, lastReadAt, now()],
-    );
+        [ownerPubky, conversationId, lastReadAt, now()],
+      );
+    });
   },
 
   /**
@@ -1157,7 +1161,6 @@ export const StorageService = {
     if (snapshot.ownerPubky !== ownerPubky) {
       throw new Error('Backup belongs to a different account');
     }
-    const db = await getDb();
     for (const contact of snapshot.contacts) {
       if (contact.ownerPubky !== ownerPubky) continue;
       await StorageService.upsertContact(contact);
@@ -1189,26 +1192,28 @@ export const StorageService = {
       if (payment.ownerPubky !== ownerPubky) continue;
       await StorageService.savePaymentRequest(payment);
     }
-    for (const tip of snapshot.tipEndpoints) {
-      if (tip.ownerPubky !== ownerPubky) continue;
-      db.executeSync(
-        `INSERT OR REPLACE INTO tip_endpoints
+    await ownedWrite(ownerPubky, db => {
+      for (const tip of snapshot.tipEndpoints) {
+        if (tip.ownerPubky !== ownerPubky) continue;
+        db.executeSync(
+          `INSERT OR REPLACE INTO tip_endpoints
           (owner_pubky, peer_pubky, identifier, payload, updated_at,
            validation_status, invoice_amount, invoice_expires_at, payment_hash)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [
-          ownerPubky,
-          tip.peerPubky,
-          tip.identifier,
-          tip.payload,
-          tip.updatedAt,
-          tip.validationStatus,
-          tip.invoiceAmount,
-          tip.invoiceExpiresAt,
-          tip.paymentHash,
-        ],
-      );
-    }
+          [
+            ownerPubky,
+            tip.peerPubky,
+            tip.identifier,
+            tip.payload,
+            tip.updatedAt,
+            tip.validationStatus,
+            tip.invoiceAmount,
+            tip.invoiceExpiresAt,
+            tip.paymentHash,
+          ],
+        );
+      }
+    });
     for (const attachment of snapshot.attachments) {
       if (attachment.ownerPubky !== ownerPubky) continue;
       await StorageService.saveAttachment({
@@ -1345,8 +1350,9 @@ export const StorageService = {
   // ── Attachments (M4) ──────────────────────────────────────────────────────
 
   async saveAttachment(record: AttachmentRecord): Promise<void> {
-    const db = await getDb();
-    insertAttachment(db, record);
+    await ownedWrite(record.ownerPubky, db => {
+      insertAttachment(db, record);
+    });
   },
 
   async getAttachment(
@@ -1411,22 +1417,23 @@ export const StorageService = {
     eventId: string,
     patch: { resolveState: AttachmentResolveState; localCachePath?: string | null },
   ): Promise<void> {
-    const db = await getDb();
-    if (patch.localCachePath !== undefined) {
-      db.executeSync(
-        `UPDATE attachments
+    await ownedWrite(ownerPubky, db => {
+      if (patch.localCachePath !== undefined) {
+        db.executeSync(
+          `UPDATE attachments
          SET resolve_state = ?, local_cache_path = ?, updated_at = ?
          WHERE owner_pubky = ? AND sender_pubky = ? AND event_id = ?`,
-        [patch.resolveState, patch.localCachePath, now(), ownerPubky, senderPubky, eventId],
-      );
-      return;
-    }
-    db.executeSync(
-      `UPDATE attachments
+          [patch.resolveState, patch.localCachePath, now(), ownerPubky, senderPubky, eventId],
+        );
+        return;
+      }
+      db.executeSync(
+        `UPDATE attachments
        SET resolve_state = ?, updated_at = ?
        WHERE owner_pubky = ? AND sender_pubky = ? AND event_id = ?`,
-      [patch.resolveState, now(), ownerPubky, senderPubky, eventId],
-    );
+        [patch.resolveState, now(), ownerPubky, senderPubky, eventId],
+      );
+    });
   },
 
   async updateAttachmentDelivery(
@@ -1435,21 +1442,22 @@ export const StorageService = {
     eventId: string,
     deliveryState: AttachmentRecord['deliveryState'],
   ): Promise<void> {
-    const db = await getDb();
-    db.executeSync(
-      `UPDATE attachments
+    await ownedWrite(ownerPubky, db => {
+      db.executeSync(
+        `UPDATE attachments
        SET delivery_state = ?, updated_at = ?
        WHERE owner_pubky = ? AND sender_pubky = ? AND event_id = ?`,
-      [deliveryState, now(), ownerPubky, senderPubky, eventId],
-    );
+        [deliveryState, now(), ownerPubky, senderPubky, eventId],
+      );
+    });
   },
 
   // ── Group channels (M3, owner-scoped) ─────────────────────────────────────
 
   async upsertGroupChannel(channel: GroupChannel): Promise<void> {
-    const db = await getDb();
-    db.executeSync(
-      `INSERT INTO group_channels
+    await ownedWrite(channel.ownerPubky, db => {
+      db.executeSync(
+        `INSERT INTO group_channels
         (owner_pubky, channel_id, name, created_at, updated_at, created_by,
          is_public, last_message_at, membership_epoch)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -1457,18 +1465,19 @@ export const StorageService = {
          name              = excluded.name,
          updated_at        = excluded.updated_at,
          last_message_at   = excluded.last_message_at`,
-      [
-        channel.ownerPubky,
-        channel.channelId,
-        channel.name,
-        channel.createdAt,
-        channel.updatedAt,
-        channel.createdBy,
-        channel.isPublic ? 1 : 0,
-        channel.lastMessageAt,
-        channel.membershipEpoch,
-      ],
-    );
+        [
+          channel.ownerPubky,
+          channel.channelId,
+          channel.name,
+          channel.createdAt,
+          channel.updatedAt,
+          channel.createdBy,
+          channel.isPublic ? 1 : 0,
+          channel.lastMessageAt,
+          channel.membershipEpoch,
+        ],
+      );
+    });
   },
 
   /**
@@ -1479,9 +1488,8 @@ export const StorageService = {
     channel: GroupChannel;
     members: GroupMember[];
   }): Promise<'inserted' | 'exists' | 'founder-mismatch'> {
-    const db = await getDb();
     let outcome: 'inserted' | 'exists' | 'founder-mismatch' = 'exists';
-    transact(db, () => {
+    await ownedTransact(input.channel.ownerPubky, db => {
       const existing = db.executeSync(
         'SELECT created_by FROM group_channels WHERE owner_pubky = ? AND channel_id = ?',
         [input.channel.ownerPubky, input.channel.channelId],
@@ -1520,13 +1528,14 @@ export const StorageService = {
     channelId: string,
     name: string,
   ): Promise<void> {
-    const db = await getDb();
-    db.executeSync(
-      `UPDATE group_channels
+    await ownedWrite(ownerPubky, db => {
+      db.executeSync(
+        `UPDATE group_channels
        SET name = ?, updated_at = ?
        WHERE owner_pubky = ? AND channel_id = ?`,
-      [name, now(), ownerPubky, channelId],
-    );
+        [name, now(), ownerPubky, channelId],
+      );
+    });
   },
 
   async getGroupChannel(ownerPubky: PubkyKey, channelId: string): Promise<GroupChannel | null> {
@@ -1601,35 +1610,37 @@ export const StorageService = {
     channelId: string,
     lastMessageAt: number,
   ): Promise<void> {
-    const db = await getDb();
-    db.executeSync(
-      `UPDATE group_channels
+    await ownedWrite(ownerPubky, db => {
+      db.executeSync(
+        `UPDATE group_channels
        SET last_message_at = ?, updated_at = ?
        WHERE owner_pubky = ? AND channel_id = ?`,
-      [lastMessageAt, now(), ownerPubky, channelId],
-    );
+        [lastMessageAt, now(), ownerPubky, channelId],
+      );
+    });
   },
 
   async bumpGroupMembershipEpoch(ownerPubky: PubkyKey, channelId: string): Promise<number> {
-    const db = await getDb();
-    const ts = now();
-    db.executeSync(
-      `UPDATE group_channels
+    return ownedWrite(ownerPubky, db => {
+      const ts = now();
+      db.executeSync(
+        `UPDATE group_channels
        SET membership_epoch = membership_epoch + 1, updated_at = ?
        WHERE owner_pubky = ? AND channel_id = ?`,
-      [ts, ownerPubky, channelId],
-    );
-    const result = db.executeSync(
-      'SELECT membership_epoch FROM group_channels WHERE owner_pubky = ? AND channel_id = ?',
-      [ownerPubky, channelId],
-    );
-    return (result.rows?.[0]?.membership_epoch as number) ?? 0;
+        [ts, ownerPubky, channelId],
+      );
+      const result = db.executeSync(
+        'SELECT membership_epoch FROM group_channels WHERE owner_pubky = ? AND channel_id = ?',
+        [ownerPubky, channelId],
+      );
+      return (result.rows?.[0]?.membership_epoch as number) ?? 0;
+    });
   },
 
   async upsertGroupMember(member: GroupMember): Promise<void> {
-    const db = await getDb();
-    db.executeSync(
-      `INSERT INTO group_members
+    await ownedWrite(member.ownerPubky, db => {
+      db.executeSync(
+        `INSERT INTO group_members
         (owner_pubky, channel_id, member_pubky, role, added_at, removed_at, status)
        VALUES (?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(owner_pubky, channel_id, member_pubky) DO UPDATE SET
@@ -1637,16 +1648,17 @@ export const StorageService = {
          added_at    = excluded.added_at,
          removed_at  = excluded.removed_at,
          status      = excluded.status`,
-      [
-        member.ownerPubky,
-        member.channelId,
-        member.memberPubky,
-        member.role,
-        member.addedAt,
-        member.removedAt,
-        member.status,
-      ],
-    );
+        [
+          member.ownerPubky,
+          member.channelId,
+          member.memberPubky,
+          member.role,
+          member.addedAt,
+          member.removedAt,
+          member.status,
+        ],
+      );
+    });
   },
 
   async getGroupMember(
@@ -1699,16 +1711,17 @@ export const StorageService = {
   },
 
   async saveGroupMessage(message: GroupMessage): Promise<boolean> {
-    const db = await getDb();
-    const existed = await this.hasGroupMessage(
-      message.ownerPubky,
-      message.channelId,
-      message.senderPubky,
-      message.eventId,
-    );
-    if (existed) return false;
-    insertGroupMessage(db, message);
-    return true;
+    return ownedWrite(message.ownerPubky, db => {
+      const existed = db.executeSync(
+        `SELECT 1 FROM group_messages
+       WHERE owner_pubky = ? AND channel_id = ? AND sender_pubky = ? AND event_id = ?
+       LIMIT 1`,
+        [message.ownerPubky, message.channelId, message.senderPubky, message.eventId],
+      );
+      if ((existed.rows?.length ?? 0) > 0) return false;
+      insertGroupMessage(db, message);
+      return true;
+    });
   },
 
   async hasGroupMessage(
@@ -1792,13 +1805,14 @@ export const StorageService = {
     eventId: string,
     receivedAt: number,
   ): Promise<void> {
-    const db = await getDb();
-    db.executeSync(
-      `INSERT OR IGNORE INTO group_seen_events
+    await ownedWrite(ownerPubky, db => {
+      db.executeSync(
+        `INSERT OR IGNORE INTO group_seen_events
         (owner_pubky, channel_id, sender_pubky, event_id, received_at)
        VALUES (?, ?, ?, ?, ?)`,
-      [ownerPubky, channelId, senderPubky, eventId, receivedAt],
-    );
+        [ownerPubky, channelId, senderPubky, eventId, receivedAt],
+      );
+    });
   },
 
   async hasGroupEventSeen(
@@ -1818,9 +1832,8 @@ export const StorageService = {
   },
 
   async saveGroupDeferred(event: GroupDeferredEvent): Promise<void> {
-    const db = await getDb();
     const cutoff = now() - GROUP_DEFERRED_TTL_MS;
-    transact(db, () => {
+    await ownedTransact(event.ownerPubky, db => {
       const expired = db.executeSync(
         `SELECT sender_pubky, event_id, received_at FROM group_deferred_events
          WHERE owner_pubky = ? AND channel_id = ? AND sender_pubky = ? AND received_at < ?`,
@@ -1940,12 +1953,13 @@ export const StorageService = {
     senderPubky: PubkyKey,
     eventId: string,
   ): Promise<void> {
-    const db = await getDb();
-    db.executeSync(
-      `DELETE FROM group_deferred_events
+    await ownedWrite(ownerPubky, db => {
+      db.executeSync(
+        `DELETE FROM group_deferred_events
        WHERE owner_pubky = ? AND channel_id = ? AND sender_pubky = ? AND event_id = ?`,
-      [ownerPubky, channelId, senderPubky, eventId],
-    );
+        [ownerPubky, channelId, senderPubky, eventId],
+      );
+    });
   },
 
   /**
@@ -1954,11 +1968,12 @@ export const StorageService = {
    * cannot promote declined-peer content into `group_messages`.
    */
   async deleteGroupDeferredForSender(ownerPubky: PubkyKey, senderPubky: PubkyKey): Promise<void> {
-    const db = await getDb();
-    db.executeSync(`DELETE FROM group_deferred_events WHERE owner_pubky = ? AND sender_pubky = ?`, [
-      ownerPubky,
-      senderPubky,
-    ]);
+    await ownedWrite(ownerPubky, db => {
+      db.executeSync(
+        `DELETE FROM group_deferred_events WHERE owner_pubky = ? AND sender_pubky = ?`,
+        [ownerPubky, senderPubky],
+      );
+    });
   },
 
   /**
@@ -1967,11 +1982,12 @@ export const StorageService = {
    * Does not touch already-persisted `group_messages`.
    */
   async deleteGroupSeenEventsForSender(ownerPubky: PubkyKey, senderPubky: PubkyKey): Promise<void> {
-    const db = await getDb();
-    db.executeSync(`DELETE FROM group_seen_events WHERE owner_pubky = ? AND sender_pubky = ?`, [
-      ownerPubky,
-      senderPubky,
-    ]);
+    await ownedWrite(ownerPubky, db => {
+      db.executeSync(`DELETE FROM group_seen_events WHERE owner_pubky = ? AND sender_pubky = ?`, [
+        ownerPubky,
+        senderPubky,
+      ]);
+    });
   },
 
   async listGroupMessages(
@@ -2021,13 +2037,14 @@ export const StorageService = {
     eventId: string,
     state: LinkDeliveryState,
   ): Promise<void> {
-    const db = await getDb();
-    db.executeSync(
-      `UPDATE group_messages
+    await ownedWrite(ownerPubky, db => {
+      db.executeSync(
+        `UPDATE group_messages
        SET delivery_state = ?, updated_at = ?
        WHERE owner_pubky = ? AND channel_id = ? AND sender_pubky = ? AND event_id = ?`,
-      [state, now(), ownerPubky, channelId, senderPubky, eventId],
-    );
+        [state, now(), ownerPubky, channelId, senderPubky, eventId],
+      );
+    });
   },
 
   async applyGroupMessageEdit(
@@ -2038,13 +2055,14 @@ export const StorageService = {
     body: string,
     editedAt: number,
   ): Promise<void> {
-    const db = await getDb();
-    db.executeSync(
-      `UPDATE group_messages
+    await ownedWrite(ownerPubky, db => {
+      db.executeSync(
+        `UPDATE group_messages
        SET body = ?, edited_at = ?, updated_at = ?
        WHERE owner_pubky = ? AND channel_id = ? AND sender_pubky = ? AND event_id = ?`,
-      [body, editedAt, now(), ownerPubky, channelId, senderPubky, eventId],
-    );
+        [body, editedAt, now(), ownerPubky, channelId, senderPubky, eventId],
+      );
+    });
   },
 
   async tombstoneGroupMessage(
@@ -2053,13 +2071,14 @@ export const StorageService = {
     senderPubky: PubkyKey,
     eventId: string,
   ): Promise<void> {
-    const db = await getDb();
-    db.executeSync(
-      `UPDATE group_messages
+    await ownedWrite(ownerPubky, db => {
+      db.executeSync(
+        `UPDATE group_messages
        SET deleted = 1, updated_at = ?
        WHERE owner_pubky = ? AND channel_id = ? AND sender_pubky = ? AND event_id = ?`,
-      [now(), ownerPubky, channelId, senderPubky, eventId],
-    );
+        [now(), ownerPubky, channelId, senderPubky, eventId],
+      );
+    });
   },
 
   /**
@@ -2187,8 +2206,9 @@ export const StorageService = {
   },
 
   async upsertGroupFanoutOutcome(outcome: GroupFanoutOutcome): Promise<void> {
-    const db = await getDb();
-    upsertFanoutOutcomeLocked(db, outcome);
+    await ownedWrite(outcome.ownerPubky, db => {
+      upsertFanoutOutcomeLocked(db, outcome);
+    });
   },
 
   async listGroupFanoutOutcomes(
@@ -2231,21 +2251,21 @@ export const StorageService = {
   },
 
   async insertBlockedPeer(ownerPubky: PubkyKey, peerPubky: PubkyKey): Promise<void> {
-    const db = await getDb();
-    db.executeSync(
-      `INSERT INTO blocked_peers (owner_pubky, peer_pubky, blocked_at, cleanup_pending)
+    await ownedWrite(ownerPubky, db => {
+      db.executeSync(
+        `INSERT INTO blocked_peers (owner_pubky, peer_pubky, blocked_at, cleanup_pending)
        VALUES (?, ?, ?, 1)
        ON CONFLICT(owner_pubky, peer_pubky) DO UPDATE SET
          blocked_at = excluded.blocked_at,
          cleanup_pending = 1`,
-      [ownerPubky, peerPubky, now()],
-    );
+        [ownerPubky, peerPubky, now()],
+      );
+    });
   },
 
   async insertBlockedPeers(ownerPubky: PubkyKey, peerPubkys: readonly PubkyKey[]): Promise<void> {
-    const db = await getDb();
     const ts = now();
-    transact(db, () => {
+    await ownedTransact(ownerPubky, db => {
       for (const peerPubky of peerPubkys) {
         db.executeSync(
           `INSERT OR IGNORE INTO blocked_peers (owner_pubky, peer_pubky, blocked_at)
@@ -2257,11 +2277,12 @@ export const StorageService = {
   },
 
   async deleteBlockedPeer(ownerPubky: PubkyKey, peerPubky: PubkyKey): Promise<void> {
-    const db = await getDb();
-    db.executeSync('DELETE FROM blocked_peers WHERE owner_pubky = ? AND peer_pubky = ?', [
-      ownerPubky,
-      peerPubky,
-    ]);
+    await ownedWrite(ownerPubky, db => {
+      db.executeSync('DELETE FROM blocked_peers WHERE owner_pubky = ? AND peer_pubky = ?', [
+        ownerPubky,
+        peerPubky,
+      ]);
+    });
   },
 
   async listBlockedPeers(ownerPubky: PubkyKey): Promise<PubkyKey[]> {
@@ -2298,20 +2319,22 @@ export const StorageService = {
     peerPubky: PubkyKey,
     pending: boolean,
   ): Promise<void> {
-    const db = await getDb();
-    db.executeSync(
-      `UPDATE blocked_peers
+    await ownedWrite(ownerPubky, db => {
+      db.executeSync(
+        `UPDATE blocked_peers
        SET cleanup_pending = ?
        WHERE owner_pubky = ? AND peer_pubky = ?`,
-      [pending ? 1 : 0, ownerPubky, peerPubky],
-    );
+        [pending ? 1 : 0, ownerPubky, peerPubky],
+      );
+    });
   },
 
   // ── Payments (M5) ─────────────────────────────────────────────────────────
 
   async savePaymentRequest(record: PaymentRequestRecord): Promise<void> {
-    const db = await getDb();
-    insertPaymentRequest(db, record);
+    await ownedWrite(record.ownerPubky, db => {
+      insertPaymentRequest(db, record);
+    });
   },
 
   async getPaymentRequest(
@@ -2350,14 +2373,15 @@ export const StorageService = {
     expectedStatuses: readonly PaymentStatus[],
     patch: PaymentRequestPatch,
   ): Promise<boolean> {
-    const db = await getDb();
-    return compareAndSetPaymentRequestRow(
-      db,
-      ownerPubky,
-      peerPubky,
-      paymentRequestId,
-      expectedStatuses,
-      patch,
+    return ownedWrite(ownerPubky, db =>
+      compareAndSetPaymentRequestRow(
+        db,
+        ownerPubky,
+        peerPubky,
+        paymentRequestId,
+        expectedStatuses,
+        patch,
+      ),
     );
   },
 
@@ -2375,9 +2399,8 @@ export const StorageService = {
     event: PaymentEventRecord;
     sendIntent: { message: LinkMessage; queueItem: DeliveryQueueItem };
   }): Promise<boolean> {
-    const db = await getDb();
     try {
-      transact(db, () => {
+      await ownedTransact(input.ownerPubky, db => {
         const applied = compareAndSetPaymentRequestRow(
           db,
           input.ownerPubky,
@@ -2403,8 +2426,7 @@ export const StorageService = {
     event: PaymentEventRecord;
     sendIntent: { message: LinkMessage; queueItem: DeliveryQueueItem };
   }): Promise<void> {
-    const db = await getDb();
-    transact(db, () => {
+    await ownedTransact(input.record.ownerPubky, db => {
       insertPaymentRequest(db, input.record);
       insertPaymentEvent(db, input.event);
       insertLinkMessage(db, input.sendIntent.message);
@@ -2416,8 +2438,7 @@ export const StorageService = {
     event: PaymentEventRecord;
     sendIntent: { message: LinkMessage; queueItem: DeliveryQueueItem };
   }): Promise<void> {
-    const db = await getDb();
-    transact(db, () => {
+    await ownedTransact(input.event.ownerPubky, db => {
       insertPaymentEvent(db, input.event);
       insertLinkMessage(db, input.sendIntent.message);
       insertQueueItem(db, input.sendIntent.queueItem);
@@ -2436,12 +2457,13 @@ export const StorageService = {
   },
 
   async clearPaymentPendingEvent(ownerPubky: PubkyKey, pendingEventId: string): Promise<void> {
-    const db = await getDb();
-    db.executeSync(
-      `UPDATE payment_requests SET pending_event_id = NULL, updated_at = ?
+    await ownedWrite(ownerPubky, db => {
+      db.executeSync(
+        `UPDATE payment_requests SET pending_event_id = NULL, updated_at = ?
        WHERE owner_pubky = ? AND pending_event_id = ?`,
-      [now(), ownerPubky, pendingEventId],
-    );
+        [now(), ownerPubky, pendingEventId],
+      );
+    });
   },
 
   async getLinkMessageByEventId(
@@ -2474,13 +2496,14 @@ export const StorageService = {
     paymentRequestId: string,
     paymentHash: string,
   ): Promise<void> {
-    const db = await getDb();
-    db.executeSync(
-      `UPDATE payment_requests
+    await ownedWrite(ownerPubky, db => {
+      db.executeSync(
+        `UPDATE payment_requests
        SET displayed_payment_hash = ?, updated_at = ?
        WHERE owner_pubky = ? AND peer_pubky = ? AND payment_request_id = ?`,
-      [paymentHash, now(), ownerPubky, peerPubky, paymentRequestId],
-    );
+        [paymentHash, now(), ownerPubky, peerPubky, paymentRequestId],
+      );
+    });
   },
 
   async getTipEndpoint(
@@ -2499,30 +2522,31 @@ export const StorageService = {
   },
 
   async savePaymentEvent(record: PaymentEventRecord): Promise<boolean> {
-    const db = await getDb();
-    const before = db.executeSync(
-      `SELECT 1 FROM payment_events
+    return ownedWrite(record.ownerPubky, db => {
+      const before = db.executeSync(
+        `SELECT 1 FROM payment_events
        WHERE owner_pubky = ? AND conversation_id = ? AND sender_pubky = ? AND event_id = ?`,
-      [record.ownerPubky, record.conversationId, record.senderPubky, record.eventId],
-    );
-    if ((before.rows?.length ?? 0) > 0) return false;
-    db.executeSync(
-      `INSERT OR IGNORE INTO payment_events
+        [record.ownerPubky, record.conversationId, record.senderPubky, record.eventId],
+      );
+      if ((before.rows?.length ?? 0) > 0) return false;
+      db.executeSync(
+        `INSERT OR IGNORE INTO payment_events
         (owner_pubky, conversation_id, sender_pubky, event_id, kind,
          payment_request_id, applied, received_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        record.ownerPubky,
-        record.conversationId,
-        record.senderPubky,
-        record.eventId,
-        record.kind,
-        record.paymentRequestId,
-        record.applied ? 1 : 0,
-        record.receivedAt,
-      ],
-    );
-    return true;
+        [
+          record.ownerPubky,
+          record.conversationId,
+          record.senderPubky,
+          record.eventId,
+          record.kind,
+          record.paymentRequestId,
+          record.applied ? 1 : 0,
+          record.receivedAt,
+        ],
+      );
+      return true;
+    });
   },
 
   async hasPaymentEvent(
@@ -2554,8 +2578,7 @@ export const StorageService = {
     }[],
     updatedAt: number,
   ): Promise<void> {
-    const db = await getDb();
-    transact(db, () => {
+    await ownedTransact(ownerPubky, db => {
       db.executeSync('DELETE FROM tip_endpoints WHERE owner_pubky = ? AND peer_pubky = ?', [
         ownerPubky,
         peerPubky,

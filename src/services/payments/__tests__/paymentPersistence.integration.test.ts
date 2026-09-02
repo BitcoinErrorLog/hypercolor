@@ -25,6 +25,7 @@ import { setDbForTests } from '../../../db';
 import { runMigrations } from '../../../db/migrations';
 import { openMemoryDb } from '../../../db/__tests__/betterSqliteAdapter';
 import { StorageService } from '../../StorageService';
+import { paintOwner } from '../../paintedOwner';
 import {
   EMPTY_PAYMENT_RECORD_EXTRAS,
   ENDPOINT_LIGHTNING_BOLT11,
@@ -114,6 +115,7 @@ describe('payment persist + CAS (real SQL)', () => {
     const db = openMemoryDb();
     setDbForTests(db);
     await runMigrations(db);
+    paintOwner(OWNER);
     await StorageService.savePaymentRequest(pendingRow());
 
     const first = await StorageService.compareAndSetPaymentRequest(
@@ -141,6 +143,7 @@ describe('payment persist + CAS (real SQL)', () => {
     const db = openMemoryDb();
     setDbForTests(db);
     await runMigrations(db);
+    paintOwner(OWNER);
     await StorageService.savePaymentRequest(pendingRow());
 
     const applied = await StorageService.persistPaymentOutboundTransition({

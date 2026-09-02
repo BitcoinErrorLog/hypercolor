@@ -9,6 +9,7 @@ import { runMigrations } from '../../../db/migrations';
 import { openMemoryDb } from '../../../db/__tests__/betterSqliteAdapter';
 import { StorageService } from '../../StorageService';
 import { KeyStore } from '../../KeyStore';
+import { clearPaintedOwner, paintOwner } from '../../paintedOwner';
 import { LinkService } from '../../link/LinkService';
 import { PubkyService } from '../../PubkyService';
 import { applyGroupInbound } from '../applyGroupInbound';
@@ -81,6 +82,7 @@ describe('GroupService', () => {
     setDbForTests(db);
     await runMigrations(db);
     mockedKeyStore.getPubky.mockReturnValue(OWNER);
+    paintOwner(OWNER);
     mockedLink.sendPersistedLinkJson.mockImplementation(async input => {
       await StorageService.finalizeGroupFanoutSend({
         ownerPubky: OWNER,
@@ -103,6 +105,7 @@ describe('GroupService', () => {
     db?.close();
     db = null;
     setDbForTests(null);
+    clearPaintedOwner();
     jest.restoreAllMocks();
   });
 
@@ -425,6 +428,7 @@ describe('GroupService', () => {
     expect(sent.body).toBe('hello public');
 
     mockedKeyStore.getPubky.mockReturnValue(PEER_A);
+    paintOwner(PEER_A);
     const joined = await GroupService.joinPublicChannel(created.channelId);
     expect(joined).toEqual(
       expect.objectContaining({

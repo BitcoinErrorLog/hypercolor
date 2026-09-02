@@ -21,6 +21,7 @@ import {
   type PaymentStatus,
 } from '../../types/payment';
 import { StorageService } from '../StorageService';
+import { paintOwner } from '../paintedOwner';
 import { applyPaymentInbound } from '../payments/applyPaymentInbound';
 import {
   cleanupNativeParties,
@@ -272,6 +273,7 @@ export async function runLinkLiveProof(
 
     if (
       !(await record('receive-payment-request-b', async () => {
+        paintOwner(pubkyB);
         const raw = await receivePaymentJson(
           native,
           partyB,
@@ -309,6 +311,7 @@ export async function runLinkLiveProof(
 
     if (
       !(await record('send-payment-acceptance-b', async () => {
+        paintOwner(pubkyB);
         await StorageService.compareAndSetPaymentRequest(
           pubkyB,
           pubkyA,
@@ -328,6 +331,7 @@ export async function runLinkLiveProof(
 
     if (
       !(await record('receive-payment-acceptance-a', async () => {
+        paintOwner(pubkyA);
         const raw = await receivePaymentJson(
           native,
           partyA,
@@ -368,6 +372,7 @@ export async function runLinkLiveProof(
 
     if (
       !(await record('send-payment-proof-b', async () => {
+        paintOwner(pubkyB);
         await StorageService.compareAndSetPaymentRequest(
           pubkyB,
           pubkyA,
@@ -387,6 +392,7 @@ export async function runLinkLiveProof(
 
     if (
       !(await record('receive-payment-proof-a', async () => {
+        paintOwner(pubkyA);
         const raw = await receivePaymentJson(
           native,
           partyA,
@@ -440,6 +446,7 @@ export async function runLinkLiveProof(
 
     if (
       !(await record('receive-payment-request-2-b', async () => {
+        paintOwner(pubkyB);
         const raw = await receivePaymentJson(
           native,
           partyB,
@@ -478,6 +485,7 @@ export async function runLinkLiveProof(
 
     if (
       !(await record('send-payment-rejection-b', async () => {
+        paintOwner(pubkyB);
         await StorageService.compareAndSetPaymentRequest(
           pubkyB,
           pubkyA,
@@ -497,6 +505,7 @@ export async function runLinkLiveProof(
 
     if (
       !(await record('receive-payment-rejection-a', async () => {
+        paintOwner(pubkyA);
         const raw = await receivePaymentJson(
           native,
           partyA,
@@ -554,6 +563,7 @@ async function persistOutboundRequest(
   },
   nowMs: number,
 ): Promise<void> {
+  paintOwner(ownerPubky);
   await StorageService.savePaymentRequest({
     ownerPubky,
     peerPubky,

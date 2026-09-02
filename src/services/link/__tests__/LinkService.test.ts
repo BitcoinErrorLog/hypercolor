@@ -1424,6 +1424,8 @@ describe('LinkService', () => {
       });
       await expect(
         LinkService.sendPersistedLinkJson({
+          ownerPubky: OWNER,
+          senderPubky: OWNER,
           peerPubky: PEER,
           queueId: QUEUE_ID,
           kind: GROUP_MESSAGE_KIND,

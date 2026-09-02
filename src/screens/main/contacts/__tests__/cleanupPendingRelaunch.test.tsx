@@ -26,6 +26,7 @@ import { setDbForTests } from '../../../../db';
 import { runMigrations } from '../../../../db/migrations';
 import { openMemoryDb } from '../../../../db/__tests__/betterSqliteAdapter';
 import { StorageService } from '../../../../services/StorageService';
+import { paintOwner } from '../../../../services/paintedOwner';
 import { FollowsImportSettings } from '../../../../services/contacts/followsImportSettings';
 import { CONTACTS_COPY } from '../../../../ui/contacts/contactsCopy';
 import { ContactDetailView } from '../ContactDetailView';
@@ -42,6 +43,7 @@ describe('cleanup-pending relaunch', () => {
     db = openMemoryDb();
     setDbForTests(db);
     await runMigrations(db);
+    paintOwner(OWNER);
   });
 
   afterEach(() => {

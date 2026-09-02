@@ -105,6 +105,8 @@ export const PaymentService = {
         sendIntent,
       });
       await LinkService.attemptPersistedSend({
+        ownerPubky: owner,
+        senderPubky: owner,
         peerPubky: peer,
         kind: PAYKIT_PAYMENT_REQUEST_KIND,
         eventId,
@@ -212,6 +214,8 @@ export const PaymentService = {
         throw new PaymentError('conflict', 'already transitioned');
       }
       await LinkService.attemptPersistedSend({
+        ownerPubky: owner,
+        senderPubky: owner,
         peerPubky: peer,
         kind: PAYKIT_PAYMENT_PROOF_KIND,
         eventId,
@@ -296,6 +300,8 @@ export const PaymentService = {
         sendIntent,
       });
       await LinkService.attemptPersistedSend({
+        ownerPubky: owner,
+        senderPubky: owner,
         peerPubky: peer,
         kind: PAYKIT_PRIVATE_PAYMENT_LIST_KIND,
         eventId,
@@ -386,6 +392,8 @@ async function localTransition(
       throw new PaymentError('conflict', 'already transitioned');
     }
     await LinkService.attemptPersistedSend({
+      ownerPubky: owner,
+      senderPubky: owner,
       peerPubky: peer,
       kind: built.envelope.kind,
       eventId,

@@ -48,6 +48,7 @@ import { KeyStore } from '../../KeyStore';
 import { PaykitLinkNative } from '../../link/PaykitLinkNative';
 import { PubkyService } from '../../PubkyService';
 import { StorageService } from '../../StorageService';
+import { clearPaintedOwner, paintOwner } from '../../paintedOwner';
 import { backupLatestUrl, BackupService, OWNER_BACKUP_VERSION } from '../BackupService';
 import type { OwnerBackupSnapshot } from '../snapshot';
 
@@ -69,6 +70,7 @@ async function openHarness(): Promise<void> {
   setDbForTests(db);
   await runMigrations(db);
   mockedKeyStore.getPubky.mockReturnValue(OWNER);
+  paintOwner(OWNER);
 }
 
 async function seedOwnerAndForeign(): Promise<void> {
@@ -83,6 +85,7 @@ async function seedOwnerAndForeign(): Promise<void> {
     addedManually: true,
     firstSeenAt: 10,
   });
+  paintOwner(OTHER);
   await StorageService.upsertContact({
     pubky: PEER,
     ownerPubky: OTHER,
@@ -94,6 +97,7 @@ async function seedOwnerAndForeign(): Promise<void> {
     addedManually: false,
     firstSeenAt: 11,
   });
+  paintOwner(OWNER);
   await StorageService.saveLinkMessage({
     ownerPubky: OWNER,
     eventId: EVENT,
@@ -108,6 +112,7 @@ async function seedOwnerAndForeign(): Promise<void> {
     receivedAt: null,
     deliveryState: 'sent',
   });
+  paintOwner(OTHER);
   await StorageService.saveLinkMessage({
     ownerPubky: OTHER,
     eventId: EVENT,
@@ -122,6 +127,7 @@ async function seedOwnerAndForeign(): Promise<void> {
     receivedAt: null,
     deliveryState: 'sent',
   });
+  paintOwner(OWNER);
   await StorageService.setLinkReadCursor(OWNER, `dm:${PEER}`, 20);
   await StorageService.saveAttachment({
     ownerPubky: OWNER,
@@ -189,6 +195,7 @@ describe('BackupService', () => {
 
   afterEach(() => {
     setDbForTests(null);
+    clearPaintedOwner();
   });
 
   it('export collects owner-scoped rows only and strips attachment secrets', async () => {

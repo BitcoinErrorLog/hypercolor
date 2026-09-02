@@ -2,17 +2,47 @@ import type { PubkyKey } from '../types';
 import { KeyStore } from './KeyStore';
 
 /**
- * Painted session identity for owner-conditional commits. The auth store
- * registers a reader at module load; SQL tests that never import authStore
- * fall through to KeyStore, then to "no session" (skip the commit guard).
+ * Painted session identity for owner-conditional commits.
+ *
+ * Precedence: explicit signing-out → explicit owner paint → auth store →
+ * KeyStore. Absence (null) is fail-closed at commit whenever a write names
+ * an expected owner. Schema / pre-auth tests must {@link paintOwner}, not
+ * rely on a production skip.
  */
+export const SIGNING_OUT = 'signing-out';
+
+export type PaintedOwner = PubkyKey | typeof SIGNING_OUT | null;
+
+type Overlay = { kind: 'unset' } | { kind: 'owner'; pubky: PubkyKey } | { kind: 'signing-out' };
+
+let overlay: Overlay = { kind: 'unset' };
 let authOwnerReader: (() => PubkyKey | null) | null = null;
 
 export function registerAuthOwnerReader(reader: () => PubkyKey | null): void {
   authOwnerReader = reader;
 }
 
-export function activeOwnerAtCommit(): PubkyKey | null {
+/** Active identity for commit guards. Call on sign-in / session adopt. */
+export function paintOwner(pubky: PubkyKey): void {
+  overlay = { kind: 'owner', pubky };
+}
+
+/**
+ * Distinct no-owner state. Paint synchronously before any sign-out await
+ * so in-flight owned writes cannot interleave with teardown.
+ */
+export function paintSigningOut(): void {
+  overlay = { kind: 'signing-out' };
+}
+
+/** Drop the overlay so auth / KeyStore (or null) are the paint again. */
+export function clearPaintedOwner(): void {
+  overlay = { kind: 'unset' };
+}
+
+export function activeOwnerAtCommit(): PaintedOwner {
+  if (overlay.kind === 'signing-out') return SIGNING_OUT;
+  if (overlay.kind === 'owner') return overlay.pubky;
   if (authOwnerReader) {
     try {
       const fromAuth = authOwnerReader();

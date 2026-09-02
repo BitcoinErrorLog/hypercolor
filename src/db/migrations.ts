@@ -65,22 +65,12 @@ export async function runMigrations(db: SqlExecutor): Promise<void> {
     return;
   }
 
-  // CURRENT_VERSION stays 16 while v16 statements remain additive and
-  // idempotent. Databases that already recorded user_version=16 must still
-  // pick up in-version DDL (blocked_peers.cleanup_pending).
+  // CURRENT_VERSION stays 16. Databases already at 16 only need the
+  // blocked_peers.cleanup_pending column if a pre-column v16 table is
+  // still on disk. Do not replay the full v16 transaction (or its
+  // duplicate-column ALTER) on every launch.
   if (currentVersion === CURRENT_VERSION) {
-    const latest = MIGRATIONS.find(m => m.version === CURRENT_VERSION);
-    if (!latest) return;
-    db.executeSync('BEGIN');
-    try {
-      for (const statement of latest.statements) {
-        applyStatement(db, statement);
-      }
-      db.executeSync('COMMIT');
-    } catch (err) {
-      db.executeSync('ROLLBACK');
-      throw new Error(`Migration v${latest.version} reconcile failed: ${(err as Error).message}`);
-    }
+    ensureBlockedPeersCleanupPending(db);
     return;
   }
 
@@ -102,10 +92,17 @@ export async function runMigrations(db: SqlExecutor): Promise<void> {
   }
 }
 
+function ensureBlockedPeersCleanupPending(db: SqlExecutor): void {
+  const info = db.executeSync('PRAGMA table_info(blocked_peers)');
+  const names = (info.rows ?? []).map(row => String(row.name));
+  if (names.length === 0 || names.includes('cleanup_pending')) return;
+  db.executeSync('ALTER TABLE blocked_peers ADD COLUMN cleanup_pending INTEGER NOT NULL DEFAULT 0');
+}
+
 /**
- * `ALTER TABLE … ADD COLUMN` is not `IF NOT EXISTS`. Re-running v16 after a
- * CREATE that already includes the column (or a previous ALTER) must not
- * fail the whole migration.
+ * `ALTER TABLE … ADD COLUMN` is not `IF NOT EXISTS`. The v16 migration
+ * CREATE already includes `cleanup_pending`; the following ALTER is for
+ * databases that created `blocked_peers` before that column existed.
  */
 function applyStatement(db: SqlExecutor, statement: string): void {
   try {

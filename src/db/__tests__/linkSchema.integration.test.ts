@@ -61,6 +61,7 @@ import {
 } from '../schema';
 import { StorageService } from '../../services/StorageService';
 import { KeyStore } from '../../services/KeyStore';
+import { paintOwner, clearPaintedOwner } from '../../services/paintedOwner';
 import { CHAT_MESSAGE_KIND, type HandshakeBudgetInput } from '../../types/link';
 import { GROUP_MEMBERSHIP_KIND, GROUP_MESSAGE_KIND } from '../../types/group';
 import { EMPTY_PAYMENT_RECORD_EXTRAS } from '../../types/payment';
@@ -96,12 +97,26 @@ afterEach(() => {
   }
   liveDbs.length = 0;
   setDbForTests(null);
+  clearPaintedOwner();
+});
+
+beforeEach(() => {
+  paintOwner(OWNER);
 });
 
 const OWNER = 'a'.repeat(52);
 const PEER = 'z'.repeat(52);
 const OTHER = 'b'.repeat(52);
 const EVENT = '00000000-0000-4000-8000-000000000001';
+
+async function asOwner<T>(owner: string, fn: () => Promise<T>): Promise<T> {
+  paintOwner(owner);
+  try {
+    return await fn();
+  } finally {
+    paintOwner(OWNER);
+  }
+}
 
 function applyV3(db: ReturnType<typeof openMemoryDb>): void {
   for (const statement of [
@@ -489,16 +504,18 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
       addedManually: true,
       firstSeenAt: 10,
     });
-    await StorageService.upsertContact({
-      pubky: PEER,
-      ownerPubky: OTHER,
-      trustScore: 0.9,
-      isFollowing: false,
-      isFollower: true,
-      isMutual: false,
-      addedManually: false,
-      firstSeenAt: 11,
-    });
+    await asOwner(OTHER, () =>
+      StorageService.upsertContact({
+        pubky: PEER,
+        ownerPubky: OTHER,
+        trustScore: 0.9,
+        isFollowing: false,
+        isFollower: true,
+        isMutual: false,
+        addedManually: false,
+        firstSeenAt: 11,
+      }),
+    );
 
     const forA = await StorageService.getContact(PEER, OWNER);
     const forB = await StorageService.getContact(PEER, OTHER);
@@ -519,7 +536,7 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
       }),
     );
 
-    await StorageService.updateTrustScore(PEER, 0.1, OTHER);
+    await asOwner(OTHER, () => StorageService.updateTrustScore(PEER, 0.1, OTHER));
     expect((await StorageService.getContact(PEER, OWNER))?.trustScore).toBe(0.2);
     expect((await StorageService.getContact(PEER, OTHER))?.trustScore).toBeCloseTo(1.0);
 
@@ -947,17 +964,19 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
       lastMessageAt: 10,
       membershipEpoch: 0,
     });
-    await StorageService.upsertGroupChannel({
-      ownerPubky: OTHER,
-      channelId,
-      name: 'Other crew',
-      createdAt: 1,
-      updatedAt: 1,
-      createdBy: OTHER,
-      isPublic: false,
-      lastMessageAt: 11,
-      membershipEpoch: 2,
-    });
+    await asOwner(OTHER, () =>
+      StorageService.upsertGroupChannel({
+        ownerPubky: OTHER,
+        channelId,
+        name: 'Other crew',
+        createdAt: 1,
+        updatedAt: 1,
+        createdBy: OTHER,
+        isPublic: false,
+        lastMessageAt: 11,
+        membershipEpoch: 2,
+      }),
+    );
     await StorageService.upsertGroupMember({
       ownerPubky: OWNER,
       channelId,
@@ -985,24 +1004,26 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
       editedAt: null,
       deleted: false,
     });
-    await StorageService.saveGroupMessage({
-      ownerPubky: OTHER,
-      channelId,
-      eventId,
-      senderPubky: OTHER,
-      kind: CHAT_MESSAGE_KIND,
-      body: 'other',
-      rawJson: '{}',
-      sentAt: 11,
-      receivedAt: null,
-      deliveryState: 'sent',
-      replyToEventId: null,
-      replyToAuthorPubky: null,
-      targetEventId: null,
-      targetAuthorPubky: null,
-      editedAt: null,
-      deleted: false,
-    });
+    await asOwner(OTHER, () =>
+      StorageService.saveGroupMessage({
+        ownerPubky: OTHER,
+        channelId,
+        eventId,
+        senderPubky: OTHER,
+        kind: CHAT_MESSAGE_KIND,
+        body: 'other',
+        rawJson: '{}',
+        sentAt: 11,
+        receivedAt: null,
+        deliveryState: 'sent',
+        replyToEventId: null,
+        replyToAuthorPubky: null,
+        targetEventId: null,
+        targetAuthorPubky: null,
+        editedAt: null,
+        deleted: false,
+      }),
+    );
     await StorageService.markGroupEventSeen(OWNER, channelId, PEER, eventId, 10);
     await StorageService.saveGroupDeferred({
       ownerPubky: OWNER,
@@ -1017,20 +1038,24 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
       targetEventId: eventId,
       targetAuthorPubky: OWNER,
     });
-    await StorageService.markGroupEventSeen(OTHER, channelId, PEER, eventId, 11);
-    await StorageService.saveGroupDeferred({
-      ownerPubky: OTHER,
-      channelId,
-      senderPubky: PEER,
-      eventId: '00000000-0000-4000-8000-0000000000cc',
-      kind: 'chat.group.edit.v0',
-      body: 'other-later',
-      rawJson: '{}',
-      sentAt: 13,
-      receivedAt: 13,
-      targetEventId: eventId,
-      targetAuthorPubky: OTHER,
-    });
+    await asOwner(OTHER, () =>
+      StorageService.markGroupEventSeen(OTHER, channelId, PEER, eventId, 11),
+    );
+    await asOwner(OTHER, () =>
+      StorageService.saveGroupDeferred({
+        ownerPubky: OTHER,
+        channelId,
+        senderPubky: PEER,
+        eventId: '00000000-0000-4000-8000-0000000000cc',
+        kind: 'chat.group.edit.v0',
+        body: 'other-later',
+        rawJson: '{}',
+        sentAt: 13,
+        receivedAt: 13,
+        targetEventId: eventId,
+        targetAuthorPubky: OTHER,
+      }),
+    );
 
     expect(await StorageService.getGroupChannel(OWNER, channelId)).toEqual(
       expect.objectContaining({ name: 'Crew', membershipEpoch: 0 }),
@@ -1146,24 +1171,26 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
       deliveryState: 'sent',
       resolveState: 'ready',
     });
-    await StorageService.saveAttachment({
-      ownerPubky: OTHER,
-      eventId: eventB,
-      conversationId: `dm:${PEER}`,
-      channelId: null,
-      senderPubky: OTHER,
-      direction: 'sent',
-      location: `pubky://${OTHER}/pub/hypercolor.app/v1/attachments/${eventB}`,
-      keyRef: `att:${OTHER}:${OTHER}:${eventB}`,
-      contentType: 'application/pdf',
-      size: 20,
-      thumbnailLocation: null,
-      localCachePath: 'file:///cache/b',
-      createdAt: 11,
-      updatedAt: 11,
-      deliveryState: 'sent',
-      resolveState: 'ready',
-    });
+    await asOwner(OTHER, () =>
+      StorageService.saveAttachment({
+        ownerPubky: OTHER,
+        eventId: eventB,
+        conversationId: `dm:${PEER}`,
+        channelId: null,
+        senderPubky: OTHER,
+        direction: 'sent',
+        location: `pubky://${OTHER}/pub/hypercolor.app/v1/attachments/${eventB}`,
+        keyRef: `att:${OTHER}:${OTHER}:${eventB}`,
+        contentType: 'application/pdf',
+        size: 20,
+        thumbnailLocation: null,
+        localCachePath: 'file:///cache/b',
+        createdAt: 11,
+        updatedAt: 11,
+        deliveryState: 'sent',
+        resolveState: 'ready',
+      }),
+    );
 
     expect(await StorageService.getAttachment(OWNER, OWNER, eventA)).toEqual(
       expect.objectContaining({ eventId: eventA, keyRef: `att:${OWNER}:${OWNER}:${eventA}` }),
@@ -1303,24 +1330,26 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
       [{ identifier: 'btc-lightning-bolt11', payload: 'lnbc1validinvoiceabc' }],
       10,
     );
-    await StorageService.savePaymentRequest({
-      ownerPubky: OTHER,
-      peerPubky: PEER,
-      direction: 'received',
-      paymentRequestId: requestId,
-      eventId,
-      amountValue: '0.002',
-      amountAsset: 'btc',
-      paymentReference: 'other-invoice',
-      endpointIds: ['btc-lightning-bolt11'],
-      expiresAt: null,
-      status: 'pending',
-      createdAt: 11,
-      updatedAt: 11,
-      proofJson: null,
-      reason: null,
-      ...EMPTY_PAYMENT_RECORD_EXTRAS,
-    });
+    await asOwner(OTHER, () =>
+      StorageService.savePaymentRequest({
+        ownerPubky: OTHER,
+        peerPubky: PEER,
+        direction: 'received',
+        paymentRequestId: requestId,
+        eventId,
+        amountValue: '0.002',
+        amountAsset: 'btc',
+        paymentReference: 'other-invoice',
+        endpointIds: ['btc-lightning-bolt11'],
+        expiresAt: null,
+        status: 'pending',
+        createdAt: 11,
+        updatedAt: 11,
+        proofJson: null,
+        reason: null,
+        ...EMPTY_PAYMENT_RECORD_EXTRAS,
+      }),
+    );
 
     expect(await StorageService.getPaymentRequest(OWNER, PEER, requestId)).toEqual(
       expect.objectContaining({ amountValue: '0.001', paymentReference: 'invoice-2026-0001' }),
@@ -1419,17 +1448,19 @@ describe('link schema v15 — durable handshake abuse budget (real SQL)', () => 
       await seedLink(peer);
     }
     // Another owner's handshake must never appear in this account's batch.
-    await StorageService.upsertLink({
-      ownerPubky: OTHER,
-      peerPubky: PEER,
-      role: 'responder',
-      status: 'handshaking',
-      snapshot: 'hs',
-      remoteNoisePublicKey: 'noise',
-      localReceiverPath: 'hypercolor/wallet',
-      remoteReceiverPath: 'hypercolor/wallet',
-      consecutiveFailures: 0,
-    });
+    await asOwner(OTHER, () =>
+      StorageService.upsertLink({
+        ownerPubky: OTHER,
+        peerPubky: PEER,
+        role: 'responder',
+        status: 'handshaking',
+        snapshot: 'hs',
+        remoteNoisePublicKey: 'noise',
+        localReceiverPath: 'hypercolor/wallet',
+        remoteReceiverPath: 'hypercolor/wallet',
+        consecutiveFailures: 0,
+      }),
+    );
 
     await seedBudget(soon, { nextAdvanceAt: 1 });
     await seedBudget(later, { nextAdvanceAt: 2 });
@@ -1492,13 +1523,15 @@ describe('link schema v15 — durable handshake abuse budget (real SQL)', () => 
     setDbForTests(db);
     await runMigrations(db);
     await seedBudget(PEER, { pendingAdvances: 7, exhaustedAt: 1 });
-    await StorageService.upsertHandshakeBudget({
-      ownerPubky: OTHER,
-      peerPubky: PEER,
-      pendingAdvances: 3,
-      nextAdvanceAt: 0,
-      exhaustedAt: null,
-    });
+    await asOwner(OTHER, () =>
+      StorageService.upsertHandshakeBudget({
+        ownerPubky: OTHER,
+        peerPubky: PEER,
+        pendingAdvances: 3,
+        nextAdvanceAt: 0,
+        exhaustedAt: null,
+      }),
+    );
 
     await StorageService.clearAccountData(OWNER);
 
@@ -1593,16 +1626,18 @@ describe('link schema v16 — per-recipient group fan-out outcomes (real SQL)', 
       reason: null,
       updatedAt: 2,
     });
-    await StorageService.upsertGroupFanoutOutcome({
-      ownerPubky: OTHER,
-      channelId,
-      eventId,
-      senderPubky: OTHER,
-      recipientPubky: PEER,
-      status: 'sent',
-      reason: null,
-      updatedAt: 3,
-    });
+    await asOwner(OTHER, () =>
+      StorageService.upsertGroupFanoutOutcome({
+        ownerPubky: OTHER,
+        channelId,
+        eventId,
+        senderPubky: OTHER,
+        recipientPubky: PEER,
+        status: 'sent',
+        reason: null,
+        updatedAt: 3,
+      }),
+    );
 
     const ownerRows = await StorageService.listGroupFanoutOutcomes(
       OWNER,

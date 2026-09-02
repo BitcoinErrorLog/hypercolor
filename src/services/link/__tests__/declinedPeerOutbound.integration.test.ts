@@ -596,6 +596,8 @@ describe('declined peer outbound (real LinkService + storage)', () => {
     mockedNative.sendPrivateMessageJson.mockResolvedValue({ snapshot: 'est-out' });
     await expect(
       LinkService.sendPersistedLinkJson({
+        ownerPubky: OWNER,
+        senderPubky: OWNER,
         peerPubky: PEER_B,
         queueId: 'q-imm-b',
         kind: GROUP_MESSAGE_KIND,
@@ -670,6 +672,8 @@ describe('declined peer outbound (real LinkService + storage)', () => {
     mockedNative.sendPrivateMessageJson.mockResolvedValue({ snapshot: 'est-out' });
     await expect(
       LinkService.sendPersistedLinkJson({
+        ownerPubky: OWNER,
+        senderPubky: OWNER,
         peerPubky: PEER,
         queueId: 'q-all-0',
         kind: GROUP_MESSAGE_KIND,
@@ -680,6 +684,8 @@ describe('declined peer outbound (real LinkService + storage)', () => {
     ).resolves.toBe('sent');
     await expect(
       LinkService.sendPersistedLinkJson({
+        ownerPubky: OWNER,
+        senderPubky: OWNER,
         peerPubky: PEER_B,
         queueId: 'q-all-1',
         kind: GROUP_MESSAGE_KIND,

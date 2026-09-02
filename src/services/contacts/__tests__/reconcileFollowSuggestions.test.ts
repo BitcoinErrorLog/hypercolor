@@ -21,6 +21,7 @@ import { setDbForTests } from '../../../db';
 import { runMigrations } from '../../../db/migrations';
 import { openMemoryDb } from '../../../db/__tests__/betterSqliteAdapter';
 import { StorageService } from '../../StorageService';
+import { paintOwner } from '../../paintedOwner';
 
 const OWNER = 'operrr8wsbpr3ue9d4qj41ge1kcc6r7fdiy6o3ugjrrhi4y77rdo';
 const ALICE = 'pxnu33x7jtpx9ar1ytsi4yxbp6a5o36gwhffs8zoxmbuptici1jy';
@@ -32,6 +33,7 @@ describe('StorageService.reconcileFollowSuggestions', () => {
     const db = openMemoryDb();
     setDbForTests(db);
     await runMigrations(db);
+    paintOwner(OWNER);
   });
 
   afterEach(() => {

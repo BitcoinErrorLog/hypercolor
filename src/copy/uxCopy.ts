@@ -139,3 +139,15 @@ export function lastBackupLine(relativeTime: string): string {
 export function claimsToBe(name: string): string {
   return `claims to be ${name}`;
 }
+
+export function sentToNofM(sent: number, total: number): string {
+  return `Sent to ${sent} of ${total}`;
+}
+
+export function sendingNofM(sent: number, total: number): string {
+  return `Sending · ${sent} of ${total} sent`;
+}
+
+export function notDeliveredBlocked(name: string): string {
+  return `Not delivered to ${name} (blocked)`;
+}

@@ -9,6 +9,7 @@ import { runMigrations } from '../../../db/migrations';
 import { openMemoryDb } from '../../../db/__tests__/betterSqliteAdapter';
 import { StorageService } from '../../StorageService';
 import { KeyStore } from '../../KeyStore';
+import { clearPaintedOwner, paintOwner } from '../../paintedOwner';
 import { LinkService } from '../../link/LinkService';
 import { applyGroupInbound } from '../applyGroupInbound';
 import { GroupService } from '../GroupService';
@@ -99,6 +100,7 @@ describe('group inbound adversarial', () => {
     setDbForTests(db);
     await runMigrations(db);
     mockedKeyStore.getPubky.mockReturnValue(OWNER);
+    paintOwner(OWNER);
     mockedLink.sendPersistedLinkJson.mockImplementation(async input => {
       await StorageService.removeFromQueue(input.queueId);
       return 'sent';
@@ -107,6 +109,7 @@ describe('group inbound adversarial', () => {
 
   afterEach(() => {
     setDbForTests(null);
+    clearPaintedOwner();
     jest.restoreAllMocks();
   });
 
@@ -470,6 +473,7 @@ describe('group inbound adversarial', () => {
       lastMessageAt: null,
       membershipEpoch: 0,
     });
+    paintOwner(OTHER);
     await StorageService.upsertGroupChannel({
       ownerPubky: OTHER,
       channelId,
@@ -481,8 +485,11 @@ describe('group inbound adversarial', () => {
       lastMessageAt: null,
       membershipEpoch: 0,
     });
+    paintOwner(OWNER);
     await StorageService.markGroupEventSeen(OWNER, channelId, PEER_A, eid(51), NOW);
+    paintOwner(OTHER);
     await StorageService.markGroupEventSeen(OTHER, channelId, PEER_A, eid(51), NOW);
+    paintOwner(OWNER);
     await StorageService.saveGroupDeferred({
       ownerPubky: OWNER,
       channelId,
@@ -496,6 +503,7 @@ describe('group inbound adversarial', () => {
       targetEventId: eid(53),
       targetAuthorPubky: PEER_A,
     });
+    paintOwner(OTHER);
     await StorageService.saveGroupDeferred({
       ownerPubky: OTHER,
       channelId,
@@ -509,6 +517,7 @@ describe('group inbound adversarial', () => {
       targetEventId: eid(53),
       targetAuthorPubky: PEER_A,
     });
+    paintOwner(OWNER);
 
     await StorageService.clearAccountData(OWNER);
     expect(await StorageService.hasGroupEventSeen(OWNER, channelId, PEER_A, eid(51))).toBe(false);

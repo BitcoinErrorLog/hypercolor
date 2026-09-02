@@ -75,6 +75,7 @@ import { getDb, setDbForTests } from '../../../db';
 import { runMigrations } from '../../../db/migrations';
 import { openMemoryDb } from '../../../db/__tests__/betterSqliteAdapter';
 import { StorageService } from '../../StorageService';
+import { clearPaintedOwner, paintOwner } from '../../paintedOwner';
 import { KeyStore } from '../../KeyStore';
 import { applyAttachmentInbound } from '../applyAttachmentInbound';
 import { reconstructAttachmentWireJson } from '../redaction';
@@ -131,10 +132,12 @@ describe('attachment security (sqlite)', () => {
     setDbForTests(db);
     await runMigrations(db);
     jest.mocked(KeyStore.getPubky).mockReturnValue(OWNER);
+    paintOwner(OWNER);
   });
 
   afterEach(() => {
     setDbForTests(null);
+    clearPaintedOwner();
   });
 
   it('never persists live key/nonce in stream, messages, group, or retry queue', async () => {
@@ -265,6 +268,7 @@ describe('attachment security (sqlite)', () => {
       rawJson: accessJson(PEER_A),
       receivedAt: NOW,
     });
+    paintOwner(OTHER_OWNER);
     await applyAttachmentInbound({
       ownerPubky: OTHER_OWNER,
       senderPubky: PEER_A,
@@ -272,6 +276,7 @@ describe('attachment security (sqlite)', () => {
       rawJson: accessJson(PEER_A),
       receivedAt: NOW,
     });
+    paintOwner(OWNER);
     expect(await StorageService.getAttachment(OWNER, PEER_A, EVENT)).not.toBeNull();
     expect(await StorageService.getAttachment(OTHER_OWNER, PEER_A, EVENT)).not.toBeNull();
     await StorageService.clearAccountData(OWNER);

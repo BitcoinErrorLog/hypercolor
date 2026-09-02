@@ -6,6 +6,7 @@ import {
 } from '@synonymdev/react-native-pubky';
 import { KeyStore } from './KeyStore';
 import { LinkService } from './link/LinkService';
+import { paintSigningOut } from './paintedOwner';
 import type { UserProfile, PubkyKey } from '../types';
 
 /**
@@ -43,6 +44,7 @@ export const PubkyService = {
   // ── Auth ──────────────────────────────────────────────────────────────────
 
   async signOut(): Promise<void> {
+    paintSigningOut();
     const sessionSecret = KeyStore.getSessionSecret();
     if (sessionSecret) {
       try {

@@ -1,18 +1,8 @@
 import type { GroupFanoutOutcome } from '../types/group';
-import { COPY } from '../copy/uxCopy';
+import { COPY, notDeliveredBlocked, sendingNofM, sentToNofM } from '../copy/uxCopy';
 import { shortPubky } from './shortPubky';
 
-export function sentToNofM(sent: number, total: number): string {
-  return `Sent to ${sent} of ${total}`;
-}
-
-export function sendingNofM(sent: number, total: number): string {
-  return `Sending · ${sent} of ${total} sent`;
-}
-
-export function notDeliveredBlocked(name: string): string {
-  return `Not delivered to ${name} (blocked)`;
-}
+export { notDeliveredBlocked, sendingNofM, sentToNofM };
 
 /**
  * Aggregate label for a private-group fan-out. Derived only from persisted
