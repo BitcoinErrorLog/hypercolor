@@ -82,7 +82,7 @@ export default function SettingsScreen() {
       scrollSettingsToSection(scrollRef.current, y, reduceMotion);
       focusSettingsSection(node);
       setHighlightedSection(target);
-      nav.setParams({ section: undefined } as never);
+      nav.setParams({ section: undefined });
     },
     [nav, recoveryGateActive, reduceMotion, sectionParam],
   );

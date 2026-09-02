@@ -105,6 +105,10 @@ export type MainTabParamList = {
 
 export type SettingsSection = 'backup' | 'payments';
 
+export type SettingsRouteParams = {
+  section?: SettingsSection | undefined;
+};
+
 export type RootStackParamList = {
   Auth: undefined;
   Main: NavigatorScreenParams<MainTabParamList> | undefined;
@@ -112,7 +116,7 @@ export type RootStackParamList = {
   ChannelScreen: { channelId: string };
   ContactSearch: undefined;
   MessageRequests: undefined;
-  Settings: { section?: SettingsSection } | undefined;
+  Settings: SettingsRouteParams | undefined;
   EnableMessaging: undefined;
 };
 

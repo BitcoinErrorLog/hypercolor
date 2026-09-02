@@ -151,17 +151,6 @@ export function bindDeferredPublicJoinToOwner(ownerPubky: string): void {
   hydrateOwner(ownerPubky);
 }
 
-export function peekDeferredPublicJoin(ownerPubky?: string | null): string | null {
-  dropLegacyGlobal();
-  if (!ownerPubky) {
-    const record = liveOrDrop(null, unsigned);
-    return record?.ref ?? null;
-  }
-  const record = liveOrDrop(ownerPubky, hydrateOwner(ownerPubky));
-  if (!record || record.dismissed) return null;
-  return record.ref;
-}
-
 /** Invite still waiting for an explicit Join/Dismiss, including after the one allowed redirect. */
 export function peekDeferredPublicInvite(ownerPubky: string): string | null {
   const record = liveOrDrop(ownerPubky, hydrateOwner(ownerPubky));
@@ -179,12 +168,11 @@ export function consumeDeferredPublicJoinRedirect(ownerPubky: string): boolean {
 }
 
 export function dismissDeferredPublicJoin(ownerPubky: string): void {
+  unsigned = null;
   const record = liveOrDrop(ownerPubky, hydrateOwner(ownerPubky));
   if (record) {
     persist(ownerPubky, { ...record, dismissed: true });
-    return;
   }
-  unsigned = null;
 }
 
 export function takeDeferredPublicJoin(ownerPubky?: string | null): string | null {
