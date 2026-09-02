@@ -85,6 +85,7 @@ jest.mock('../../StorageService', () => ({
     insertInboundPrivateCreate: jest.fn(),
     saveGroupMessage: jest.fn(),
     upsertMessageRequest: jest.fn(),
+    deleteMessageRequest: jest.fn(),
     listMessageRequests: jest.fn(),
     countPendingMessageRequests: jest.fn(),
     deleteLinkStreamItemsForPeer: jest.fn(),

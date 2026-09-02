@@ -132,6 +132,7 @@ jest.mock('../../StorageService', () => ({
     getAllContacts: jest.fn(),
     getMessageRequest: jest.fn(),
     upsertMessageRequest: jest.fn(),
+    deleteMessageRequest: jest.fn(),
     listMessageRequests: jest.fn(),
     countPendingMessageRequests: jest.fn(),
     deleteLinkStreamItemsForPeer: jest.fn(),

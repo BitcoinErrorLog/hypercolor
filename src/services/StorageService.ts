@@ -314,6 +314,14 @@ export const StorageService = {
     );
   },
 
+  async deleteMessageRequest(ownerPubky: PubkyKey, peerPubky: PubkyKey): Promise<void> {
+    const db = await getDb();
+    db.executeSync('DELETE FROM message_requests WHERE owner_pubky = ? AND peer_pubky = ?', [
+      ownerPubky,
+      peerPubky,
+    ]);
+  },
+
   async getMessageRequest(
     ownerPubky: PubkyKey,
     peerPubky: PubkyKey,

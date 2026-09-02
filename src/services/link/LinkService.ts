@@ -53,6 +53,7 @@ import { reconstructAttachmentWireJson } from '../attachments/redaction';
 import { applyPaymentInbound } from '../payments/applyPaymentInbound';
 import { isPaykitPaymentKind } from '../../types/payment';
 import { shouldDropOversizedKnownInbound } from './inboundEnvelope';
+import { FollowsImportSettings } from '../contacts/followsImportSettings';
 
 /**
  * LinkService — end-to-end-encrypted DMs over official Paykit Encrypted
@@ -917,6 +918,21 @@ export const LinkService = {
         updatedAt: ts,
         status: 'declined',
       });
+    });
+  },
+
+  /**
+   * Unblock transition for a previously declined peer: delete the declined
+   * `message_requests` row. Decline is sticky in upsert, so this is the
+   * only way back to "no request" without inventing a status. No-op when
+   * there is no declined row (including when messaging is not enabled).
+   */
+  async releaseDeclinedRequest(ownerPubky: PubkyKey, peerPubky: PubkyKey): Promise<void> {
+    if (!ownerPubky || !peerPubky) return;
+    return withQueue(peerPubky, async () => {
+      const existing = await StorageService.getMessageRequest(ownerPubky, peerPubky);
+      if (existing?.status !== 'declined') return;
+      await StorageService.deleteMessageRequest(ownerPubky, peerPubky);
     });
   },
 };
@@ -2044,6 +2060,10 @@ function notifyInboxSynced(ownerPubky: PubkyKey): void {
 
 async function syncPeerLocked(peerPubky: PubkyKey): Promise<LinkMessage[]> {
   const ownerPubky = requireOwner();
+  if (FollowsImportSettings.isBlocked(ownerPubky, peerPubky)) {
+    await rejectDeclinedInbound(ownerPubky, peerPubky);
+    return [];
+  }
   const prior = await StorageService.getLink(ownerPubky, peerPubky);
   const existingRequest = await StorageService.getMessageRequest(ownerPubky, peerPubky);
   if (existingRequest?.status === 'declined') {

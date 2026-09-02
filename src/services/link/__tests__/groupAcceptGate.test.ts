@@ -122,6 +122,7 @@ jest.mock('../../StorageService', () => ({
     setContactRelationshipFlags: jest.fn(),
     getMessageRequest: jest.fn(),
     upsertMessageRequest: jest.fn(),
+    deleteMessageRequest: jest.fn(),
     listMessageRequests: jest.fn(),
     countPendingMessageRequests: jest.fn(),
     hasGroupEvent: jest.fn(),

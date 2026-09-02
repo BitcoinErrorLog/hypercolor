@@ -1,14 +1,17 @@
 import type { PubkyKey } from '../../types';
 
+export const BLOCK_CLEANUP_PENDING_MESSAGE = 'Blocked; cleanup pending. Retry.';
+
+export type BlockPeerOutcome =
+  | { blocked: true; cleanup: 'complete' }
+  | { blocked: true; cleanup: 'pending'; message: string; details: string };
+
 /**
- * Block a peer for one owner: persist the deny list, close the Encrypted
- * Link (decline is the existing terminal inbound-deny), then drop the
- * contact row so they leave the inbox probe set.
- *
- * Does not change wire formats or crypto. Relies on
- * `LinkService.declineMessageRequest` to wipe native link/outbox state
- * and persist `message_requests.status = declined`, which
- * `syncPeerLocked` already refuses.
+ * Block a peer for one owner. Persist the owner-scoped deny list first;
+ * that write is terminal even if later cleanup fails. Decline (Encrypted
+ * Link wipe + `message_requests.status = declined`) and contact deletion
+ * are retryable. Callers must report cleanup-pending honestly rather than
+ * "block failed" when the deny is already stored.
  */
 export async function blockPeer(input: {
   ownerPubky: PubkyKey;
@@ -16,36 +19,47 @@ export async function blockPeer(input: {
   persistBlock: (ownerPubky: PubkyKey, peerPubky: PubkyKey) => void;
   declineMessageRequest: (peerPubky: PubkyKey) => Promise<void>;
   deleteContact: (ownerPubky: PubkyKey, peerPubky: PubkyKey) => Promise<void>;
-}): Promise<void> {
+}): Promise<BlockPeerOutcome> {
   const { ownerPubky, peerPubky } = input;
   if (!ownerPubky || !peerPubky) {
     throw new Error('Could not block this pubky.');
   }
   input.persistBlock(ownerPubky, peerPubky);
-  await input.declineMessageRequest(peerPubky);
-  await input.deleteContact(ownerPubky, peerPubky);
+  try {
+    await input.declineMessageRequest(peerPubky);
+    await input.deleteContact(ownerPubky, peerPubky);
+    return { blocked: true, cleanup: 'complete' };
+  } catch (err) {
+    return {
+      blocked: true,
+      cleanup: 'pending',
+      message: BLOCK_CLEANUP_PENDING_MESSAGE,
+      details: err instanceof Error ? err.message : String(err),
+    };
+  }
 }
 
 /**
- * Local inbox probe set used by LinkService.collectInboxCandidates:
- * contacts ∪ existing Encrypted-Link peers. After a successful block
- * the peer must be in neither collection.
+ * Reverse a block for one owner: drop the MMKV deny and remove the
+ * terminal `declined` message-request row so a re-add can start clean.
+ *
+ * Decline is sticky in `upsertMessageRequest` (declined cannot be
+ * overwritten). The existing status set is `pending | accepted | declined`;
+ * deleting the declined row returns the peer to "no request", which is how
+ * inbound creates a new `pending` request and how outbound send proceeds
+ * without treating them as declined. Do not invent a fourth status, and do
+ * not promote to `accepted` — manual add does not skip the WoT queue.
  */
-export function localInboxProbeSet(
-  contacts: { pubky: PubkyKey }[],
-  links: { peerPubky: PubkyKey }[],
-): PubkyKey[] {
-  const seen = new Set<string>();
-  const out: PubkyKey[] = [];
-  for (const contact of contacts) {
-    if (seen.has(contact.pubky)) continue;
-    seen.add(contact.pubky);
-    out.push(contact.pubky);
+export async function unblockPeer(input: {
+  ownerPubky: PubkyKey;
+  peerPubky: PubkyKey;
+  persistUnblock: (ownerPubky: PubkyKey, peerPubky: PubkyKey) => void;
+  releaseDeclinedRequest: (ownerPubky: PubkyKey, peerPubky: PubkyKey) => Promise<void>;
+}): Promise<void> {
+  const { ownerPubky, peerPubky } = input;
+  if (!ownerPubky || !peerPubky) {
+    throw new Error('Could not unblock this pubky.');
   }
-  for (const link of links) {
-    if (seen.has(link.peerPubky)) continue;
-    seen.add(link.peerPubky);
-    out.push(link.peerPubky);
-  }
-  return out;
+  input.persistUnblock(ownerPubky, peerPubky);
+  await input.releaseDeclinedRequest(ownerPubky, peerPubky);
 }

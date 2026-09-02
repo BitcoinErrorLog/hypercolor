@@ -1,73 +1,107 @@
-import { blockPeer, localInboxProbeSet } from '../blockPeer';
+import { BLOCK_CLEANUP_PENDING_MESSAGE, blockPeer, unblockPeer } from '../blockPeer';
 import type { PubkyKey } from '../../../types';
 
 const OWNER = 'operrr8wsbpr3ue9d4qj41ge1kcc6r7fdiy6o3ugjrrhi4y77rdo';
 const PEER = 'pxnu33x7jtpx9ar1ytsi4yxbp6a5o36gwhffs8zoxmbuptici1jy';
-const OTHER = 'kyp7qac797z86bngq9g3ajqbrsgsb3tibayndqi6fe4cqi3gb6ry';
 
 describe('blockPeer', () => {
-  it('persists deny, declines the Encrypted Link, deletes the contact, and drops the peer from the inbox probe set', async () => {
-    const contacts = new Map<PubkyKey, { pubky: PubkyKey }>([
-      [PEER, { pubky: PEER }],
-      [OTHER, { pubky: OTHER }],
-    ]);
-    const links = new Map<PubkyKey, { peerPubky: PubkyKey }>([[PEER, { peerPubky: PEER }]]);
-    const requests = new Map<PubkyKey, 'pending' | 'declined'>([[PEER, 'pending']]);
+  it('persists deny first, then declines and deletes on the happy path', async () => {
+    const order: string[] = [];
     const blocked = new Set<string>();
+    const contacts = new Map<PubkyKey, { pubky: PubkyKey }>([[PEER, { pubky: PEER }]]);
+    const requests = new Map<PubkyKey, 'pending' | 'declined'>([[PEER, 'pending']]);
 
-    await blockPeer({
+    const result = await blockPeer({
+      ownerPubky: OWNER,
+      peerPubky: PEER,
+      persistBlock: (_owner, peer) => {
+        order.push('deny');
+        blocked.add(peer);
+      },
+      declineMessageRequest: async peer => {
+        order.push('decline');
+        requests.set(peer, 'declined');
+      },
+      deleteContact: async (_owner, peer) => {
+        order.push('delete');
+        contacts.delete(peer);
+      },
+    });
+
+    expect(result).toEqual({ blocked: true, cleanup: 'complete' });
+    expect(order).toEqual(['deny', 'decline', 'delete']);
+    expect(blocked.has(PEER)).toBe(true);
+    expect(requests.get(PEER)).toBe('declined');
+    expect(contacts.has(PEER)).toBe(false);
+  });
+
+  it('keeps the deny and reports cleanup pending when decline throws', async () => {
+    const blocked = new Set<string>();
+    const contacts = new Map([[PEER, { pubky: PEER }]]);
+    const deleteContact = jest.fn(async (_owner: PubkyKey, peer: PubkyKey) => {
+      contacts.delete(peer);
+    });
+    const result = await blockPeer({
       ownerPubky: OWNER,
       peerPubky: PEER,
       persistBlock: (_owner, peer) => {
         blocked.add(peer);
       },
-      declineMessageRequest: async peer => {
-        links.delete(peer);
-        requests.set(peer, 'declined');
+      declineMessageRequest: async () => {
+        throw new Error('native close failed');
       },
-      deleteContact: async (_owner, peer) => {
-        contacts.delete(peer);
-      },
+      deleteContact,
     });
-
-    expect(blocked.has(PEER)).toBe(true);
-    expect(requests.get(PEER)).toBe('declined');
-    expect(contacts.has(PEER)).toBe(false);
-    expect(links.has(PEER)).toBe(false);
-    expect(localInboxProbeSet([...contacts.values()], [...links.values()])).toEqual([OTHER]);
-  });
-
-  it('does not surface a blocked peer as a request or chat candidate', async () => {
-    const contacts: { pubky: PubkyKey }[] = [];
-    const links: { peerPubky: PubkyKey }[] = [];
-    const requestStatus = 'declined';
-    const probe = localInboxProbeSet(contacts, links);
-    expect(probe).not.toContain(PEER);
-    const wouldPoll = probe.includes(PEER);
-    const wouldCreateRequest = requestStatus !== 'declined';
-    expect(wouldPoll).toBe(false);
-    expect(wouldCreateRequest).toBe(false);
-  });
-
-  it('keeps the deny list if closing the Encrypted Link fails', async () => {
-    const blocked = new Set<string>();
-    const contacts = new Map([[PEER, { pubky: PEER }]]);
-    await expect(
-      blockPeer({
-        ownerPubky: OWNER,
-        peerPubky: PEER,
-        persistBlock: (_owner, peer) => {
-          blocked.add(peer);
-        },
-        declineMessageRequest: async () => {
-          throw new Error('native close failed');
-        },
-        deleteContact: async (_owner, peer) => {
-          contacts.delete(peer);
-        },
-      }),
-    ).rejects.toThrow(/native close failed/);
+    expect(result).toEqual({
+      blocked: true,
+      cleanup: 'pending',
+      message: BLOCK_CLEANUP_PENDING_MESSAGE,
+      details: 'native close failed',
+    });
     expect(blocked.has(PEER)).toBe(true);
     expect(contacts.has(PEER)).toBe(true);
+    expect(deleteContact).not.toHaveBeenCalled();
+  });
+
+  it('keeps the deny and reports cleanup pending when contact deletion throws', async () => {
+    const blocked = new Set<string>();
+    const result = await blockPeer({
+      ownerPubky: OWNER,
+      peerPubky: PEER,
+      persistBlock: (_owner, peer) => {
+        blocked.add(peer);
+      },
+      declineMessageRequest: async () => undefined,
+      deleteContact: async () => {
+        throw new Error('sqlite locked');
+      },
+    });
+    expect(result).toEqual({
+      blocked: true,
+      cleanup: 'pending',
+      message: BLOCK_CLEANUP_PENDING_MESSAGE,
+      details: 'sqlite locked',
+    });
+    expect(blocked.has(PEER)).toBe(true);
+  });
+});
+
+describe('unblockPeer', () => {
+  it('removes the deny then releases the declined request', async () => {
+    const order: string[] = [];
+    const blocked = new Set<string>([PEER]);
+    await unblockPeer({
+      ownerPubky: OWNER,
+      peerPubky: PEER,
+      persistUnblock: (_owner, peer) => {
+        order.push('unblock');
+        blocked.delete(peer);
+      },
+      releaseDeclinedRequest: async () => {
+        order.push('release');
+      },
+    });
+    expect(order).toEqual(['unblock', 'release']);
+    expect(blocked.has(PEER)).toBe(false);
   });
 });

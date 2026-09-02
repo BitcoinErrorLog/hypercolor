@@ -410,6 +410,40 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
     expect(pkCols).toEqual(['owner_pubky', 'pubky']);
   });
 
+  it('deletes a declined message request so a later upsert can become pending', async () => {
+    const db = openMemoryDb();
+    setDbForTests(db);
+    await runMigrations(db);
+
+    await StorageService.upsertMessageRequest({
+      ownerPubky: OWNER,
+      peerPubky: PEER,
+      createdAt: 1,
+      updatedAt: 1,
+      status: 'declined',
+    });
+    await StorageService.upsertMessageRequest({
+      ownerPubky: OWNER,
+      peerPubky: PEER,
+      createdAt: 2,
+      updatedAt: 2,
+      status: 'pending',
+    });
+    expect((await StorageService.getMessageRequest(OWNER, PEER))?.status).toBe('declined');
+
+    await StorageService.deleteMessageRequest(OWNER, PEER);
+    expect(await StorageService.getMessageRequest(OWNER, PEER)).toBeNull();
+
+    await StorageService.upsertMessageRequest({
+      ownerPubky: OWNER,
+      peerPubky: PEER,
+      createdAt: 3,
+      updatedAt: 3,
+      status: 'pending',
+    });
+    expect((await StorageService.getMessageRequest(OWNER, PEER))?.status).toBe('pending');
+  });
+
   it('keeps independent contact rows per account and does not delete A on B sign-out', async () => {
     const db = openMemoryDb();
     setDbForTests(db);
