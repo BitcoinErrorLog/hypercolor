@@ -259,19 +259,59 @@ export function deleteLinkSession(): void {
 /**
  * Ephemeral X25519 secret used to decrypt `hypercolor://ring-callback`.
  * Must live in Keychain, not only a JS var: iOS may kill Hypercolor while
- * Ring is in the foreground.
+ * Ring is in the foreground. `expiresAt` is persisted so cold-start
+ * redemption can still enforce the handoff TTL.
  */
-export async function setPendingRingHandoff(ephemeralSkHex: string): Promise<void> {
-  await Keychain.setGenericPassword(KEYCHAIN_USERNAME, ephemeralSkHex, {
-    service: RING_PENDING_SERVICE,
-    accessible: Keychain.ACCESSIBLE.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
-  });
+type PendingRingHandoffRecord = {
+  ephemeralSkHex: string;
+  expiresAt: number | null;
+};
+
+function parsePendingRingHandoff(password: string): PendingRingHandoffRecord | null {
+  if (password.length === 0) return null;
+  try {
+    const parsed = JSON.parse(password) as { ephemeralSkHex?: unknown; expiresAt?: unknown };
+    if (typeof parsed?.ephemeralSkHex === 'string' && parsed.ephemeralSkHex.length > 0) {
+      const expiresAt =
+        typeof parsed.expiresAt === 'number' && Number.isFinite(parsed.expiresAt)
+          ? parsed.expiresAt
+          : null;
+      return { ephemeralSkHex: parsed.ephemeralSkHex, expiresAt };
+    }
+  } catch {
+    // Legacy entries stored the raw hex secret as the password.
+  }
+  return { ephemeralSkHex: password, expiresAt: null };
+}
+
+export async function setPendingRingHandoff(
+  ephemeralSkHex: string,
+  expiresAt: number,
+): Promise<void> {
+  await Keychain.setGenericPassword(
+    KEYCHAIN_USERNAME,
+    JSON.stringify({ ephemeralSkHex, expiresAt }),
+    {
+      service: RING_PENDING_SERVICE,
+      accessible: Keychain.ACCESSIBLE.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
+    },
+  );
 }
 
 export async function getPendingRingHandoff(): Promise<string | null> {
+  const record = await readPendingRingHandoff();
+  return record?.ephemeralSkHex ?? null;
+}
+
+export async function getPendingRingHandoffExpiresAt(): Promise<number | null> {
+  const record = await readPendingRingHandoff();
+  return record?.expiresAt ?? null;
+}
+
+async function readPendingRingHandoff(): Promise<PendingRingHandoffRecord | null> {
   const result = await Keychain.getGenericPassword({ service: RING_PENDING_SERVICE });
   if (result === false) return null;
-  return result.password.length > 0 ? result.password : null;
+  return parsePendingRingHandoff(result.password);
 }
 
 export async function clearPendingRingHandoff(): Promise<void> {
@@ -517,6 +557,7 @@ export const KeyStore = {
   deleteLinkSession,
   setPendingRingHandoff,
   getPendingRingHandoff,
+  getPendingRingHandoffExpiresAt,
   clearPendingRingHandoff,
   setAttachmentSecret,
   getAttachmentSecret,

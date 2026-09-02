@@ -16,11 +16,14 @@ jest.mock('../../utils/PubkyNoiseModule', () => ({
 }));
 
 const mockGetPendingRingHandoff = jest.fn();
+const mockGetPendingRingHandoffExpiresAt = jest.fn();
 
 jest.mock('../KeyStore', () => ({
   KeyStore: {
     setPendingRingHandoff: jest.fn(),
     getPendingRingHandoff: (...args: unknown[]) => mockGetPendingRingHandoff(...args),
+    getPendingRingHandoffExpiresAt: (...args: unknown[]) =>
+      mockGetPendingRingHandoffExpiresAt(...args),
     clearPendingRingHandoff: jest.fn(),
     setAppKeypair: jest.fn(),
     setAppCert: jest.fn(),
@@ -48,6 +51,7 @@ import {
   handleRingCallback,
   requestDelegation,
   resolvePendingEphemeralSk,
+  ExpiredDelegationError,
   StaleDelegationRequestError,
 } from '../PubkyRingAuthService';
 import { RING_GRANT_CAPABILITIES } from '../../types/link';
@@ -69,15 +73,22 @@ function deferred<T>(): {
 }
 
 let mockPersistedHandoffSk: string | null = null;
+let mockPersistedHandoffExpiresAt: number | null = null;
 
 beforeEach(() => {
   mockPersistedHandoffSk = null;
+  mockPersistedHandoffExpiresAt = null;
   mockGetPendingRingHandoff.mockImplementation(async () => mockPersistedHandoffSk);
-  jest.mocked(KeyStore.setPendingRingHandoff).mockImplementation(async (sk: string) => {
-    mockPersistedHandoffSk = sk;
-  });
+  mockGetPendingRingHandoffExpiresAt.mockImplementation(async () => mockPersistedHandoffExpiresAt);
+  jest
+    .mocked(KeyStore.setPendingRingHandoff)
+    .mockImplementation(async (sk: string, expiresAt: number) => {
+      mockPersistedHandoffSk = sk;
+      mockPersistedHandoffExpiresAt = expiresAt;
+    });
   jest.mocked(KeyStore.clearPendingRingHandoff).mockImplementation(async () => {
     mockPersistedHandoffSk = null;
+    mockPersistedHandoffExpiresAt = null;
   });
 });
 
@@ -144,7 +155,7 @@ describe('requestDelegation', () => {
     expect(result.expiresAt).toBeLessThanOrEqual(Date.now() + ENABLE_AUTH_TTL_MS);
     expect(Linking.openURL).not.toHaveBeenCalled();
     expect(KeyStore.clearPendingRingHandoff).not.toHaveBeenCalled();
-    expect(KeyStore.setPendingRingHandoff).toHaveBeenCalledWith('ephemeral-sk');
+    expect(KeyStore.setPendingRingHandoff).toHaveBeenCalledWith('ephemeral-sk', expect.any(Number));
   });
 
   it('opens Ring on this device when it is installed and still returns the URL', async () => {
@@ -166,7 +177,10 @@ describe('requestDelegation', () => {
     expect(second.url).not.toBe(first.url);
     expect(second.url).toBe(buildPaykitConnectUrl('hypercolor-other', 'pk-2'));
     expect(x25519GenerateKeypair).toHaveBeenCalledTimes(2);
-    expect(KeyStore.setPendingRingHandoff).toHaveBeenLastCalledWith('ephemeral-sk-2');
+    expect(KeyStore.setPendingRingHandoff).toHaveBeenLastCalledWith(
+      'ephemeral-sk-2',
+      expect.any(Number),
+    );
   });
 
   it('discards a stale requestDelegation when a newer generation finishes first', async () => {
@@ -206,11 +220,14 @@ describe('requestDelegation', () => {
     (Linking.canOpenURL as jest.Mock).mockResolvedValue(false);
     const setGate = deferred<void>();
     const setStarted = deferred<string>();
-    jest.mocked(KeyStore.setPendingRingHandoff).mockImplementation(async (sk: string) => {
-      setStarted.resolve(sk);
-      await setGate.promise;
-      mockPersistedHandoffSk = sk;
-    });
+    jest
+      .mocked(KeyStore.setPendingRingHandoff)
+      .mockImplementation(async (sk: string, expiresAt: number) => {
+        setStarted.resolve(sk);
+        await setGate.promise;
+        mockPersistedHandoffSk = sk;
+        mockPersistedHandoffExpiresAt = expiresAt;
+      });
 
     const pending = requestDelegation(deviceId);
     await setStarted.promise;
@@ -230,11 +247,14 @@ describe('requestDelegation', () => {
     (Linking.canOpenURL as jest.Mock).mockResolvedValue(false);
     const setGate = deferred<void>();
     const setStarted = deferred<string>();
-    jest.mocked(KeyStore.setPendingRingHandoff).mockImplementation(async (sk: string) => {
-      setStarted.resolve(sk);
-      await setGate.promise;
-      mockPersistedHandoffSk = sk;
-    });
+    jest
+      .mocked(KeyStore.setPendingRingHandoff)
+      .mockImplementation(async (sk: string, expiresAt: number) => {
+        setStarted.resolve(sk);
+        await setGate.promise;
+        mockPersistedHandoffSk = sk;
+        mockPersistedHandoffExpiresAt = expiresAt;
+      });
     (x25519GenerateKeypair as jest.Mock).mockResolvedValueOnce({
       secretKey: 'sk-cancelled',
       publicKey: 'pk-cancelled',
@@ -247,9 +267,12 @@ describe('requestDelegation', () => {
     await expect(cancelled).rejects.toBeInstanceOf(StaleDelegationRequestError);
     await cancel;
 
-    jest.mocked(KeyStore.setPendingRingHandoff).mockImplementation(async (sk: string) => {
-      mockPersistedHandoffSk = sk;
-    });
+    jest
+      .mocked(KeyStore.setPendingRingHandoff)
+      .mockImplementation(async (sk: string, expiresAt: number) => {
+        mockPersistedHandoffSk = sk;
+        mockPersistedHandoffExpiresAt = expiresAt;
+      });
     (x25519GenerateKeypair as jest.Mock).mockResolvedValue({
       secretKey: 'sk-newest',
       publicKey: 'pk-newest',
@@ -271,11 +294,14 @@ describe('requestDelegation', () => {
     (Linking.canOpenURL as jest.Mock).mockResolvedValue(false);
     const setGate = deferred<void>();
     const setStarted = deferred<string>();
-    jest.mocked(KeyStore.setPendingRingHandoff).mockImplementation(async (sk: string) => {
-      setStarted.resolve(sk);
-      await setGate.promise;
-      mockPersistedHandoffSk = sk;
-    });
+    jest
+      .mocked(KeyStore.setPendingRingHandoff)
+      .mockImplementation(async (sk: string, expiresAt: number) => {
+        setStarted.resolve(sk);
+        await setGate.promise;
+        mockPersistedHandoffSk = sk;
+        mockPersistedHandoffExpiresAt = expiresAt;
+      });
     (x25519GenerateKeypair as jest.Mock)
       .mockResolvedValueOnce({ secretKey: 'sk-a', publicKey: 'pk-a' })
       .mockResolvedValueOnce({ secretKey: 'sk-b', publicKey: 'pk-b' });
@@ -294,6 +320,31 @@ describe('requestDelegation', () => {
     await expect(resolvePendingEphemeralSk()).rejects.toThrow(
       'No pending delegation request. Call requestDelegation() before handling the callback.',
     );
+  });
+
+  it('surfaces StaleDelegationRequestError when KeyStore get rejects during discard', async () => {
+    (Linking.canOpenURL as jest.Mock).mockResolvedValue(false);
+    const setGate = deferred<void>();
+    const setStarted = deferred<string>();
+    jest
+      .mocked(KeyStore.setPendingRingHandoff)
+      .mockImplementation(async (sk: string, expiresAt: number) => {
+        setStarted.resolve(sk);
+        await setGate.promise;
+        mockPersistedHandoffSk = sk;
+        mockPersistedHandoffExpiresAt = expiresAt;
+      });
+    mockGetPendingRingHandoff.mockImplementation(async () => {
+      throw new Error('keystore unavailable');
+    });
+
+    const pending = requestDelegation(deviceId);
+    await setStarted.promise;
+    const cancel = cancelPendingDelegation();
+    setGate.resolve();
+    await expect(pending).rejects.toBeInstanceOf(StaleDelegationRequestError);
+    await cancel;
+    expect(KeyStore.clearPendingRingHandoff).toHaveBeenCalled();
   });
 });
 
@@ -429,5 +480,52 @@ describe('handleRingCallback z32 owner pubky', () => {
     expect(sb2VerifySignature).not.toHaveBeenCalled();
     expect(sb2Decrypt).not.toHaveBeenCalled();
     expect(rnGet).not.toHaveBeenCalled();
+  });
+
+  it('does not wipe a newer generation handoff from an older callback tail', async () => {
+    const setAppGate = deferred<void>();
+    const setAppStarted = deferred<void>();
+    jest.mocked(KeyStore.setAppKeypair).mockImplementation(async () => {
+      setAppStarted.resolve();
+      await setAppGate.promise;
+    });
+    const callback = handleRingCallback(ringCallbackUrl(RING_PUBKY_Z32));
+    await setAppStarted.promise;
+
+    (x25519GenerateKeypair as jest.Mock).mockResolvedValue({
+      secretKey: 'sk-b',
+      publicKey: 'pk-b',
+    });
+    const next = await requestDelegation('hypercolor-b');
+    expect(await resolvePendingEphemeralSk()).toBe('sk-b');
+
+    setAppGate.resolve();
+    await expect(callback).resolves.toEqual({
+      pubky: RING_PUBKY_Z32,
+      homeserver: RING_HOMESERVER_Z32,
+    });
+    expect(await resolvePendingEphemeralSk()).toBe('sk-b');
+    expect(getPendingDelegationSnapshot()?.url).toBe(next.url);
+    expect(mockPersistedHandoffSk).toBe('sk-b');
+  });
+
+  it('rejects a callback after the handoff TTL without storing keys', async () => {
+    jest.mocked(KeyStore.setAppKeypair).mockClear();
+    const nowSpy = jest.spyOn(Date, 'now').mockReturnValue(Date.now() + ENABLE_AUTH_TTL_MS + 1);
+    await expect(handleRingCallback(ringCallbackUrl(RING_PUBKY_Z32))).rejects.toBeInstanceOf(
+      ExpiredDelegationError,
+    );
+    expect(KeyStore.setAppKeypair).not.toHaveBeenCalled();
+    nowSpy.mockRestore();
+  });
+
+  it('enforces TTL on cold-start KeyStore fallback and still completes when unexpired', async () => {
+    const sk = await resolvePendingEphemeralSk();
+    const unexpired = Date.now() + ENABLE_AUTH_TTL_MS;
+    await cancelPendingDelegation();
+    mockPersistedHandoffSk = sk;
+    mockPersistedHandoffExpiresAt = unexpired;
+    const result = await handleRingCallback(ringCallbackUrl(RING_PUBKY_Z32));
+    expect(result).toEqual({ pubky: RING_PUBKY_Z32, homeserver: RING_HOMESERVER_Z32 });
   });
 });

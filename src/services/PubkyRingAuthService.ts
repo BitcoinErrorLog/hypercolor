@@ -35,8 +35,19 @@ export class StaleDelegationRequestError extends Error {
   }
 }
 
+export class ExpiredDelegationError extends Error {
+  override readonly name = 'ExpiredDelegationError';
+  constructor() {
+    super('Authorization expired');
+  }
+}
+
 export function isStaleDelegationRequestError(err: unknown): boolean {
   return err instanceof StaleDelegationRequestError;
+}
+
+export function isExpiredDelegationError(err: unknown): boolean {
+  return err instanceof ExpiredDelegationError;
 }
 
 export type PendingDelegationSnapshot = {
@@ -96,9 +107,58 @@ async function discardOwnWrite(myGen: number, ephemeralSkHex: string): Promise<v
   if (_pending?.generation === myGen) {
     _pending = null;
   }
-  const persisted = await KeyStore.getPendingRingHandoff();
-  if (persisted === ephemeralSkHex) {
-    await KeyStore.clearPendingRingHandoff();
+  let persisted: string | null = null;
+  let readFailed = false;
+  try {
+    persisted = await KeyStore.getPendingRingHandoff();
+  } catch {
+    readFailed = true;
+  }
+  if (readFailed || persisted === ephemeralSkHex) {
+    try {
+      await KeyStore.clearPendingRingHandoff();
+    } catch {
+      // Best-effort: never strand this generation's secret, and never
+      // replace StaleDelegationRequestError with a KeyStore read error.
+    }
+  }
+}
+
+async function clearMatchingHandoff(ephemeralSkHex: string): Promise<void> {
+  const work = writeChain.then(async () => {
+    if (_pending?.ephemeralSkHex === ephemeralSkHex) _pending = null;
+    let persisted: string | null = null;
+    let readFailed = false;
+    try {
+      persisted = await KeyStore.getPendingRingHandoff();
+    } catch {
+      readFailed = true;
+    }
+    if (readFailed || persisted === ephemeralSkHex) {
+      try {
+        await KeyStore.clearPendingRingHandoff();
+      } catch {
+        // Best-effort KeyStore clear.
+      }
+    }
+  });
+  writeChain = work.then(
+    () => undefined,
+    () => undefined,
+  );
+  await work;
+}
+
+async function pendingHandoffExpiresAt(ephemeralSkHex: string): Promise<number | null> {
+  if (_pending?.ephemeralSkHex === ephemeralSkHex) {
+    return _pending.startedAt + ENABLE_AUTH_TTL_MS;
+  }
+  try {
+    const persisted = await KeyStore.getPendingRingHandoff();
+    if (persisted !== ephemeralSkHex) return null;
+    return await KeyStore.getPendingRingHandoffExpiresAt();
+  } catch {
+    return null;
   }
 }
 
@@ -129,7 +189,7 @@ export async function requestDelegation(deviceId: string): Promise<DelegationReq
     const url = buildPaykitConnectUrl(deviceId, ephemeralPkHex);
     const startedAt = Date.now();
     _pending = { ephemeralSkHex, startedAt, url, generation: myGen };
-    await KeyStore.setPendingRingHandoff(ephemeralSkHex);
+    await KeyStore.setPendingRingHandoff(ephemeralSkHex, startedAt + ENABLE_AUTH_TTL_MS);
     if (myGen !== delegationGeneration) {
       await discardOwnWrite(myGen, ephemeralSkHex);
       stale = true;
@@ -218,6 +278,11 @@ export async function handleRingCallback(url: string): Promise<DelegationResult>
   const ownerPeeridHex = pubkyZ32ToHex(pubky);
 
   const ephemeralSkHex = await resolvePendingEphemeralSk();
+  const expiresAt = await pendingHandoffExpiresAt(ephemeralSkHex);
+  if (expiresAt != null && Date.now() >= expiresAt) {
+    await clearMatchingHandoff(ephemeralSkHex);
+    throw new ExpiredDelegationError();
+  }
 
   // ── Fetch handoff ──
   // pubky-ring stores: { "sb2": "<base64SB2Envelope>" }
@@ -267,6 +332,11 @@ export async function handleRingCallback(url: string): Promise<DelegationResult>
       'No pending delegation request. Call requestDelegation() before handling the callback.',
     );
   }
+  const expiresAtLate = await pendingHandoffExpiresAt(ephemeralSkHex);
+  if (expiresAtLate != null && Date.now() >= expiresAtLate) {
+    await clearMatchingHandoff(ephemeralSkHex);
+    throw new ExpiredDelegationError();
+  }
 
   // ── Store all delegated keys ──
   await KeyStore.setAppKeypair({
@@ -294,8 +364,7 @@ export async function handleRingCallback(url: string): Promise<DelegationResult>
     KeyStore.setSessionSecret(payload.session_secret);
   }
 
-  _pending = null;
-  await KeyStore.clearPendingRingHandoff();
+  await clearMatchingHandoff(ephemeralSkHex);
 
   return { pubky, homeserver };
 }
@@ -338,4 +407,5 @@ export const PubkyRingAuthService = {
   cancelPendingDelegation,
   getPendingDelegationSnapshot,
   isStaleDelegationRequestError,
+  isExpiredDelegationError,
 };

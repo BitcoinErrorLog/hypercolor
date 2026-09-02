@@ -118,15 +118,35 @@ describe('KeyStore session and Ring pending', () => {
     mockCreateMMKVCalls.length = 0;
   });
 
-  it('persists the pending Ring ephemeral SK in Keychain', async () => {
-    const { initKeyStore, setPendingRingHandoff, getPendingRingHandoff, clearPendingRingHandoff } =
-      await freshKeyStore();
+  it('persists the pending Ring ephemeral SK and expiry in Keychain', async () => {
+    const {
+      initKeyStore,
+      setPendingRingHandoff,
+      getPendingRingHandoff,
+      getPendingRingHandoffExpiresAt,
+      clearPendingRingHandoff,
+    } = await freshKeyStore();
     await initKeyStore();
-    await setPendingRingHandoff('deadbeef');
+    const expiresAt = 1_700_000_000_000;
+    await setPendingRingHandoff('deadbeef', expiresAt);
     await expect(getPendingRingHandoff()).resolves.toBe('deadbeef');
-    expect(mockKeychainStore.get('hypercolor-ring-pending')).toBe('deadbeef');
+    await expect(getPendingRingHandoffExpiresAt()).resolves.toBe(expiresAt);
+    expect(JSON.parse(mockKeychainStore.get('hypercolor-ring-pending') as string)).toEqual({
+      ephemeralSkHex: 'deadbeef',
+      expiresAt,
+    });
     await clearPendingRingHandoff();
     await expect(getPendingRingHandoff()).resolves.toBeNull();
+    await expect(getPendingRingHandoffExpiresAt()).resolves.toBeNull();
+  });
+
+  it('reads a legacy raw-hex pending Ring handoff without an expiry', async () => {
+    const { initKeyStore, getPendingRingHandoff, getPendingRingHandoffExpiresAt } =
+      await freshKeyStore();
+    await initKeyStore();
+    mockKeychainStore.set('hypercolor-ring-pending', 'deadbeef');
+    await expect(getPendingRingHandoff()).resolves.toBe('deadbeef');
+    await expect(getPendingRingHandoffExpiresAt()).resolves.toBeNull();
   });
 
   it('treats a missing AppCert expiresAt as no expiry', async () => {
