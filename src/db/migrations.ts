@@ -17,7 +17,7 @@ import {
   SCHEMA_V16_STATEMENTS,
 } from './schema';
 import type { SqlExecutor } from './sql';
-import { backfillOwnInvoiceHashAmounts, ensureOwnInvoiceHashColumns } from './ownInvoiceHashes';
+import { repairOwnInvoiceHashes } from './ownInvoiceHashes';
 
 /**
  * Migration runner for Hypercolor SQLite database.
@@ -83,10 +83,10 @@ export async function runMigrations(db: SqlExecutor): Promise<void> {
   }
 
   // In-branch v16 databases may predate amount/expiry columns. Idempotent; no version bump.
+  // Skip cleanly when the table is absent (W2b-stamped v16). Never startup-fatal.
   db.executeSync('BEGIN');
   try {
-    ensureOwnInvoiceHashColumns(db);
-    backfillOwnInvoiceHashAmounts(db);
+    repairOwnInvoiceHashes(db);
     db.executeSync('COMMIT');
   } catch (err) {
     db.executeSync('ROLLBACK');

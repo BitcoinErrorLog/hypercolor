@@ -903,10 +903,18 @@ primary.
      invoice amount must satisfy the request: invoice millisatoshis ≥ request
      millisatoshis. Over-payment is `paid`. Under-payment is not. An amountless
      invoice cannot satisfy an amount-bearing request (v1 requests always carry
-     an amount). An invoice that expired at or before the request was created
+     an amount).      An invoice that expired at or before the request was created
      cannot corroborate it. Amount mismatch does not occupy the verified-hash
      unique index, so the matching request can still be marked `paid` by the
      same preimage.
+
+     Clock trust: payee-side expiry uses this device's wall-clock
+     `createdAt` on the locally persisted sent request. The payer's proof
+     envelope cannot supply or backdate that timestamp. A payee clock that
+     is behind the invoice issuer can still make an already-expired invoice
+     appear valid for a newly created request. Current-time invoice expiry
+     is intentionally not checked, so a payment that settled while the
+     invoice was valid can still corroborate after delayed delivery.
    - `expired` — proposal expiry has passed while the request is still
      `pending`. An `accepted` request past proposal expiry still accepts proofs
      and is shown as `requested`, not `expired`.

@@ -7,13 +7,16 @@
  * requires the stored invoice amount to satisfy the request (see
  * `invoiceAmountRelation`).
  *
- * `invoice_amount_msat` is the bolt11 msat string, the sentinel `amountless`,
- * or NULL (unknown — cannot corroborate). `invoice_expires_at` is unix ms.
+ * `invoice_amount_msat` is the bolt11 msat string, the sentinel `amountless`
+ * (only after a valid amountless mainnet bolt11 decode), `unknown` (repair
+ * could not derive an amount), or NULL (not yet repaired — cannot
+ * corroborate). `invoice_expires_at` is unix ms.
  * Seed copies current own tip hashes (`owner_pubky = peer_pubky`) so invoices
- * already on disk are known; amount/expiry are filled from the tip row (NULL
- * tip amount → `amountless`) and backfilled from the payload when needed.
- * Inserts upsert missing metadata; they never overwrite a known amount.
- * `first_seen_at` is the tip row's `updated_at` at seed time.
+ * already on disk are known; amount/expiry start NULL and are filled from a
+ * mainnet bolt11 decode or a denormalized BTC decimal. Inserts never
+ * overwrite a known millisatoshi string; a verified decode may replace
+ * `amountless` / `unknown`. `first_seen_at` is the tip row's `updated_at`
+ * at seed time.
  *
  * Rows are not pruned. An invoice that expired at or before the request was
  * created cannot corroborate that request; later expiry is not a proof reject
@@ -46,7 +49,7 @@ export const SCHEMA_V16_STATEMENTS: readonly string[] = [
      (owner_pubky, endpoint_identifier, payment_hash, first_seen_at,
       invoice_amount_msat, invoice_expires_at)
    SELECT owner_pubky, identifier, payment_hash, updated_at,
-          CASE WHEN invoice_amount IS NULL THEN 'amountless' ELSE NULL END,
+          NULL,
           invoice_expires_at
      FROM tip_endpoints
     WHERE owner_pubky = peer_pubky

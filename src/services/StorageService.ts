@@ -59,7 +59,8 @@ import type {
   OwnInvoiceHashRecord,
 } from '../types/payment';
 import { isPaykitPaymentKind } from '../types/payment';
-import { bindingFromEndpoint } from './payments/invoiceAmountBind';
+import { bindingFromEndpoint, preferVerifiedInvoiceAmount } from './payments/invoiceAmountBind';
+import { isVerifiedHashUniqueError } from './payments/verifiedHashUniqueError';
 import { KeyStore } from './KeyStore';
 import { cachePathsForAttachment, deleteCacheFiles } from './attachments/fileIo';
 import { OWNER_BACKUP_VERSION, type OwnerBackupSnapshot } from './backup/snapshot';
@@ -1119,6 +1120,26 @@ export const StorageService = {
     }
     for (const hashRow of snapshot.ownInvoiceHashes ?? []) {
       if (hashRow.ownerPubky !== ownerPubky) continue;
+      const matchingTip = snapshot.tipEndpoints.find(
+        tip =>
+          tip.ownerPubky === ownerPubky &&
+          tip.peerPubky === ownerPubky &&
+          tip.identifier === hashRow.endpointIdentifier &&
+          tip.paymentHash === hashRow.paymentHash,
+      );
+      if (matchingTip) {
+        const binding = bindingFromEndpoint(matchingTip);
+        insertOwnInvoiceHash(
+          db,
+          ownerPubky,
+          hashRow.endpointIdentifier,
+          hashRow.paymentHash,
+          hashRow.firstSeenAt,
+          binding.amountMsat,
+          binding.expiresAt,
+        );
+        continue;
+      }
       insertOwnInvoiceHash(
         db,
         ownerPubky,
@@ -2858,15 +2879,40 @@ function insertOwnInvoiceHash(
   invoiceAmountMsat: string | null,
   invoiceExpiresAt: number | null,
 ): void {
+  const existing = db.executeSync(
+    `SELECT invoice_amount_msat, invoice_expires_at FROM own_invoice_hashes
+        WHERE owner_pubky = ? AND endpoint_identifier = ? AND payment_hash = ?`,
+    [ownerPubky, endpointIdentifier, paymentHash],
+  ).rows?.[0];
+  if (!existing) {
+    db.executeSync(
+      `INSERT INTO own_invoice_hashes
+        (owner_pubky, endpoint_identifier, payment_hash, first_seen_at,
+         invoice_amount_msat, invoice_expires_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [
+        ownerPubky,
+        endpointIdentifier,
+        paymentHash,
+        firstSeenAt,
+        invoiceAmountMsat,
+        invoiceExpiresAt,
+      ],
+    );
+    return;
+  }
+  const currentAmount =
+    typeof existing.invoice_amount_msat === 'string' ? existing.invoice_amount_msat : null;
+  const currentExpiry =
+    typeof existing.invoice_expires_at === 'number' ? existing.invoice_expires_at : null;
+  const nextAmount = preferVerifiedInvoiceAmount(currentAmount, invoiceAmountMsat);
+  const nextExpiry = currentExpiry ?? invoiceExpiresAt;
+  if (nextAmount === currentAmount && nextExpiry === currentExpiry) return;
   db.executeSync(
-    `INSERT INTO own_invoice_hashes
-      (owner_pubky, endpoint_identifier, payment_hash, first_seen_at,
-       invoice_amount_msat, invoice_expires_at)
-     VALUES (?, ?, ?, ?, ?, ?)
-     ON CONFLICT(owner_pubky, endpoint_identifier, payment_hash) DO UPDATE SET
-       invoice_amount_msat = COALESCE(own_invoice_hashes.invoice_amount_msat, excluded.invoice_amount_msat),
-       invoice_expires_at = COALESCE(own_invoice_hashes.invoice_expires_at, excluded.invoice_expires_at)`,
-    [ownerPubky, endpointIdentifier, paymentHash, firstSeenAt, invoiceAmountMsat, invoiceExpiresAt],
+    `UPDATE own_invoice_hashes
+        SET invoice_amount_msat = ?, invoice_expires_at = ?
+      WHERE owner_pubky = ? AND endpoint_identifier = ? AND payment_hash = ?`,
+    [nextAmount, nextExpiry, ownerPubky, endpointIdentifier, paymentHash],
   );
 }
 
@@ -2880,18 +2926,6 @@ class CasConflictError extends Error {
 function sqliteChanges(db: SqlExecutor): number {
   const result = db.executeSync('SELECT changes() AS n');
   return Number(result.rows?.[0]?.n ?? 0);
-}
-
-function isVerifiedHashUniqueError(err: unknown): boolean {
-  const code = typeof err === 'object' && err !== null && 'code' in err ? String(err.code) : '';
-  const message = err instanceof Error ? err.message : String(err);
-  const isUnique =
-    /UNIQUE constraint failed/i.test(message) ||
-    code === 'SQLITE_CONSTRAINT_UNIQUE' ||
-    /CONSTRAINT_UNIQUE/i.test(code);
-  if (!isUnique) return false;
-  if (/idx_payment_requests_owner_verified_hash/i.test(message)) return true;
-  return /payment_requests/i.test(message) && /displayed_payment_hash/i.test(message);
 }
 
 function casPaymentRequestRow(

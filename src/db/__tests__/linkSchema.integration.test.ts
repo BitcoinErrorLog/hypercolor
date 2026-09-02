@@ -65,6 +65,22 @@ import { KeyStore } from '../../services/KeyStore';
 import { CHAT_MESSAGE_KIND, type HandshakeBudgetInput } from '../../types/link';
 import { GROUP_MEMBERSHIP_KIND } from '../../types/group';
 import { EMPTY_PAYMENT_RECORD_EXTRAS } from '../../types/payment';
+import {
+  INVOICE_AMOUNT_UNKNOWN,
+  INVOICE_AMOUNTLESS,
+} from '../../services/payments/invoiceAmountBind';
+import {
+  MAINNET_BOLT11_20U,
+  MAINNET_BOLT11_20U_HASH,
+  MAINNET_BOLT11_20U_MSAT,
+  MAINNET_BOLT11_AMOUNTLESS,
+  REGTEST_BOLT11,
+  REGTEST_BOLT11_HASH,
+  TESTNET_BOLT11,
+  TESTNET_BOLT11_HASH,
+} from '../../services/payments/__tests__/bolt11Vectors';
+import { OWNER_BACKUP_VERSION } from '../../services/backup/snapshot';
+import { OWN_INVOICE_HASH_BACKFILL_SCAN_FROM } from '../ownInvoiceHashes';
 import { openFileDb, openMemoryDb } from './betterSqliteAdapter';
 import { mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
@@ -1569,7 +1585,7 @@ describe('schema v16 — own invoice history and verified-hash unique index', ()
       'btc-lightning-bolt11',
       'aa'.repeat(32),
     );
-    expect(amountless?.invoiceAmountMsat).toBe('amountless');
+    expect(amountless?.invoiceAmountMsat).toBe(INVOICE_AMOUNT_UNKNOWN);
     const amountful = await StorageService.getOwnInvoiceHash(
       OWNER,
       'btc-lightning-extra',
@@ -1614,6 +1630,224 @@ describe('schema v16 — own invoice history and verified-hash unique index', ()
     expect(
       await StorageService.hasOwnInvoiceHash(OWNER, 'btc-lightning-bolt11', 'aa'.repeat(32)),
     ).toBe(false);
+  });
+
+  it('backfills a v15 amount-bearing bolt11 whose denormalized amount is NULL', async () => {
+    const db = openMemoryDb();
+    applyThroughV15(db);
+    db.executeSync(
+      `INSERT INTO tip_endpoints
+        (owner_pubky, peer_pubky, identifier, payload, updated_at,
+         validation_status, invoice_amount, invoice_expires_at, payment_hash)
+       VALUES (?, ?, 'btc-lightning-bolt11', ?, 10, 'valid', NULL, NULL, ?)`,
+      [OWNER, OWNER, MAINNET_BOLT11_20U, MAINNET_BOLT11_20U_HASH],
+    );
+    setDbForTests(db);
+    await runMigrations(db);
+    const row = await StorageService.getOwnInvoiceHash(
+      OWNER,
+      'btc-lightning-bolt11',
+      MAINNET_BOLT11_20U_HASH,
+    );
+    expect(row?.invoiceAmountMsat).toBe(MAINNET_BOLT11_20U_MSAT);
+  });
+
+  it('replaces a sticky amountless sentinel with a verified mainnet amount', async () => {
+    const db = openMemoryDb();
+    applyThroughV15(db);
+    db.executeSync(
+      `INSERT INTO tip_endpoints
+        (owner_pubky, peer_pubky, identifier, payload, updated_at,
+         validation_status, invoice_amount, invoice_expires_at, payment_hash)
+       VALUES (?, ?, 'btc-lightning-bolt11', ?, 10, 'valid', NULL, NULL, ?)`,
+      [OWNER, OWNER, MAINNET_BOLT11_20U, MAINNET_BOLT11_20U_HASH],
+    );
+    setDbForTests(db);
+    await runMigrations(db);
+    db.executeSync(`UPDATE own_invoice_hashes SET invoice_amount_msat = 'amountless'`);
+    db.executeSync('DELETE FROM schema_meta');
+    await runMigrations(db);
+    const repaired = await StorageService.getOwnInvoiceHash(
+      OWNER,
+      'btc-lightning-bolt11',
+      MAINNET_BOLT11_20U_HASH,
+    );
+    expect(repaired?.invoiceAmountMsat).toBe(MAINNET_BOLT11_20U_MSAT);
+  });
+
+  it('derives amountless only from a decoded amountless mainnet bolt11', async () => {
+    const db = openMemoryDb();
+    applyThroughV15(db);
+    db.executeSync(
+      `INSERT INTO tip_endpoints
+        (owner_pubky, peer_pubky, identifier, payload, updated_at,
+         validation_status, invoice_amount, invoice_expires_at, payment_hash)
+       VALUES (?, ?, 'btc-lightning-bolt11', ?, 10, 'valid', NULL, NULL, ?)`,
+      [
+        OWNER,
+        OWNER,
+        MAINNET_BOLT11_AMOUNTLESS,
+        '0001020304050607080900010203040506070809000102030405060708090102',
+      ],
+    );
+    setDbForTests(db);
+    await runMigrations(db);
+    const row = await StorageService.getOwnInvoiceHash(
+      OWNER,
+      'btc-lightning-bolt11',
+      '0001020304050607080900010203040506070809000102030405060708090102',
+    );
+    expect(row?.invoiceAmountMsat).toBe(INVOICE_AMOUNTLESS);
+  });
+
+  it('leaves testnet invoice metadata unknown after v15→v16 backfill', async () => {
+    const db = openMemoryDb();
+    applyThroughV15(db);
+    db.executeSync(
+      `INSERT INTO tip_endpoints
+        (owner_pubky, peer_pubky, identifier, payload, updated_at,
+         validation_status, invoice_amount, invoice_expires_at, payment_hash)
+       VALUES (?, ?, 'btc-lightning-bolt11', ?, 10, 'valid', '0.2', 99, ?),
+              (?, ?, 'btc-lightning-extra', ?, 11, 'valid', '24', 99, ?)`,
+      [
+        OWNER,
+        OWNER,
+        TESTNET_BOLT11,
+        TESTNET_BOLT11_HASH,
+        OWNER,
+        OWNER,
+        REGTEST_BOLT11,
+        REGTEST_BOLT11_HASH,
+      ],
+    );
+    setDbForTests(db);
+    await runMigrations(db);
+    const backfilled = await StorageService.getOwnInvoiceHash(
+      OWNER,
+      'btc-lightning-bolt11',
+      TESTNET_BOLT11_HASH,
+    );
+    expect(backfilled?.invoiceAmountMsat).toBe(INVOICE_AMOUNT_UNKNOWN);
+    expect(backfilled?.invoiceExpiresAt).toBeNull();
+    const backfilledRegtest = await StorageService.getOwnInvoiceHash(
+      OWNER,
+      'btc-lightning-extra',
+      REGTEST_BOLT11_HASH,
+    );
+    expect(backfilledRegtest?.invoiceAmountMsat).toBe(INVOICE_AMOUNT_UNKNOWN);
+    expect(backfilledRegtest?.invoiceExpiresAt).toBeNull();
+  });
+
+  it('does not store amount or expiry when history write is a non-mainnet invoice', async () => {
+    const db = openMemoryDb();
+    setDbForTests(db);
+    await runMigrations(db);
+    await StorageService.replaceTipEndpoints(
+      OWNER,
+      OWNER,
+      [
+        {
+          identifier: 'btc-lightning-bolt11',
+          payload: REGTEST_BOLT11,
+          paymentHash: REGTEST_BOLT11_HASH,
+          invoiceAmount: '24',
+          invoiceExpiresAt: 99,
+          validationStatus: 'valid',
+        },
+      ],
+      40,
+    );
+    const written = await StorageService.getOwnInvoiceHash(
+      OWNER,
+      'btc-lightning-bolt11',
+      REGTEST_BOLT11_HASH,
+    );
+    expect(written?.invoiceAmountMsat).toBeNull();
+    expect(written?.invoiceExpiresAt).toBeNull();
+  });
+
+  it('does not restore non-mainnet invoice amount metadata', async () => {
+    const restoreDb = openMemoryDb();
+    setDbForTests(restoreDb);
+    await runMigrations(restoreDb);
+    await StorageService.importOwnerBackup(OWNER, {
+      version: OWNER_BACKUP_VERSION,
+      ownerPubky: OWNER,
+      exportedAt: 1,
+      contacts: [],
+      messageRequests: [],
+      linkMessages: [],
+      readCursors: [],
+      groupChannels: [],
+      groupMembers: [],
+      groupMessages: [],
+      paymentRequests: [],
+      tipEndpoints: [
+        {
+          ownerPubky: OWNER,
+          peerPubky: OWNER,
+          identifier: 'btc-lightning-bolt11',
+          payload: TESTNET_BOLT11,
+          updatedAt: 10,
+          validationStatus: 'valid',
+          invoiceAmount: '0.2',
+          invoiceExpiresAt: 99,
+          paymentHash: TESTNET_BOLT11_HASH,
+        },
+      ],
+      ownInvoiceHashes: [
+        {
+          ownerPubky: OWNER,
+          endpointIdentifier: 'btc-lightning-bolt11',
+          paymentHash: TESTNET_BOLT11_HASH,
+          firstSeenAt: 10,
+          invoiceAmountMsat: '2000000000',
+          invoiceExpiresAt: 99,
+        },
+      ],
+      attachments: [],
+    });
+    const restored = await StorageService.getOwnInvoiceHash(
+      OWNER,
+      'btc-lightning-bolt11',
+      TESTNET_BOLT11_HASH,
+    );
+    expect(restored?.invoiceAmountMsat).toBeNull();
+    expect(restored?.invoiceExpiresAt).toBeNull();
+  });
+
+  it('skips amount backfill when a v16 database has no own_invoice_hashes table', async () => {
+    const db = openMemoryDb();
+    db.executeSync('PRAGMA user_version = 16');
+    const debug = jest.spyOn(console, 'debug').mockImplementation(() => undefined);
+    setDbForTests(db);
+    await expect(runMigrations(db)).resolves.toBeUndefined();
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(16);
+    expect(
+      db.executeSync(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'own_invoice_hashes'",
+      ).rows,
+    ).toHaveLength(0);
+    expect(debug).toHaveBeenCalledWith(
+      '[db] skipped own_invoice_hashes amount backfill: table absent',
+    );
+    debug.mockRestore();
+  });
+
+  it('does not rescan own_invoice_hashes after the repair marker is set', async () => {
+    const db = openMemoryDb();
+    setDbForTests(db);
+    await runMigrations(db);
+
+    const original = db.executeSync.bind(db);
+    const scans: string[] = [];
+    db.executeSync = (query, params) => {
+      const sql = String(query);
+      if (sql.includes(OWN_INVOICE_HASH_BACKFILL_SCAN_FROM)) scans.push(sql);
+      return original(query, params);
+    };
+    await runMigrations(db);
+    expect(scans).toHaveLength(0);
   });
 });
 
