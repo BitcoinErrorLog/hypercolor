@@ -12,7 +12,7 @@ import {
   Alert,
   BackHandler,
 } from 'react-native';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, usePreventRemove, type NavigationAction } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { FeatureFlags } from '../../flags';
 import { useAuthStore } from '../../stores/authStore';
@@ -55,37 +55,56 @@ export default function SettingsScreen() {
   const [restoreNote, setRestoreNote] = useState<string | null>(null);
   const [restoreError, setRestoreError] = useState<string | null>(null);
 
-  const leaveSettings = useCallback(() => {
-    nav.goBack();
-  }, [nav]);
+  const leaveSettings = useCallback(
+    (action?: NavigationAction) => {
+      if (action) {
+        nav.dispatch(action);
+        return;
+      }
+      nav.goBack();
+    },
+    [nav],
+  );
 
-  const requestLeave = useCallback(() => {
-    if (!recoveryGateActive) {
-      leaveSettings();
-      return;
-    }
-    Alert.alert(COPY.leaveRecoveryTitle, COPY.leaveRecoveryBody, [
-      { text: COPY.goBack, style: 'cancel' },
-      {
-        text: COPY.leaveAnyway,
-        style: 'destructive',
-        onPress: () => {
-          setRecoveryGateActive(false);
-          setRecoveryCode(null);
-          setRecoveryConfirmed(false);
-          leaveSettings();
+  const requestLeave = useCallback(
+    (action?: NavigationAction) => {
+      if (!recoveryGateActive) {
+        leaveSettings(action);
+        return;
+      }
+      Alert.alert(COPY.leaveRecoveryTitle, COPY.leaveRecoveryBody, [
+        { text: COPY.goBack, style: 'cancel' },
+        {
+          text: COPY.leaveAnyway,
+          style: 'destructive',
+          onPress: () => {
+            setRecoveryGateActive(false);
+            setRecoveryCode(null);
+            setRecoveryConfirmed(false);
+            leaveSettings(action);
+          },
         },
-      },
-    ]);
-  }, [leaveSettings, recoveryGateActive]);
+      ]);
+    },
+    [leaveSettings, recoveryGateActive],
+  );
+
+  usePreventRemove(recoveryGateActive, ({ data }) => {
+    requestLeave(data.action);
+  });
+
+  useEffect(() => {
+    nav.setOptions({ gestureEnabled: !recoveryGateActive });
+  }, [nav, recoveryGateActive]);
 
   useEffect(() => {
     const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (!recoveryGateActive) return false;
       requestLeave();
       return true;
     });
     return () => sub.remove();
-  }, [requestLeave]);
+  }, [recoveryGateActive, requestLeave]);
 
   function toggleMesh(val: boolean) {
     FeatureFlags.set('mesh_transport', val);
@@ -105,7 +124,7 @@ export default function SettingsScreen() {
           accessibilityRole="button"
           accessibilityLabel="Back"
           hitSlop={HIT_SLOP_44}
-          onPress={requestLeave}
+          onPress={() => requestLeave()}
           style={styles.backHit}
         >
           <Text style={styles.back}>← Back</Text>
