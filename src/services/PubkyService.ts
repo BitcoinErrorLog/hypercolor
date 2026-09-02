@@ -6,7 +6,13 @@ import {
 } from '@synonymdev/react-native-pubky';
 import { KeyStore } from './KeyStore';
 import { LinkService } from './link/LinkService';
-import { paintSigningOut, restorePaintedOwner } from './paintedOwner';
+import { StorageService } from './StorageService';
+import {
+  activeOwnerAtCommit,
+  paintSigningOut,
+  restorePaintedOwner,
+  SIGNING_OUT,
+} from './paintedOwner';
 import type { UserProfile, PubkyKey } from '../types';
 
 /**
@@ -38,6 +44,25 @@ function unwrap<T>(result: { isOk(): boolean; value?: T; error?: Error }): T {
   return result.value as T;
 }
 
+async function finishIdentityClear(): Promise<void> {
+  try {
+    await KeyStore.clear();
+    KeyStore.clearSignOutIncomplete();
+    try {
+      await StorageService.clearSignOutIncompleteJournal();
+    } catch {
+      // Journal clear is best-effort once identity is gone.
+    }
+  } catch (err) {
+    try {
+      KeyStore.markSignOutIncomplete();
+    } catch {
+      // Boot still has getPubky(); the SQL journal may already be set.
+    }
+    throw err;
+  }
+}
+
 // ─── PubkyService ─────────────────────────────────────────────────────────────
 
 export const PubkyService = {
@@ -58,11 +83,34 @@ export const PubkyService = {
       // Full messaging teardown (KeyStore attachment keys, cache, SQL) while
       // the current-owner identity is still readable. Identity clear is last.
       await LinkService.clearSession();
-      await KeyStore.clear();
     } catch (err) {
-      if (previousOwner) restorePaintedOwner(previousOwner);
+      if (activeOwnerAtCommit() === SIGNING_OUT) {
+        await finishIdentityClear();
+      } else if (previousOwner) {
+        restorePaintedOwner(previousOwner);
+      }
       throw err;
     }
+    await finishIdentityClear();
+  },
+
+  async hasInterruptedSignOut(): Promise<boolean> {
+    if (KeyStore.isSignOutIncomplete()) return true;
+    try {
+      return await StorageService.hasSignOutIncompleteJournal();
+    } catch {
+      return false;
+    }
+  },
+
+  async completeInterruptedSignOut(): Promise<void> {
+    paintSigningOut();
+    try {
+      await LinkService.clearSession();
+    } catch {
+      // Finish identity even if a commit step threw.
+    }
+    await finishIdentityClear();
   },
 
   // ── Profile ────────────────────────────────────────────────────────────────

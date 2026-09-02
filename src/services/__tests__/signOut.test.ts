@@ -22,13 +22,24 @@ jest.mock('../KeyStore', () => ({
     isAppCertValid: jest.fn(),
     getAppKeypair: jest.fn(),
     clear: jest.fn(),
+    markSignOutIncomplete: jest.fn(),
+    isSignOutIncomplete: jest.fn(() => false),
+    clearSignOutIncomplete: jest.fn(),
+  },
+}));
+
+jest.mock('../StorageService', () => ({
+  StorageService: {
+    persistSignOutIncompleteJournal: jest.fn().mockResolvedValue(undefined),
+    hasSignOutIncompleteJournal: jest.fn().mockResolvedValue(false),
+    clearSignOutIncompleteJournal: jest.fn().mockResolvedValue(undefined),
   },
 }));
 
 import { KeyStore } from '../KeyStore';
 import { LinkService } from '../link/LinkService';
 import { PubkyService } from '../PubkyService';
-import { activeOwnerAtCommit, paintOwner } from '../paintedOwner';
+import { activeOwnerAtCommit, paintOwner, restorePaintedOwner, SIGNING_OUT } from '../paintedOwner';
 
 describe('sign-out teardown', () => {
   const callOrder: string[] = [];
@@ -57,9 +68,22 @@ describe('sign-out teardown', () => {
   it('restores the painted owner when teardown throws', async () => {
     const owner = 'a'.repeat(52);
     paintOwner(owner);
-    jest.mocked(LinkService.clearSession).mockRejectedValueOnce(new Error('teardown'));
+    jest.mocked(LinkService.clearSession).mockImplementationOnce(async () => {
+      restorePaintedOwner(owner);
+      throw new Error('teardown');
+    });
     await expect(PubkyService.signOut()).rejects.toThrow('teardown');
     expect(activeOwnerAtCommit()).toBe(owner);
     expect(KeyStore.clear).not.toHaveBeenCalled();
+  });
+
+  it('does not restore paint when KeyStore.clear throws after a successful teardown', async () => {
+    const owner = 'a'.repeat(52);
+    paintOwner(owner);
+    jest.mocked(KeyStore.clear).mockRejectedValueOnce(new Error('identity-clear'));
+    await expect(PubkyService.signOut()).rejects.toThrow('identity-clear');
+    expect(activeOwnerAtCommit()).toBe(SIGNING_OUT);
+    expect(KeyStore.markSignOutIncomplete).toHaveBeenCalled();
+    expect(LinkService.clearSession).toHaveBeenCalled();
   });
 });

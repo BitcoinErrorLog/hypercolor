@@ -1540,6 +1540,88 @@ describe('link schema v15 — durable handshake abuse budget (real SQL)', () => 
     );
   });
 
+  it('wipes only the signed-out account queue rows and leaves the other owner', async () => {
+    const db = openMemoryDb();
+    setDbForTests(db);
+    await runMigrations(db);
+    await StorageService.enqueue({
+      id: 'q-mine',
+      messageId: EVENT,
+      recipientPubky: PEER,
+      payload: JSON.stringify({
+        type: 'link.chat.message',
+        ownerPubky: OWNER,
+        peerPubky: PEER,
+        senderPubky: OWNER,
+        kind: CHAT_MESSAGE_KIND,
+        eventId: EVENT,
+        rawJson: '{}',
+      }),
+      attempts: 0,
+      nextRetryAt: 1,
+      createdAt: 1,
+    });
+    await asOwner(OTHER, () =>
+      StorageService.enqueue({
+        id: 'q-other',
+        messageId: EVENT,
+        recipientPubky: PEER,
+        payload: JSON.stringify({
+          type: 'link.chat.message',
+          ownerPubky: OTHER,
+          peerPubky: PEER,
+          senderPubky: OTHER,
+          kind: CHAT_MESSAGE_KIND,
+          eventId: EVENT,
+          rawJson: '{}',
+        }),
+        attempts: 0,
+        nextRetryAt: 1,
+        createdAt: 1,
+      }),
+    );
+
+    await StorageService.clearAccountData(OWNER);
+
+    expect(await StorageService.hasQueueItem('q-mine')).toBe(false);
+    expect(await StorageService.hasQueueItem('q-other')).toBe(true);
+  });
+
+  it('deletes owner-less queue rows on clearAccountData', async () => {
+    const db = openMemoryDb();
+    setDbForTests(db);
+    await runMigrations(db);
+    db.executeSync(
+      `INSERT INTO delivery_queue (id, message_id, recipient_pubky, payload, attempts, next_retry_at, created_at)
+       VALUES ('q-legacy', ?, ?, ?, 0, 1, 1)`,
+      [EVENT, PEER, JSON.stringify({ type: 'link.chat.message', rawJson: 'secret' })],
+    );
+    await asOwner(OTHER, () =>
+      StorageService.enqueue({
+        id: 'q-other',
+        messageId: EVENT,
+        recipientPubky: PEER,
+        payload: JSON.stringify({
+          type: 'link.chat.message',
+          ownerPubky: OTHER,
+          peerPubky: PEER,
+          senderPubky: OTHER,
+          kind: CHAT_MESSAGE_KIND,
+          eventId: EVENT,
+          rawJson: '{}',
+        }),
+        attempts: 0,
+        nextRetryAt: 1,
+        createdAt: 1,
+      }),
+    );
+
+    await StorageService.clearAccountData(OWNER);
+
+    expect(await StorageService.hasQueueItem('q-legacy')).toBe(false);
+    expect(await StorageService.hasQueueItem('q-other')).toBe(true);
+  });
+
   it('forgets the budget on an explicit clear', async () => {
     const db = openMemoryDb();
     setDbForTests(db);
@@ -1926,6 +2008,63 @@ describe('link schema v16 — per-recipient group fan-out outcomes (real SQL)', 
     expect(await StorageService.hasQueueItem('q-fan-3')).toBe(false);
     expect(await StorageService.hasQueueItem('q-fan-4')).toBe(false);
     db.close();
+  });
+});
+
+describe('link schema v16 — legacy queue owner backfill', () => {
+  it('backfills ownerPubky from a matching link message on in-version reconcile', async () => {
+    const db = openMemoryDb();
+    setDbForTests(db);
+    await runMigrations(db);
+    await StorageService.saveLinkMessage({
+      ownerPubky: OWNER,
+      eventId: EVENT,
+      conversationId: `dm:${PEER}`,
+      peerPubky: PEER,
+      senderPubky: OWNER,
+      direction: 'sent',
+      kind: CHAT_MESSAGE_KIND,
+      rawJson: '{}',
+      body: 'out',
+      sentAt: 1,
+      receivedAt: null,
+      deliveryState: 'sending',
+    });
+    db.executeSync(
+      `INSERT INTO delivery_queue (id, message_id, recipient_pubky, payload, attempts, next_retry_at, created_at)
+       VALUES ('q-legacy-owned', ?, ?, ?, 0, 1, 1)`,
+      [
+        EVENT,
+        PEER,
+        JSON.stringify({
+          type: 'link.chat.message',
+          peerPubky: PEER,
+          senderPubky: OWNER,
+          kind: CHAT_MESSAGE_KIND,
+          eventId: EVENT,
+          rawJson: 'plaintext-retry',
+        }),
+      ],
+    );
+    await runMigrations(db);
+    const queued = await StorageService.listDeliveryQueue();
+    const row = queued.find(item => item.id === 'q-legacy-owned');
+    expect(row).toBeDefined();
+    expect(JSON.parse(row!.payload).ownerPubky).toBe(OWNER);
+    expect(JSON.parse(row!.payload).rawJson).toBe('plaintext-retry');
+  });
+
+  it('deletes a legacy queue row whose owner cannot be derived', async () => {
+    const db = openMemoryDb();
+    setDbForTests(db);
+    await runMigrations(db);
+    db.executeSync(
+      `INSERT INTO delivery_queue (id, message_id, recipient_pubky, payload, attempts, next_retry_at, created_at)
+       VALUES ('q-legacy-orphan', 'missing-event', ?, ?, 0, 1, 1)`,
+      [PEER, 'not-json'],
+    );
+    await runMigrations(db);
+    expect(await StorageService.hasQueueItem('q-legacy-orphan')).toBe(false);
   });
 });
 

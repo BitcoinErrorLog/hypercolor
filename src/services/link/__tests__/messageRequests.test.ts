@@ -74,6 +74,9 @@ jest.mock('../../StorageService', () => ({
     getLinkReadCursor: jest.fn(),
     setLinkReadCursor: jest.fn(),
     clearAccountData: jest.fn(),
+    persistSignOutIncompleteJournal: jest.fn().mockResolvedValue(undefined),
+    hasSignOutIncompleteJournal: jest.fn().mockResolvedValue(false),
+    clearSignOutIncompleteJournal: jest.fn().mockResolvedValue(undefined),
     retryPendingCleanup: jest.fn(),
     markGroupEventSeen: jest.fn(),
     listDeliveryQueue: jest.fn(),
@@ -120,6 +123,9 @@ jest.mock('../../KeyStore', () => ({
     getLinkSession: jest.fn(),
     setLinkSession: jest.fn(),
     deleteLinkSession: jest.fn(),
+    markSignOutIncomplete: jest.fn(),
+    isSignOutIncomplete: jest.fn(() => false),
+    clearSignOutIncomplete: jest.fn(),
   },
 }));
 

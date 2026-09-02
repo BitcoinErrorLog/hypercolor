@@ -10,7 +10,7 @@ import { DebugSignupPanel } from '../auth/DebugSignupPanel';
 import { getE2eIdentity } from '../../navigation/e2eSignupResult';
 import { switchE2eSavedSlotFromUi } from '../../navigation/e2eDeepLinks';
 import { COPY } from '../../copy/uxCopy';
-import { paintSigningOut, restorePaintedOwner } from '../../services/paintedOwner';
+import { paintSigningOut } from '../../services/paintedOwner';
 import { CustodyLine } from '../../ui/CustodyLine';
 import { SignOutSheet } from '../../ui/SignOutSheet';
 import { HIT_SLOP_44 } from '../../ui/hitTarget';
@@ -57,17 +57,23 @@ export default function ProfileScreen() {
   async function confirmSignOut() {
     setSignOutBusy(true);
     setSignOutError(null);
-    const previousOwner = pubky;
+    paintSigningOut();
     try {
-      paintSigningOut();
-      await PubkyService.signOut();
-      clearLastBackupAt();
-      clearSession();
-      setSignOutOpen(false);
-    } catch (err) {
-      if (previousOwner) restorePaintedOwner(previousOwner);
-      const sanitized = sanitizeError(err, COPY.couldNotSignOut);
-      setSignOutError({ message: sanitized.message, details: sanitized.details });
+      try {
+        await PubkyService.signOut();
+      } catch (err) {
+        const sanitized = sanitizeError(err, COPY.couldNotSignOut);
+        setSignOutError({ message: sanitized.message, details: sanitized.details });
+        return;
+      }
+      try {
+        clearLastBackupAt();
+        clearSession();
+        setSignOutOpen(false);
+      } catch (err) {
+        const sanitized = sanitizeError(err, COPY.couldNotSignOut);
+        setSignOutError({ message: sanitized.message, details: sanitized.details });
+      }
     } finally {
       setSignOutBusy(false);
     }

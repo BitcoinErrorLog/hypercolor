@@ -18,6 +18,17 @@ jest.mock('../KeyStore', () => ({
     getAppKeypair: (...args: unknown[]) => mockGetAppKeypair(...args),
     getSessionSecret: jest.fn(),
     clear: jest.fn(),
+    markSignOutIncomplete: jest.fn(),
+    isSignOutIncomplete: jest.fn(() => false),
+    clearSignOutIncomplete: jest.fn(),
+  },
+}));
+
+jest.mock('../StorageService', () => ({
+  StorageService: {
+    persistSignOutIncompleteJournal: jest.fn().mockResolvedValue(undefined),
+    hasSignOutIncompleteJournal: jest.fn().mockResolvedValue(false),
+    clearSignOutIncompleteJournal: jest.fn().mockResolvedValue(undefined),
   },
 }));
 

@@ -288,10 +288,10 @@ export const LinkService = {
     const previousOwner = session?.pubky ?? KeyStore.getPubky();
     paintSigningOut();
     stopLinkRetryDrain();
+    const owner = previousOwner;
+    const alias = session?.alias ?? KeyStore.getLinkSession();
+    let markerPath = LINK_RECEIVER_PATH;
     try {
-      const owner = previousOwner;
-      const alias = session?.alias ?? KeyStore.getLinkSession();
-      let markerPath = LINK_RECEIVER_PATH;
       if (owner) {
         const receiver = await StorageService.getLinkReceiver(owner);
         if (receiver) markerPath = coerceReceiverPath(receiver.receiverPath);
@@ -300,33 +300,12 @@ export const LinkService = {
           const live = liveHandles.get(linkKey(owner, link.peerPubky));
           if (live) await closeQuietly(live.linkId);
         }
-        await StorageService.clearAccountData(owner);
       }
-      if (alias) {
-        try {
-          await PaykitLinkNative.removeReceiverMarker(alias, markerPath);
-        } catch {
-          // Best-effort: peers should stop handshaking into a dead inbox.
-        }
-        try {
-          await PaykitLinkNative.signOutSession(alias);
-        } catch {
-          // Native may already have dropped the bearer.
-        }
-      }
-      try {
-        await PaykitLinkNative.clearAllNativeSecrets();
-      } catch {
-        // Best-effort: leftover receiver/session aliases must not survive a switch.
-      }
-      session = null;
-      liveHandles.clear();
-      queues.clear();
-      KeyStore.deleteLinkSession();
     } catch (err) {
       if (previousOwner) restorePaintedOwner(previousOwner);
       throw err;
     }
+    await commitSignOutWipe({ owner: owner ?? null, alias: alias ?? null, markerPath });
   },
 
   /**
@@ -3084,6 +3063,83 @@ async function closeQuietly(linkId: string): Promise<void> {
   } catch (err) {
     if (isLinkNativeError(err) && err.code === 'unavailable') throw err;
   }
+}
+
+async function persistSignOutIncompleteMarker(owner: string | null): Promise<void> {
+  try {
+    KeyStore.markSignOutIncomplete();
+  } catch {
+    // MMKV may already be the failing store; SQL journal is the fallback.
+  }
+  if (!owner) return;
+  try {
+    await StorageService.persistSignOutIncompleteJournal(owner);
+  } catch {
+    // Best-effort durable marker.
+  }
+}
+
+function deleteLinkSessionWithRetry(): void {
+  try {
+    KeyStore.deleteLinkSession();
+  } catch {
+    try {
+      KeyStore.deleteLinkSession();
+    } catch (err) {
+      try {
+        KeyStore.markSignOutIncomplete();
+      } catch {
+        // Marker write may fail on the same store.
+      }
+      throw err;
+    }
+  }
+}
+
+async function commitSignOutWipe(input: {
+  owner: string | null;
+  alias: string | null;
+  markerPath: string;
+}): Promise<void> {
+  await persistSignOutIncompleteMarker(input.owner);
+  const errors: unknown[] = [];
+  const capture = async (work: () => Promise<void>): Promise<void> => {
+    try {
+      await work();
+    } catch (err) {
+      errors.push(err);
+    }
+  };
+
+  if (input.owner) {
+    await capture(() => StorageService.clearAccountData(input.owner!));
+  }
+  if (input.alias) {
+    try {
+      await PaykitLinkNative.removeReceiverMarker(input.alias, input.markerPath);
+    } catch {
+      // Best-effort: peers should stop handshaking into a dead inbox.
+    }
+    try {
+      await PaykitLinkNative.signOutSession(input.alias);
+    } catch {
+      // Native may already have dropped the bearer.
+    }
+  }
+  try {
+    await PaykitLinkNative.clearAllNativeSecrets();
+  } catch {
+    // Best-effort: leftover receiver/session aliases must not survive a switch.
+  }
+  session = null;
+  liveHandles.clear();
+  queues.clear();
+  try {
+    deleteLinkSessionWithRetry();
+  } catch (err) {
+    errors.push(err);
+  }
+  if (errors.length > 0) throw errors[0];
 }
 
 /**

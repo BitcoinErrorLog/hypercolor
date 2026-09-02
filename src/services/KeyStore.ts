@@ -42,6 +42,7 @@ const PUBKY_KEY = 'pubky';
 const HOMESERVER_KEY = 'homeserver';
 const SESSION_SECRET_KEY = 'session_secret';
 const LINK_SESSION_KEY = 'link_session';
+const SIGN_OUT_INCOMPLETE_KEY = 'sign_out_incomplete';
 
 const MMKV_KEY_SERVICE = 'hypercolor-mmkv-encryption-key';
 let _store: MMKV | null = null;
@@ -252,6 +253,23 @@ export function getLinkSession(): string | null {
 
 export function deleteLinkSession(): void {
   store().remove(LINK_SESSION_KEY);
+}
+
+/**
+ * Durable flag that an irreversible sign-out started but identity clear
+ * did not finish. Survives `clear()` so boot can complete the wipe before
+ * painting any owner. Cleared only after a successful identity wipe.
+ */
+export function markSignOutIncomplete(): void {
+  store().set(SIGN_OUT_INCOMPLETE_KEY, '1');
+}
+
+export function isSignOutIncomplete(): boolean {
+  return store().getString(SIGN_OUT_INCOMPLETE_KEY) === '1';
+}
+
+export function clearSignOutIncomplete(): void {
+  store().remove(SIGN_OUT_INCOMPLETE_KEY);
 }
 
 // ─── Pending Ring handoff (OS Keychain — survives process death) ─────────────
@@ -555,6 +573,9 @@ export const KeyStore = {
   setLinkSession,
   getLinkSession,
   deleteLinkSession,
+  markSignOutIncomplete,
+  isSignOutIncomplete,
+  clearSignOutIncomplete,
   setPendingRingHandoff,
   getPendingRingHandoff,
   getPendingRingHandoffExpiresAt,

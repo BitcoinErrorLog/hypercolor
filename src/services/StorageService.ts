@@ -73,6 +73,9 @@ import { OWNER_BACKUP_VERSION, type OwnerBackupSnapshot } from './backup/snapsho
 
 const now = () => Date.now();
 
+const SIGN_OUT_INCOMPLETE_KIND = 'sign-out-incomplete';
+const SIGN_OUT_INCOMPLETE_TARGET = 'identity';
+
 /**
  * Owner-conditional commit: one synchronous check against the painted
  * identity immediately before BEGIN / executeSync, in the same tick as
@@ -460,7 +463,7 @@ export const StorageService = {
       throw new LinkSendError('owner-changed', 'StorageService: queue payload missing owner');
     }
     await ownedWrite(owner, db => {
-      insertQueueItem(db, item);
+      insertQueueItem(db, item, owner);
     });
   },
 
@@ -779,8 +782,9 @@ export const StorageService = {
     queueItem: DeliveryQueueItem;
   }): Promise<void> {
     await ownedTransact(input.message.ownerPubky, db => {
+      const item = bindQueueItemToOwner(input.queueItem, input.message.ownerPubky);
       insertLinkMessage(db, input.message);
-      insertQueueItem(db, input.queueItem);
+      insertQueueItem(db, item, input.message.ownerPubky);
     });
   },
 
@@ -1291,7 +1295,10 @@ export const StorageService = {
 
     const ownerQueueIds: string[] = [];
     for (const item of await StorageService.listDeliveryQueue()) {
-      if (queuePayloadBelongsToOwner(item.payload, ownerPubky)) {
+      if (
+        queuePayloadBelongsToOwner(item.payload, ownerPubky) ||
+        queueOwnerFromPayload(item.payload) === null
+      ) {
         ownerQueueIds.push(item.id);
       }
     }
@@ -1326,8 +1333,19 @@ export const StorageService = {
         );
       }
       for (const id of ownerQueueIds) {
-        db.executeSync('DELETE FROM delivery_queue WHERE id = ?', [id]);
+        db.executeSync(
+          `DELETE FROM delivery_queue
+           WHERE id = ?
+             AND (
+               json_extract(payload, '$.ownerPubky') = ?
+               OR json_extract(payload, '$.ownerPubky') IS NULL
+             )`,
+          [id, ownerPubky],
+        );
       }
+      db.executeSync(
+        `DELETE FROM delivery_queue WHERE json_extract(payload, '$.ownerPubky') IS NULL`,
+      );
       db.executeSync('DELETE FROM attachments WHERE owner_pubky = ?', [ownerPubky]);
       db.executeSync('DELETE FROM payment_events WHERE owner_pubky = ?', [ownerPubky]);
       db.executeSync('DELETE FROM payment_requests WHERE owner_pubky = ?', [ownerPubky]);
@@ -1358,6 +1376,7 @@ export const StorageService = {
       const ownerPubky = String(row.owner_pubky);
       const targetKind = String(row.target_kind);
       const target = String(row.target);
+      if (targetKind === SIGN_OUT_INCOMPLETE_KIND) continue;
       let ok = false;
       if (
         targetKind === 'keystore' &&
@@ -1384,6 +1403,29 @@ export const StorageService = {
         );
       }
     }
+  },
+
+  async persistSignOutIncompleteJournal(ownerPubky: PubkyKey): Promise<void> {
+    const db = await getDb();
+    db.executeSync(
+      `INSERT OR IGNORE INTO pending_cleanup
+        (owner_pubky, target_kind, target, created_at)
+       VALUES (?, ?, ?, ?)`,
+      [ownerPubky, SIGN_OUT_INCOMPLETE_KIND, SIGN_OUT_INCOMPLETE_TARGET, now()],
+    );
+  },
+
+  async hasSignOutIncompleteJournal(): Promise<boolean> {
+    const db = await getDb();
+    const result = db.executeSync(`SELECT 1 FROM pending_cleanup WHERE target_kind = ? LIMIT 1`, [
+      SIGN_OUT_INCOMPLETE_KIND,
+    ]);
+    return (result.rows?.length ?? 0) > 0;
+  },
+
+  async clearSignOutIncompleteJournal(): Promise<void> {
+    const db = await getDb();
+    db.executeSync(`DELETE FROM pending_cleanup WHERE target_kind = ?`, [SIGN_OUT_INCOMPLETE_KIND]);
   },
 
   // ── Attachments (M4) ──────────────────────────────────────────────────────
@@ -2146,7 +2188,8 @@ export const StorageService = {
       insertGroupMessage(db, input.message);
       const ts = now();
       for (const item of input.queueItems) {
-        insertQueueItem(db, item);
+        const bound = bindQueueItemToOwner(item, input.message.ownerPubky);
+        insertQueueItem(db, bound, input.message.ownerPubky);
         upsertFanoutOutcomeLocked(db, {
           ownerPubky: input.message.ownerPubky,
           channelId: input.message.channelId,
@@ -2451,7 +2494,11 @@ export const StorageService = {
         if (!applied) throw new CasConflictError();
         insertPaymentEvent(db, input.event);
         insertLinkMessage(db, input.sendIntent.message);
-        insertQueueItem(db, input.sendIntent.queueItem);
+        insertQueueItem(
+          db,
+          bindQueueItemToOwner(input.sendIntent.queueItem, input.ownerPubky),
+          input.ownerPubky,
+        );
       });
       return true;
     } catch (err) {
@@ -2469,7 +2516,11 @@ export const StorageService = {
       insertPaymentRequest(db, input.record);
       insertPaymentEvent(db, input.event);
       insertLinkMessage(db, input.sendIntent.message);
-      insertQueueItem(db, input.sendIntent.queueItem);
+      insertQueueItem(
+        db,
+        bindQueueItemToOwner(input.sendIntent.queueItem, input.record.ownerPubky),
+        input.record.ownerPubky,
+      );
     });
   },
 
@@ -2480,7 +2531,11 @@ export const StorageService = {
     await ownedTransact(input.event.ownerPubky, db => {
       insertPaymentEvent(db, input.event);
       insertLinkMessage(db, input.sendIntent.message);
-      insertQueueItem(db, input.sendIntent.queueItem);
+      insertQueueItem(
+        db,
+        bindQueueItemToOwner(input.sendIntent.queueItem, input.event.ownerPubky),
+        input.event.ownerPubky,
+      );
     });
   },
 
@@ -2786,7 +2841,29 @@ function settleGroupFanoutLocked(
   }
 }
 
-function insertQueueItem(db: SqlExecutor, item: DeliveryQueueItem): void {
+function bindQueueItemToOwner(item: DeliveryQueueItem, expectedOwner: PubkyKey): DeliveryQueueItem {
+  let parsed: Record<string, unknown>;
+  try {
+    const value = JSON.parse(item.payload) as unknown;
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+      throw new LinkSendError('owner-changed', 'StorageService: queue payload owner mismatch');
+    }
+    parsed = value as Record<string, unknown>;
+  } catch (err) {
+    if (err instanceof LinkSendError) throw err;
+    throw new LinkSendError('owner-changed', 'StorageService: queue payload owner mismatch');
+  }
+  const existing = parsed.ownerPubky;
+  if (typeof existing === 'string' && existing.length > 0 && existing !== expectedOwner) {
+    throw new LinkSendError('owner-changed', 'StorageService: queue payload owner mismatch');
+  }
+  return { ...item, payload: JSON.stringify({ ...parsed, ownerPubky: expectedOwner }) };
+}
+
+function insertQueueItem(db: SqlExecutor, item: DeliveryQueueItem, expectedOwner: PubkyKey): void {
+  if (queueOwnerFromPayload(item.payload) !== expectedOwner) {
+    throw new LinkSendError('owner-changed', 'StorageService: queue payload owner mismatch');
+  }
   db.executeSync(
     `INSERT OR REPLACE INTO delivery_queue
       (id, message_id, recipient_pubky, payload, attempts, next_retry_at, created_at)

@@ -44,6 +44,16 @@ export function restorePaintedOwner(pubky: PubkyKey): void {
   overlay = { kind: 'owner', pubky };
 }
 
+/**
+ * Drop the in-memory overlay so commit identity is read from auth / KeyStore.
+ * Boot calls this after confirming sign-out is not incomplete, matching a
+ * fresh JS context. Do not call this to undo a failed sign-out — use
+ * {@link restorePaintedOwner} for the reversible prelude only.
+ */
+export function resetPaintOverlayForBoot(): void {
+  overlay = { kind: 'unset' };
+}
+
 export function activeOwnerAtCommit(): PaintedOwner {
   if (overlay.kind === 'signing-out') return SIGNING_OUT;
   if (overlay.kind === 'owner') return overlay.pubky;

@@ -198,4 +198,23 @@ describe('KeyStore session and Ring pending', () => {
     setPubky('pubky-owner');
     await expect(hasPersistedSession()).resolves.toBe(true);
   });
+
+  it('keeps the sign-out-incomplete marker across KeyStore.clear', async () => {
+    const {
+      initKeyStore,
+      setPubky,
+      markSignOutIncomplete,
+      isSignOutIncomplete,
+      clear,
+      clearSignOutIncomplete,
+    } = await freshKeyStore();
+    await initKeyStore();
+    setPubky('pubky-owner');
+    markSignOutIncomplete();
+    expect(isSignOutIncomplete()).toBe(true);
+    await clear();
+    expect(isSignOutIncomplete()).toBe(true);
+    clearSignOutIncomplete();
+    expect(isSignOutIncomplete()).toBe(false);
+  });
 });

@@ -16,7 +16,7 @@ import {
   SCHEMA_V15_STATEMENTS,
   SCHEMA_V16_STATEMENTS,
 } from './schema';
-import type { SqlExecutor } from './sql';
+import type { SqlExecutor, SqlValue } from './sql';
 
 /**
  * Migration runner for Hypercolor SQLite database.
@@ -79,6 +79,7 @@ export async function runMigrations(db: SqlExecutor): Promise<void> {
         applyStatement(db, statement);
       }
       ensureBlockedPeersCleanupPending(db);
+      reconcileLegacyQueueOwners(db);
       db.executeSync('COMMIT');
     } catch (err) {
       db.executeSync('ROLLBACK');
@@ -101,6 +102,136 @@ export async function runMigrations(db: SqlExecutor): Promise<void> {
     } catch (err) {
       db.executeSync('ROLLBACK');
       throw new Error(`Migration v${migration.version} failed: ${(err as Error).message}`);
+    }
+  }
+
+  db.executeSync('BEGIN');
+  try {
+    reconcileLegacyQueueOwners(db);
+    db.executeSync('COMMIT');
+  } catch (err) {
+    db.executeSync('ROLLBACK');
+    throw err;
+  }
+}
+
+function tableExists(db: SqlExecutor, name: string): boolean {
+  const result = db.executeSync(
+    `SELECT 1 AS n FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1`,
+    [name],
+  );
+  return (result.rows?.length ?? 0) > 0;
+}
+
+function payloadOwner(payload: string): string | null {
+  try {
+    const parsed = JSON.parse(payload) as { ownerPubky?: unknown };
+    return typeof parsed.ownerPubky === 'string' && parsed.ownerPubky.length > 0
+      ? parsed.ownerPubky
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function distinctOwners(db: SqlExecutor, sql: string, params: SqlValue[]): string[] {
+  try {
+    const result = db.executeSync(sql, params);
+    return [...new Set((result.rows ?? []).map(row => String(row.owner_pubky)))].filter(
+      owner => owner.length > 0,
+    );
+  } catch {
+    return [];
+  }
+}
+
+function deriveLegacyQueueOwner(
+  db: SqlExecutor,
+  row: { message_id: unknown; recipient_pubky: unknown; payload: unknown },
+): string | null {
+  let parsed: {
+    eventId?: unknown;
+    senderPubky?: unknown;
+    kind?: unknown;
+    channelId?: unknown;
+    peerPubky?: unknown;
+  } = {};
+  try {
+    const value = JSON.parse(String(row.payload ?? '')) as unknown;
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
+    parsed = value as typeof parsed;
+  } catch {
+    return null;
+  }
+  const eventId =
+    typeof parsed.eventId === 'string' && parsed.eventId.length > 0
+      ? parsed.eventId
+      : String(row.message_id ?? '');
+  const sender = typeof parsed.senderPubky === 'string' ? parsed.senderPubky : null;
+  const kind = typeof parsed.kind === 'string' ? parsed.kind : null;
+  const peer =
+    typeof parsed.peerPubky === 'string' ? parsed.peerPubky : String(row.recipient_pubky ?? '');
+  const channelId = typeof parsed.channelId === 'string' ? parsed.channelId : null;
+
+  if (eventId.length > 0 && tableExists(db, 'link_messages')) {
+    const owners = distinctOwners(
+      db,
+      `SELECT DISTINCT owner_pubky FROM link_messages
+       WHERE event_id = ?
+         AND (? IS NULL OR sender_pubky = ?)
+         AND (? IS NULL OR kind = ?)
+         AND (? IS NULL OR peer_pubky = ?)`,
+      [eventId, sender, sender, kind, kind, peer, peer],
+    );
+    if (owners.length === 1) return owners[0]!;
+    if (owners.length > 1) return null;
+  }
+
+  if (eventId.length > 0 && tableExists(db, 'group_messages')) {
+    const owners = distinctOwners(
+      db,
+      `SELECT DISTINCT owner_pubky FROM group_messages
+       WHERE event_id = ?
+         AND (? IS NULL OR sender_pubky = ?)
+         AND (? IS NULL OR channel_id = ?)`,
+      [eventId, sender, sender, channelId, channelId],
+    );
+    if (owners.length === 1) return owners[0]!;
+  }
+  return null;
+}
+
+/**
+ * Pre-v4 `delivery_queue` rows have no `payload.ownerPubky`. Backfill from
+ * the matching message row when exactly one owner is derivable; otherwise
+ * delete — plaintext retention is worse than a lost retry.
+ */
+function reconcileLegacyQueueOwners(db: SqlExecutor): void {
+  if (!tableExists(db, 'delivery_queue')) return;
+  const rows =
+    db.executeSync('SELECT id, message_id, recipient_pubky, payload FROM delivery_queue').rows ??
+    [];
+  for (const row of rows) {
+    const id = String(row.id);
+    const payload = String(row.payload ?? '');
+    if (payloadOwner(payload)) continue;
+    const derived = deriveLegacyQueueOwner(db, {
+      message_id: row.message_id,
+      recipient_pubky: row.recipient_pubky,
+      payload: row.payload,
+    });
+    if (!derived) {
+      db.executeSync('DELETE FROM delivery_queue WHERE id = ?', [id]);
+      continue;
+    }
+    try {
+      const parsed = JSON.parse(payload) as Record<string, unknown>;
+      db.executeSync('UPDATE delivery_queue SET payload = ? WHERE id = ?', [
+        JSON.stringify({ ...parsed, ownerPubky: derived }),
+        id,
+      ]);
+    } catch {
+      db.executeSync('DELETE FROM delivery_queue WHERE id = ?', [id]);
     }
   }
 }

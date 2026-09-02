@@ -17,6 +17,7 @@ import { PaykitLinkNative } from '../PaykitLinkNative';
 import { StorageService } from '../../StorageService';
 import { KeyStore } from '../../KeyStore';
 import { RetryQueue } from '../../RetryQueue';
+import { resetPaintOverlayForBoot } from '../../paintedOwner';
 import {
   CHAT_MESSAGE_KIND,
   LINK_MESSAGE_MAX_BYTES,
@@ -124,6 +125,9 @@ jest.mock('../../StorageService', () => ({
     getLinkReadCursor: jest.fn(),
     setLinkReadCursor: jest.fn(),
     clearAccountData: jest.fn(),
+    persistSignOutIncompleteJournal: jest.fn().mockResolvedValue(undefined),
+    hasSignOutIncompleteJournal: jest.fn().mockResolvedValue(false),
+    clearSignOutIncompleteJournal: jest.fn().mockResolvedValue(undefined),
     retryPendingCleanup: jest.fn(),
     markGroupEventSeen: jest.fn(),
     listDeliveryQueue: jest.fn(),
@@ -198,6 +202,9 @@ jest.mock('../../KeyStore', () => ({
     getLinkSession: jest.fn(),
     setLinkSession: jest.fn(),
     deleteLinkSession: jest.fn(),
+    markSignOutIncomplete: jest.fn(),
+    isSignOutIncomplete: jest.fn(() => false),
+    clearSignOutIncomplete: jest.fn(),
     setAttachmentSecret: jest.fn(),
     getAttachmentSecret: jest.fn(),
     deleteAttachmentSecrets: jest.fn(),
@@ -880,6 +887,16 @@ describe('LinkService', () => {
       mockedKeyStore.getPubky.mockReturnValue(null);
 
       await expect(LinkService.ensureLinkWith(PEER)).resolves.toBe('error');
+    });
+
+    it('reports needs-enable when there is no session and no paint', async () => {
+      resetLinkServiceHarnessState();
+      resetPaintOverlayForBoot();
+      mockedKeyStore.getLinkSession.mockReturnValue(null);
+      mockedKeyStore.getPubky.mockReturnValue(null);
+      mockedNative.isAvailable.mockReturnValue(false);
+
+      await expect(LinkService.ensureLinkWith(PEER)).resolves.toBe('needs-enable');
     });
 
     it('reports needs-enable when the receiver marker was never published', async () => {
