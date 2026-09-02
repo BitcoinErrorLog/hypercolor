@@ -9,7 +9,7 @@ import { runMigrations } from '../../../db/migrations';
 import { openMemoryDb } from '../../../db/__tests__/betterSqliteAdapter';
 import { StorageService } from '../../StorageService';
 import { KeyStore } from '../../KeyStore';
-import { clearPaintedOwner, paintOwner } from '../../paintedOwner';
+import { paintOwner } from '../../paintedOwner';
 import { LinkService } from '../../link/LinkService';
 import { applyGroupInbound } from '../applyGroupInbound';
 import { GroupService } from '../GroupService';
@@ -109,7 +109,6 @@ describe('group inbound adversarial', () => {
 
   afterEach(() => {
     setDbForTests(null);
-    clearPaintedOwner();
     jest.restoreAllMocks();
   });
 

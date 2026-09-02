@@ -28,6 +28,7 @@ jest.mock('../KeyStore', () => ({
 import { KeyStore } from '../KeyStore';
 import { LinkService } from '../link/LinkService';
 import { PubkyService } from '../PubkyService';
+import { activeOwnerAtCommit, paintOwner } from '../paintedOwner';
 
 describe('sign-out teardown', () => {
   const callOrder: string[] = [];
@@ -51,5 +52,14 @@ describe('sign-out teardown', () => {
     const teardownOrder = jest.mocked(LinkService.clearSession).mock.invocationCallOrder[0]!;
     const identityOrder = jest.mocked(KeyStore.clear).mock.invocationCallOrder[0]!;
     expect(teardownOrder).toBeLessThan(identityOrder);
+  });
+
+  it('restores the painted owner when teardown throws', async () => {
+    const owner = 'a'.repeat(52);
+    paintOwner(owner);
+    jest.mocked(LinkService.clearSession).mockRejectedValueOnce(new Error('teardown'));
+    await expect(PubkyService.signOut()).rejects.toThrow('teardown');
+    expect(activeOwnerAtCommit()).toBe(owner);
+    expect(KeyStore.clear).not.toHaveBeenCalled();
   });
 });

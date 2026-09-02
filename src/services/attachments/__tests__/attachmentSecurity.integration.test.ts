@@ -75,7 +75,7 @@ import { getDb, setDbForTests } from '../../../db';
 import { runMigrations } from '../../../db/migrations';
 import { openMemoryDb } from '../../../db/__tests__/betterSqliteAdapter';
 import { StorageService } from '../../StorageService';
-import { clearPaintedOwner, paintOwner } from '../../paintedOwner';
+import { paintOwner } from '../../paintedOwner';
 import { KeyStore } from '../../KeyStore';
 import { applyAttachmentInbound } from '../applyAttachmentInbound';
 import { reconstructAttachmentWireJson } from '../redaction';
@@ -137,7 +137,6 @@ describe('attachment security (sqlite)', () => {
 
   afterEach(() => {
     setDbForTests(null);
-    clearPaintedOwner();
   });
 
   it('never persists live key/nonce in stream, messages, group, or retry queue', async () => {

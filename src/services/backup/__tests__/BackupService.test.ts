@@ -48,7 +48,7 @@ import { KeyStore } from '../../KeyStore';
 import { PaykitLinkNative } from '../../link/PaykitLinkNative';
 import { PubkyService } from '../../PubkyService';
 import { StorageService } from '../../StorageService';
-import { clearPaintedOwner, paintOwner } from '../../paintedOwner';
+import { paintOwner } from '../../paintedOwner';
 import { backupLatestUrl, BackupService, OWNER_BACKUP_VERSION } from '../BackupService';
 import type { OwnerBackupSnapshot } from '../snapshot';
 
@@ -195,7 +195,6 @@ describe('BackupService', () => {
 
   afterEach(() => {
     setDbForTests(null);
-    clearPaintedOwner();
   });
 
   it('export collects owner-scoped rows only and strips attachment secrets', async () => {

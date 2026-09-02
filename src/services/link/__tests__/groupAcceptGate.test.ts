@@ -184,7 +184,6 @@ jest.mock('../../KeyStore', () => ({
 
 jest.mock('../../RetryQueue', () => ({
   RetryQueue: {
-    enqueue: jest.fn(),
     getDue: jest.fn(),
     recordFailure: jest.fn(),
     recordSuccess: jest.fn(),

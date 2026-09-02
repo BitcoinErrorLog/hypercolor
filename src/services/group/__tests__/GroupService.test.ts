@@ -9,7 +9,7 @@ import { runMigrations } from '../../../db/migrations';
 import { openMemoryDb } from '../../../db/__tests__/betterSqliteAdapter';
 import { StorageService } from '../../StorageService';
 import { KeyStore } from '../../KeyStore';
-import { clearPaintedOwner, paintOwner } from '../../paintedOwner';
+import { paintOwner } from '../../paintedOwner';
 import { LinkService } from '../../link/LinkService';
 import { PubkyService } from '../../PubkyService';
 import { applyGroupInbound } from '../applyGroupInbound';
@@ -105,7 +105,6 @@ describe('GroupService', () => {
     db?.close();
     db = null;
     setDbForTests(null);
-    clearPaintedOwner();
     jest.restoreAllMocks();
   });
 

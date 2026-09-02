@@ -107,8 +107,13 @@ import {
 import { PaykitLinkNative } from '../link/PaykitLinkNative';
 import { CHAT_MESSAGE_KIND, LINK_RECEIVER_PATH, buildDmConversationId } from '../../types/link';
 import { GROUP_MESSAGE_KIND } from '../../types/group';
-import { paintOwner, paintSigningOut, clearPaintedOwner } from '../paintedOwner';
-import { PAYKIT_PAYMENT_REQUEST_KIND } from '../../types/payment';
+import { activeOwnerAtCommit, paintOwner, paintSigningOut, SIGNING_OUT } from '../paintedOwner';
+import {
+  EMPTY_PAYMENT_RECORD_EXTRAS,
+  ENDPOINT_LIGHTNING_BOLT11,
+  PAYKIT_PAYMENT_ACCEPTANCE_KIND,
+  PAYKIT_PAYMENT_REQUEST_KIND,
+} from '../../types/payment';
 
 const mockedNative = jest.mocked(PaykitLinkNative);
 const mockedKeyStore = jest.mocked(KeyStore);
@@ -170,7 +175,6 @@ describe('owner-conditional persist at commit time', () => {
     FollowsImportSettings.resetForTests();
     resetLinkServiceHarnessState();
     ownerCommitGetDbGate.current = null;
-    clearPaintedOwner();
     db = openMemoryDb();
     setDbForTests(db);
     await runMigrations(db);
@@ -218,7 +222,6 @@ describe('owner-conditional persist at commit time', () => {
     FollowsImportSettings.resetForTests();
     resetLinkServiceHarnessState();
     ownerCommitGetDbGate.current = null;
-    clearPaintedOwner();
     db?.close();
     db = null;
     setDbForTests(null);
@@ -452,7 +455,6 @@ describe('owner-conditional persist at commit time', () => {
     paintSigningOut();
     await StorageService.clearAccountData(OWNER);
     mockedKeyStore.getPubky.mockReturnValue(null);
-    clearPaintedOwner();
     stall.release();
     await expect(pending).rejects.toEqual(
       expect.objectContaining({ name: 'LinkSendError', code: 'owner-changed' }),
@@ -623,5 +625,95 @@ describe('owner-conditional persist at commit time', () => {
     expect(
       await StorageService.hasLinkMessage(OWNER, OWNER, PAYKIT_PAYMENT_REQUEST_KIND, eventId),
     ).toBe(true);
+  });
+
+  async function seedPendingPaymentWithoutQueue(eventId: string): Promise<void> {
+    await StorageService.savePaymentRequest({
+      ownerPubky: OWNER,
+      peerPubky: PEER,
+      direction: 'received',
+      paymentRequestId: 'b7f9c2a1-6d43-4b0e-a8d4-0fe2c712ab33',
+      eventId: '8a0d8b4c-913f-4e31-9f2c-2a6f5bb4d101',
+      amountValue: '0.001',
+      amountAsset: 'btc',
+      paymentReference: 'invoice-r9',
+      endpointIds: [ENDPOINT_LIGHTNING_BOLT11],
+      expiresAt: null,
+      status: 'accepted',
+      createdAt: NOW,
+      updatedAt: NOW,
+      proofJson: null,
+      reason: null,
+      ...EMPTY_PAYMENT_RECORD_EXTRAS,
+      pendingEventId: eventId,
+    });
+    await StorageService.saveLinkMessage({
+      ownerPubky: OWNER,
+      eventId,
+      conversationId: buildDmConversationId(PEER),
+      peerPubky: PEER,
+      senderPubky: OWNER,
+      direction: 'sent',
+      kind: PAYKIT_PAYMENT_ACCEPTANCE_KIND,
+      rawJson: '{}',
+      body: 'pay',
+      sentAt: NOW,
+      receivedAt: null,
+      deliveryState: 'sending',
+    });
+  }
+
+  it('does not enqueue a payment retry after sign-out paints mid-reconcile', async () => {
+    const eventId = '00000000-0000-4000-8000-00000000aaac';
+    await seedPendingPaymentWithoutQueue(eventId);
+    const stall = installGetDbStall();
+    stall.armNth(3);
+    const pending = LinkService.recoverPendingSends();
+    await stall.waiting;
+    await LinkService.clearSession();
+    stall.release();
+    await pending;
+    expect(await StorageService.listDeliveryQueue()).toEqual([]);
+    expect(await StorageService.hasQueueItemForMessage(eventId)).toBe(false);
+  });
+
+  it('does not enqueue a payment retry for the old owner after a mid-reconcile switch', async () => {
+    const eventId = '00000000-0000-4000-8000-00000000aaad';
+    await seedPendingPaymentWithoutQueue(eventId);
+    const stall = installGetDbStall();
+    stall.armNth(3);
+    const pending = LinkService.recoverPendingSends();
+    await stall.waiting;
+    switchPaintedOwner();
+    stall.release();
+    await pending;
+    const queued = await StorageService.listDeliveryQueue();
+    expect(queued.filter(item => JSON.parse(item.payload).ownerPubky === OWNER)).toEqual([]);
+    expect(await StorageService.hasQueueItemForMessage(eventId)).toBe(false);
+  });
+
+  it('restores painted owner when sign-out teardown throws so owned writes still commit', async () => {
+    const spy = jest
+      .spyOn(StorageService, 'clearAccountData')
+      .mockRejectedValueOnce(new Error('sql locked'));
+    await expect(LinkService.clearSession()).rejects.toThrow('sql locked');
+    spy.mockRestore();
+    expect(activeOwnerAtCommit()).toBe(OWNER);
+    await StorageService.upsertContact({
+      pubky: PEER,
+      ownerPubky: OWNER,
+      trustScore: 0,
+      isFollowing: false,
+      isFollower: false,
+      isMutual: false,
+      addedManually: true,
+      firstSeenAt: NOW,
+    });
+    expect(await StorageService.getContact(PEER, OWNER)).not.toBeNull();
+  });
+
+  it('leaves signing-out paint after successful teardown', async () => {
+    await LinkService.clearSession();
+    expect(activeOwnerAtCommit()).toBe(SIGNING_OUT);
   });
 });

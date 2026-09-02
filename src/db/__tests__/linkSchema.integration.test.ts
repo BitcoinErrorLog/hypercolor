@@ -61,7 +61,7 @@ import {
 } from '../schema';
 import { StorageService } from '../../services/StorageService';
 import { KeyStore } from '../../services/KeyStore';
-import { paintOwner, clearPaintedOwner } from '../../services/paintedOwner';
+import { paintOwner } from '../../services/paintedOwner';
 import { CHAT_MESSAGE_KIND, type HandshakeBudgetInput } from '../../types/link';
 import { GROUP_MEMBERSHIP_KIND, GROUP_MESSAGE_KIND } from '../../types/group';
 import { EMPTY_PAYMENT_RECORD_EXTRAS } from '../../types/payment';
@@ -97,7 +97,6 @@ afterEach(() => {
   }
   liveDbs.length = 0;
   setDbForTests(null);
-  clearPaintedOwner();
 });
 
 beforeEach(() => {
@@ -1564,7 +1563,15 @@ describe('link schema v15 — durable handshake abuse budget (real SQL)', () => 
       id: 'q-race',
       messageId: EVENT,
       recipientPubky: PEER,
-      payload: '{"type":"link.chat.message"}',
+      payload: JSON.stringify({
+        type: 'link.chat.message',
+        ownerPubky: OWNER,
+        peerPubky: PEER,
+        senderPubky: OWNER,
+        kind: CHAT_MESSAGE_KIND,
+        eventId: EVENT,
+        rawJson: '{}',
+      }),
       attempts: 0,
       nextRetryAt: 1,
       createdAt: 1,
@@ -1710,6 +1717,37 @@ describe('link schema v16 — per-recipient group fan-out outcomes (real SQL)', 
     await runMigrations(db);
     expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(16);
     expect(SCHEMA_V16_STATEMENTS.some(s => /cleanup_pending/.test(s))).toBe(true);
+  });
+
+  it('replays all v16 CREATE statements on a database already stamped 16', async () => {
+    const db = openMemoryDb();
+    openDbs.push(db);
+    setDbForTests(db);
+    db.executeSync('PRAGMA user_version = 16');
+    await runMigrations(db);
+    const tables = db.executeSync(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('group_fanout_outcomes', 'blocked_peers') ORDER BY name",
+    );
+    expect((tables.rows ?? []).map(row => String(row.name))).toEqual([
+      'blocked_peers',
+      'group_fanout_outcomes',
+    ]);
+    const indexes = db.executeSync(
+      "SELECT name FROM sqlite_master WHERE type = 'index' AND name IN ('idx_group_fanout_outcomes_event', 'idx_blocked_peers_owner') ORDER BY name",
+    );
+    expect((indexes.rows ?? []).map(row => String(row.name))).toEqual([
+      'idx_blocked_peers_owner',
+      'idx_group_fanout_outcomes_event',
+    ]);
+    const info = db.executeSync('PRAGMA table_info(blocked_peers)');
+    expect((info.rows ?? []).map(row => String(row.name))).toContain('cleanup_pending');
+    await runMigrations(db);
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(16);
+    expect(
+      db.executeSync(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('group_fanout_outcomes', 'blocked_peers')",
+      ).rows,
+    ).toHaveLength(2);
   });
 
   it('seeds pending outcomes with persistGroupSendIntent and rolls back a failed complete', async () => {

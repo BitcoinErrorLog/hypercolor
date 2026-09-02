@@ -455,21 +455,13 @@ export const StorageService = {
   // ── Delivery Queue ────────────────────────────────────────────────────────
 
   async enqueue(item: DeliveryQueueItem): Promise<void> {
-    const db = await getDb();
-    db.executeSync(
-      `INSERT OR REPLACE INTO delivery_queue
-        (id, message_id, recipient_pubky, payload, attempts, next_retry_at, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      [
-        item.id,
-        item.messageId,
-        item.recipientPubky,
-        persistQueuePayload(item.payload),
-        item.attempts,
-        item.nextRetryAt,
-        item.createdAt,
-      ],
-    );
+    const owner = queueOwnerFromPayload(item.payload);
+    if (!owner) {
+      throw new LinkSendError('owner-changed', 'StorageService: queue payload missing owner');
+    }
+    await ownedWrite(owner, db => {
+      insertQueueItem(db, item);
+    });
   },
 
   async dequeue(limit = 10): Promise<DeliveryQueueItem[]> {
@@ -482,16 +474,23 @@ export const StorageService = {
   },
 
   async incrementAttempt(id: string, nextRetryAt: number): Promise<void> {
-    const db = await getDb();
-    db.executeSync(
-      'UPDATE delivery_queue SET attempts = attempts + 1, next_retry_at = ? WHERE id = ?',
-      [nextRetryAt, id],
-    );
+    await mutateOwnedQueueRow(id, (db, owner) => {
+      db.executeSync(
+        `UPDATE delivery_queue SET attempts = attempts + 1, next_retry_at = ?
+         WHERE id = ? AND json_extract(payload, '$.ownerPubky') = ?`,
+        [nextRetryAt, id, owner],
+      );
+    });
   },
 
   async deferQueueItem(id: string, nextRetryAt: number): Promise<void> {
-    const db = await getDb();
-    db.executeSync('UPDATE delivery_queue SET next_retry_at = ? WHERE id = ?', [nextRetryAt, id]);
+    await mutateOwnedQueueRow(id, (db, owner) => {
+      db.executeSync(
+        `UPDATE delivery_queue SET next_retry_at = ?
+         WHERE id = ? AND json_extract(payload, '$.ownerPubky') = ?`,
+        [nextRetryAt, id, owner],
+      );
+    });
   },
 
   async listDeliveryQueue(): Promise<DeliveryQueueItem[]> {
@@ -512,8 +511,12 @@ export const StorageService = {
   },
 
   async removeFromQueue(id: string): Promise<void> {
-    const db = await getDb();
-    db.executeSync('DELETE FROM delivery_queue WHERE id = ?', [id]);
+    await mutateOwnedQueueRow(id, (db, owner) => {
+      db.executeSync(
+        `DELETE FROM delivery_queue WHERE id = ? AND json_extract(payload, '$.ownerPubky') = ?`,
+        [id, owner],
+      );
+    });
   },
 
   // ── Link receivers (Paykit Encrypted Links) ───────────────────────────────
@@ -948,6 +951,42 @@ export const StorageService = {
        SET delivery_state = ?, updated_at = ?
        WHERE owner_pubky = ? AND sender_pubky = ? AND kind = ? AND event_id = ?`,
         [state, now(), ownerPubky, senderPubky, kind, eventId],
+      );
+    });
+  },
+
+  /**
+   * Terminal failed delivery + dequeue in one owner-conditional transaction.
+   * The owned message write gates the queue delete so a paint change cannot
+   * dequeue another owner's row.
+   */
+  async failLinkMessageAndDequeue(input: {
+    ownerPubky: PubkyKey;
+    senderPubky: PubkyKey;
+    kind: string;
+    eventId: string;
+    queueId: string;
+  }): Promise<void> {
+    await ownedTransact(input.ownerPubky, db => {
+      const ts = now();
+      db.executeSync(
+        `UPDATE link_messages
+         SET delivery_state = 'failed', updated_at = ?
+         WHERE owner_pubky = ? AND sender_pubky = ? AND kind = ? AND event_id = ?`,
+        [ts, input.ownerPubky, input.senderPubky, input.kind, input.eventId],
+      );
+      if (input.kind === CHAT_ATTACHMENT_KIND) {
+        db.executeSync(
+          `UPDATE attachments
+           SET delivery_state = 'failed', updated_at = ?
+           WHERE owner_pubky = ? AND sender_pubky = ? AND event_id = ?`,
+          [ts, input.ownerPubky, input.senderPubky, input.eventId],
+        );
+      }
+      db.executeSync(
+        `DELETE FROM delivery_queue
+         WHERE id = ? AND json_extract(payload, '$.ownerPubky') = ?`,
+        [input.queueId, input.ownerPubky],
       );
     });
   },
@@ -2994,6 +3033,33 @@ function persistRawJson(kind: string | null | undefined, rawJson: string): strin
   return rawJson;
 }
 
+function queueOwnerFromPayload(payload: string): PubkyKey | null {
+  try {
+    const parsed = JSON.parse(payload) as { ownerPubky?: unknown };
+    return typeof parsed.ownerPubky === 'string' && parsed.ownerPubky.length > 0
+      ? parsed.ownerPubky
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+async function mutateOwnedQueueRow(
+  id: string,
+  fn: (db: SqlExecutor, owner: PubkyKey) => void,
+): Promise<void> {
+  const db = await getDb();
+  const result = db.executeSync('SELECT payload FROM delivery_queue WHERE id = ? LIMIT 1', [id]);
+  const raw = result.rows?.[0]?.payload;
+  if (typeof raw !== 'string') return;
+  const owner = queueOwnerFromPayload(raw);
+  if (!owner) {
+    throw new LinkSendError('owner-changed', 'StorageService: queue payload missing owner');
+  }
+  assertOwnerAtCommit(owner);
+  fn(db, owner);
+}
+
 function persistQueuePayload(payload: string): string {
   try {
     const parsed = JSON.parse(payload) as { kind?: unknown; rawJson?: unknown };
@@ -3007,12 +3073,7 @@ function persistQueuePayload(payload: string): string {
 }
 
 function queuePayloadBelongsToOwner(payload: string, ownerPubky: string): boolean {
-  try {
-    const parsed = JSON.parse(payload) as { ownerPubky?: unknown };
-    return parsed.ownerPubky === ownerPubky;
-  } catch {
-    return false;
-  }
+  return queueOwnerFromPayload(payload) === ownerPubky;
 }
 
 function insertAttachment(db: SqlExecutor, record: AttachmentRecord): void {

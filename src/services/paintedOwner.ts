@@ -35,9 +35,13 @@ export function paintSigningOut(): void {
   overlay = { kind: 'signing-out' };
 }
 
-/** Drop the overlay so auth / KeyStore (or null) are the paint again. */
-export function clearPaintedOwner(): void {
-  overlay = { kind: 'unset' };
+/**
+ * Re-paint the still-signed-in owner after a failed sign-out. Do not use
+ * this on the success path — successful teardown leaves {@link SIGNING_OUT}
+ * in place until the next {@link paintOwner}.
+ */
+export function restorePaintedOwner(pubky: PubkyKey): void {
+  overlay = { kind: 'owner', pubky };
 }
 
 export function activeOwnerAtCommit(): PaintedOwner {

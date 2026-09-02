@@ -78,6 +78,7 @@ jest.mock('../../StorageService', () => ({
     getLinkMessage: jest.fn(),
     getLinkMessagesForConversation: jest.fn(),
     updateLinkMessageDeliveryState: jest.fn(),
+    failLinkMessageAndDequeue: jest.fn(),
     saveLinkStreamItems: jest.fn(),
     getUnprocessedLinkStreamItems: jest.fn(),
     markLinkStreamItemProcessed: jest.fn(),
@@ -144,7 +145,6 @@ jest.mock('../../KeyStore', () => ({
 
 jest.mock('../../RetryQueue', () => ({
   RetryQueue: {
-    enqueue: jest.fn(),
     getDue: jest.fn(),
     recordFailure: jest.fn(),
     recordSuccess: jest.fn(),
@@ -260,6 +260,7 @@ describe('inbound deny is authoritative', () => {
     mockedStorage.listBlockedPeerCleanupPending.mockResolvedValue([]);
     mockedStorage.setBlockedPeerCleanupPending.mockResolvedValue(undefined);
     mockedStorage.completeGroupFanoutRecipient.mockResolvedValue(undefined);
+    mockedStorage.failLinkMessageAndDequeue.mockResolvedValue(undefined);
 
     await LinkService.clearSession();
     await LinkService.signinWithSecret('signin-secret-hex');
@@ -497,16 +498,16 @@ describe('inbound deny is authoritative', () => {
     await LinkService.drainRetries();
 
     expect(mockedNative.sendPrivateMessageJson).not.toHaveBeenCalled();
-    expect(mockedRetryQueue.recordSuccess).toHaveBeenCalledWith('q-blocked');
+    expect(mockedStorage.failLinkMessageAndDequeue).toHaveBeenCalledWith({
+      ownerPubky: OWNER,
+      senderPubky: OWNER,
+      kind: CHAT_MESSAGE_KIND,
+      eventId: 'evt-blocked',
+      queueId: 'q-blocked',
+    });
+    expect(mockedRetryQueue.recordSuccess).not.toHaveBeenCalled();
     expect(mockedRetryQueue.defer).not.toHaveBeenCalled();
     expect(mockedRetryQueue.recordFailure).not.toHaveBeenCalled();
-    expect(mockedStorage.updateLinkMessageDeliveryState).toHaveBeenCalledWith(
-      OWNER,
-      OWNER,
-      CHAT_MESSAGE_KIND,
-      'evt-blocked',
-      'failed',
-    );
   });
 
   it('finalizes group fan-out as failed when the last recipient is blocked', async () => {

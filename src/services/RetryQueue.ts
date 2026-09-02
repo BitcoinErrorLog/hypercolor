@@ -43,21 +43,6 @@ export const RetryQueue = {
   },
 
   /**
-   * Adds a delivery item to the persistent queue.
-   */
-  async enqueue(
-    item: Omit<DeliveryQueueItem, 'attempts' | 'nextRetryAt' | 'createdAt'>,
-  ): Promise<void> {
-    const now = Date.now();
-    await StorageService.enqueue({
-      ...item,
-      attempts: 0,
-      nextRetryAt: now, // eligible immediately on first try
-      createdAt: now,
-    });
-  },
-
-  /**
    * Returns up to `limit` items that are due for retry right now.
    */
   async getDue(limit = 10): Promise<DeliveryQueueItem[]> {

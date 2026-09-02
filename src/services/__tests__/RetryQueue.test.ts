@@ -5,7 +5,6 @@ import type { DeliveryQueueItem } from '../../types';
 
 jest.mock('../StorageService', () => ({
   StorageService: {
-    enqueue: jest.fn(),
     dequeue: jest.fn(),
     removeFromQueue: jest.fn(),
     incrementAttempt: jest.fn(),
@@ -31,26 +30,6 @@ describe('RetryQueue', () => {
 
   afterEach(() => {
     jest.restoreAllMocks();
-  });
-
-  describe('enqueue', () => {
-    it('persists the item with zero attempts, immediately eligible', async () => {
-      await RetryQueue.enqueue({
-        id: 'q1',
-        messageId: 'm1',
-        recipientPubky: 'peer-a',
-        payload: 'cipher',
-      } as Omit<DeliveryQueueItem, 'attempts' | 'nextRetryAt' | 'createdAt'>);
-
-      expect(mockedStorage.enqueue).toHaveBeenCalledWith(
-        expect.objectContaining({
-          id: 'q1',
-          attempts: 0,
-          nextRetryAt: NOW,
-          createdAt: NOW,
-        }),
-      );
-    });
   });
 
   describe('getDue', () => {

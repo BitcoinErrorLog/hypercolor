@@ -6,7 +6,7 @@ import {
 } from '@synonymdev/react-native-pubky';
 import { KeyStore } from './KeyStore';
 import { LinkService } from './link/LinkService';
-import { paintSigningOut } from './paintedOwner';
+import { paintSigningOut, restorePaintedOwner } from './paintedOwner';
 import type { UserProfile, PubkyKey } from '../types';
 
 /**
@@ -44,19 +44,25 @@ export const PubkyService = {
   // ── Auth ──────────────────────────────────────────────────────────────────
 
   async signOut(): Promise<void> {
+    const previousOwner = KeyStore.getPubky();
     paintSigningOut();
-    const sessionSecret = KeyStore.getSessionSecret();
-    if (sessionSecret) {
-      try {
-        unwrap(await rnSignOut(sessionSecret));
-      } catch {
-        // Best-effort
+    try {
+      const sessionSecret = KeyStore.getSessionSecret();
+      if (sessionSecret) {
+        try {
+          unwrap(await rnSignOut(sessionSecret));
+        } catch {
+          // Best-effort
+        }
       }
+      // Full messaging teardown (KeyStore attachment keys, cache, SQL) while
+      // the current-owner identity is still readable. Identity clear is last.
+      await LinkService.clearSession();
+      await KeyStore.clear();
+    } catch (err) {
+      if (previousOwner) restorePaintedOwner(previousOwner);
+      throw err;
     }
-    // Full messaging teardown (KeyStore attachment keys, cache, SQL) while
-    // the current-owner identity is still readable. Identity clear is last.
-    await LinkService.clearSession();
-    await KeyStore.clear();
   },
 
   // ── Profile ────────────────────────────────────────────────────────────────

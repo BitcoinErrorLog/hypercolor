@@ -65,12 +65,25 @@ export async function runMigrations(db: SqlExecutor): Promise<void> {
     return;
   }
 
-  // CURRENT_VERSION stays 16. Databases already at 16 only need the
-  // blocked_peers.cleanup_pending column if a pre-column v16 table is
-  // still on disk. Do not replay the full v16 transaction (or its
-  // duplicate-column ALTER) on every launch.
+  // CURRENT_VERSION stays 16. Unreleased v16 was mutated in place, so a
+  // database already stamped 16 may be missing later-wave tables. Replay
+  // the idempotent CREATE TABLE/INDEX statements every launch; gate only
+  // the duplicate-column ALTER behind PRAGMA table_info.
   if (currentVersion === CURRENT_VERSION) {
-    ensureBlockedPeersCleanupPending(db);
+    const latest = MIGRATIONS.find(m => m.version === CURRENT_VERSION);
+    if (!latest) return;
+    db.executeSync('BEGIN');
+    try {
+      for (const statement of latest.statements) {
+        if (/ALTER TABLE/i.test(statement)) continue;
+        applyStatement(db, statement);
+      }
+      ensureBlockedPeersCleanupPending(db);
+      db.executeSync('COMMIT');
+    } catch (err) {
+      db.executeSync('ROLLBACK');
+      throw err;
+    }
     return;
   }
 
