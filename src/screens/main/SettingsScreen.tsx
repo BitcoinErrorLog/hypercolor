@@ -14,7 +14,12 @@ import {
   AccessibilityInfo,
   findNodeHandle,
 } from 'react-native';
-import { useNavigation, usePreventRemove, useRoute, type NavigationAction } from '@react-navigation/native';
+import {
+  useNavigation,
+  usePreventRemove,
+  useRoute,
+  type NavigationAction,
+} from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { RouteProp } from '@react-navigation/native';
 import { FeatureFlags } from '../../flags';
