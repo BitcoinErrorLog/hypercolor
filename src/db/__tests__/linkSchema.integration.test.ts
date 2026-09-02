@@ -63,7 +63,10 @@ import { KeyStore } from '../../services/KeyStore';
 import { CHAT_MESSAGE_KIND, type HandshakeBudgetInput } from '../../types/link';
 import { GROUP_MEMBERSHIP_KIND, GROUP_MESSAGE_KIND } from '../../types/group';
 import { EMPTY_PAYMENT_RECORD_EXTRAS } from '../../types/payment';
-import { openFileDb as openFileDbRaw, openMemoryDb as openMemoryDbRaw } from './betterSqliteAdapter';
+import {
+  openFileDb as openFileDbRaw,
+  openMemoryDb as openMemoryDbRaw,
+} from './betterSqliteAdapter';
 
 const liveDbs: Array<{ close: () => void }> = [];
 
