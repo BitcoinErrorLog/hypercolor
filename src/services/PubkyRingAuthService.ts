@@ -60,8 +60,15 @@ let writeChain: Promise<void> = Promise.resolve();
 
 export async function cancelPendingDelegation(): Promise<void> {
   delegationGeneration += 1;
-  _pending = null;
-  await KeyStore.clearPendingRingHandoff();
+  const work = writeChain.then(async () => {
+    _pending = null;
+    await KeyStore.clearPendingRingHandoff();
+  });
+  writeChain = work.then(
+    () => undefined,
+    () => undefined,
+  );
+  await work;
 }
 
 export function getPendingDelegationSnapshot(): PendingDelegationSnapshot | null {
@@ -71,10 +78,6 @@ export function getPendingDelegationSnapshot(): PendingDelegationSnapshot | null
     expiresAt: _pending.startedAt + ENABLE_AUTH_TTL_MS,
     generation: _pending.generation,
   };
-}
-
-export function getPendingDelegationExpiresAt(): number | null {
-  return getPendingDelegationSnapshot()?.expiresAt ?? null;
 }
 
 export function buildPaykitConnectUrl(deviceId: string, ephemeralPkHex: string): string {
@@ -89,10 +92,14 @@ export function buildPaykitConnectUrl(deviceId: string, ephemeralPkHex: string):
   );
 }
 
-async function discardIfCurrentGeneration(myGen: number): Promise<void> {
-  if (_pending?.generation !== myGen) return;
-  _pending = null;
-  await KeyStore.clearPendingRingHandoff();
+async function discardOwnWrite(myGen: number, ephemeralSkHex: string): Promise<void> {
+  if (_pending?.generation === myGen) {
+    _pending = null;
+  }
+  const persisted = await KeyStore.getPendingRingHandoff();
+  if (persisted === ephemeralSkHex) {
+    await KeyStore.clearPendingRingHandoff();
+  }
 }
 
 /**
@@ -124,13 +131,13 @@ export async function requestDelegation(deviceId: string): Promise<DelegationReq
     _pending = { ephemeralSkHex, startedAt, url, generation: myGen };
     await KeyStore.setPendingRingHandoff(ephemeralSkHex);
     if (myGen !== delegationGeneration) {
-      await discardIfCurrentGeneration(myGen);
+      await discardOwnWrite(myGen, ephemeralSkHex);
       stale = true;
       return;
     }
     const canOpen = await Linking.canOpenURL('pubkyring://');
     if (myGen !== delegationGeneration) {
-      await discardIfCurrentGeneration(myGen);
+      await discardOwnWrite(myGen, ephemeralSkHex);
       stale = true;
       return;
     }
@@ -138,7 +145,7 @@ export async function requestDelegation(deviceId: string): Promise<DelegationReq
       await Linking.openURL(url);
     }
     if (myGen !== delegationGeneration) {
-      await discardIfCurrentGeneration(myGen);
+      await discardOwnWrite(myGen, ephemeralSkHex);
       stale = true;
       return;
     }
@@ -329,7 +336,6 @@ export const PubkyRingAuthService = {
   buildPaykitConnectUrl,
   handleRingCallback,
   cancelPendingDelegation,
-  getPendingDelegationExpiresAt,
   getPendingDelegationSnapshot,
   isStaleDelegationRequestError,
 };

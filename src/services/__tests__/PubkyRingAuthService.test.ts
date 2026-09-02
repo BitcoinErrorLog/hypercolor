@@ -201,6 +201,100 @@ describe('requestDelegation', () => {
     expect(KeyStore.setPendingRingHandoff).not.toHaveBeenCalledWith('sk-a');
     expect(Linking.openURL).not.toHaveBeenCalledWith(buildPaykitConnectUrl('device-a', 'pk-a'));
   });
+
+  it('cancel during an in-flight request leaves no KeyStore secret and no _pending', async () => {
+    (Linking.canOpenURL as jest.Mock).mockResolvedValue(false);
+    const setGate = deferred<void>();
+    const setStarted = deferred<string>();
+    jest.mocked(KeyStore.setPendingRingHandoff).mockImplementation(async (sk: string) => {
+      setStarted.resolve(sk);
+      await setGate.promise;
+      mockPersistedHandoffSk = sk;
+    });
+
+    const pending = requestDelegation(deviceId);
+    await setStarted.promise;
+    const cancel = cancelPendingDelegation();
+    setGate.resolve();
+    await expect(pending).rejects.toBeInstanceOf(StaleDelegationRequestError);
+    await cancel;
+
+    expect(mockPersistedHandoffSk).toBeNull();
+    expect(getPendingDelegationSnapshot()).toBeNull();
+    await expect(resolvePendingEphemeralSk()).rejects.toThrow(
+      'No pending delegation request. Call requestDelegation() before handling the callback.',
+    );
+  });
+
+  it('cancel then a new request keeps only the newest secret', async () => {
+    (Linking.canOpenURL as jest.Mock).mockResolvedValue(false);
+    const setGate = deferred<void>();
+    const setStarted = deferred<string>();
+    jest.mocked(KeyStore.setPendingRingHandoff).mockImplementation(async (sk: string) => {
+      setStarted.resolve(sk);
+      await setGate.promise;
+      mockPersistedHandoffSk = sk;
+    });
+    (x25519GenerateKeypair as jest.Mock).mockResolvedValueOnce({
+      secretKey: 'sk-cancelled',
+      publicKey: 'pk-cancelled',
+    });
+
+    const cancelled = requestDelegation(deviceId);
+    await setStarted.promise;
+    const cancel = cancelPendingDelegation();
+    setGate.resolve();
+    await expect(cancelled).rejects.toBeInstanceOf(StaleDelegationRequestError);
+    await cancel;
+
+    jest.mocked(KeyStore.setPendingRingHandoff).mockImplementation(async (sk: string) => {
+      mockPersistedHandoffSk = sk;
+    });
+    (x25519GenerateKeypair as jest.Mock).mockResolvedValue({
+      secretKey: 'sk-newest',
+      publicKey: 'pk-newest',
+    });
+    const newest = await requestDelegation('hypercolor-newest');
+
+    expect(mockPersistedHandoffSk).toBe('sk-newest');
+    expect(await resolvePendingEphemeralSk()).toBe('sk-newest');
+    expect(getPendingDelegationSnapshot()).toEqual(
+      expect.objectContaining({
+        url: newest.url,
+        generation: newest.generation,
+      }),
+    );
+    expect(KeyStore.setPendingRingHandoff).not.toHaveBeenLastCalledWith('sk-cancelled');
+  });
+
+  it('request A, request B, then cancel leaves nothing', async () => {
+    (Linking.canOpenURL as jest.Mock).mockResolvedValue(false);
+    const setGate = deferred<void>();
+    const setStarted = deferred<string>();
+    jest.mocked(KeyStore.setPendingRingHandoff).mockImplementation(async (sk: string) => {
+      setStarted.resolve(sk);
+      await setGate.promise;
+      mockPersistedHandoffSk = sk;
+    });
+    (x25519GenerateKeypair as jest.Mock)
+      .mockResolvedValueOnce({ secretKey: 'sk-a', publicKey: 'pk-a' })
+      .mockResolvedValueOnce({ secretKey: 'sk-b', publicKey: 'pk-b' });
+
+    const first = requestDelegation('device-a');
+    await setStarted.promise;
+    const second = requestDelegation('device-b');
+    const cancel = cancelPendingDelegation();
+    setGate.resolve();
+    await expect(first).rejects.toBeInstanceOf(StaleDelegationRequestError);
+    await expect(second).rejects.toBeInstanceOf(StaleDelegationRequestError);
+    await cancel;
+
+    expect(mockPersistedHandoffSk).toBeNull();
+    expect(getPendingDelegationSnapshot()).toBeNull();
+    await expect(resolvePendingEphemeralSk()).rejects.toThrow(
+      'No pending delegation request. Call requestDelegation() before handling the callback.',
+    );
+  });
 });
 
 const RING_PUBKY_Z32 = 'gcumbhd7sqit6nn457jxmrwqx9pyymqwamnarekgo3xppqo6a19o';
