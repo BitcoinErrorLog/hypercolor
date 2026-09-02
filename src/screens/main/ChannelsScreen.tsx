@@ -239,7 +239,7 @@ export function ChannelsScreenContent({
   }, [channels, mode, publicOptIn]);
 
   const selectedPubkys = Object.keys(selected).filter(k => selected[k]);
-  const animation = modalAnimationType(reduceMotion);
+  const animation = modalAnimationType(reduceMotion, 'slide');
 
   const renderChannel = useCallback(
     ({ item }: { item: ChannelListItem }) => (

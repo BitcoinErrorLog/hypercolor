@@ -21,7 +21,7 @@ export function ComposerActionMenu({
     <Modal
       visible={visible}
       transparent
-      animationType={modalAnimationType(reduceMotion) === 'none' ? 'none' : 'fade'}
+      animationType={modalAnimationType(reduceMotion, 'fade')}
       onRequestClose={onClose}
       accessibilityViewIsModal
     >

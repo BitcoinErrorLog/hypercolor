@@ -25,6 +25,7 @@ jest.mock('@react-navigation/native', () => ({
     preventRemoveEnabled = enabled;
     preventRemoveCallback = cb;
   },
+  useRoute: () => ({ params: {} }),
 }));
 
 jest.mock('../../../flags', () => ({
