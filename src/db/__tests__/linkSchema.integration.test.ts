@@ -57,6 +57,7 @@ import {
   SCHEMA_V11_STATEMENTS,
   SCHEMA_V12_STATEMENTS,
   SCHEMA_V13_STATEMENTS,
+  SCHEMA_V16_STATEMENTS,
 } from '../schema';
 import { StorageService } from '../../services/StorageService';
 import { KeyStore } from '../../services/KeyStore';
@@ -1646,11 +1647,34 @@ describe('link schema v16 — per-recipient group fan-out outcomes (real SQL)', 
       await runMigrations(second);
       expect(await StorageService.listBlockedPeers(OWNER)).toEqual([PEER]);
       expect(await StorageService.hasBlockedPeer(OWNER, PEER)).toBe(true);
+      expect(await StorageService.listBlockedPeerCleanupPending(OWNER)).toEqual([PEER]);
       second.close();
       setDbForTests(null);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  it('adds cleanup_pending to a pre-column v16 blocked_peers table', async () => {
+    const db = openMemoryDb();
+    openDbs.push(db);
+    setDbForTests(db);
+    db.executeSync(
+      `CREATE TABLE blocked_peers (
+        owner_pubky TEXT NOT NULL,
+        peer_pubky TEXT NOT NULL,
+        blocked_at INTEGER NOT NULL,
+        PRIMARY KEY (owner_pubky, peer_pubky)
+      )`,
+    );
+    db.executeSync('PRAGMA user_version = 16');
+    await runMigrations(db);
+    const info = db.executeSync('PRAGMA table_info(blocked_peers)');
+    const names = (info.rows ?? []).map(row => String(row.name));
+    expect(names).toContain('cleanup_pending');
+    await runMigrations(db);
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(16);
+    expect(SCHEMA_V16_STATEMENTS.some(s => /cleanup_pending/.test(s))).toBe(true);
   });
 
   it('seeds pending outcomes with persistGroupSendIntent and rolls back a failed complete', async () => {
@@ -1731,6 +1755,103 @@ describe('link schema v16 — per-recipient group fan-out outcomes (real SQL)', 
     expect(after.every(row => row.status === 'pending')).toBe(true);
     expect(await StorageService.hasQueueItem('q-fan-1')).toBe(true);
     expect(await StorageService.hasQueueItem('q-fan-2')).toBe(true);
+    db.close();
+  });
+
+  it('does not duplicate outcomes or reset terminal rows when re-persisting the same event', async () => {
+    const db = openMemoryDb();
+    openDbs.push(db);
+    setDbForTests(db);
+    await runMigrations(db);
+    const channelId = `${OWNER}:00000000-0000-4000-8000-00000000bbbb`;
+    const eventId = '00000000-0000-4000-8000-00000000eeee';
+    const message = {
+      ownerPubky: OWNER,
+      channelId,
+      eventId,
+      senderPubky: OWNER,
+      kind: GROUP_MESSAGE_KIND,
+      body: 'hi',
+      rawJson: '{}',
+      sentAt: 1,
+      receivedAt: null,
+      deliveryState: 'sending' as const,
+      replyToEventId: null,
+      replyToAuthorPubky: null,
+      targetEventId: null,
+      targetAuthorPubky: null,
+      editedAt: null,
+      deleted: false,
+    };
+    await StorageService.persistGroupSendIntent({
+      message,
+      queueItems: [
+        {
+          id: 'q-fan-1',
+          messageId: eventId,
+          recipientPubky: PEER,
+          payload: '{}',
+          attempts: 0,
+          nextRetryAt: 1,
+          createdAt: 1,
+        },
+        {
+          id: 'q-fan-2',
+          messageId: eventId,
+          recipientPubky: OTHER,
+          payload: '{}',
+          attempts: 0,
+          nextRetryAt: 1,
+          createdAt: 1,
+        },
+      ],
+    });
+    await StorageService.completeGroupFanoutRecipient({
+      ownerPubky: OWNER,
+      channelId,
+      eventId,
+      senderPubky: OWNER,
+      recipientPubky: PEER,
+      status: 'failed',
+      reason: 'blocked',
+      queueId: 'q-fan-1',
+      kind: GROUP_MESSAGE_KIND,
+    });
+    await StorageService.persistGroupSendIntent({
+      message,
+      queueItems: [
+        {
+          id: 'q-fan-3',
+          messageId: eventId,
+          recipientPubky: PEER,
+          payload: '{}',
+          attempts: 0,
+          nextRetryAt: 2,
+          createdAt: 2,
+        },
+        {
+          id: 'q-fan-4',
+          messageId: eventId,
+          recipientPubky: OTHER,
+          payload: '{}',
+          attempts: 0,
+          nextRetryAt: 2,
+          createdAt: 2,
+        },
+      ],
+    });
+    const outcomes = await StorageService.getGroupFanoutAggregate(OWNER, channelId, OWNER, eventId);
+    expect(outcomes).toHaveLength(2);
+    expect(outcomes.find(row => row.recipientPubky === PEER)).toEqual(
+      expect.objectContaining({ status: 'failed', reason: 'blocked' }),
+    );
+    expect(outcomes.find(row => row.recipientPubky === OTHER)).toEqual(
+      expect.objectContaining({ status: 'pending' }),
+    );
+    expect(await StorageService.hasQueueItem('q-fan-1')).toBe(false);
+    expect(await StorageService.hasQueueItem('q-fan-2')).toBe(true);
+    expect(await StorageService.hasQueueItem('q-fan-3')).toBe(false);
+    expect(await StorageService.hasQueueItem('q-fan-4')).toBe(false);
     db.close();
   });
 });

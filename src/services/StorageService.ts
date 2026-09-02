@@ -7,6 +7,8 @@ import type {
   PubkyKey,
 } from '../types';
 import type { SqlExecutor } from '../db/sql';
+import { LinkSendError } from './link/LinkSendError';
+import { activeOwnerAtCommit } from './paintedOwner';
 import type {
   HandshakeBudget,
   HandshakeBudgetInput,
@@ -70,6 +72,34 @@ import { OWNER_BACKUP_VERSION, type OwnerBackupSnapshot } from './backup/snapsho
  */
 
 const now = () => Date.now();
+
+/**
+ * Owner-conditional commit: one synchronous check against the painted
+ * identity immediately before BEGIN / executeSync, in the same tick as
+ * the write so no `await` can interleave. Throws typed `owner-changed`
+ * instead of persisting.
+ */
+function assertOwnerAtCommit(expectedOwner: PubkyKey): void {
+  const current = activeOwnerAtCommit();
+  if (current !== null && current !== expectedOwner) {
+    throw new LinkSendError('owner-changed', 'StorageService: owner changed during persist');
+  }
+}
+
+async function ownedWrite<T>(expectedOwner: PubkyKey, fn: (db: SqlExecutor) => T): Promise<T> {
+  const db = await getDb();
+  assertOwnerAtCommit(expectedOwner);
+  return fn(db);
+}
+
+async function ownedTransact(
+  expectedOwner: PubkyKey,
+  fn: (db: SqlExecutor) => void,
+): Promise<void> {
+  const db = await getDb();
+  assertOwnerAtCommit(expectedOwner);
+  transact(db, () => fn(db));
+}
 
 function transact(db: SqlExecutor, fn: () => void): void {
   db.executeSync('BEGIN IMMEDIATE');
@@ -297,22 +327,29 @@ export const StorageService = {
   // ── Message requests (WoT inbound gate) ───────────────────────────────────
 
   async upsertMessageRequest(request: MessageRequest): Promise<void> {
-    const db = await getDb();
-    db.executeSync(
-      `INSERT INTO message_requests
-        (owner_pubky, peer_pubky, created_at, updated_at, status)
-       VALUES (?, ?, ?, ?, ?)
-       ON CONFLICT(owner_pubky, peer_pubky) DO UPDATE SET
-         status     = CASE
-           WHEN message_requests.status = 'declined' THEN message_requests.status
-           ELSE excluded.status
-         END,
-         updated_at = CASE
-           WHEN message_requests.status = 'declined' THEN message_requests.updated_at
-           ELSE excluded.updated_at
-         END`,
-      [request.ownerPubky, request.peerPubky, request.createdAt, request.updatedAt, request.status],
-    );
+    await ownedWrite(request.ownerPubky, db => {
+      db.executeSync(
+        `INSERT INTO message_requests
+          (owner_pubky, peer_pubky, created_at, updated_at, status)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(owner_pubky, peer_pubky) DO UPDATE SET
+           status     = CASE
+             WHEN message_requests.status = 'declined' THEN message_requests.status
+             ELSE excluded.status
+           END,
+           updated_at = CASE
+             WHEN message_requests.status = 'declined' THEN message_requests.updated_at
+             ELSE excluded.updated_at
+           END`,
+        [
+          request.ownerPubky,
+          request.peerPubky,
+          request.createdAt,
+          request.updatedAt,
+          request.status,
+        ],
+      );
+    });
   },
 
   /**
@@ -320,14 +357,15 @@ export const StorageService = {
    * Returns whether a declined row was updated.
    */
   async acceptDeclinedMessageRequest(ownerPubky: PubkyKey, peerPubky: PubkyKey): Promise<boolean> {
-    const db = await getDb();
-    db.executeSync(
-      `UPDATE message_requests
-       SET status = 'accepted', updated_at = ?
-       WHERE owner_pubky = ? AND peer_pubky = ? AND status = 'declined'`,
-      [now(), ownerPubky, peerPubky],
-    );
-    return sqliteChanges(db) > 0;
+    return ownedWrite(ownerPubky, db => {
+      db.executeSync(
+        `UPDATE message_requests
+         SET status = 'accepted', updated_at = ?
+         WHERE owner_pubky = ? AND peer_pubky = ? AND status = 'declined'`,
+        [now(), ownerPubky, peerPubky],
+      );
+      return sqliteChanges(db) > 0;
+    });
   },
 
   async deleteMessageRequest(ownerPubky: PubkyKey, peerPubky: PubkyKey): Promise<void> {
@@ -528,36 +566,37 @@ export const StorageService = {
   // ── Links (Paykit Encrypted Links) ────────────────────────────────────────
 
   async upsertLink(link: LinkRecordInput): Promise<void> {
-    const db = await getDb();
-    db.executeSync(
-      `INSERT INTO links
-        (owner_pubky, peer_pubky, role, status, snapshot,
-         remote_noise_public_key, local_receiver_path, remote_receiver_path,
-         consecutive_failures, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT(owner_pubky, peer_pubky) DO UPDATE SET
-         role                    = excluded.role,
-         status                  = excluded.status,
-         snapshot                = excluded.snapshot,
-         remote_noise_public_key = excluded.remote_noise_public_key,
-         local_receiver_path     = excluded.local_receiver_path,
-         remote_receiver_path    = excluded.remote_receiver_path,
-         consecutive_failures    = excluded.consecutive_failures,
-         updated_at              = excluded.updated_at`,
-      [
-        link.ownerPubky,
-        link.peerPubky,
-        link.role,
-        link.status,
-        link.snapshot,
-        link.remoteNoisePublicKey,
-        link.localReceiverPath,
-        link.remoteReceiverPath,
-        link.consecutiveFailures,
-        now(),
-        now(),
-      ],
-    );
+    await ownedWrite(link.ownerPubky, db => {
+      db.executeSync(
+        `INSERT INTO links
+          (owner_pubky, peer_pubky, role, status, snapshot,
+           remote_noise_public_key, local_receiver_path, remote_receiver_path,
+           consecutive_failures, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(owner_pubky, peer_pubky) DO UPDATE SET
+           role                    = excluded.role,
+           status                  = excluded.status,
+           snapshot                = excluded.snapshot,
+           remote_noise_public_key = excluded.remote_noise_public_key,
+           local_receiver_path     = excluded.local_receiver_path,
+           remote_receiver_path    = excluded.remote_receiver_path,
+           consecutive_failures    = excluded.consecutive_failures,
+           updated_at              = excluded.updated_at`,
+        [
+          link.ownerPubky,
+          link.peerPubky,
+          link.role,
+          link.status,
+          link.snapshot,
+          link.remoteNoisePublicKey,
+          link.localReceiverPath,
+          link.remoteReceiverPath,
+          link.consecutiveFailures,
+          now(),
+          now(),
+        ],
+      );
+    });
   },
 
   async getLink(ownerPubky: PubkyKey, peerPubky: PubkyKey): Promise<LinkRecord | null> {
@@ -615,13 +654,14 @@ export const StorageService = {
     snapshot: string,
     status: StoredLinkStatus,
   ): Promise<void> {
-    const db = await getDb();
-    db.executeSync(
-      `UPDATE links
-       SET snapshot = ?, status = ?, consecutive_failures = 0, updated_at = ?
-       WHERE owner_pubky = ? AND peer_pubky = ?`,
-      [snapshot, status, now(), ownerPubky, peerPubky],
-    );
+    await ownedWrite(ownerPubky, db => {
+      db.executeSync(
+        `UPDATE links
+         SET snapshot = ?, status = ?, consecutive_failures = 0, updated_at = ?
+         WHERE owner_pubky = ? AND peer_pubky = ?`,
+        [snapshot, status, now(), ownerPubky, peerPubky],
+      );
+    });
   },
 
   // ── Handshake abuse budget (survives link wipe) ────────────────────────────
@@ -648,25 +688,26 @@ export const StorageService = {
   },
 
   async upsertHandshakeBudget(budget: HandshakeBudgetInput): Promise<void> {
-    const db = await getDb();
-    db.executeSync(
-      `INSERT INTO link_handshake_budgets
-        (owner_pubky, peer_pubky, pending_advances, next_advance_at, exhausted_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?)
-       ON CONFLICT(owner_pubky, peer_pubky) DO UPDATE SET
-         pending_advances = excluded.pending_advances,
-         next_advance_at  = excluded.next_advance_at,
-         exhausted_at     = excluded.exhausted_at,
-         updated_at       = excluded.updated_at`,
-      [
-        budget.ownerPubky,
-        budget.peerPubky,
-        budget.pendingAdvances,
-        budget.nextAdvanceAt,
-        budget.exhaustedAt,
-        now(),
-      ],
-    );
+    await ownedWrite(budget.ownerPubky, db => {
+      db.executeSync(
+        `INSERT INTO link_handshake_budgets
+          (owner_pubky, peer_pubky, pending_advances, next_advance_at, exhausted_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(owner_pubky, peer_pubky) DO UPDATE SET
+           pending_advances = excluded.pending_advances,
+           next_advance_at  = excluded.next_advance_at,
+           exhausted_at     = excluded.exhausted_at,
+           updated_at       = excluded.updated_at`,
+        [
+          budget.ownerPubky,
+          budget.peerPubky,
+          budget.pendingAdvances,
+          budget.nextAdvanceAt,
+          budget.exhaustedAt,
+          now(),
+        ],
+      );
+    });
   },
 
   /**
@@ -675,48 +716,52 @@ export const StorageService = {
    * `LinkService.ensureLinkLocked`.
    */
   async clearHandshakeBudget(ownerPubky: PubkyKey, peerPubky: PubkyKey): Promise<void> {
-    const db = await getDb();
-    db.executeSync('DELETE FROM link_handshake_budgets WHERE owner_pubky = ? AND peer_pubky = ?', [
-      ownerPubky,
-      peerPubky,
-    ]);
+    await ownedWrite(ownerPubky, db => {
+      db.executeSync(
+        'DELETE FROM link_handshake_budgets WHERE owner_pubky = ? AND peer_pubky = ?',
+        [ownerPubky, peerPubky],
+      );
+    });
   },
 
   async resetLinkConsecutiveFailures(ownerPubky: PubkyKey, peerPubky: PubkyKey): Promise<void> {
-    const db = await getDb();
-    db.executeSync(
-      `UPDATE links
-       SET consecutive_failures = 0, updated_at = ?
-       WHERE owner_pubky = ? AND peer_pubky = ?`,
-      [now(), ownerPubky, peerPubky],
-    );
+    await ownedWrite(ownerPubky, db => {
+      db.executeSync(
+        `UPDATE links
+         SET consecutive_failures = 0, updated_at = ?
+         WHERE owner_pubky = ? AND peer_pubky = ?`,
+        [now(), ownerPubky, peerPubky],
+      );
+    });
   },
 
   async incrementLinkConsecutiveFailures(
     ownerPubky: PubkyKey,
     peerPubky: PubkyKey,
   ): Promise<number> {
-    const db = await getDb();
-    const ts = now();
-    db.executeSync(
-      `UPDATE links
-       SET consecutive_failures = consecutive_failures + 1, updated_at = ?
-       WHERE owner_pubky = ? AND peer_pubky = ?`,
-      [ts, ownerPubky, peerPubky],
-    );
-    const result = db.executeSync(
-      'SELECT consecutive_failures FROM links WHERE owner_pubky = ? AND peer_pubky = ?',
-      [ownerPubky, peerPubky],
-    );
-    return (result.rows?.[0]?.consecutive_failures as number) ?? 0;
+    return ownedWrite(ownerPubky, db => {
+      const ts = now();
+      db.executeSync(
+        `UPDATE links
+         SET consecutive_failures = consecutive_failures + 1, updated_at = ?
+         WHERE owner_pubky = ? AND peer_pubky = ?`,
+        [ts, ownerPubky, peerPubky],
+      );
+      const result = db.executeSync(
+        'SELECT consecutive_failures FROM links WHERE owner_pubky = ? AND peer_pubky = ?',
+        [ownerPubky, peerPubky],
+      );
+      return (result.rows?.[0]?.consecutive_failures as number) ?? 0;
+    });
   },
 
   async deleteLink(ownerPubky: PubkyKey, peerPubky: PubkyKey): Promise<void> {
-    const db = await getDb();
-    db.executeSync('DELETE FROM links WHERE owner_pubky = ? AND peer_pubky = ?', [
-      ownerPubky,
-      peerPubky,
-    ]);
+    await ownedWrite(ownerPubky, db => {
+      db.executeSync('DELETE FROM links WHERE owner_pubky = ? AND peer_pubky = ?', [
+        ownerPubky,
+        peerPubky,
+      ]);
+    });
   },
 
   // ── Link messages (Paykit Encrypted Links) ────────────────────────────────
@@ -735,8 +780,7 @@ export const StorageService = {
     message: LinkMessage;
     queueItem: DeliveryQueueItem;
   }): Promise<void> {
-    const db = await getDb();
-    transact(db, () => {
+    await ownedTransact(input.message.ownerPubky, db => {
       insertLinkMessage(db, input.message);
       insertQueueItem(db, input.queueItem);
     });
@@ -756,9 +800,8 @@ export const StorageService = {
     snapshot: string;
     queueId: string;
   }): Promise<void> {
-    const db = await getDb();
-    const ts = now();
-    transact(db, () => {
+    await ownedTransact(input.ownerPubky, db => {
+      const ts = now();
       db.executeSync(
         `UPDATE link_messages
          SET delivery_state = 'sent', updated_at = ?
@@ -2022,15 +2065,28 @@ export const StorageService = {
   /**
    * Atomic pre-fan-out persist: the group message row, one retry item per
    * recipient, and one `pending` outcome per recipient, before any native send.
+   * Insert-only: if the group message already exists, this is a no-op so a
+   * resend cannot duplicate queue rows or reset terminal outcomes.
    */
   async persistGroupSendIntent(input: {
     message: GroupMessage;
     queueItems: DeliveryQueueItem[];
   }): Promise<void> {
-    const db = await getDb();
-    const ts = now();
-    transact(db, () => {
+    await ownedTransact(input.message.ownerPubky, db => {
+      const existing = db.executeSync(
+        `SELECT 1 AS n FROM group_messages
+         WHERE owner_pubky = ? AND channel_id = ? AND sender_pubky = ? AND event_id = ?
+         LIMIT 1`,
+        [
+          input.message.ownerPubky,
+          input.message.channelId,
+          input.message.senderPubky,
+          input.message.eventId,
+        ],
+      );
+      if ((existing.rows?.length ?? 0) > 0) return;
       insertGroupMessage(db, input.message);
+      const ts = now();
       for (const item of input.queueItems) {
         insertQueueItem(db, item);
         upsertFanoutOutcomeLocked(db, {
@@ -2061,9 +2117,8 @@ export const StorageService = {
     senderPubky: PubkyKey;
     kind: string;
   }): Promise<void> {
-    const db = await getDb();
-    const ts = now();
-    transact(db, () => {
+    await ownedTransact(input.ownerPubky, db => {
+      const ts = now();
       db.executeSync(
         `UPDATE links
          SET snapshot = ?, status = 'established', consecutive_failures = 0, updated_at = ?
@@ -2100,9 +2155,8 @@ export const StorageService = {
     queueId: string;
     kind: string;
   }): Promise<void> {
-    const db = await getDb();
-    const ts = now();
-    transact(db, () => {
+    await ownedTransact(input.ownerPubky, db => {
+      const ts = now();
       upsertFanoutOutcomeLocked(db, {
         ownerPubky: input.ownerPubky,
         channelId: input.channelId,
@@ -2179,9 +2233,11 @@ export const StorageService = {
   async insertBlockedPeer(ownerPubky: PubkyKey, peerPubky: PubkyKey): Promise<void> {
     const db = await getDb();
     db.executeSync(
-      `INSERT INTO blocked_peers (owner_pubky, peer_pubky, blocked_at)
-       VALUES (?, ?, ?)
-       ON CONFLICT(owner_pubky, peer_pubky) DO UPDATE SET blocked_at = excluded.blocked_at`,
+      `INSERT INTO blocked_peers (owner_pubky, peer_pubky, blocked_at, cleanup_pending)
+       VALUES (?, ?, ?, 1)
+       ON CONFLICT(owner_pubky, peer_pubky) DO UPDATE SET
+         blocked_at = excluded.blocked_at,
+         cleanup_pending = 1`,
       [ownerPubky, peerPubky, now()],
     );
   },
@@ -2224,6 +2280,31 @@ export const StorageService = {
       [ownerPubky, peerPubky],
     );
     return (result.rows?.length ?? 0) > 0;
+  },
+
+  async listBlockedPeerCleanupPending(ownerPubky: PubkyKey): Promise<PubkyKey[]> {
+    const db = await getDb();
+    const result = db.executeSync(
+      `SELECT peer_pubky FROM blocked_peers
+       WHERE owner_pubky = ? AND cleanup_pending = 1
+       ORDER BY peer_pubky ASC`,
+      [ownerPubky],
+    );
+    return (result.rows ?? []).map(row => String(row.peer_pubky));
+  },
+
+  async setBlockedPeerCleanupPending(
+    ownerPubky: PubkyKey,
+    peerPubky: PubkyKey,
+    pending: boolean,
+  ): Promise<void> {
+    const db = await getDb();
+    db.executeSync(
+      `UPDATE blocked_peers
+       SET cleanup_pending = ?
+       WHERE owner_pubky = ? AND peer_pubky = ?`,
+      [pending ? 1 : 0, ownerPubky, peerPubky],
+    );
   },
 
   // ── Payments (M5) ─────────────────────────────────────────────────────────

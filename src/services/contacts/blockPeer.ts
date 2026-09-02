@@ -21,8 +21,8 @@ export async function blockPeer(input: {
   persistBlock: (ownerPubky: PubkyKey, peerPubky: PubkyKey) => void | Promise<void>;
   declineMessageRequest: (peerPubky: PubkyKey) => Promise<void>;
   deleteContact: (ownerPubky: PubkyKey, peerPubky: PubkyKey) => Promise<void>;
-  persistCleanupPending?: (ownerPubky: PubkyKey, peerPubky: PubkyKey) => void;
-  clearCleanupPending?: (ownerPubky: PubkyKey, peerPubky: PubkyKey) => void;
+  persistCleanupPending?: (ownerPubky: PubkyKey, peerPubky: PubkyKey) => void | Promise<void>;
+  clearCleanupPending?: (ownerPubky: PubkyKey, peerPubky: PubkyKey) => void | Promise<void>;
 }): Promise<BlockPeerOutcome> {
   const { ownerPubky, peerPubky } = input;
   if (!ownerPubky || !peerPubky) {
@@ -32,10 +32,14 @@ export async function blockPeer(input: {
   try {
     await input.declineMessageRequest(peerPubky);
     await input.deleteContact(ownerPubky, peerPubky);
-    input.clearCleanupPending?.(ownerPubky, peerPubky);
+    await input.clearCleanupPending?.(ownerPubky, peerPubky);
     return { blocked: true, cleanup: 'complete' };
   } catch (err) {
-    input.persistCleanupPending?.(ownerPubky, peerPubky);
+    try {
+      await input.persistCleanupPending?.(ownerPubky, peerPubky);
+    } catch {
+      // Deny insert already stored cleanup_pending=1.
+    }
     return {
       blocked: true,
       cleanup: 'pending',
@@ -63,7 +67,7 @@ export async function unblockPeer(input: {
   peerPubky: PubkyKey;
   persistUnblock: (ownerPubky: PubkyKey, peerPubky: PubkyKey) => void | Promise<void>;
   releaseDeclinedRequest: (ownerPubky: PubkyKey, peerPubky: PubkyKey) => Promise<void>;
-  clearCleanupPending?: (ownerPubky: PubkyKey, peerPubky: PubkyKey) => void;
+  clearCleanupPending?: (ownerPubky: PubkyKey, peerPubky: PubkyKey) => void | Promise<void>;
 }): Promise<void> {
   const { ownerPubky, peerPubky } = input;
   if (!ownerPubky || !peerPubky) {
@@ -71,5 +75,5 @@ export async function unblockPeer(input: {
   }
   await input.releaseDeclinedRequest(ownerPubky, peerPubky);
   await input.persistUnblock(ownerPubky, peerPubky);
-  input.clearCleanupPending?.(ownerPubky, peerPubky);
+  await input.clearCleanupPending?.(ownerPubky, peerPubky);
 }

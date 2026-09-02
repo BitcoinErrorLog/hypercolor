@@ -98,6 +98,8 @@ jest.mock('../../StorageService', () => ({
     deleteGroupSeenEventsForSender: jest.fn(),
     setContactRelationshipFlags: jest.fn(),
     listBlockedPeers: jest.fn(),
+    listBlockedPeerCleanupPending: jest.fn(),
+    setBlockedPeerCleanupPending: jest.fn(),
     insertBlockedPeer: jest.fn(),
     deleteBlockedPeer: jest.fn(),
   },
@@ -210,6 +212,7 @@ describe('LinkService message requests', () => {
     mockedStorage.acceptDeclinedMessageRequest.mockResolvedValue(false);
     mockedStorage.countLinkMessagesForPeer.mockResolvedValue(0);
     mockedStorage.listBlockedPeers.mockResolvedValue([]);
+    mockedStorage.listBlockedPeerCleanupPending.mockResolvedValue([]);
     mockedStorage.getHandshakeBudget.mockResolvedValue(null);
     mockedRetryQueue.getDue.mockResolvedValue([]);
 

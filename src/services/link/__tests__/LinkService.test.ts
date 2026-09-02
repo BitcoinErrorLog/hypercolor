@@ -156,6 +156,8 @@ jest.mock('../../StorageService', () => ({
     completeGroupFanoutRecipient: jest.fn(),
     getGroupFanoutAggregate: jest.fn(),
     listBlockedPeers: jest.fn(),
+    listBlockedPeerCleanupPending: jest.fn(),
+    setBlockedPeerCleanupPending: jest.fn(),
     insertBlockedPeer: jest.fn(),
     insertBlockedPeers: jest.fn(),
     deleteBlockedPeer: jest.fn(),
@@ -430,6 +432,8 @@ describe('LinkService', () => {
     mockedStorage.getHandshakeBudget.mockResolvedValue(null);
     mockedStorage.upsertHandshakeBudget.mockResolvedValue(undefined);
     mockedStorage.clearHandshakeBudget.mockResolvedValue(undefined);
+    mockedStorage.persistLinkSendIntent.mockResolvedValue(undefined);
+    mockedStorage.resetLinkConsecutiveFailures.mockResolvedValue(undefined);
     mockedStorage.hasQueueItem.mockResolvedValue(true);
     mockedStorage.listDeliveryQueue.mockResolvedValue([]);
     mockedStorage.listPaymentRequestsWithPendingEvent.mockResolvedValue([]);
@@ -453,6 +457,8 @@ describe('LinkService', () => {
     mockedStorage.completeGroupFanoutRecipient.mockResolvedValue(undefined);
     mockedStorage.getGroupFanoutAggregate.mockResolvedValue([]);
     mockedStorage.listBlockedPeers.mockResolvedValue([]);
+    mockedStorage.listBlockedPeerCleanupPending.mockResolvedValue([]);
+    mockedStorage.setBlockedPeerCleanupPending.mockResolvedValue(undefined);
     mockedStorage.insertBlockedPeer.mockResolvedValue(undefined);
     mockedStorage.deleteBlockedPeer.mockResolvedValue(undefined);
     mockedRetryQueue.wouldDrop.mockImplementation((attempts: number) => attempts + 1 >= 10);
@@ -1411,7 +1417,108 @@ describe('LinkService', () => {
       await expect(LinkService.sendDm(PEER, 'hello')).rejects.toBeTruthy();
       expect(warns.join('\n')).not.toMatch(z32);
       expect(warns.join('\n')).not.toContain(PEER);
+
+      mockedNative.sendPrivateMessageJson.mockRejectedValue({
+        code: 'protocol',
+        message: `group native failed for ${PEER}`,
+      });
+      await expect(
+        LinkService.sendPersistedLinkJson({
+          peerPubky: PEER,
+          queueId: QUEUE_ID,
+          kind: GROUP_MESSAGE_KIND,
+          eventId: EVENT_ID,
+          rawJson: '{}',
+          channelId: `${OWNER}:00000000-0000-4000-8000-00000000bbbb`,
+        }),
+      ).resolves.toBe('queued');
+      mockedRetryQueue.getDue.mockResolvedValue([
+        {
+          id: 'q-group-warn',
+          messageId: EVENT_ID,
+          recipientPubky: PEER,
+          payload: JSON.stringify({
+            type: LINK_GROUP_FANOUT_PAYLOAD_TYPE,
+            ownerPubky: OWNER,
+            peerPubky: PEER,
+            senderPubky: OWNER,
+            kind: GROUP_MESSAGE_KIND,
+            eventId: EVENT_ID,
+            channelId: `${OWNER}:00000000-0000-4000-8000-00000000bbbb`,
+            rawJson: '{}',
+          }),
+          attempts: 0,
+          nextRetryAt: NOW,
+          createdAt: NOW,
+        },
+      ]);
+      await LinkService.drainRetries();
+      expect(warns.join('\n')).not.toMatch(z32);
+      expect(warns.join('\n')).not.toContain(PEER);
       warnSpy.mockRestore();
+    });
+
+    it('aborts live handshake advance after an identity switch without charging or snapshotting', async () => {
+      mockedStorage.getLink.mockResolvedValue(storedLink({ snapshot: 'hs-2' }));
+      mockedNative.restoreHandshake.mockResolvedValue({ linkId: 'hs-handle', status: 'pending' });
+      mockedNative.advanceHandshake.mockImplementation(async () => {
+        mockedNative.signinWithSecret.mockResolvedValue({
+          sessionAlias: 'session-b',
+          pubky: OTHER_OWNER,
+        });
+        mockedKeyStore.getPubky.mockReturnValue(OTHER_OWNER);
+        await LinkService.signinWithSecret('owner-b-secret');
+        return { status: 'pending', snapshot: 'hs-3' };
+      });
+
+      await expect(LinkService.sendDm(PEER, 'hello')).rejects.toEqual(
+        expect.objectContaining({
+          name: 'LinkSendError',
+          code: 'owner-changed',
+        }),
+      );
+      expect(mockedStorage.upsertHandshakeBudget).not.toHaveBeenCalled();
+      expect(mockedStorage.updateLinkSnapshot).not.toHaveBeenCalled();
+      expect(mockedStorage.persistLinkSendIntent).not.toHaveBeenCalled();
+    });
+
+    it('does not charge a queued handshake advance after an identity switch', async () => {
+      mockedStorage.getLink.mockResolvedValue(storedLink({ snapshot: 'hs-2' }));
+      mockedNative.restoreHandshake.mockResolvedValue({ linkId: 'hs-handle', status: 'pending' });
+      mockedNative.advanceHandshake.mockImplementation(async () => {
+        mockedNative.signinWithSecret.mockResolvedValue({
+          sessionAlias: 'session-b',
+          pubky: OTHER_OWNER,
+        });
+        mockedKeyStore.getPubky.mockReturnValue(OTHER_OWNER);
+        await LinkService.signinWithSecret('owner-b-secret');
+        return { status: 'pending', snapshot: 'hs-3' };
+      });
+      mockedRetryQueue.getDue.mockResolvedValue([
+        {
+          id: 'q-hs-switch',
+          messageId: EVENT_ID,
+          recipientPubky: PEER,
+          payload: JSON.stringify({
+            type: LINK_RETRY_PAYLOAD_TYPE,
+            ownerPubky: OWNER,
+            peerPubky: PEER,
+            senderPubky: OWNER,
+            kind: CHAT_MESSAGE_KIND,
+            eventId: EVENT_ID,
+            rawJson: wireMessage(EVENT_ID),
+          }),
+          attempts: 0,
+          nextRetryAt: NOW,
+          createdAt: NOW,
+        },
+      ]);
+
+      await LinkService.drainRetries();
+
+      expect(mockedStorage.upsertHandshakeBudget).not.toHaveBeenCalled();
+      expect(mockedStorage.updateLinkSnapshot).not.toHaveBeenCalled();
+      expect(mockedNative.sendPrivateMessageJson).not.toHaveBeenCalled();
     });
   });
 

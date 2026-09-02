@@ -63,6 +63,12 @@ function ContactDetailLoader({
 
   useEffect(() => FollowsImportSettings.subscribe(() => setPrivacyTick(t => t + 1)), []);
 
+  useEffect(() => {
+    if (!ownerPubky) return undefined;
+    void FollowsImportSettings.hydrate(ownerPubky);
+    return undefined;
+  }, [ownerPubky]);
+
   const followsImportEnabled = ownerPubky
     ? FollowsImportSettings.getFollowsImportEnabled(ownerPubky)
     : false;

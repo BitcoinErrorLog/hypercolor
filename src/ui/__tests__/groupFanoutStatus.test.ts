@@ -3,6 +3,7 @@ import {
   formatGroupFanoutAggregate,
   groupDeliveryFromOutcomes,
   notDeliveredBlocked,
+  sendingNofM,
   sentToNofM,
 } from '../groupFanoutStatus';
 
@@ -58,7 +59,22 @@ describe('formatGroupFanoutAggregate', () => {
       { recipientPubky: ALICE, status: 'sent' as const, reason: null },
       { recipientPubky: BOB, status: 'pending' as const, reason: null },
     ];
-    expect(formatGroupFanoutAggregate(mixed)).toBe(sentToNofM(1, 2));
+    expect(formatGroupFanoutAggregate(mixed)).toBe(sendingNofM(1, 2));
     expect(groupDeliveryFromOutcomes(mixed)).toBe('sent');
+  });
+
+  it('is Sending when every recipient is still pending', () => {
+    expect(
+      formatGroupFanoutAggregate([
+        { recipientPubky: ALICE, status: 'pending', reason: null },
+        { recipientPubky: BOB, status: 'pending', reason: null },
+      ]),
+    ).toBe(COPY.sending);
+  });
+
+  it('is Not delivered when every recipient failed', () => {
+    expect(formatGroupFanoutAggregate([outcome(ALICE, 'failed'), outcome(BOB, 'failed')])).toBe(
+      COPY.notDelivered,
+    );
   });
 });

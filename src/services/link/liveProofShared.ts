@@ -3,6 +3,7 @@ import { LINK_RECEIVER_PATH } from '../../types/link';
 import { LinkService, type LinkEnableFlow } from './LinkService';
 import { StorageService } from '../StorageService';
 import { KeyStore } from '../KeyStore';
+import { stripSensitive } from '../../ui/sanitizedError';
 
 export type LiveProofConfig = {
   homeserverPubky: string;
@@ -275,7 +276,9 @@ export function createLiveProofRecorder(
         const detail = redactLiveProofForLog(await body(), redactSecrets);
         const entry: LiveProofStep = { step, ok: true, detail, elapsedMs: now() - started };
         steps.push(entry);
-        console.log('[liveproof]', JSON.stringify(entry));
+        if (__DEV__) {
+          console.log('[liveproof]', stripSensitive(JSON.stringify(entry)));
+        }
         return true;
       } catch (err) {
         const entry: LiveProofStep = {
@@ -285,7 +288,9 @@ export function createLiveProofRecorder(
           elapsedMs: now() - started,
         };
         steps.push(entry);
-        console.log('[liveproof]', JSON.stringify(entry));
+        if (__DEV__) {
+          console.log('[liveproof]', stripSensitive(JSON.stringify(entry)));
+        }
         return false;
       }
     },

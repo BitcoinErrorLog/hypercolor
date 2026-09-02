@@ -613,6 +613,7 @@ export const LinkService = {
         snapshot,
         queueId: input.queueId,
       });
+      abortIfOwnerChanged(ownerAtStart);
       return 'sent';
     } catch (err) {
       if (err instanceof LinkSendError && err.code === 'owner-changed') throw err;
@@ -673,6 +674,7 @@ export const LinkService = {
           senderPubky: ownerAtStart,
           kind: input.kind,
         });
+        abortIfOwnerChanged(ownerAtStart);
         return 'sent';
       } catch (err) {
         if (err instanceof LinkSendError && err.code === 'owner-changed') throw err;
@@ -1275,9 +1277,11 @@ async function ensureLinkLocked(
   // case that needs it: the peer whose budget the handshake itself ran down.
   if (intent === 'user') {
     await StorageService.clearHandshakeBudget(ownerPubky, peerPubky);
+    abortIfOwnerChanged(expectedOwner);
   }
 
   if (live?.status === 'handshaking') {
+    abortIfOwnerChanged(expectedOwner);
     return advanceLiveHandshake(
       activeSession,
       receiver,
@@ -1286,6 +1290,7 @@ async function ensureLinkLocked(
       live,
       intent,
       alreadyRecovered,
+      expectedOwner,
     );
   }
 
@@ -1298,6 +1303,7 @@ async function ensureLinkLocked(
       stored,
       intent,
       alreadyRecovered,
+      expectedOwner,
     );
     abortIfOwnerChanged(expectedOwner);
     return restored;
@@ -1315,6 +1321,7 @@ async function ensureLinkLocked(
       stored,
       intent,
       alreadyRecovered,
+      expectedOwner,
     );
     abortIfOwnerChanged(expectedOwner);
     return restored;
@@ -1330,6 +1337,7 @@ async function ensureLinkLocked(
     abortIfOwnerChanged(expectedOwner);
   } catch (err) {
     if (isLinkNativeError(err) && err.code === 'protocol') {
+      abortIfOwnerChanged(expectedOwner);
       await clearPeerOutboxBestEffort(
         activeSession,
         receiver,
@@ -1338,6 +1346,7 @@ async function ensureLinkLocked(
         localPath,
         LINK_RECEIVER_PATH,
       );
+      abortIfOwnerChanged(expectedOwner);
       if (!mayInitiate(intent)) return 'idle';
       return initiateHandshake(
         activeSession,
@@ -1348,16 +1357,19 @@ async function ensureLinkLocked(
         localPath,
         intent,
         alreadyRecovered,
+        expectedOwner,
       );
     }
     throw err;
   }
   if (inbound !== null) {
-    return adoptInboundHandshake(ownerPubky, peerPubky, marker, localPath, inbound);
+    abortIfOwnerChanged(expectedOwner);
+    return adoptInboundHandshake(ownerPubky, peerPubky, marker, localPath, inbound, expectedOwner);
   }
 
   if (!mayInitiate(intent)) return 'idle';
 
+  abortIfOwnerChanged(expectedOwner);
   return initiateHandshake(
     activeSession,
     receiver,
@@ -1367,6 +1379,7 @@ async function ensureLinkLocked(
     localPath,
     intent,
     alreadyRecovered,
+    expectedOwner,
   );
 }
 
@@ -1376,10 +1389,12 @@ async function restoreEstablished(
   stored: LinkRecord,
   intent: LinkIntent,
   alreadyRecovered: boolean,
+  expectedOwner?: PubkyKey,
 ): Promise<EnsureOutcome> {
   const localPath = coerceReceiverPath(stored.localReceiverPath);
   const remotePath = coerceReceiverPath(stored.remoteReceiverPath);
   try {
+    abortIfOwnerChanged(expectedOwner);
     const { linkId } = await PaykitLinkNative.restoreLink(
       activeSession.alias,
       receiver.receiverAlias,
@@ -1389,6 +1404,7 @@ async function restoreEstablished(
       remotePath,
       stored.snapshot,
     );
+    abortIfOwnerChanged(expectedOwner);
     liveHandles.set(linkKey(stored.ownerPubky, stored.peerPubky), {
       status: 'established',
       linkId,
@@ -1396,7 +1412,8 @@ async function restoreEstablished(
     await StorageService.resetLinkConsecutiveFailures(stored.ownerPubky, stored.peerPubky);
     return 'ready';
   } catch (err) {
-    return handleLinkFailure(err, stored, intent, alreadyRecovered);
+    if (err instanceof LinkSendError && err.code === 'owner-changed') throw err;
+    return handleLinkFailure(err, stored, intent, alreadyRecovered, expectedOwner);
   }
 }
 
@@ -1406,10 +1423,12 @@ async function restoreAndAdvanceHandshake(
   stored: LinkRecord,
   intent: LinkIntent,
   alreadyRecovered: boolean,
+  expectedOwner?: PubkyKey,
 ): Promise<EnsureOutcome> {
   const localPath = coerceReceiverPath(stored.localReceiverPath);
   const remotePath = coerceReceiverPath(stored.remoteReceiverPath);
   try {
+    abortIfOwnerChanged(expectedOwner);
     const restored = await PaykitLinkNative.restoreHandshake(
       activeSession.alias,
       receiver.receiverAlias,
@@ -1419,6 +1438,7 @@ async function restoreAndAdvanceHandshake(
       remotePath,
       stored.snapshot,
     );
+    abortIfOwnerChanged(expectedOwner);
     liveHandles.set(linkKey(stored.ownerPubky, stored.peerPubky), {
       status: 'handshaking',
       linkId: restored.linkId,
@@ -1440,6 +1460,7 @@ async function restoreAndAdvanceHandshake(
         localPath,
         remotePath,
         restored.linkId,
+        expectedOwner,
       );
     }
     return advanceLiveHandshake(
@@ -1450,10 +1471,12 @@ async function restoreAndAdvanceHandshake(
       { status: 'handshaking', linkId: restored.linkId, role: stored.role },
       intent,
       alreadyRecovered,
+      expectedOwner,
     );
   } catch (err) {
+    if (err instanceof LinkSendError && err.code === 'owner-changed') throw err;
     const current = await StorageService.getLink(stored.ownerPubky, stored.peerPubky);
-    return handleLinkFailure(err, current ?? stored, intent, alreadyRecovered);
+    return handleLinkFailure(err, current ?? stored, intent, alreadyRecovered, expectedOwner);
   }
 }
 
@@ -1465,10 +1488,14 @@ async function advanceLiveHandshake(
   live: Extract<LiveHandle, { status: 'handshaking' }>,
   intent: LinkIntent,
   alreadyRecovered: boolean,
+  expectedOwner?: PubkyKey,
 ): Promise<EnsureOutcome> {
   const stored = await StorageService.getLink(ownerPubky, peerPubky);
+  abortIfOwnerChanged(expectedOwner);
   try {
+    abortIfOwnerChanged(expectedOwner);
     const result = await PaykitLinkNative.advanceHandshake(live.linkId);
+    abortIfOwnerChanged(expectedOwner);
     if (result.status === 'established') {
       const remoteKey = stored?.remoteNoisePublicKey ?? '';
       const localPath = coerceReceiverPath(stored?.localReceiverPath ?? receiver.receiverPath);
@@ -1487,6 +1514,7 @@ async function advanceLiveHandshake(
         localPath,
         remotePath,
         live.linkId,
+        expectedOwner,
       );
     }
 
@@ -1495,20 +1523,29 @@ async function advanceLiveHandshake(
     // something. What it costs is decided in one place: see the charge policy on
     // `chargeHandshakeBudget`. Charged BEFORE persisting the snapshot: a crash
     // between the two loses a handshake step, never a charge.
-    const budget = await chargeHandshakeBudget(ownerPubky, peerPubky, {
-      reason: 'pending-advance',
-      intent,
-    });
+    const budget = await chargeHandshakeBudget(
+      ownerPubky,
+      peerPubky,
+      {
+        reason: 'pending-advance',
+        intent,
+      },
+      expectedOwner,
+    );
+    abortIfOwnerChanged(expectedOwner);
     await StorageService.updateLinkSnapshot(ownerPubky, peerPubky, result.snapshot, 'handshaking');
+    abortIfOwnerChanged(expectedOwner);
 
     if (budget.exhausted) {
       return abandonUnestablishedLink(
         stored ?? fallbackLinkRecord(ownerPubky, peerPubky, receiver, live.role),
+        expectedOwner,
       );
     }
 
     if (live.role === 'initiator' && ownerPubky < peerPubky) {
       const marker = await PaykitLinkNative.getReceiverMarker(peerPubky, LINK_RECEIVER_PATH);
+      abortIfOwnerChanged(expectedOwner);
       if (marker) {
         const inbound = await probeInbound(
           activeSession,
@@ -1518,23 +1555,32 @@ async function advanceLiveHandshake(
           marker,
           LINK_RECEIVER_PATH,
         );
+        abortIfOwnerChanged(expectedOwner);
         if (inbound !== null) {
           await closeQuietly(live.linkId);
           liveHandles.delete(linkKey(ownerPubky, peerPubky));
-          return adoptInboundHandshake(ownerPubky, peerPubky, marker, LINK_RECEIVER_PATH, inbound);
+          return adoptInboundHandshake(
+            ownerPubky,
+            peerPubky,
+            marker,
+            LINK_RECEIVER_PATH,
+            inbound,
+            expectedOwner,
+          );
         }
       }
     }
 
     return roleStatus(live.role);
   } catch (err) {
+    if (err instanceof LinkSendError && err.code === 'owner-changed') throw err;
     // Re-read: `completeEstablished` persists `established` before restoring
     // the transport handle, so the row read above can be stale by exactly one
     // transition. Charging handshake failures against a row that is already
     // established would wipe a live link.
     const current = await StorageService.getLink(ownerPubky, peerPubky);
     const fallback = current ?? fallbackLinkRecord(ownerPubky, peerPubky, receiver, live.role);
-    return handleLinkFailure(err, fallback, intent, alreadyRecovered);
+    return handleLinkFailure(err, fallback, intent, alreadyRecovered, expectedOwner);
   }
 }
 
@@ -1605,8 +1651,10 @@ async function chargeHandshakeBudget(
   ownerPubky: PubkyKey,
   peerPubky: PubkyKey,
   charge: HandshakeCharge,
+  expectedOwner?: PubkyKey,
 ): Promise<{ advances: number; exhausted: boolean }> {
   const current = await StorageService.getHandshakeBudget(ownerPubky, peerPubky);
+  abortIfOwnerChanged(expectedOwner);
   const held = {
     advances: current?.pendingAdvances ?? 0,
     exhausted: current ? current.exhaustedAt !== null : false,
@@ -1617,6 +1665,7 @@ async function chargeHandshakeBudget(
   }
   const advances = held.advances + 1;
   const exhausted = advances >= HANDSHAKE_PENDING_ADVANCE_LIMIT;
+  abortIfOwnerChanged(expectedOwner);
   await StorageService.upsertHandshakeBudget({
     ownerPubky,
     peerPubky,
@@ -1646,13 +1695,18 @@ async function isHandshakeBudgetExhausted(
  * The budget row deliberately outlives this: it carries `exhausted_at`, which
  * is what stops the peer from buying more periodic work by rewriting message 1.
  */
-async function abandonUnestablishedLink(stored: LinkRecord): Promise<EnsureOutcome> {
+async function abandonUnestablishedLink(
+  stored: LinkRecord,
+  expectedOwner?: PubkyKey,
+): Promise<EnsureOutcome> {
+  abortIfOwnerChanged(expectedOwner);
   console.warn(
     `[LinkService] handshake-abandoned peer=${opaquePeerId(stored.peerPubky)} after ` +
       `${HANDSHAKE_PENDING_ADVANCE_LIMIT} steps`,
   );
   await failQueuedSendsForPeer(stored.ownerPubky, stored.peerPubky);
-  await wipeLinkState(stored);
+  abortIfOwnerChanged(expectedOwner);
+  await wipeLinkState(stored, expectedOwner);
   return 'error';
 }
 
@@ -1692,10 +1746,13 @@ async function completeEstablished(
   localPath: string,
   remotePath: string,
   handshakeLinkId: string,
+  expectedOwner?: PubkyKey,
 ): Promise<LinkStatus> {
+  abortIfOwnerChanged(expectedOwner);
   // A completed Noise XX handshake is proof of a real counterparty, so it is
   // the one non-user event that forgives everything charged against this peer.
   await StorageService.clearHandshakeBudget(ownerPubky, peerPubky);
+  abortIfOwnerChanged(expectedOwner);
   await StorageService.upsertLink({
     ownerPubky,
     peerPubky,
@@ -1707,9 +1764,11 @@ async function completeEstablished(
     remoteReceiverPath: remotePath,
     consecutiveFailures: 0,
   });
+  abortIfOwnerChanged(expectedOwner);
   await closeQuietly(handshakeLinkId);
   const key = linkKey(ownerPubky, peerPubky);
   try {
+    abortIfOwnerChanged(expectedOwner);
     const { linkId } = await PaykitLinkNative.restoreLink(
       activeSession.alias,
       receiver.receiverAlias,
@@ -1719,8 +1778,10 @@ async function completeEstablished(
       remotePath,
       snapshot,
     );
+    abortIfOwnerChanged(expectedOwner);
     liveHandles.set(key, { status: 'established', linkId });
   } catch (err) {
+    if (err instanceof LinkSendError && err.code === 'owner-changed') throw err;
     // The handshake handle is already closed and the row already says
     // `established`. Keeping the stale handshaking handle would let a later
     // step drive a dead linkId; the caller re-reads the row and treats this
@@ -1740,7 +1801,9 @@ async function initiateHandshake(
   localPath: string,
   intent: LinkIntent,
   alreadyRecovered: boolean,
+  expectedOwner?: PubkyKey,
 ): Promise<EnsureOutcome> {
+  abortIfOwnerChanged(expectedOwner);
   const remotePath = LINK_RECEIVER_PATH;
   const initiated = await PaykitLinkNative.initiateLink(
     activeSession.alias,
@@ -1750,6 +1813,7 @@ async function initiateHandshake(
     localPath,
     remotePath,
   );
+  abortIfOwnerChanged(expectedOwner);
   await StorageService.upsertLink({
     ownerPubky,
     peerPubky,
@@ -1775,6 +1839,7 @@ async function initiateHandshake(
     { status: 'handshaking', linkId: initiated.linkId, role: 'initiator' },
     intent,
     alreadyRecovered,
+    expectedOwner,
   );
 }
 
@@ -1813,11 +1878,14 @@ async function adoptInboundHandshake(
   marker: ReceiverMarker,
   localPath: string,
   inbound: Extract<LinkProbeResult, { result: 'pending' | 'established' }>,
+  expectedOwner?: PubkyKey,
 ): Promise<LinkStatus> {
+  abortIfOwnerChanged(expectedOwner);
   const remotePath = LINK_RECEIVER_PATH;
   const key = linkKey(ownerPubky, peerPubky);
   if (inbound.result === 'established') {
     await StorageService.clearHandshakeBudget(ownerPubky, peerPubky);
+    abortIfOwnerChanged(expectedOwner);
     await StorageService.upsertLink({
       ownerPubky,
       peerPubky,
@@ -1860,13 +1928,16 @@ async function handleLinkFailure(
   stored: LinkRecord,
   intent: LinkIntent,
   alreadyRecovered: boolean,
+  expectedOwner?: PubkyKey,
 ): Promise<EnsureOutcome> {
+  if (err instanceof LinkSendError && err.code === 'owner-changed') throw err;
   if (isLinkNativeError(err) && err.code === 'unavailable') return 'native-missing';
   if (isLinkNativeError(err) && err.code === 'auth') {
     KeyStore.deleteLinkSession();
     session = null;
     return 'needs-enable';
   }
+  abortIfOwnerChanged(expectedOwner);
   const established = stored.status === 'established';
   if (isLinkNativeError(err) && err.code === 'network') {
     if (established) {
@@ -1881,12 +1952,12 @@ async function handleLinkFailure(
       stored.peerPubky,
     );
     if (failures >= HANDSHAKE_FAILURE_LIMIT) {
-      return recoverWedgedLink(stored, intent, alreadyRecovered, err);
+      return recoverWedgedLink(stored, intent, alreadyRecovered, err, expectedOwner);
     }
     return roleStatus(stored.role);
   }
   if (isLinkNativeError(err) && err.code === 'protocol') {
-    return recoverWedgedLink(stored, intent, alreadyRecovered, err);
+    return recoverWedgedLink(stored, intent, alreadyRecovered, err, expectedOwner);
   }
 
   if (established) {
@@ -1902,7 +1973,7 @@ async function handleLinkFailure(
     stored.peerPubky,
   );
   if (failures >= HANDSHAKE_FAILURE_LIMIT) {
-    return recoverWedgedLink(stored, intent, alreadyRecovered, err);
+    return recoverWedgedLink(stored, intent, alreadyRecovered, err, expectedOwner);
   }
   console.warn(
     `[LinkService] handshake-step-failed peer=${opaquePeerId(stored.peerPubky)}:`,
@@ -1934,11 +2005,14 @@ async function recoverWedgedLink(
   intent: LinkIntent,
   alreadyRecovered: boolean,
   cause: unknown,
+  expectedOwner?: PubkyKey,
 ): Promise<EnsureOutcome> {
+  abortIfOwnerChanged(expectedOwner);
   const protocol = isLinkNativeError(cause) && cause.code === 'protocol';
   if (protocol) {
     try {
       const marker = await PaykitLinkNative.getReceiverMarker(stored.peerPubky, LINK_RECEIVER_PATH);
+      abortIfOwnerChanged(expectedOwner);
       if (
         marker &&
         stored.remoteNoisePublicKey &&
@@ -1948,25 +2022,32 @@ async function recoverWedgedLink(
           `[LinkService] peer-re-enrolled peer=${opaquePeerId(stored.peerPubky)}; restarting handshake`,
         );
       }
-    } catch {
+    } catch (err) {
+      if (err instanceof LinkSendError && err.code === 'owner-changed') throw err;
       // Marker fetch failing does not block the wipe — the handshake is wedged.
     }
   }
 
   if (stored.status !== 'established') {
-    const budget = await chargeHandshakeBudget(stored.ownerPubky, stored.peerPubky, {
-      reason: 'unestablished-wipe',
-    });
-    if (budget.exhausted) return abandonUnestablishedLink(stored);
+    const budget = await chargeHandshakeBudget(
+      stored.ownerPubky,
+      stored.peerPubky,
+      {
+        reason: 'unestablished-wipe',
+      },
+      expectedOwner,
+    );
+    if (budget.exhausted) return abandonUnestablishedLink(stored, expectedOwner);
   }
 
-  await wipeLinkState(stored);
+  await wipeLinkState(stored, expectedOwner);
 
   if (alreadyRecovered) return 'error';
-  return ensureLinkLocked(stored.peerPubky, intent, true);
+  return ensureLinkLocked(stored.peerPubky, intent, true, expectedOwner);
 }
 
-async function wipeLinkState(stored: LinkRecord): Promise<void> {
+async function wipeLinkState(stored: LinkRecord, expectedOwner?: PubkyKey): Promise<void> {
+  abortIfOwnerChanged(expectedOwner);
   const key = linkKey(stored.ownerPubky, stored.peerPubky);
   const live = liveHandles.get(key);
   if (live) {
@@ -1974,6 +2055,7 @@ async function wipeLinkState(stored: LinkRecord): Promise<void> {
     liveHandles.delete(key);
   }
   const receiver = await StorageService.getLinkReceiver(stored.ownerPubky);
+  abortIfOwnerChanged(expectedOwner);
   if (session && receiver) {
     try {
       await PaykitLinkNative.clearLinkOutbox(
@@ -1988,6 +2070,7 @@ async function wipeLinkState(stored: LinkRecord): Promise<void> {
       // Best-effort: a missing outbox is the desired end state.
     }
   }
+  abortIfOwnerChanged(expectedOwner);
   await StorageService.deleteLink(stored.ownerPubky, stored.peerPubky);
 }
 
@@ -2788,6 +2871,7 @@ async function dispatchPreparedDm(input: {
       createdAt: ts,
     },
   });
+  abortIfOwnerChanged(input.ownerPubky);
 
   if (input.outcome !== 'ready') return message;
 
@@ -2812,8 +2896,10 @@ async function dispatchPreparedDm(input: {
       snapshot,
       queueId,
     });
+    abortIfOwnerChanged(input.ownerPubky);
     return { ...message, deliveryState: 'sent' };
   } catch (err) {
+    if (err instanceof LinkSendError && err.code === 'owner-changed') throw err;
     console.warn(
       `[LinkService] send-failed peer=${opaquePeerId(input.peerPubky)}:`,
       errorMessage(err),

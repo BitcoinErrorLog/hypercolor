@@ -41,6 +41,8 @@ jest.mock('../../StorageService', () => ({
     insertBlockedPeers: jest.fn(),
     deleteBlockedPeer: jest.fn(),
     listBlockedPeers: jest.fn(),
+    listBlockedPeerCleanupPending: jest.fn(),
+    setBlockedPeerCleanupPending: jest.fn(),
   },
 }));
 
@@ -51,11 +53,14 @@ const OWNER_B = 'gcumbhd7sqit6nn457jxmrwqx9pyymqwamnarekgo3xppqo6a19o';
 const PEER = 'pxnu33x7jtpx9ar1ytsi4yxbp6a5o36gwhffs8zoxmbuptici1jy';
 const PEER_B = 'kyp7qac797z86bngq9g3ajqbrsgsb3tibayndqi6fe4cqi3gb6ry';
 
-function wireSql(rows: Map<string, Set<string>>): void {
+function wireSql(rows: Map<string, Set<string>>, pending: Map<string, Set<string>>): void {
   mockedStorage.insertBlockedPeer.mockImplementation(async (owner, peer) => {
     const set = rows.get(owner) ?? new Set<string>();
     set.add(peer);
     rows.set(owner, set);
+    const wait = pending.get(owner) ?? new Set<string>();
+    wait.add(peer);
+    pending.set(owner, wait);
   });
   mockedStorage.insertBlockedPeers.mockImplementation(async (owner, peers) => {
     const set = rows.get(owner) ?? new Set<string>();
@@ -64,12 +69,23 @@ function wireSql(rows: Map<string, Set<string>>): void {
   });
   mockedStorage.deleteBlockedPeer.mockImplementation(async (owner, peer) => {
     rows.get(owner)?.delete(peer);
+    pending.get(owner)?.delete(peer);
   });
   mockedStorage.listBlockedPeers.mockImplementation(async owner => [...(rows.get(owner) ?? [])]);
+  mockedStorage.listBlockedPeerCleanupPending.mockImplementation(async owner => [
+    ...(pending.get(owner) ?? []),
+  ]);
+  mockedStorage.setBlockedPeerCleanupPending.mockImplementation(async (owner, peer, flag) => {
+    const wait = pending.get(owner) ?? new Set<string>();
+    if (flag) wait.add(peer);
+    else wait.delete(peer);
+    pending.set(owner, wait);
+  });
 }
 
 describe('FollowsImportSettings', () => {
   let rows: Map<string, Set<string>>;
+  let pending: Map<string, Set<string>>;
 
   beforeEach(() => {
     FollowsImportSettings.resetForTests();
@@ -78,7 +94,8 @@ describe('FollowsImportSettings', () => {
     mmkvState.setThrows = false;
     mmkvState.unavailable = false;
     rows = new Map();
-    wireSql(rows);
+    pending = new Map();
+    wireSql(rows, pending);
   });
 
   it('defaults follows import off', () => {
@@ -179,13 +196,22 @@ describe('FollowsImportSettings', () => {
     expect(FollowsImportSettings.getDenyState(OWNER, PEER)).toBe('denied');
   });
 
-  it('persists cleanup-pending per owner until cleared', () => {
+  it('persists cleanup-pending on the deny insert until cleanup clears it', async () => {
     expect(FollowsImportSettings.isBlockCleanupPending(OWNER, PEER)).toBe(false);
-    FollowsImportSettings.markBlockCleanupPending(OWNER, PEER);
+    await FollowsImportSettings.block(OWNER, PEER);
     expect(FollowsImportSettings.isBlockCleanupPending(OWNER, PEER)).toBe(true);
     expect(FollowsImportSettings.isBlockCleanupPending(OWNER_B, PEER)).toBe(false);
-    FollowsImportSettings.clearBlockCleanupPending(OWNER, PEER);
+    await FollowsImportSettings.clearBlockCleanupPending(OWNER, PEER);
     expect(FollowsImportSettings.isBlockCleanupPending(OWNER, PEER)).toBe(false);
+  });
+
+  it('rehydrates cleanup-pending from SQL after a relaunch-shaped cache clear', async () => {
+    await FollowsImportSettings.block(OWNER, PEER);
+    FollowsImportSettings.resetForTests();
+    expect(FollowsImportSettings.isBlockCleanupPending(OWNER, PEER)).toBe(false);
+    expect(await FollowsImportSettings.hydrate(OWNER)).toBe('clear');
+    expect(FollowsImportSettings.isBlocked(OWNER, PEER)).toBe(true);
+    expect(FollowsImportSettings.isBlockCleanupPending(OWNER, PEER)).toBe(true);
   });
 
   it('re-reads durable MMKV consent after session memory is cleared', () => {

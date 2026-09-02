@@ -8,8 +8,11 @@
  *
  * `blocked_peers` is the durable fail-closed deny list. A MMKV copy is
  * migrated forward once (see FollowsImportSettings); this table is the
- * source of truth afterwards. All statements are idempotent so a later
- * W2c reconciliation can re-run them.
+ * source of truth afterwards. `cleanup_pending` is the durable Retry
+ * marker for leftover link/message/contact data after the deny commits.
+ * All statements are idempotent so a later W2c reconciliation can re-run
+ * them (`CREATE IF NOT EXISTS`; `ALTER ADD COLUMN` ignores duplicate
+ * column names in the migration runner).
  */
 export const SCHEMA_V16_STATEMENTS: readonly string[] = [
   `CREATE TABLE IF NOT EXISTS group_fanout_outcomes (
@@ -26,13 +29,15 @@ export const SCHEMA_V16_STATEMENTS: readonly string[] = [
   `CREATE INDEX IF NOT EXISTS idx_group_fanout_outcomes_event
     ON group_fanout_outcomes(owner_pubky, channel_id, sender_pubky, event_id)`,
   `CREATE TABLE IF NOT EXISTS blocked_peers (
-    owner_pubky  TEXT NOT NULL,
-    peer_pubky   TEXT NOT NULL,
-    blocked_at   INTEGER NOT NULL,
+    owner_pubky       TEXT NOT NULL,
+    peer_pubky        TEXT NOT NULL,
+    blocked_at        INTEGER NOT NULL,
+    cleanup_pending   INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (owner_pubky, peer_pubky)
   )`,
   `CREATE INDEX IF NOT EXISTS idx_blocked_peers_owner
     ON blocked_peers(owner_pubky)`,
+  `ALTER TABLE blocked_peers ADD COLUMN cleanup_pending INTEGER NOT NULL DEFAULT 0`,
 ];
 
 /**

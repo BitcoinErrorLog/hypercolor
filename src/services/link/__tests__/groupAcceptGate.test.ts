@@ -155,6 +155,8 @@ jest.mock('../../StorageService', () => ({
     clearHandshakeBudget: jest.fn(),
     hasQueueItem: jest.fn(),
     listBlockedPeers: jest.fn(),
+    listBlockedPeerCleanupPending: jest.fn(),
+    setBlockedPeerCleanupPending: jest.fn(),
     insertBlockedPeer: jest.fn(),
     deleteBlockedPeer: jest.fn(),
   },
@@ -294,6 +296,7 @@ function wireInMemoryStorage(): void {
   mockedStorage.clearHandshakeBudget.mockResolvedValue(undefined);
   mockedStorage.hasQueueItem.mockResolvedValue(false);
   mockedStorage.listBlockedPeers.mockResolvedValue([]);
+  mockedStorage.listBlockedPeerCleanupPending.mockResolvedValue([]);
 
   mockedStorage.upsertLink.mockImplementation(async record => {
     db.links.set(record.peerPubky, { ...record, updatedAt: NOW });

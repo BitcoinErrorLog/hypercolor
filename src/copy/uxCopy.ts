@@ -82,8 +82,10 @@ export const COPY = {
   decline: 'Decline',
 
   queued: 'Queued',
+  sending: 'Sending',
   sent: 'Sent',
   failed: 'Failed',
+  notDelivered: 'Not delivered',
   inboxClosed: 'Inbox closed',
   offline: 'Offline',
   needsEnable: 'Needs enable',

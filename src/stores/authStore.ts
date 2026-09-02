@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { immer } from 'zustand/middleware/immer';
 import type { PubkyKey, UserProfile } from '../types';
+import { registerAuthOwnerReader } from '../services/paintedOwner';
 
 interface AuthState {
   isAuthenticated: boolean;
@@ -41,3 +42,5 @@ export const useAuthStore = create<AuthState>()(
       }),
   })),
 );
+
+registerAuthOwnerReader(() => useAuthStore.getState().pubky);

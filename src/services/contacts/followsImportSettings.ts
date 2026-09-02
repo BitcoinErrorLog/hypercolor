@@ -15,12 +15,12 @@ import { StorageService } from '../StorageService';
  * or malformed persisted data is a distinct `unavailable` state — never an
  * empty set — and every Encrypted-Link choke fails closed on it.
  *
- * MMKV is loaded lazily so unit tests that never touch persistence do not
- * need a native store.
+ * Cleanup-pending lives on `blocked_peers.cleanup_pending` and is set in
+ * the same deny insert that commits the block. MMKV is loaded lazily so
+ * unit tests that never touch persistence do not need a native store.
  */
 const FLAG_PREFIX = 'followsImportEnabled:';
 const BLOCKED_PREFIX = 'blocked:';
-const CLEANUP_PENDING_PREFIX = 'blockCleanupPending:';
 
 export type PeerDenyState = 'denied' | 'clear' | 'unavailable';
 
@@ -147,39 +147,21 @@ async function loadOwnerDeny(ownerPubky: PubkyKey): Promise<OwnerDenyCache> {
     await migrateMmkvBlocked(ownerPubky);
     const peers = await StorageService.listBlockedPeers(ownerPubky);
     if (!Array.isArray(peers)) throw new Error('deny list unavailable');
+    const pending = await StorageService.listBlockedPeerCleanupPending(ownerPubky);
+    if (!Array.isArray(pending)) throw new Error('deny list unavailable');
+    memCleanupPending.set(ownerPubky, new Set(pending));
     return markAvailable(ownerPubky, new Set(peers));
   } catch {
     return markUnavailable(ownerPubky);
   }
 }
 
-function readCleanupPending(ownerPubky: PubkyKey): Set<string> {
+function cleanupPendingSet(ownerPubky: PubkyKey): Set<string> {
   const cached = memCleanupPending.get(ownerPubky);
   if (cached) return cached;
-  let next = new Set<string>();
-  try {
-    const raw = storage()?.getString(`${CLEANUP_PENDING_PREFIX}${ownerPubky}`);
-    if (raw) {
-      const parsed: unknown = JSON.parse(raw);
-      if (Array.isArray(parsed)) {
-        next = new Set(parsed.filter((item): item is string => typeof item === 'string'));
-      }
-    }
-  } catch {
-    next = new Set<string>();
-  }
+  const next = new Set<string>();
   memCleanupPending.set(ownerPubky, next);
   return next;
-}
-
-function writeCleanupPending(ownerPubky: PubkyKey, pending: Set<string>): void {
-  memCleanupPending.set(ownerPubky, pending);
-  try {
-    storage()?.set(`${CLEANUP_PENDING_PREFIX}${ownerPubky}`, JSON.stringify([...pending]));
-  } catch {
-    // Memory remains the source of truth for this session.
-  }
-  notify();
 }
 
 export const FollowsImportSettings = {
@@ -247,6 +229,9 @@ export const FollowsImportSettings = {
       return;
     }
     markAvailable(ownerPubky, new Set(peers));
+    const pending = cleanupPendingSet(ownerPubky);
+    pending.add(pubky);
+    notify();
   },
 
   async unblock(ownerPubky: PubkyKey, pubky: PubkyKey): Promise<void> {
@@ -262,25 +247,27 @@ export const FollowsImportSettings = {
       return;
     }
     markAvailable(ownerPubky, new Set(peers));
+    cleanupPendingSet(ownerPubky).delete(pubky);
+    notify();
   },
 
   isBlockCleanupPending(ownerPubky: PubkyKey, pubky: PubkyKey): boolean {
     if (!ownerPubky || !pubky) return false;
-    return readCleanupPending(ownerPubky).has(pubky);
+    return cleanupPendingSet(ownerPubky).has(pubky);
   },
 
-  markBlockCleanupPending(ownerPubky: PubkyKey, pubky: PubkyKey): void {
+  async markBlockCleanupPending(ownerPubky: PubkyKey, pubky: PubkyKey): Promise<void> {
     if (!ownerPubky || !pubky) return;
-    const pending = new Set(readCleanupPending(ownerPubky));
-    pending.add(pubky);
-    writeCleanupPending(ownerPubky, pending);
+    await StorageService.setBlockedPeerCleanupPending(ownerPubky, pubky, true);
+    cleanupPendingSet(ownerPubky).add(pubky);
+    notify();
   },
 
-  clearBlockCleanupPending(ownerPubky: PubkyKey, pubky: PubkyKey): void {
+  async clearBlockCleanupPending(ownerPubky: PubkyKey, pubky: PubkyKey): Promise<void> {
     if (!ownerPubky || !pubky) return;
-    const pending = new Set(readCleanupPending(ownerPubky));
-    pending.delete(pubky);
-    writeCleanupPending(ownerPubky, pending);
+    await StorageService.setBlockedPeerCleanupPending(ownerPubky, pubky, false);
+    cleanupPendingSet(ownerPubky).delete(pubky);
+    notify();
   },
 
   /**

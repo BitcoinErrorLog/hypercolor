@@ -1,11 +1,17 @@
 import type { PubkyKey } from '../../types';
+import { hmacSha256Hex } from './hmacSha256';
 
 /**
- * Per-install opaque correlation id for logs. Not a pubky prefix and not
- * reversible to the peer identity without the install salt.
+ * Per-install opaque correlation id for logs. HMAC-SHA-256 of the peer
+ * pubky under a random install salt, truncated to 16 hex chars.
  *
- * Salt lives in MMKV (KeyStore-free). Hash is FNV-1a 64-bit of
- * `salt || pubky` — log correlation only, never a security decision.
+ * Threat model:
+ * - Logs alone (no salt): recovering a random 52-character z32 identity
+ *   by preimage search is infeasible.
+ * - Logs plus the device-local MMKV salt plus a candidate identity set
+ *   (contacts, public graph, a suspect list): dictionary matching is
+ *   cheap and exact. Treat this as log correlation, never as a secret
+ *   or a security decision.
  */
 const SALT_KEY = 'peer-log-salt';
 
@@ -69,21 +75,11 @@ function installSalt(): string | null {
   return memorySalt;
 }
 
-function fnv1a64Hex(input: string): string {
-  let hash = 0xcbf29ce484222325n;
-  const prime = 0x100000001b3n;
-  for (let i = 0; i < input.length; i += 1) {
-    hash ^= BigInt(input.charCodeAt(i));
-    hash = BigInt.asUintN(64, hash * prime);
-  }
-  return hash.toString(16).padStart(16, '0');
-}
-
 /** Stable per-install id for a peer. Hex, 16 chars — never a 52-char z32 pubky. */
 export function opaquePeerId(pubky: PubkyKey): string {
   const salt = installSalt();
   if (!salt) return 'unavailable';
-  return fnv1a64Hex(`${salt}\0${pubky}`);
+  return hmacSha256Hex(salt, pubky).slice(0, 16);
 }
 
 /** Test-only: drop cached salt so the next lookup re-reads MMKV. */

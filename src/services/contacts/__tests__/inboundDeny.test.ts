@@ -116,6 +116,8 @@ jest.mock('../../StorageService', () => ({
     updateAttachmentDelivery: jest.fn(),
     completeGroupFanoutRecipient: jest.fn(),
     listBlockedPeers: jest.fn(),
+    listBlockedPeerCleanupPending: jest.fn(),
+    setBlockedPeerCleanupPending: jest.fn(),
     insertBlockedPeer: jest.fn(),
     insertBlockedPeers: jest.fn(),
     deleteBlockedPeer: jest.fn(),
@@ -255,6 +257,8 @@ describe('inbound deny is authoritative', () => {
     mockedStorage.listBlockedPeers.mockImplementation(async owner => [
       ...(denyRows.get(owner) ?? []),
     ]);
+    mockedStorage.listBlockedPeerCleanupPending.mockResolvedValue([]);
+    mockedStorage.setBlockedPeerCleanupPending.mockResolvedValue(undefined);
     mockedStorage.completeGroupFanoutRecipient.mockResolvedValue(undefined);
 
     await LinkService.clearSession();

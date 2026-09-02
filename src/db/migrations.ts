@@ -61,8 +61,27 @@ export async function runMigrations(db: SqlExecutor): Promise<void> {
   const versionResult = db.executeSync('PRAGMA user_version');
   const currentVersion: number = (versionResult.rows?.[0]?.user_version as number) ?? 0;
 
-  if (currentVersion >= CURRENT_VERSION) {
-    return; // Already up to date
+  if (currentVersion > CURRENT_VERSION) {
+    return;
+  }
+
+  // CURRENT_VERSION stays 16 while v16 statements remain additive and
+  // idempotent. Databases that already recorded user_version=16 must still
+  // pick up in-version DDL (blocked_peers.cleanup_pending).
+  if (currentVersion === CURRENT_VERSION) {
+    const latest = MIGRATIONS.find(m => m.version === CURRENT_VERSION);
+    if (!latest) return;
+    db.executeSync('BEGIN');
+    try {
+      for (const statement of latest.statements) {
+        applyStatement(db, statement);
+      }
+      db.executeSync('COMMIT');
+    } catch (err) {
+      db.executeSync('ROLLBACK');
+      throw new Error(`Migration v${latest.version} reconcile failed: ${(err as Error).message}`);
+    }
+    return;
   }
 
   const pending = MIGRATIONS.filter(m => m.version > currentVersion);
@@ -71,7 +90,7 @@ export async function runMigrations(db: SqlExecutor): Promise<void> {
     db.executeSync('BEGIN');
     try {
       for (const statement of migration.statements) {
-        db.executeSync(statement);
+        applyStatement(db, statement);
       }
       // Commit and advance the schema version
       db.executeSync(`PRAGMA user_version = ${migration.version}`);
@@ -80,5 +99,26 @@ export async function runMigrations(db: SqlExecutor): Promise<void> {
       db.executeSync('ROLLBACK');
       throw new Error(`Migration v${migration.version} failed: ${(err as Error).message}`);
     }
+  }
+}
+
+/**
+ * `ALTER TABLE … ADD COLUMN` is not `IF NOT EXISTS`. Re-running v16 after a
+ * CREATE that already includes the column (or a previous ALTER) must not
+ * fail the whole migration.
+ */
+function applyStatement(db: SqlExecutor, statement: string): void {
+  try {
+    db.executeSync(statement);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (
+      /ALTER TABLE/i.test(statement) &&
+      /ADD COLUMN/i.test(statement) &&
+      /duplicate column name/i.test(message)
+    ) {
+      return;
+    }
+    throw err;
   }
 }

@@ -752,7 +752,9 @@ action, never a side effect of adding a pubky.
 - **Blocked · cleanup pending.** A leftover contact row stays in the list with that label after
   a Block whose decline/delete failed. Contact detail shows the same label, `Retry` (finishes
   cleanup while the deny stays), and `Unblock`. Navigating away and back keeps Retry — cleanup
-  pending is persisted per owner, not component state.
+  pending is a SQLite column on `blocked_peers` (`cleanup_pending`), set to 1 in the same deny
+  insert that commits the block and cleared to 0 after leftover Encrypted Link / message /
+  contact cleanup succeeds. It is not an MMKV flag. Relaunch hydrates it with the deny list.
 - **Unblock and add.** Pasting a blocked pubky does not lift the deny. Search (and Add as
   contact) returns a blocked result and opens `This pubky is blocked. Unblock and add?`
   Decline keeps the block. Confirm persists the contact first, then lifts the deny and
@@ -773,11 +775,27 @@ action, never a side effect of adding a pubky.
   transaction as the send intent, then upserts that row in the same transaction
   that advances the snapshot and deletes the queue item (or writes a terminal
   failure). The Channel view labels an outbound private-group message from those
-  persisted rows (`Sent`, `Sent to N of M`, `Not delivered to {name} (blocked)`),
-  never from drain order or the coarse `group_messages.delivery_state` alone.
+  persisted rows, never from drain order or the coarse
+  `group_messages.delivery_state` alone:
+
+  | Persisted recipient state | Label |
+  | --- | --- |
+  | every row `pending`, or pending with zero `sent` | `Sending` |
+  | mixed `sent` + `pending` | `Sending · N of M sent` |
+  | every row `sent` | `Sent` |
+  | mixed `sent` + `failed` (no pending) | `Sent to N of M` |
+  | every row `failed`, one `blocked` | `Not delivered to {name} (blocked)` |
+  | every row `failed` otherwise | `Not delivered` |
+
   One-to-one DMs still use the coarse delivery word. A declined message
-  request is not a deny at this choke. User send pins the owner at start and
-  aborts with no persistence if that owner is no longer current after an await.
+  request is not a deny at this choke. User send pins the owner at start.
+  Persistence is owner-conditional at commit time: after every `await getDb()`,
+  the storage layer reads the painted identity from the auth store (falling
+  back to KeyStore) synchronously immediately before `BEGIN IMMEDIATE` /
+  `executeSync`, in the same tick as the write so no further await can
+  interleave, and refuses with typed `owner-changed` instead of writing.
+  Nested send-path handshake helpers take `expectedOwner` and check after
+  every external await before persistence or a native side effect.
 - **Send to a blocked pubky.** The thread shows `You blocked this contact. Unblock
   to message them.` with `Unblock`. Send never surfaces an internal error string.
 - **Block sheet.** Names local deletion (contact row, Encrypted Link, one-to-one messages,
