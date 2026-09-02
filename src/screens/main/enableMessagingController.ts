@@ -96,11 +96,15 @@ export function createEnableMessagingController(
   let attempt = 0;
   let starting = false;
   let statusGeneration = 0;
+  const lateFlowDisposition = new Map<number, 'release' | 'cancel'>();
   const listeners = new Set<(next: EnableMessagingState) => void>();
   const now = () => (deps.now ? deps.now() : Date.now());
 
   function emit(patch: Partial<EnableMessagingState>): void {
     state = { ...state, ...patch };
+    if (typeof patch.starting === 'boolean') {
+      starting = patch.starting;
+    }
     for (const listener of listeners) listener(state);
   }
 
@@ -122,7 +126,29 @@ export function createEnableMessagingController(
     return !cancelled && generation === attempt;
   }
 
+  /**
+   * Status and enable() share `attempt`. A newer status that lands while
+   * enable() is still unresolved must invalidate that attempt so its later
+   * resolution cannot overwrite Success or leave the CTA latch stuck.
+   */
+  function invalidateStartingAttempt(status: LinkEnableStatus): void {
+    if (!starting) return;
+    lateFlowDisposition.set(attempt, status === 'enabled' ? 'release' : 'cancel');
+    attempt += 1;
+  }
+
+  function disposeLateFlow(myAttempt: number, nextFlow: LinkEnableFlow): void {
+    const recorded = lateFlowDisposition.get(myAttempt);
+    lateFlowDisposition.delete(myAttempt);
+    if (recorded === 'release' || (recorded === undefined && state.phase === 'success')) {
+      nextFlow.releaseKeepalive();
+      return;
+    }
+    nextFlow.cancel();
+  }
+
   async function applyStatus(status: LinkEnableStatus): Promise<void> {
+    invalidateStartingAttempt(status);
     if (status === 'native-missing') {
       flow?.cancel();
       flow = null;
@@ -161,13 +187,12 @@ export function createEnableMessagingController(
       flow.cancel();
       flow = null;
     }
-    starting = true;
     const myAttempt = ++attempt;
     emit({ starting: true });
     try {
       const nextFlow = await deps.enable();
       if (!isCurrentAttempt(myAttempt)) {
-        nextFlow.cancel();
+        disposeLateFlow(myAttempt, nextFlow);
         return;
       }
       flow = nextFlow;
@@ -178,7 +203,6 @@ export function createEnableMessagingController(
         details: null,
         starting: false,
       });
-      starting = false;
       if (isAutoOpenableAuthUrl(flow.authorizationUrl)) {
         try {
           await deps.openUrl(flow.authorizationUrl);
@@ -215,9 +239,8 @@ export function createEnableMessagingController(
         starting: false,
       });
     } finally {
-      if (myAttempt === attempt) {
-        starting = false;
-        if (state.starting) emit({ starting: false });
+      if (myAttempt === attempt && starting) {
+        emit({ starting: false });
       }
     }
   }
@@ -315,13 +338,14 @@ export function createEnableMessagingController(
     cancel() {
       cancelled = true;
       attempt += 1;
-      starting = false;
       if (state.phase === 'success') {
         flow?.releaseKeepalive();
+        emit({ starting: false });
         return;
       }
       flow?.cancel();
       flow = null;
+      emit({ starting: false });
     },
   };
 }

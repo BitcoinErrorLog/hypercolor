@@ -427,6 +427,88 @@ describe('enableMessagingController', () => {
     await started.catch(() => undefined);
   });
 
+  it('keeps Success when AppState enabled wins over an unresolved enable()', async () => {
+    const pendingEnable = deferred<LinkEnableFlow>();
+    const awaitEnabled = jest.fn(
+      () =>
+        new Promise<{ pubky: string; receiverPath: string; noisePublicKey: string }>(
+          () => undefined,
+        ),
+    );
+    const flow = authFlow({ awaitEnabled });
+    const getEnableStatus = jest
+      .fn()
+      .mockResolvedValueOnce('needs-enable')
+      .mockResolvedValue('enabled');
+    const deps = makeDeps({
+      getEnableStatus,
+      enable: jest.fn(() => pendingEnable.promise),
+    });
+    const controller = createEnableMessagingController(deps);
+    await controller.start();
+    const started = controller.beginAuth();
+    await flush();
+    expect(controller.getState().starting).toBe(true);
+
+    await controller.onAppActive();
+    expect(controller.getState().phase).toBe('success');
+    expect(controller.getState().starting).toBe(false);
+
+    pendingEnable.resolve(flow);
+    await started;
+
+    expect(controller.getState().phase).toBe('success');
+    expect(controller.getState().starting).toBe(false);
+    expect(flow.releaseKeepalive).toHaveBeenCalled();
+    expect(flow.cancel).not.toHaveBeenCalled();
+    expect(awaitEnabled).not.toHaveBeenCalled();
+  });
+
+  it('lets a new Enable tap start after AppState needs-enable during starting', async () => {
+    const firstEnable = deferred<LinkEnableFlow>();
+    const firstFlow = authFlow({
+      authorizationUrl: 'pubkyauth://stale',
+      awaitEnabled: jest.fn(
+        () =>
+          new Promise<{ pubky: string; receiverPath: string; noisePublicKey: string }>(
+            () => undefined,
+          ),
+      ),
+    });
+    const secondFlow = authFlow({
+      authorizationUrl: 'pubkyauth://fresh',
+    });
+    const enable = jest
+      .fn()
+      .mockImplementationOnce(() => firstEnable.promise)
+      .mockResolvedValue(secondFlow);
+    const deps = makeDeps({ enable });
+    const controller = createEnableMessagingController(deps);
+    await controller.start();
+    const stale = controller.beginAuth();
+    await flush();
+    expect(deps.enable).toHaveBeenCalledTimes(1);
+    expect(controller.getState().starting).toBe(true);
+
+    await controller.onAppActive();
+    expect(controller.getState().phase).toBe('needs-enable');
+    expect(controller.getState().starting).toBe(false);
+
+    const fresh = controller.beginAuth();
+    await flush();
+    expect(deps.enable).toHaveBeenCalledTimes(2);
+
+    firstEnable.resolve(firstFlow);
+    await stale;
+    expect(firstFlow.cancel).toHaveBeenCalled();
+    expect(firstFlow.releaseKeepalive).not.toHaveBeenCalled();
+    expect(firstFlow.awaitEnabled).not.toHaveBeenCalled();
+
+    await fresh;
+    expect(controller.getState().phase).toBe('success');
+    expect(controller.getState().starting).toBe(false);
+  });
+
   it('does not sign out when a delayed awaitEnabled resolves after AppState enabled', async () => {
     const pending = deferred<{ pubky: string; receiverPath: string; noisePublicKey: string }>();
     const flow = authFlow({ awaitEnabled: jest.fn(() => pending.promise) });
