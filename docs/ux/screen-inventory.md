@@ -142,7 +142,7 @@ Related phases on the same screen: `checking` (spinner), `authorizing` (QR + Ope
 | Contact detail | **No route.** Contacts row → `Thread`. No edit/delete/homeserver/trust breakdown UI (`TrustEngine.explain` runs for score persistence only, `ContactsScreen.tsx`). |
 | Group detail as its own stack screen | Members are an in-screen pane on `ChannelScreen`, not `RootStackParamList`. |
 | Attachment gallery / viewer route | `AttachmentBubble` in thread/channel only (`src/components/AttachmentBubble.tsx`). |
-| Username search | `ContactSearchScreen` is paste z32 only. `NexusClient.user` exists (`src/services/NexusClient.ts`) and has **zero callers**. |
+| Username search | `ContactSearchScreen` is paste z32 only. `NexusClient.user` was **removed** (`NexusClient` is followers/following/friends only). |
 | Discover / public tags | No screen, tab, or component. Public channels: invite link copy in the create modal (`ChannelsScreen.tsx`) and `src/types/group.ts` (“Nexus does not index chat URIs”). |
 | Notifications inbox / OS permission | None. `docs/NOTIFICATIONS.md`: foreground `syncInbox` only. |
 | Mesh peer list | `contactStore.meshPeers` is never written. `MeshService` is never imported. Settings has a quarantined BLE switch only. |
