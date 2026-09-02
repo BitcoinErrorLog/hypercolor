@@ -1,4 +1,4 @@
-export type ConnectAuthFeedback = 'denied' | 'offline';
+export type ConnectAuthFeedback = 'denied' | 'offline' | 'expired';
 
 const listeners = new Set<(next: ConnectAuthFeedback) => void>();
 

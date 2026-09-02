@@ -134,7 +134,12 @@ export function RootNavigator() {
         notifyEnableMessagingResume();
       } catch (err) {
         const sanitized = sanitizeError(err, COPY.couldNotCompleteAuthorization);
-        if (sanitized.category === 'denied') {
+        if (
+          PubkyRingAuthService.isExpiredDelegationError(err) ||
+          sanitized.category === 'expired'
+        ) {
+          notifyConnectAuthFeedback('expired');
+        } else if (sanitized.category === 'denied') {
           notifyConnectAuthFeedback('denied');
         } else if (sanitized.category === 'offline' || sanitized.category === 'network') {
           notifyConnectAuthFeedback('offline');

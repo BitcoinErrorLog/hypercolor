@@ -123,7 +123,7 @@ describe('AwaitingRingAuthScreen', () => {
     await unmount(tree);
   });
 
-  it('surfaces denied and offline from Connect callback feedback', async () => {
+  it('surfaces denied, offline, and expired from Connect callback feedback', async () => {
     const tree = await render(<AwaitingRingAuthScreen />);
     await act(async () => {
       notifyConnectAuthFeedback('denied');
@@ -135,6 +135,12 @@ describe('AwaitingRingAuthScreen', () => {
       notifyConnectAuthFeedback('offline');
     });
     expect(JSON.stringify(tree.toJSON())).toContain(COPY.sessionOffline);
+
+    await act(async () => {
+      notifyConnectAuthFeedback('expired');
+    });
+    expect(JSON.stringify(tree.toJSON())).toContain(COPY.authorizationExpired);
+    expect(tree.root.findByProps({ testID: 'awaitingRingAuthGenerateNew' })).toBeTruthy();
     await unmount(tree);
   });
 
