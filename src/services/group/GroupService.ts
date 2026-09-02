@@ -38,6 +38,11 @@ import { LINK_GROUP_FANOUT_PAYLOAD_TYPE } from '../../types/group';
 import { LinkService } from '../link/LinkService';
 import { notifyGroupEvent } from './groupEvents';
 import {
+  bindDeferredPublicJoinToOwner,
+  clearDeferredPublicJoin,
+  consumeDeferredPublicJoinRedirect,
+  dismissDeferredPublicJoin,
+  peekDeferredPublicInvite,
   peekDeferredPublicJoin,
   setDeferredPublicJoin,
   takeDeferredPublicJoin,
@@ -46,16 +51,36 @@ import {
 export { subscribeGroupEvents } from './groupEvents';
 export { PRIVATE_GROUP_MEMBER_CAP };
 
-export function setPendingPublicJoin(ref: string): void {
-  setDeferredPublicJoin(ref);
+export function setPendingPublicJoin(ref: string, ownerPubky?: string | null): void {
+  setDeferredPublicJoin(ref, ownerPubky);
 }
 
-export function peekPendingPublicJoin(): string | null {
-  return peekDeferredPublicJoin();
+export function peekPendingPublicJoin(ownerPubky?: string | null): string | null {
+  return peekDeferredPublicJoin(ownerPubky);
 }
 
-export function takePendingPublicJoin(): string | null {
-  return takeDeferredPublicJoin();
+export function peekPendingPublicInvite(ownerPubky: string): string | null {
+  return peekDeferredPublicInvite(ownerPubky);
+}
+
+export function bindPendingPublicJoin(ownerPubky: string): void {
+  bindDeferredPublicJoinToOwner(ownerPubky);
+}
+
+export function consumePendingPublicJoinRedirect(ownerPubky: string): boolean {
+  return consumeDeferredPublicJoinRedirect(ownerPubky);
+}
+
+export function dismissPendingPublicJoin(ownerPubky: string): void {
+  dismissDeferredPublicJoin(ownerPubky);
+}
+
+export function takePendingPublicJoin(ownerPubky?: string | null): string | null {
+  return takeDeferredPublicJoin(ownerPubky);
+}
+
+export function clearPendingPublicJoin(ownerPubky?: string | null): void {
+  clearDeferredPublicJoin(ownerPubky);
 }
 
 export const GroupService = {

@@ -4,10 +4,6 @@ export type ChannelMode = 'private' | 'public';
 
 export type ChannelListItem = GroupChannel & { unreadCount: number };
 
-export function groupReadCursorId(channelId: string): string {
-  return `group:${channelId}`;
-}
-
 export function filterChannelsByMode(
   channels: readonly ChannelListItem[],
   mode: ChannelMode,
@@ -21,6 +17,11 @@ export function publicListVisible(optedIn: boolean): boolean {
 }
 
 export function mayReadPublicGraph(optedIn: boolean): boolean {
+  return optedIn;
+}
+
+/** Public-substrate writes that are not already on a viewed public channel. */
+export function mayWritePublicGraph(optedIn: boolean): boolean {
   return optedIn;
 }
 

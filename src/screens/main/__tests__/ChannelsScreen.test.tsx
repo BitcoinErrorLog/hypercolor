@@ -82,6 +82,7 @@ function props(
     joinOpen: false,
     createPublicDefault: false,
     busy: false,
+    pendingInvite: null,
     memberCap: 50,
     onModeChange: noop,
     onLoadPublic: noop,
@@ -92,6 +93,8 @@ function props(
     onCreatePrivate: noop,
     onCreatePublic: noop,
     onJoinPublic: noop,
+    onConfirmPendingJoin: noop,
+    onDismissPendingJoin: noop,
     onOpenChannel: noop,
     ...overrides,
   };
@@ -127,5 +130,46 @@ describe('ChannelsScreenContent', () => {
     expect(byTestId(tree, 'channelRowPublic').length).toBeGreaterThan(0);
     expect(JSON.stringify(tree.toJSON())).toContain('Town square');
     await unmount(tree);
+  });
+
+  it('keeps Join disabled on a pending invite until Load public topics, then confirms', async () => {
+    const onConfirmPendingJoin = jest.fn();
+    const onDismissPendingJoin = jest.fn();
+    const tree = await render(
+      <ChannelsScreenContent
+        {...props({
+          mode: 'public',
+          publicOptIn: false,
+          pendingInvite: 'hypercolor://join-public?channel=x&host=y',
+          onConfirmPendingJoin,
+          onDismissPendingJoin,
+        })}
+      />,
+    );
+    expect(tree.root.findByProps({ testID: 'channelsPendingInvite' })).toBeTruthy();
+    expect(tree.root.findByProps({ testID: 'channelsPendingJoin' }).props.disabled).toBe(true);
+    await unmount(tree);
+
+    const opted = await render(
+      <ChannelsScreenContent
+        {...props({
+          mode: 'public',
+          publicOptIn: true,
+          pendingInvite: 'hypercolor://join-public?channel=x&host=y',
+          onConfirmPendingJoin,
+          onDismissPendingJoin,
+        })}
+      />,
+    );
+    expect(opted.root.findByProps({ testID: 'channelsPendingJoin' }).props.disabled).toBe(false);
+    await act(async () => {
+      opted.root.findByProps({ testID: 'channelsPendingJoin' }).props.onPress();
+    });
+    expect(onConfirmPendingJoin).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      opted.root.findByProps({ testID: 'channelsPendingDismiss' }).props.onPress();
+    });
+    expect(onDismissPendingJoin).toHaveBeenCalledTimes(1);
+    await unmount(opted);
   });
 });

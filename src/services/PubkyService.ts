@@ -6,6 +6,7 @@ import {
 } from '@synonymdev/react-native-pubky';
 import { KeyStore } from './KeyStore';
 import { LinkService } from './link/LinkService';
+import { clearDeferredPublicJoin } from '../stores/deferredPublicJoin';
 import type { UserProfile, PubkyKey } from '../types';
 
 /**
@@ -47,6 +48,7 @@ export const PubkyService = {
   // ── Auth ──────────────────────────────────────────────────────────────────
 
   async signOut(): Promise<void> {
+    const owner = KeyStore.getPubky();
     const sessionSecret = KeyStore.getSessionSecret();
     if (sessionSecret) {
       try {
@@ -58,6 +60,7 @@ export const PubkyService = {
     // Full messaging teardown (KeyStore attachment keys, cache, SQL) while
     // the current-owner identity is still readable. Identity clear is last.
     await LinkService.clearSession();
+    clearDeferredPublicJoin(owner);
     await KeyStore.clear();
   },
 

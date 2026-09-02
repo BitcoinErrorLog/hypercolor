@@ -21,7 +21,11 @@ import { useAuthStore } from '../stores/authStore';
 import ThreadScreen from '../screens/main/ThreadScreen';
 import ChannelScreen from '../screens/main/ChannelScreen';
 import { PubkyRingAuthService } from '../services/PubkyRingAuthService';
-import { setPendingPublicJoin, peekPendingPublicJoin } from '../services/group/GroupService';
+import {
+  bindPendingPublicJoin,
+  consumePendingPublicJoinRedirect,
+  setPendingPublicJoin,
+} from '../services/group/GroupService';
 import { parsePublicChannelRef } from '../types/group';
 import { sanitizeError } from '../ui/sanitizedError';
 import { COPY } from '../copy/uxCopy';
@@ -105,7 +109,7 @@ function LoadingFallback() {
 }
 
 export function RootNavigator() {
-  const { isAuthenticated, setAuthenticated } = useAuthStore();
+  const { isAuthenticated, setAuthenticated, pubky } = useAuthStore();
   const reduceMotion = useReduceMotion();
   const stackAnimation = (kind: 'slide_from_right' | 'slide_from_bottom') =>
     stackTransitionAnimation(reduceMotion, kind);
@@ -115,8 +119,8 @@ export function RootNavigator() {
       if (url.startsWith('hypercolor://e2e/')) return;
       if (url.startsWith('hypercolor://join-public')) {
         if (!parsePublicChannelRef(url)) return;
-        setPendingPublicJoin(url);
-        if (isAuthenticated) {
+        setPendingPublicJoin(url, isAuthenticated ? pubky : null);
+        if (isAuthenticated && pubky && consumePendingPublicJoinRedirect(pubky)) {
           navigateRoot(PUBLIC_CHANNELS_ROUTE.name, PUBLIC_CHANNELS_ROUTE.params);
         }
         return;
@@ -137,14 +141,16 @@ export function RootNavigator() {
         Alert.alert(COPY.couldNotCompleteAuthorization, sanitized.message);
       }
     },
-    [isAuthenticated, setAuthenticated],
+    [isAuthenticated, pubky, setAuthenticated],
   );
 
   useEffect(() => {
-    if (!isAuthenticated) return;
-    if (!peekPendingPublicJoin()) return;
-    navigateRoot(PUBLIC_CHANNELS_ROUTE.name, PUBLIC_CHANNELS_ROUTE.params);
-  }, [isAuthenticated]);
+    if (!isAuthenticated || !pubky) return;
+    bindPendingPublicJoin(pubky);
+    if (consumePendingPublicJoinRedirect(pubky)) {
+      navigateRoot(PUBLIC_CHANNELS_ROUTE.name, PUBLIC_CHANNELS_ROUTE.params);
+    }
+  }, [isAuthenticated, pubky]);
 
   useEffect(() => {
     if (__DEV__) {

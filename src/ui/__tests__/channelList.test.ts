@@ -1,7 +1,8 @@
+import { groupReadCursorId } from '../../types/group';
 import {
   filterChannelsByMode,
-  groupReadCursorId,
   mayReadPublicGraph,
+  mayWritePublicGraph,
   parseChannelMode,
   publicListVisible,
   withUnreadCounts,
@@ -49,11 +50,13 @@ describe('public graph opt-in', () => {
   it('forbids public reads before consent', () => {
     expect(mayReadPublicGraph(false)).toBe(false);
     expect(publicListVisible(false)).toBe(false);
+    expect(mayWritePublicGraph(false)).toBe(false);
   });
 
   it('allows public reads after Load public topics', () => {
     expect(mayReadPublicGraph(true)).toBe(true);
     expect(publicListVisible(true)).toBe(true);
+    expect(mayWritePublicGraph(true)).toBe(true);
   });
 });
 

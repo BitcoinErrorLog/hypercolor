@@ -25,9 +25,14 @@ jest.mock('../KeyStore', () => ({
   },
 }));
 
+jest.mock('../../stores/deferredPublicJoin', () => ({
+  clearDeferredPublicJoin: jest.fn(),
+}));
+
 import { KeyStore } from '../KeyStore';
 import { LinkService } from '../link/LinkService';
 import { PubkyService } from '../PubkyService';
+import { clearDeferredPublicJoin } from '../../stores/deferredPublicJoin';
 
 describe('sign-out teardown', () => {
   const callOrder: string[] = [];
@@ -47,6 +52,7 @@ describe('sign-out teardown', () => {
     await PubkyService.signOut();
     expect(callOrder).toEqual(['teardown', 'identity-clear']);
     expect(LinkService.clearSession).toHaveBeenCalled();
+    expect(clearDeferredPublicJoin).toHaveBeenCalledWith('a'.repeat(52));
     expect(KeyStore.clear).toHaveBeenCalled();
     const teardownOrder = jest.mocked(LinkService.clearSession).mock.invocationCallOrder[0]!;
     const identityOrder = jest.mocked(KeyStore.clear).mock.invocationCallOrder[0]!;

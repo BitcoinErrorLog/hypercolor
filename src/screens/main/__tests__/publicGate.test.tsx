@@ -1,6 +1,7 @@
 const mockNavigate = jest.fn();
 const mockFocusOnce = { ran: false };
-const mockTakePending = jest.fn((): string | null => null);
+const mockTakePending = jest.fn((_owner?: string): string | null => null);
+const mockPeekInvite = jest.fn((): string | null => null);
 const mockJoinPublic = jest.fn();
 const mockPubkyGet = jest.fn();
 const mockPubkyList = jest.fn();
@@ -43,7 +44,9 @@ jest.mock('../../../services/group/GroupService', () => ({
     listChannels: jest.fn().mockResolvedValue([]),
     joinPublicChannel: (...args: unknown[]) => mockJoinPublic(...args),
   },
-  takePendingPublicJoin: () => mockTakePending(),
+  takePendingPublicJoin: (owner?: string) => mockTakePending(owner),
+  peekPendingPublicInvite: () => mockPeekInvite(),
+  dismissPendingPublicJoin: jest.fn(),
   subscribeGroupEvents: jest.fn(() => () => undefined),
 }));
 
@@ -69,6 +72,8 @@ describe('public graph consent gate', () => {
     mockNavigate.mockReset();
     mockTakePending.mockReset();
     mockTakePending.mockReturnValue(REF);
+    mockPeekInvite.mockReset();
+    mockPeekInvite.mockReturnValue(REF);
     mockJoinPublic.mockReset();
     mockJoinPublic.mockResolvedValue({ channelId: `${HOST}:${LOCAL}` });
     mockPubkyGet.mockReset();
@@ -86,12 +91,14 @@ describe('public graph consent gate', () => {
     expect(mockJoinPublic).not.toHaveBeenCalled();
     expect(mockTakePending).not.toHaveBeenCalled();
     expect(tree.root.findByProps({ testID: 'channelsLoadPublic' })).toBeTruthy();
+    expect(tree.root.findByProps({ testID: 'channelsPendingInvite' })).toBeTruthy();
+    expect(tree.root.findByProps({ testID: 'channelsPendingJoin' }).props.disabled).toBe(true);
     await act(async () => {
       tree.unmount();
     });
   });
 
-  it('consumes the deferred join only after Load public topics', async () => {
+  it('consumes the deferred join only after Load public topics and an explicit Join', async () => {
     let tree!: ReactTestRenderer;
     await act(async () => {
       tree = create(<ChannelsScreen />);
@@ -99,6 +106,12 @@ describe('public graph consent gate', () => {
     await flush();
     await act(async () => {
       tree.root.findByProps({ testID: 'channelsLoadPublic' }).props.onPress();
+    });
+    await flush();
+    expect(mockJoinPublic).not.toHaveBeenCalled();
+    expect(mockTakePending).not.toHaveBeenCalled();
+    await act(async () => {
+      tree.root.findByProps({ testID: 'channelsPendingJoin' }).props.onPress();
     });
     await flush();
     expect(mockTakePending).toHaveBeenCalled();

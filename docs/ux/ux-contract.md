@@ -784,6 +784,12 @@ button dismisses them. Neither does today (`src/screens/main/ChannelsScreen.tsx:
 2. The Android hardware back button dismisses the create sheet and the join sheet.
 3. The public-graph warning is visible before any public post can be composed.
 4. Web `/discover` and `/discover/{tag}` resolve to Channels in Public mode rather than 404.
+5. Public-substrate **writes** that are not the direct result of a user tapping an action on a
+   public channel they are already viewing require both `Load public topics` opt-in **and** an
+   explicit confirm. A deferred `hypercolor://join-public` link never writes membership until the
+   user taps Join on the dismissible `Pending invite to public topic` affordance. Creating a public
+   topic from the Channels `+` sheet is gated the same way. Posts and refresh from an open public
+   channel the user is viewing remain user-initiated actions on that channel.
 
 ### D.11 Channel / group view and the composer action menu
 
@@ -791,7 +797,7 @@ button dismisses them. Neither does today (`src/screens/main/ChannelsScreen.tsx:
 `src/components/tag-channel-view.tsx`, `src/components/composer.tsx`*
 
 **Layout regions.** (1) Header: Back, channel name, member count, overflow. (2) Message list.
-(3) Composer.
+(3) Composer. Drafts are capped at 1000 bytes including envelope overhead.
 
 **Message status.** Private group outbound messages use the §B.3 four-value mapping. The raw
 enum interpolation at `src/screens/main/ChannelScreen.tsx:357` is replaced by the shared
