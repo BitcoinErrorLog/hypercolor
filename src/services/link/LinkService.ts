@@ -53,11 +53,10 @@ import { reconstructAttachmentWireJson } from '../attachments/redaction';
 import { applyPaymentInbound } from '../payments/applyPaymentInbound';
 import { isPaykitPaymentKind } from '../../types/payment';
 import { shouldDropOversizedKnownInbound } from './inboundEnvelope';
+import { LinkSendError } from './LinkSendError';
 import { FollowsImportSettings } from '../contacts/followsImportSettings';
 import { CONTACTS_COPY } from '../../ui/contacts/contactsCopy';
-import { LinkSendError } from './LinkSendError';
-
-export { LinkSendError } from './LinkSendError';
+import { groupDeliveryFromOutcomes } from '../../ui/groupFanoutStatus';
 
 /**
  * LinkService — end-to-end-encrypted DMs over official Paykit Encrypted
@@ -485,17 +484,10 @@ export const LinkService = {
    */
   async sendDm(peerPubky: PubkyKey, body: string): Promise<LinkMessage> {
     return withQueue(peerPubky, async () => {
+      await promoteUserOutboundRequest(peerPubky, 'before-link');
       const outcome = await ensureLinkLocked(peerPubky, 'user', false);
       assertLinkSendable(outcome, peerPubky, 'sendDm');
-      const ownerForRequest = requireOwner();
-      const pending = await StorageService.getMessageRequest(ownerForRequest, peerPubky);
-      if (pending?.status === 'pending') {
-        await StorageService.upsertMessageRequest({
-          ...pending,
-          status: 'accepted',
-          updatedAt: Date.now(),
-        });
-      }
+      await promoteUserOutboundRequest(peerPubky, 'sendable');
 
       const ownerPubky = requireOwner();
       const { envelope, json } = buildChatMessageEnvelope({
@@ -529,17 +521,10 @@ export const LinkService = {
     sentAt: number;
   }): Promise<LinkMessage> {
     return withQueue(input.peerPubky, async () => {
+      await promoteUserOutboundRequest(input.peerPubky, 'before-link');
       const outcome = await ensureLinkLocked(input.peerPubky, 'user', false);
       assertLinkSendable(outcome, input.peerPubky, 'sendPreparedMessage');
-      const ownerForRequest = requireOwner();
-      const pending = await StorageService.getMessageRequest(ownerForRequest, input.peerPubky);
-      if (pending?.status === 'pending') {
-        await StorageService.upsertMessageRequest({
-          ...pending,
-          status: 'accepted',
-          updatedAt: Date.now(),
-        });
-      }
+      await promoteUserOutboundRequest(input.peerPubky, 'sendable');
       return dispatchPreparedDm({
         ownerPubky: requireOwner(),
         peerPubky: input.peerPubky,
@@ -575,6 +560,7 @@ export const LinkService = {
   }): Promise<'sent' | 'queued'> {
     let outcome: EnsureOutcome;
     try {
+      await promoteUserOutboundRequest(input.peerPubky, 'before-link');
       outcome = await ensureLinkLocked(input.peerPubky, 'user', false);
     } catch {
       return 'queued';
@@ -586,15 +572,7 @@ export const LinkService = {
     ) {
       return 'queued';
     }
-    const ownerForRequest = requireOwner();
-    const pending = await StorageService.getMessageRequest(ownerForRequest, input.peerPubky);
-    if (pending?.status === 'pending') {
-      await StorageService.upsertMessageRequest({
-        ...pending,
-        status: 'accepted',
-        updatedAt: Date.now(),
-      });
-    }
+    await promoteUserOutboundRequest(input.peerPubky, 'sendable');
     if (outcome !== 'ready') return 'queued';
     try {
       const ownerPubky = requireOwner();
@@ -855,11 +833,9 @@ export const LinkService = {
    * Promotes a pending message request to a normal conversation and routes
    * any stream items that were held while it was gated.
    *
-   * Decline is terminal. The requests UI only lists `pending` rows, inbound
-   * from a declined peer is rejected without creating a new request, and
-   * this method refuses to reverse a decline. Nothing from before the
-   * decline can replay: held items, deferred rows, and seen markers were
-   * deleted at decline time.
+   * Decline is sticky in {@link StorageService.upsertMessageRequest}. This
+   * method still refuses a declined row — reversing a decline is
+   * {@link LinkService.acceptDeclinedRequest} or a user-initiated send.
    */
   async acceptMessageRequest(peerPubky: PubkyKey): Promise<LinkMessage[]> {
     return withQueue(peerPubky, async () => {
@@ -876,7 +852,28 @@ export const LinkService = {
         updatedAt: ts,
         status: 'accepted',
       });
-      return syncPeerLocked(peerPubky, requireOwner());
+      return syncPeerLocked(peerPubky, ownerPubky);
+    });
+  },
+
+  /**
+   * User-initiated release of a declined-not-blocked request: declined →
+   * accepted. Not reachable from inbound sync. Sticky upsert cannot do this.
+   */
+  async acceptDeclinedRequest(peerPubky: PubkyKey): Promise<LinkMessage[]> {
+    return withQueue(peerPubky, async () => {
+      const ownerPubky = requireOwner();
+      if (FollowsImportSettings.isBlocked(ownerPubky, peerPubky)) {
+        throw new LinkSendError('denied', CONTACTS_COPY.deniedSendMessage);
+      }
+      const changed = await StorageService.acceptDeclinedMessageRequest(ownerPubky, peerPubky);
+      if (!changed) {
+        const existing = await StorageService.getMessageRequest(ownerPubky, peerPubky);
+        if (existing?.status !== 'accepted') {
+          throw new Error('Cannot accept this request.');
+        }
+      }
+      return syncPeerLocked(peerPubky, ownerPubky);
     });
   },
 
@@ -1138,11 +1135,38 @@ function isUnusableReceiverAliasError(err: unknown): boolean {
  * or used to deliver a queued payload.
  *
  * Decline is not a deny. A `declined` message request is inbound-queue
- * memory only ({@link syncPeerLocked}); user-initiated outbound still
- * proceeds and does not promote or delete that row.
+ * memory only ({@link syncPeerLocked}) until a user-initiated send or
+ * {@link LinkService.acceptDeclinedRequest} promotes it to `accepted`.
  */
 function isPeerDenied(ownerPubky: PubkyKey, peerPubky: PubkyKey): boolean {
   return FollowsImportSettings.isBlocked(ownerPubky, peerPubky);
+}
+
+/**
+ * User-initiated request promotion. `before-link` is declined → accepted
+ * only (sticky upsert cannot). `sendable` is pending → accepted after the
+ * link is known to be sendable. Never called from inbound.
+ */
+async function promoteUserOutboundRequest(
+  peerPubky: PubkyKey,
+  phase: 'before-link' | 'sendable',
+): Promise<void> {
+  const ownerPubky = requireOwner();
+  if (FollowsImportSettings.isBlocked(ownerPubky, peerPubky)) return;
+  const existing = await StorageService.getMessageRequest(ownerPubky, peerPubky);
+  if (phase === 'before-link') {
+    if (existing?.status === 'declined') {
+      await StorageService.acceptDeclinedMessageRequest(ownerPubky, peerPubky);
+    }
+    return;
+  }
+  if (existing?.status === 'pending') {
+    await StorageService.upsertMessageRequest({
+      ...existing,
+      status: 'accepted',
+      updatedAt: Date.now(),
+    });
+  }
 }
 
 function assertLinkSendable(
@@ -1573,10 +1597,9 @@ async function failQueuedSendsForPeer(ownerPubky: PubkyKey, peerPubky: PubkyKey)
     const payload = parseRetryPayload(item.payload);
     if (!payload) continue;
     if (payload.ownerPubky !== ownerPubky || payload.peerPubky !== peerPubky) continue;
-    // Drop before marking: group fan-out reads the remaining queue depth to
-    // decide whether the message is done (see `markFailed`).
+    // Mark failed before dequeue so a throw cannot strand the row `sending`.
+    await markFailed(payload, 'sent', item.id);
     await StorageService.removeFromQueue(item.id);
-    await markFailed(payload);
   }
 }
 
@@ -2094,7 +2117,10 @@ async function syncPeerLocked(peerPubky: PubkyKey, ownerPubky: PubkyKey): Promis
   const prior = await StorageService.getLink(ownerPubky, peerPubky);
   const existingRequest = await StorageService.getMessageRequest(ownerPubky, peerPubky);
   if (existingRequest?.status === 'declined') {
-    await rejectDeclinedInbound(ownerPubky, peerPubky);
+    // Do not wipe a user-established link. Inbound is still not adopted.
+    if (prior === null) {
+      await rejectDeclinedInbound(ownerPubky, peerPubky);
+    }
     return [];
   }
   try {
@@ -2314,13 +2340,13 @@ async function deliverQueuedPayload(
         return;
       }
       const dropped = await RetryQueue.recordFailure(item.id, item.attempts);
-      if (dropped) await markFailed(payload);
+      if (dropped) await markFailed(payload, 'sent', item.id);
       return;
     }
 
     if (outcome === 'denied') {
+      await markFailed(payload, 'failed', item.id);
       await RetryQueue.recordSuccess(item.id);
-      await markFailed(payload, 'failed');
       return;
     }
 
@@ -2340,30 +2366,14 @@ async function deliverQueuedPayload(
       );
       const { snapshot } = await PaykitLinkNative.sendPrivateMessageJson(handle, wireJson);
       if (payload.type === LINK_GROUP_FANOUT_PAYLOAD_TYPE) {
+        await recordGroupFanoutOutcome(payload, 'sent', null);
         await StorageService.finalizeGroupFanoutSend({
           ownerPubky: payload.ownerPubky,
           peerPubky: payload.peerPubky,
           snapshot,
           queueId: item.id,
         });
-        const remaining = await StorageService.countDeliveryQueueForMessage(payload.eventId);
-        if (remaining === 0) {
-          await StorageService.updateGroupMessageDeliveryState(
-            payload.ownerPubky,
-            payload.channelId,
-            payload.senderPubky,
-            payload.eventId,
-            'sent',
-          );
-          if (payload.kind === CHAT_ATTACHMENT_KIND) {
-            await StorageService.updateAttachmentDelivery(
-              payload.ownerPubky,
-              payload.senderPubky,
-              payload.eventId,
-              'sent',
-            );
-          }
-        }
+        await settleGroupFanoutIfComplete(payload, item.id);
       } else {
         await StorageService.finalizeLinkSend({
           ownerPubky: payload.ownerPubky,
@@ -2382,7 +2392,7 @@ async function deliverQueuedPayload(
         return;
       }
       const dropped = await RetryQueue.recordFailure(item.id, item.attempts);
-      if (dropped) await markFailed(payload);
+      if (dropped) await markFailed(payload, 'sent', item.id);
     }
   });
 }
@@ -2424,28 +2434,69 @@ function toSendError(err: unknown): Error {
   return new Error(native.message);
 }
 
+async function recordGroupFanoutOutcome(
+  payload: Extract<AnyLinkRetryPayload, { type: typeof LINK_GROUP_FANOUT_PAYLOAD_TYPE }>,
+  status: 'sent' | 'failed',
+  reason: 'blocked' | null,
+): Promise<void> {
+  await StorageService.upsertGroupFanoutOutcome({
+    ownerPubky: payload.ownerPubky,
+    channelId: payload.channelId,
+    eventId: payload.eventId,
+    senderPubky: payload.senderPubky,
+    recipientPubky: payload.peerPubky,
+    status,
+    reason,
+    updatedAt: Date.now(),
+  });
+}
+
+async function settleGroupFanoutIfComplete(
+  payload: Extract<AnyLinkRetryPayload, { type: typeof LINK_GROUP_FANOUT_PAYLOAD_TYPE }>,
+  excludeQueueId: string,
+): Promise<void> {
+  const remaining = await StorageService.countDeliveryQueueForMessage(
+    payload.eventId,
+    excludeQueueId,
+  );
+  if (remaining > 0) return;
+  const outcomes = await StorageService.listGroupFanoutOutcomes(
+    payload.ownerPubky,
+    payload.channelId,
+    payload.senderPubky,
+    payload.eventId,
+  );
+  const terminal = groupDeliveryFromOutcomes(outcomes);
+  await StorageService.updateGroupMessageDeliveryState(
+    payload.ownerPubky,
+    payload.channelId,
+    payload.senderPubky,
+    payload.eventId,
+    terminal,
+  );
+  if (payload.kind === CHAT_ATTACHMENT_KIND) {
+    await StorageService.updateAttachmentDelivery(
+      payload.ownerPubky,
+      payload.senderPubky,
+      payload.eventId,
+      terminal,
+    );
+  }
+}
+
 async function markFailed(
   payload: AnyLinkRetryPayload,
   groupTerminal: 'sent' | 'failed' = 'sent',
+  queueId?: string,
 ): Promise<void> {
   if (payload.type === LINK_GROUP_FANOUT_PAYLOAD_TYPE) {
-    const remaining = await StorageService.countDeliveryQueueForMessage(payload.eventId);
-    if (remaining === 0) {
-      await StorageService.updateGroupMessageDeliveryState(
-        payload.ownerPubky,
-        payload.channelId,
-        payload.senderPubky,
-        payload.eventId,
-        groupTerminal,
-      );
-      if (payload.kind === CHAT_ATTACHMENT_KIND) {
-        await StorageService.updateAttachmentDelivery(
-          payload.ownerPubky,
-          payload.senderPubky,
-          payload.eventId,
-          groupTerminal,
-        );
-      }
+    await recordGroupFanoutOutcome(
+      payload,
+      'failed',
+      groupTerminal === 'failed' ? 'blocked' : null,
+    );
+    if (queueId) {
+      await settleGroupFanoutIfComplete(payload, queueId);
     }
     return;
   }

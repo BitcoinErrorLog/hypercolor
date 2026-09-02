@@ -4,11 +4,7 @@ import { ConfirmSheet } from '../../../ui/contacts/ConfirmSheet';
 import { CONTACTS_COPY } from '../../../ui/contacts/contactsCopy';
 import { CONTACTS_ERROR, MIN_TARGET } from '../../../ui/contacts/tokens';
 
-export function ThreadDeniedBanner({
-  onUnblock,
-}: {
-  onUnblock: () => void | Promise<void>;
-}) {
+export function ThreadDeniedBanner({ onUnblock }: { onUnblock: () => void | Promise<void> }) {
   const [unblockOpen, setUnblockOpen] = useState(false);
 
   return (

@@ -32,6 +32,9 @@ import { stackTransitionAnimation, useReduceMotion } from '../ui/reduceMotion';
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
 const ContactSearchScreen = React.lazy(() => import('../screens/main/ContactSearchScreen'));
+const ContactDetailScreen = React.lazy(
+  () => import('../screens/main/contacts/ContactDetailScreen'),
+);
 const MessageRequestsScreen = React.lazy(() => import('../screens/main/MessageRequestsScreen'));
 const SettingsScreen = React.lazy(() => import('../screens/main/SettingsScreen'));
 const EnableMessagingScreen = React.lazy(() => import('../screens/main/EnableMessagingScreen'));
@@ -184,6 +187,11 @@ export function RootNavigator() {
                   name="ContactSearch"
                   component={ContactSearchScreen}
                   options={{ animation: stackAnimation('slide_from_bottom'), headerShown: false }}
+                />
+                <Stack.Screen
+                  name="ContactDetail"
+                  component={ContactDetailScreen}
+                  options={{ animation: stackAnimation('slide_from_right'), headerShown: false }}
                 />
                 <Stack.Screen
                   name="MessageRequests"

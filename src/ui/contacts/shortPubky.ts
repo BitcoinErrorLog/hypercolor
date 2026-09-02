@@ -1,10 +1,6 @@
 import { PUBKY_ID_LENGTH } from '../../utils/pubkyId';
 
-/** Visual abbreviation for a z32 pubky. Accessible name should use {@link groupedPubky}. */
-export function shortPubky(pubky: string): string {
-  if (pubky.length <= 12) return pubky;
-  return `${pubky.slice(0, 6)}…${pubky.slice(-4)}`;
-}
+export { shortPubky } from '../shortPubky';
 
 /** Deliberately grouped identifier for accessibility names — not a raw 52-char run. */
 export function groupedPubky(pubky: string): string {

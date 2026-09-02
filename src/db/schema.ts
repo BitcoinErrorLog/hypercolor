@@ -1,4 +1,27 @@
 /**
+ * Schema v16 — persist per-recipient private-group fan-out outcomes.
+ *
+ * Mixed drain used to finalize the whole `group_messages` row as `sent` or
+ * `failed` depending on which recipient drained last. Outcomes survive
+ * dequeue so the row can derive a stable aggregate.
+ */
+export const SCHEMA_V16_STATEMENTS: readonly string[] = [
+  `CREATE TABLE IF NOT EXISTS group_fanout_outcomes (
+    owner_pubky      TEXT NOT NULL,
+    channel_id       TEXT NOT NULL,
+    event_id         TEXT NOT NULL,
+    sender_pubky     TEXT NOT NULL,
+    recipient_pubky  TEXT NOT NULL,
+    status           TEXT NOT NULL,
+    reason           TEXT,
+    updated_at       INTEGER NOT NULL,
+    PRIMARY KEY (owner_pubky, channel_id, event_id, sender_pubky, recipient_pubky)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_group_fanout_outcomes_event
+    ON group_fanout_outcomes(owner_pubky, channel_id, sender_pubky, event_id)`,
+];
+
+/**
  * Schema v15 — move the handshake advance budget off the `links` row.
  *
  * v14 put `pending_advances` / `next_advance_at` on `links`, which is deleted

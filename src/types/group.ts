@@ -415,6 +415,20 @@ export interface GroupMessage {
   deleted: boolean;
 }
 
+/** Terminal per-recipient outcome for a private-group fan-out send. */
+export type GroupFanoutStatus = 'sent' | 'failed';
+
+export interface GroupFanoutOutcome {
+  ownerPubky: PubkyKey;
+  channelId: string;
+  eventId: string;
+  senderPubky: PubkyKey;
+  recipientPubky: PubkyKey;
+  status: GroupFanoutStatus;
+  reason: 'blocked' | null;
+  updatedAt: number;
+}
+
 /** Bounded deferred reaction / edit / delete waiting for its target. */
 export interface GroupDeferredEvent {
   ownerPubky: PubkyKey;

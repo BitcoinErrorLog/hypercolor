@@ -129,7 +129,7 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
 
     await runMigrations(db);
 
-    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(15);
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(16);
     expect(db.executeSync('SELECT * FROM link_receivers').rows).toEqual([]);
     expect(
       db.executeSync(
@@ -364,7 +364,7 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
     setDbForTests(db);
     await runMigrations(db);
 
-    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(15);
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(16);
     const cols = db.executeSync('PRAGMA table_info(contacts)').rows ?? [];
     const names = cols.map(row => row.name);
     expect(names).toEqual(
@@ -859,7 +859,7 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
 
     await runMigrations(db);
 
-    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(15);
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(16);
     for (const name of ['threads', 'messages', 'channels', 'channel_members', 'cursor_state']) {
       expect(
         db.executeSync("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", [name])
@@ -886,7 +886,7 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
     setDbForTests(db);
     await runMigrations(db);
 
-    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(15);
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(16);
     for (const name of [
       'group_channels',
       'group_members',
@@ -1039,7 +1039,7 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
 
     await runMigrations(db);
 
-    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(15);
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(16);
     const row = db.executeSync('SELECT * FROM group_messages').rows?.[0];
     expect(row).toEqual(
       expect.objectContaining({
@@ -1065,7 +1065,7 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
     setDbForTests(db);
     await runMigrations(db);
 
-    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(15);
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(16);
     expect(
       db.executeSync("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'attachments'")
         .rows,
@@ -1207,7 +1207,7 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
     setDbForTests(db);
     await runMigrations(db);
 
-    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(15);
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(16);
     const paymentCols = (db.executeSync('PRAGMA table_info(payment_requests)').rows ?? []).map(
       col => col.name,
     );
@@ -1361,7 +1361,7 @@ describe('link schema v15 — durable handshake abuse budget (real SQL)', () => 
 
     await runMigrations(db);
 
-    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(15);
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(16);
     const row = db.executeSync('SELECT * FROM links').rows?.[0] ?? {};
     expect(row).toEqual(expect.objectContaining({ owner_pubky: OWNER, peer_pubky: PEER }));
     expect(Object.keys(row)).not.toContain('pending_advances');
@@ -1510,6 +1510,75 @@ describe('link schema v15 — durable handshake abuse budget (real SQL)', () => 
     expect(await StorageService.hasQueueItem('q-race')).toBe(true);
     await StorageService.removeFromQueue('q-race');
     expect(await StorageService.hasQueueItem('q-race')).toBe(false);
+  });
+});
+
+describe('link schema v16 — per-recipient group fan-out outcomes (real SQL)', () => {
+  afterEach(() => {
+    setDbForTests(null);
+  });
+
+  it('creates group_fanout_outcomes, persists mixed status, and wipes on clearAccountData', async () => {
+    const db = openMemoryDb();
+    setDbForTests(db);
+    await runMigrations(db);
+
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(16);
+    expect(
+      db.executeSync(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'group_fanout_outcomes'",
+      ).rows,
+    ).toHaveLength(1);
+
+    const channelId = `${OWNER}:00000000-0000-4000-8000-00000000bbbb`;
+    const eventId = '00000000-0000-4000-8000-00000000eeee';
+    await StorageService.upsertGroupFanoutOutcome({
+      ownerPubky: OWNER,
+      channelId,
+      eventId,
+      senderPubky: OWNER,
+      recipientPubky: PEER,
+      status: 'failed',
+      reason: 'blocked',
+      updatedAt: 1,
+    });
+    await StorageService.upsertGroupFanoutOutcome({
+      ownerPubky: OWNER,
+      channelId,
+      eventId,
+      senderPubky: OWNER,
+      recipientPubky: OTHER,
+      status: 'sent',
+      reason: null,
+      updatedAt: 2,
+    });
+    await StorageService.upsertGroupFanoutOutcome({
+      ownerPubky: OTHER,
+      channelId,
+      eventId,
+      senderPubky: OTHER,
+      recipientPubky: PEER,
+      status: 'sent',
+      reason: null,
+      updatedAt: 3,
+    });
+
+    const ownerRows = await StorageService.listGroupFanoutOutcomes(
+      OWNER,
+      channelId,
+      OWNER,
+      eventId,
+    );
+    expect(ownerRows).toHaveLength(2);
+    expect(ownerRows.map(row => row.status).sort()).toEqual(['failed', 'sent']);
+
+    await StorageService.clearAccountData(OWNER);
+    expect(await StorageService.listGroupFanoutOutcomes(OWNER, channelId, OWNER, eventId)).toEqual(
+      [],
+    );
+    expect(
+      await StorageService.listGroupFanoutOutcomes(OTHER, channelId, OTHER, eventId),
+    ).toHaveLength(1);
   });
 });
 

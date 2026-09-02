@@ -21,6 +21,8 @@ export const CONTACTS_COPY = {
   blockedAddMessage: 'This pubky is blocked.',
   deniedSendMessage: 'You blocked this contact. Unblock to message them.',
   couldNotSendMessage: 'Could not send this message over Encrypted Links.',
+  declinedSendNotice: 'You declined a request from this person. Sending a message accepts it.',
+  declinedSection: 'Declined',
 
   removeTitle: 'Remove this contact?',
   removeBody:

@@ -582,10 +582,17 @@ decline.` This replaces web's version at `src/components/requests-page.tsx:72-77
 (`src/screens/main/MessageRequestsScreen.tsx:172`), which is wrong for the same reason as
 §B.5 — the follow relationship is not what gates the queue.
 
-**Decline is not a block.** The user may still open a thread and send to that pubky. The
-inbound `declined` row stays `declined` until the user acts (Unblock releases it; Accept
-refuses to reverse a decline). User-initiated outbound does not promote `declined` to
-`accepted` and does not invent a fourth status. Inbound from that peer is still not adopted.
+**Decline is not a block.** The user may still open a thread and send to that pubky.
+Sending a message to a declined-not-blocked peer accepts the request (`declined →
+accepted`) atomically before Encrypted Link establishment. The thread shows a
+one-line notice above the composer until that send (or until Accept from the
+Declined section): `You declined a request from this person. Sending a message
+accepts it.` Requests lists declined rows under `Declined` with an explicit
+`Accept` that performs the same user-initiated promotion without messaging.
+`acceptMessageRequest` still refuses a declined row — inbound Accept is unchanged.
+Sticky `upsertMessageRequest` cannot overwrite `declined`. Inbound from that peer
+is not adopted until the row is `accepted`. Unblock remains the release path only
+for a peer who was blocked.
 
 **Held request row.** Display name or `shortPubky`, full pubky in monospace secondary, arrival
 time, and any held group invitations as `Group invitation · {name}` (web already does this at
@@ -754,7 +761,9 @@ action, never a side effect of adding a pubky.
   declined row, then drop the deny. Manual add of a blocked pubky: persist contact, then
   unblock. Inbound and handshake establishment consult the deny at the Encrypted Link choke
   point; queued payloads for a blocked peer are dropped as `Failed` (not delivered),
-  not retried, and group fan-out finalizes that recipient. A declined message
+  not retried. Group fan-out records a per-recipient terminal state; the group
+  message derives an aggregate from those states (`Sent`, `Sent to N of M`,
+  `Not delivered to {name} (blocked)`), never from drain order. A declined message
   request is not a deny at this choke.
 - **Send to a blocked pubky.** The thread shows `You blocked this contact. Unblock
   to message them.` with `Unblock`. Send never surfaces an internal error string.

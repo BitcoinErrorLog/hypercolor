@@ -1,5 +1,6 @@
 import type { Contact } from '../../../types';
-import { shortPubky } from '../../../ui/contacts/shortPubky';
+import { claimsToBe } from '../../../copy/uxCopy';
+import { shortPubky } from '../../../ui/shortPubky';
 import { isContactRow } from '../../../ui/contacts/relationshipBadge';
 
 /**
@@ -22,7 +23,7 @@ export function contactSecondaryText(
     return shortPubky(contact.pubky);
   }
   if (contact.displayName && contact.displayName.length > 0) {
-    return `claims to be ${contact.displayName}`;
+    return claimsToBe(contact.displayName);
   }
   return null;
 }

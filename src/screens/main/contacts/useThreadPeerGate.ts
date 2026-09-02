@@ -11,9 +11,7 @@ export function useThreadPeerGate(ownerPubky: string | null, peerPubky: string) 
   const [, setTick] = useState(0);
   useEffect(() => FollowsImportSettings.subscribe(() => setTick(t => t + 1)), []);
 
-  const peerBlocked = ownerPubky
-    ? FollowsImportSettings.isBlocked(ownerPubky, peerPubky)
-    : false;
+  const peerBlocked = ownerPubky ? FollowsImportSettings.isBlocked(ownerPubky, peerPubky) : false;
 
   const runUnblock = useCallback(async () => {
     if (!ownerPubky) return;

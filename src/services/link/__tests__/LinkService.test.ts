@@ -132,6 +132,7 @@ jest.mock('../../StorageService', () => ({
     getAllContacts: jest.fn(),
     getMessageRequest: jest.fn(),
     upsertMessageRequest: jest.fn(),
+    acceptDeclinedMessageRequest: jest.fn(),
     deleteMessageRequest: jest.fn(),
     listMessageRequests: jest.fn(),
     countPendingMessageRequests: jest.fn(),
@@ -145,6 +146,8 @@ jest.mock('../../StorageService', () => ({
     hasGroupMessage: jest.fn(),
     finalizeGroupFanoutSend: jest.fn(),
     countDeliveryQueueForMessage: jest.fn(),
+    upsertGroupFanoutOutcome: jest.fn(),
+    listGroupFanoutOutcomes: jest.fn(),
     updateGroupMessageDeliveryState: jest.fn(),
     saveAttachment: jest.fn(),
     getAttachment: jest.fn(),
@@ -433,6 +436,9 @@ describe('LinkService', () => {
     mockedStorage.countDeliveryQueueForMessage.mockResolvedValue(0);
     mockedStorage.updateGroupMessageDeliveryState.mockResolvedValue(undefined);
     mockedStorage.upsertMessageRequest.mockResolvedValue(undefined);
+    mockedStorage.acceptDeclinedMessageRequest.mockResolvedValue(false);
+    mockedStorage.upsertGroupFanoutOutcome.mockResolvedValue(undefined);
+    mockedStorage.listGroupFanoutOutcomes.mockResolvedValue([]);
     mockedStorage.deleteLinkStreamItemsForPeer.mockResolvedValue(undefined);
     mockedStorage.deleteLinkMessagesForPeer.mockResolvedValue(undefined);
     mockedStorage.getLinkMessage.mockResolvedValue(sendingRow());

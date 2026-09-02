@@ -91,6 +91,7 @@ import { PaykitLinkNative } from '../PaykitLinkNative';
 import { CHAT_MESSAGE_KIND, LINK_RECEIVER_PATH, buildDmConversationId } from '../../../types/link';
 import { GROUP_MESSAGE_KIND } from '../../../types/group';
 import { CONTACTS_COPY } from '../../../ui/contacts/contactsCopy';
+import { formatGroupFanoutAggregate } from '../../../ui/groupFanoutStatus';
 
 const mockedNative = jest.mocked(PaykitLinkNative);
 const mockedKeyStore = jest.mocked(KeyStore);
@@ -180,7 +181,7 @@ describe('declined peer outbound (real LinkService + storage)', () => {
     expect(request?.status).toBe('declined');
   });
 
-  it('sends outbound to a declined peer without promoting the request', async () => {
+  it('sends outbound to a declined peer and accepts the request before linking', async () => {
     await StorageService.upsertMessageRequest({
       ownerPubky: OWNER,
       peerPubky: PEER,
@@ -192,7 +193,7 @@ describe('declined peer outbound (real LinkService + storage)', () => {
     const sent = await LinkService.sendDm(PEER, 'hello after decline');
     expect(sent.deliveryState).toBe('sent');
     const request = await StorageService.getMessageRequest(OWNER, PEER);
-    expect(request?.status).toBe('declined');
+    expect(request?.status).toBe('accepted');
     const stored = await StorageService.getLinkMessage(
       OWNER,
       OWNER,
@@ -201,9 +202,39 @@ describe('declined peer outbound (real LinkService + storage)', () => {
     );
     expect(stored?.body).toBe('hello after decline');
     expect(stored?.deliveryState).toBe('sent');
+    const link = await StorageService.getLink(OWNER, PEER);
+    expect(link?.status).toBe('established');
   });
 
-  it('does not adopt declined inbound', async () => {
+  it('keeps the link and outbox after send then syncInbox', async () => {
+    await StorageService.upsertMessageRequest({
+      ownerPubky: OWNER,
+      peerPubky: PEER,
+      createdAt: NOW,
+      updatedAt: NOW,
+      status: 'declined',
+    });
+    mockedNative.clearLinkOutbox.mockClear();
+
+    const sent = await LinkService.sendDm(PEER, 'keep me');
+    const received = await LinkService.syncInbox([PEER]);
+
+    expect(received.filter(row => row.direction === 'received')).toEqual([]);
+    expect(mockedNative.clearLinkOutbox).not.toHaveBeenCalled();
+    const link = await StorageService.getLink(OWNER, PEER);
+    expect(link?.status).toBe('established');
+    const stored = await StorageService.getLinkMessage(
+      OWNER,
+      OWNER,
+      CHAT_MESSAGE_KIND,
+      sent.eventId,
+    );
+    expect(stored?.deliveryState).toBe('sent');
+    const request = await StorageService.getMessageRequest(OWNER, PEER);
+    expect(request?.status).toBe('accepted');
+  });
+
+  it('does not adopt declined inbound before any user send', async () => {
     await StorageService.upsertMessageRequest({
       ownerPubky: OWNER,
       peerPubky: PEER,
@@ -225,6 +256,8 @@ describe('declined peer outbound (real LinkService + storage)', () => {
       50,
     );
     expect(conversation.filter(row => row.direction === 'received')).toEqual([]);
+    expect(mockedNative.clearLinkOutbox).not.toHaveBeenCalled();
+    expect(await StorageService.getLink(OWNER, PEER)).not.toBeNull();
   });
 
   it('denies ensureLinkWith and sendDm for a blocked peer', async () => {
@@ -341,5 +374,119 @@ describe('declined peer outbound (real LinkService + storage)', () => {
     expect(group?.deliveryState).toBe('failed');
     expect(await StorageService.listDeliveryQueue()).toEqual([]);
     expect(mockedNative.sendPrivateMessageJson).not.toHaveBeenCalled();
+  });
+
+  it('accepts a declined request from Requests without messaging', async () => {
+    await StorageService.upsertMessageRequest({
+      ownerPubky: OWNER,
+      peerPubky: PEER,
+      createdAt: NOW,
+      updatedAt: NOW,
+      status: 'declined',
+    });
+    mockedNative.receivePrivateMessages.mockResolvedValue({ messages: [], snapshot: 'est-in' });
+
+    const routed = await LinkService.acceptDeclinedRequest(PEER);
+    expect(routed.filter(row => row.direction === 'received')).toEqual([]);
+    const request = await StorageService.getMessageRequest(OWNER, PEER);
+    expect(request?.status).toBe('accepted');
+    const after = await LinkService.syncInbox([PEER]);
+    expect(mockedNative.receivePrivateMessages).toHaveBeenCalled();
+    expect(after).toEqual([]);
+  });
+
+  it('derives the same mixed fan-out aggregate in both drain orders', async () => {
+    const PEER_B = 'kyp7qac797z86bngq9g3ajqbrsgsb3tibayndqi6fe4cqi3gb6ry';
+    const PEER_C = 'gcumbhd7sqit6nn457jxmrwqx9pyymqwamnarekgo3xppqo6a19o';
+    const eventId = '00000000-0000-4000-8000-00000000eeee';
+
+    async function seedPeer(peer: string): Promise<void> {
+      await StorageService.upsertLink({
+        ownerPubky: OWNER,
+        peerPubky: peer,
+        role: 'initiator',
+        status: 'established',
+        snapshot: `est-${peer.slice(0, 4)}`,
+        remoteNoisePublicKey: `noise-${peer.slice(0, 4)}`,
+        localReceiverPath: LINK_RECEIVER_PATH,
+        remoteReceiverPath: LINK_RECEIVER_PATH,
+        consecutiveFailures: 0,
+      });
+    }
+
+    async function runDrain(order: [string, string, string]): Promise<string> {
+      FollowsImportSettings.resetForTests();
+      resetLinkServiceHarnessState();
+      const db = openMemoryDb();
+      setDbForTests(db);
+      await runMigrations(db);
+      mockedNative.isAvailable.mockReturnValue(true);
+      mockedNative.signinWithSecret.mockResolvedValue({
+        sessionAlias: SESSION_ALIAS,
+        pubky: OWNER,
+      });
+      mockedNative.restoreLink.mockResolvedValue({ linkId: 'handle-mix' });
+      mockedNative.sendPrivateMessageJson.mockResolvedValue({ snapshot: 'est-out' });
+      mockedKeyStore.getPubky.mockReturnValue(OWNER);
+      mockedKeyStore.getLinkSession.mockReturnValue(SESSION_ALIAS);
+      await seedMessaging();
+      await seedPeer(PEER_B);
+      await seedPeer(PEER_C);
+      await LinkService.signinWithSecret('signin-secret-hex');
+      FollowsImportSettings.block(OWNER, PEER);
+
+      await StorageService.saveGroupMessage({
+        ownerPubky: OWNER,
+        channelId: CHANNEL_ID,
+        eventId,
+        senderPubky: OWNER,
+        kind: GROUP_MESSAGE_KIND,
+        body: 'group hello',
+        rawJson: '{}',
+        sentAt: NOW,
+        receivedAt: null,
+        deliveryState: 'sending',
+        replyToEventId: null,
+        replyToAuthorPubky: null,
+        targetEventId: null,
+        targetAuthorPubky: null,
+        editedAt: null,
+        deleted: false,
+      });
+      for (let i = 0; i < order.length; i += 1) {
+        const peer = order[i]!;
+        await StorageService.enqueue({
+          id: `q-mix-${i}`,
+          messageId: eventId,
+          recipientPubky: peer,
+          payload: JSON.stringify({
+            type: LINK_GROUP_FANOUT_PAYLOAD_TYPE,
+            ownerPubky: OWNER,
+            peerPubky: peer,
+            senderPubky: OWNER,
+            kind: GROUP_MESSAGE_KIND,
+            eventId,
+            channelId: CHANNEL_ID,
+            rawJson: '{}',
+          }),
+          attempts: 0,
+          nextRetryAt: NOW - order.length + i,
+          createdAt: NOW,
+        });
+      }
+      await LinkService.drainRetries();
+      const outcomes = await StorageService.listGroupFanoutOutcomes(
+        OWNER,
+        CHANNEL_ID,
+        OWNER,
+        eventId,
+      );
+      return formatGroupFanoutAggregate(outcomes);
+    }
+
+    const blockedFirst = await runDrain([PEER, PEER_B, PEER_C]);
+    const blockedLast = await runDrain([PEER_B, PEER_C, PEER]);
+    expect(blockedFirst).toBe(blockedLast);
+    expect(blockedFirst).toBe('Sent to 2 of 3');
   });
 });

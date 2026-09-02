@@ -85,6 +85,7 @@ jest.mock('../../StorageService', () => ({
     insertInboundPrivateCreate: jest.fn(),
     saveGroupMessage: jest.fn(),
     upsertMessageRequest: jest.fn(),
+    acceptDeclinedMessageRequest: jest.fn(),
     deleteMessageRequest: jest.fn(),
     listMessageRequests: jest.fn(),
     countPendingMessageRequests: jest.fn(),
@@ -201,6 +202,7 @@ describe('LinkService message requests', () => {
     mockedStorage.getContact.mockResolvedValue(null);
     mockedStorage.getAllContacts.mockResolvedValue([]);
     mockedStorage.getMessageRequest.mockResolvedValue(null);
+    mockedStorage.acceptDeclinedMessageRequest.mockResolvedValue(false);
     mockedStorage.countLinkMessagesForPeer.mockResolvedValue(0);
     mockedRetryQueue.getDue.mockResolvedValue([]);
 
@@ -437,10 +439,40 @@ describe('LinkService message requests', () => {
     );
 
     expect(mockedStorage.upsertMessageRequest).not.toHaveBeenCalled();
+    expect(mockedStorage.acceptDeclinedMessageRequest).not.toHaveBeenCalled();
     expect(mockedNative.receivePrivateMessages).not.toHaveBeenCalled();
     expect(mockedNative.restoreLink).not.toHaveBeenCalled();
     expect(mockedStorage.saveLinkMessage).not.toHaveBeenCalled();
     expect(mockedStorage.saveLinkStreamItems).not.toHaveBeenCalled();
+  });
+
+  it('acceptDeclinedRequest promotes declined to accepted without using sticky upsert', async () => {
+    let status: MessageRequest['status'] = 'declined';
+    mockedStorage.getMessageRequest.mockImplementation(async () => pendingRequest(status));
+    mockedStorage.acceptDeclinedMessageRequest.mockImplementation(async () => {
+      status = 'accepted';
+      return true;
+    });
+    mockedStorage.getLink.mockResolvedValue({
+      ownerPubky: OWNER,
+      peerPubky: PEER,
+      role: 'responder',
+      status: 'established',
+      snapshot: 'est-in',
+      remoteNoisePublicKey: PEER_NOISE,
+      localReceiverPath: LINK_RECEIVER_PATH,
+      remoteReceiverPath: LINK_RECEIVER_PATH,
+      consecutiveFailures: 0,
+      updatedAt: NOW,
+    } satisfies LinkRecord);
+    mockedNative.restoreLink.mockResolvedValue({ linkId: 'handle-1' });
+    mockedStorage.getUnprocessedLinkStreamItems.mockResolvedValue([]);
+
+    await LinkService.acceptDeclinedRequest(PEER);
+
+    expect(mockedStorage.acceptDeclinedMessageRequest).toHaveBeenCalledWith(OWNER, PEER);
+    expect(mockedStorage.upsertMessageRequest).not.toHaveBeenCalled();
+    expect(mockedNative.restoreLink).toHaveBeenCalled();
   });
 
   it('classifies a wiped established conversation as auto-accept, not a new request', async () => {

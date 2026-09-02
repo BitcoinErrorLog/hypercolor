@@ -109,6 +109,8 @@ jest.mock('../../StorageService', () => ({
     getDueHandshakingLinks: jest.fn(),
     hasQueueItem: jest.fn(),
     countDeliveryQueueForMessage: jest.fn(),
+    upsertGroupFanoutOutcome: jest.fn(),
+    listGroupFanoutOutcomes: jest.fn(),
     hasGroupMessage: jest.fn(),
     updateGroupMessageDeliveryState: jest.fn(),
     updateAttachmentDelivery: jest.fn(),
@@ -218,6 +220,16 @@ describe('inbound deny is authoritative', () => {
     mockedStorage.hasQueueItem.mockResolvedValue(true);
     mockedStorage.countDeliveryQueueForMessage.mockResolvedValue(0);
     mockedStorage.hasGroupMessage.mockResolvedValue(true);
+    mockedStorage.upsertGroupFanoutOutcome.mockImplementation(async outcome => {
+      const current = await mockedStorage.listGroupFanoutOutcomes(
+        outcome.ownerPubky,
+        outcome.channelId,
+        outcome.senderPubky,
+        outcome.eventId,
+      );
+      mockedStorage.listGroupFanoutOutcomes.mockResolvedValue([...current, outcome]);
+    });
+    mockedStorage.listGroupFanoutOutcomes.mockResolvedValue([]);
     mockedStorage.getHandshakeBudget.mockResolvedValue(null);
     mockedRetryQueue.getDue.mockResolvedValue([]);
 

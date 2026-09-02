@@ -26,6 +26,7 @@ import type {
 import type {
   GroupChannel,
   GroupDeferredEvent,
+  GroupFanoutOutcome,
   GroupMember,
   GroupMemberStatus,
   GroupMessage,
@@ -312,6 +313,21 @@ export const StorageService = {
          END`,
       [request.ownerPubky, request.peerPubky, request.createdAt, request.updatedAt, request.status],
     );
+  },
+
+  /**
+   * User-initiated declined → accepted. The sticky upsert cannot do this.
+   * Returns whether a declined row was updated.
+   */
+  async acceptDeclinedMessageRequest(ownerPubky: PubkyKey, peerPubky: PubkyKey): Promise<boolean> {
+    const db = await getDb();
+    db.executeSync(
+      `UPDATE message_requests
+       SET status = 'accepted', updated_at = ?
+       WHERE owner_pubky = ? AND peer_pubky = ? AND status = 'declined'`,
+      [now(), ownerPubky, peerPubky],
+    );
+    return sqliteChanges(db) > 0;
   },
 
   async deleteMessageRequest(ownerPubky: PubkyKey, peerPubky: PubkyKey): Promise<void> {
@@ -1229,6 +1245,7 @@ export const StorageService = {
       db.executeSync('DELETE FROM payment_events WHERE owner_pubky = ?', [ownerPubky]);
       db.executeSync('DELETE FROM payment_requests WHERE owner_pubky = ?', [ownerPubky]);
       db.executeSync('DELETE FROM tip_endpoints WHERE owner_pubky = ?', [ownerPubky]);
+      db.executeSync('DELETE FROM group_fanout_outcomes WHERE owner_pubky = ?', [ownerPubky]);
       db.executeSync('DELETE FROM group_deferred_events WHERE owner_pubky = ?', [ownerPubky]);
       db.executeSync('DELETE FROM group_seen_events WHERE owner_pubky = ?', [ownerPubky]);
       db.executeSync('DELETE FROM group_messages WHERE owner_pubky = ?', [ownerPubky]);
@@ -2042,12 +2059,57 @@ export const StorageService = {
     });
   },
 
-  async countDeliveryQueueForMessage(messageId: string): Promise<number> {
+  async countDeliveryQueueForMessage(messageId: string, excludeId?: string): Promise<number> {
     const db = await getDb();
-    const result = db.executeSync('SELECT COUNT(*) AS n FROM delivery_queue WHERE message_id = ?', [
-      messageId,
-    ]);
+    const result =
+      excludeId !== undefined
+        ? db.executeSync(
+            'SELECT COUNT(*) AS n FROM delivery_queue WHERE message_id = ? AND id != ?',
+            [messageId, excludeId],
+          )
+        : db.executeSync('SELECT COUNT(*) AS n FROM delivery_queue WHERE message_id = ?', [
+            messageId,
+          ]);
     return (result.rows?.[0]?.n as number) ?? 0;
+  },
+
+  async upsertGroupFanoutOutcome(outcome: GroupFanoutOutcome): Promise<void> {
+    const db = await getDb();
+    db.executeSync(
+      `INSERT INTO group_fanout_outcomes
+        (owner_pubky, channel_id, event_id, sender_pubky, recipient_pubky, status, reason, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(owner_pubky, channel_id, event_id, sender_pubky, recipient_pubky) DO UPDATE SET
+         status = excluded.status,
+         reason = excluded.reason,
+         updated_at = excluded.updated_at`,
+      [
+        outcome.ownerPubky,
+        outcome.channelId,
+        outcome.eventId,
+        outcome.senderPubky,
+        outcome.recipientPubky,
+        outcome.status,
+        outcome.reason,
+        outcome.updatedAt,
+      ],
+    );
+  },
+
+  async listGroupFanoutOutcomes(
+    ownerPubky: PubkyKey,
+    channelId: string,
+    senderPubky: PubkyKey,
+    eventId: string,
+  ): Promise<GroupFanoutOutcome[]> {
+    const db = await getDb();
+    const result = db.executeSync(
+      `SELECT * FROM group_fanout_outcomes
+       WHERE owner_pubky = ? AND channel_id = ? AND sender_pubky = ? AND event_id = ?
+       ORDER BY recipient_pubky ASC`,
+      [ownerPubky, channelId, senderPubky, eventId],
+    );
+    return (result.rows ?? []).map(rowToGroupFanoutOutcome);
   },
 
   // ── Payments (M5) ─────────────────────────────────────────────────────────
@@ -2389,6 +2451,20 @@ function rowToQueueItem(row: any): DeliveryQueueItem {
     attempts: row.attempts,
     nextRetryAt: row.next_retry_at,
     createdAt: row.created_at,
+  };
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function rowToGroupFanoutOutcome(row: any): GroupFanoutOutcome {
+  return {
+    ownerPubky: row.owner_pubky,
+    channelId: row.channel_id,
+    eventId: row.event_id,
+    senderPubky: row.sender_pubky,
+    recipientPubky: row.recipient_pubky,
+    status: row.status === 'failed' ? 'failed' : 'sent',
+    reason: row.reason === 'blocked' ? 'blocked' : null,
+    updatedAt: row.updated_at,
   };
 }
 

@@ -42,6 +42,7 @@ import { useSessionStatusStore } from '../../stores/sessionStatusStore';
 import { sanitizeError } from '../../ui/sanitizedError';
 import { CONTACTS_COPY } from '../../ui/contacts/contactsCopy';
 import { ThreadDeniedBanner } from './contacts/ThreadDeniedBanner';
+import { ThreadDeclinedNotice } from './contacts/ThreadDeclinedNotice';
 import { useThreadPeerGate } from './contacts/useThreadPeerGate';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Thread'>;
@@ -72,6 +73,9 @@ export default function ThreadScreen({ route }: Props) {
   const [paymentBusy, setPaymentBusy] = useState(false);
   const [peerContact, setPeerContact] = useState<Contact | null>(null);
   const [linkStatus, setLinkStatus] = useState<LinkStatus | null>(null);
+  const [requestStatus, setRequestStatus] = useState<'pending' | 'accepted' | 'declined' | null>(
+    null,
+  );
   const sessionKind = useSessionStatusStore(s => s.kind);
   const { peerBlocked, runUnblock } = useThreadPeerGate(localPubky, participantPubky);
 
@@ -94,6 +98,8 @@ export default function ThreadScreen({ route }: Props) {
     await LinkService.markRead(conversationId, latest > 0 ? latest : Date.now());
     const contact = await StorageService.getContact(participantPubky, localPubky);
     setPeerContact(contact);
+    const request = await StorageService.getMessageRequest(localPubky, participantPubky);
+    setRequestStatus(request?.status ?? null);
     try {
       setLinkStatus(await LinkService.getLinkStatus(participantPubky));
     } catch {
@@ -188,6 +194,7 @@ export default function ThreadScreen({ route }: Props) {
       peerContact={peerContact}
       linkStatus={linkStatus}
       peerBlocked={peerBlocked}
+      peerDeclined={requestStatus === 'declined' && !peerBlocked}
       onUnblock={() => {
         void runUnblock();
       }}
@@ -232,6 +239,7 @@ export function ThreadScreenContent({
   peerContact,
   linkStatus,
   peerBlocked,
+  peerDeclined,
   onUnblock,
   onEnableMessaging,
   onRetryFailed,
@@ -260,6 +268,7 @@ export function ThreadScreenContent({
   peerContact: Contact | null;
   linkStatus: LinkStatus | null;
   peerBlocked: boolean;
+  peerDeclined: boolean;
   onUnblock: () => void;
   onEnableMessaging: () => void;
   onRetryFailed: () => void;
@@ -439,6 +448,8 @@ export function ThreadScreenContent({
           onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: false })}
         />
       )}
+
+      {peerDeclined ? <ThreadDeclinedNotice /> : null}
 
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}

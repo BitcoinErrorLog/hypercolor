@@ -20,7 +20,9 @@ jest.mock('../../../services/link/LinkService', () => ({
 }));
 
 jest.mock('../../../services/StorageService', () => ({
-  StorageService: {},
+  StorageService: {
+    getMessageRequest: jest.fn(),
+  },
 }));
 
 jest.mock('../../../services/KeyStore', () => ({
@@ -110,6 +112,7 @@ function contentProps(
     peerContact: null,
     linkStatus: 'ready',
     peerBlocked: false,
+    peerDeclined: false,
     onUnblock: noop,
     onEnableMessaging: noop,
     onRetryFailed: noop,
@@ -145,6 +148,17 @@ describe('ThreadScreenContent blocked send', () => {
       tree.root.findByProps({ testID: 'confirmSheetConfirm' }).props.onPress();
     });
     expect(onUnblock).toHaveBeenCalled();
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('shows the declined-send notice without disabling the composer', async () => {
+    const tree = await render(<ThreadScreenContent {...contentProps({ peerDeclined: true })} />);
+    const json = JSON.stringify(tree.toJSON());
+    expect(json).toContain(CONTACTS_COPY.declinedSendNotice);
+    expect(tree.root.findByProps({ testID: 'threadSend' }).props.disabled).toBe(false);
+    expect(tree.root.findAllByProps({ testID: 'threadBlockedBanner' })).toHaveLength(0);
     await act(async () => {
       tree.unmount();
     });
