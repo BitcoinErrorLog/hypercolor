@@ -144,6 +144,9 @@ export default function App() {
       if (!disposed) setAllowContinue(true);
     }, 4000);
     let appStateSub: { remove: () => void } | undefined;
+    // v1→v2 MMKV migration runs inside initKeyStore. Reconcile must wait
+    // so a live alias is in KeyStore before native sighting. Reconcile is
+    // report-only: it never deletes a bearer.
     KeyStore.initKeyStore()
       .then(async () => {
         try {

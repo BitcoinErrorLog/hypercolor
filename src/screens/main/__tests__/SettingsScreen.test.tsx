@@ -451,3 +451,71 @@ describe('SettingsScreen recovery gate', () => {
     });
   });
 });
+
+describe('SettingsScreen backup KeyStoreNotReady', () => {
+  beforeEach(() => {
+    mockGoBack.mockReset();
+    mockDispatch.mockReset();
+    mockSetOptions.mockReset();
+    preventRemoveEnabled = false;
+    preventRemoveCallback = undefined;
+    mockVisitedActions = new WeakSet<object>();
+  });
+
+  it('sanitizes KeyStoreNotReady on backup export', async () => {
+    (BackupService.exportBackup as jest.Mock).mockRejectedValueOnce(
+      Object.assign(new Error('KeyStore.getPubky: encrypted store is not ready'), {
+        name: 'KeyStoreNotReady',
+        code: 'KeyStoreNotReady',
+      }),
+    );
+    let tree!: ReactTestRenderer;
+    await act(async () => {
+      tree = create(<SettingsScreen />);
+    });
+    await exportRecovery(tree);
+    expect(tree.root.findByProps({ children: 'Could not create a backup.' })).toBeTruthy();
+    await act(async () => {
+      tree.root.findByProps({ accessibilityLabel: 'Show details' }).props.onPress();
+    });
+    expect(tree.root.findByProps({ testID: 'errorDetailsBody' }).props.children).toBe(
+      '[host]: encrypted store is not ready',
+    );
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('sanitizes KeyStoreNotReady on backup restore', async () => {
+    (BackupService.restoreBackup as jest.Mock).mockRejectedValueOnce(
+      Object.assign(new Error('KeyStore.getPubky: encrypted store is not ready'), {
+        name: 'KeyStoreNotReady',
+        code: 'KeyStoreNotReady',
+      }),
+    );
+    let tree!: ReactTestRenderer;
+    await act(async () => {
+      tree = create(<SettingsScreen />);
+    });
+    await act(async () => {
+      tree.root
+        .findByProps({ placeholder: 'Paste recovery code to restore' })
+        .props.onChangeText('recovery-code');
+    });
+    await act(async () => {
+      tree.root.findByProps({ accessibilityLabel: 'Restore from backup' }).props.onPress();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(tree.root.findByProps({ children: 'That recovery code did not work.' })).toBeTruthy();
+    await act(async () => {
+      tree.root.findByProps({ accessibilityLabel: 'Show details' }).props.onPress();
+    });
+    expect(tree.root.findByProps({ testID: 'errorDetailsBody' }).props.children).toBe(
+      '[host]: encrypted store is not ready',
+    );
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+});

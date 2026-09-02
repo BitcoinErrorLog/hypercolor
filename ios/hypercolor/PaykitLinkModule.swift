@@ -402,8 +402,12 @@ class PaykitLinkModule: NSObject, RCTInvalidating {
     }
 
     /// Boot reconcile (keystore-ready only): two-sighting quarantine of
-    /// adopted bearers KeyStore does not name. In-flight pending/adopting
-    /// aliases are excluded. Enumerations run under `pendingIoLock`.
+    /// adopted bearers KeyStore does not name. Report-only: subsequent
+    /// sightings log an opaque alias id and keep the bearer. In-flight
+    /// pending/adopting aliases are excluded. Enumerations run under
+    /// `pendingIoLock`. In-memory pending is snapshotted under `lock`
+    /// immediately before the IO section (locks are never nested) and
+    /// unioned with durable pending listed inside it.
     @objc func reconcileAdoptedSessions(
         _ knownSessionAlias: Any?,
         resolver resolve: @escaping RCTPromiseResolveBlock,
@@ -415,9 +419,9 @@ class PaykitLinkModule: NSObject, RCTInvalidating {
             if let named = Self.optionalText(knownSessionAlias) {
                 known.insert(named)
             }
-            var toEvict: [String] = []
+            let inMemoryPending = self.lock.withLock { self.pendingSessionAliases }
             try self.pendingIoLock.withLock {
-                let inFlight = self.adoptingAliases
+                let inFlight = self.adoptingAliases.union(inMemoryPending)
                 let sessionAliases = try PaykitLinkStore.listSessionAliases()
                 let pending = Set(try PaykitLinkStore.listPendingSessionAliases())
                 let current = try Self.loadBootCounter()
@@ -464,23 +468,11 @@ class PaykitLinkModule: NSObject, RCTInvalidating {
                             PaykitLinkAuthProtocol.encodeQuarantine(record),
                             account: PaykitLinkAuthProtocol.quarantineAccount(decision.alias)
                         )
-                    case .subsequentDelete:
-                        toEvict.append(decision.alias)
-                        try PaykitLinkStore.delete(
-                            account: PaykitLinkStore.sessionAccount(decision.alias)
-                        )
-                        try PaykitLinkStore.delete(
-                            account: PaykitLinkStore.pendingAccount(decision.alias)
-                        )
-                        try PaykitLinkStore.delete(
-                            account: PaykitLinkAuthProtocol.quarantineAccount(decision.alias)
+                    case .subsequentReport:
+                        paykitLinkLog.notice(
+                            "\(PaykitLinkAuthProtocol.subsequentSightingLogLine(alias: decision.alias, boot: boot), privacy: .public)"
                         )
                     }
-                }
-            }
-            for alias in toEvict {
-                self.lock.withLock {
-                    self.sessions.removeValue(forKey: alias)
                 }
             }
             return NSNull()

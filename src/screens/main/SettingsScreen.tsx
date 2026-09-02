@@ -314,6 +314,8 @@ export default function SettingsScreen() {
             autoCorrect={false}
           />
           <TouchableOpacity
+            accessibilityRole="button"
+            accessibilityLabel="Restore from backup"
             style={[
               styles.liveButton,
               (backupBusy || restoreCode.trim().length === 0) && styles.liveButtonDisabled,

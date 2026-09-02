@@ -262,6 +262,8 @@ export const LinkService = {
    * Once-per-process boot reconcile. Must run only after
    * `initKeyStore()` has installed a real encrypted store — never from
    * AppState `active`, never while enable/Connect is in flight.
+   * Native reconcile is report-only: it records sightings and never
+   * deletes an adopted bearer.
    */
   async reconcileAdoptedSessionsAtBoot(): Promise<void> {
     await reconcileNativeSessions();

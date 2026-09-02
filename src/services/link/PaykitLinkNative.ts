@@ -231,11 +231,12 @@ export interface PaykitLinkNativeApi {
   adoptAuthSession(sessionAlias: string): Promise<void>;
   /**
    * Boot reconcile: two-sighting quarantine of adopted native session
-   * aliases that KeyStore does not reference. Still-pending / in-flight
-   * aliases are left for the native pending sweep / enable. Pass `null`
-   * when KeyStore is ready and empty. JS must not call this from AppState
-   * `active` or while enable/Connect is in flight. Must not be treated as
-   * a no-op when the native method is missing.
+   * aliases that KeyStore does not reference. Report-only: subsequent
+   * sightings log an opaque alias id and keep the bearer. Still-pending /
+   * in-flight aliases are left for the native pending sweep / enable.
+   * Pass `null` when KeyStore is ready and empty. JS must not call this
+   * from AppState `active` or while enable/Connect is in flight. Must not
+   * be treated as a no-op when the native method is missing.
    */
   reconcileAdoptedSessions(knownSessionAlias?: string | null): Promise<void>;
   /**

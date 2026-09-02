@@ -306,9 +306,10 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
 
     /**
      * Boot reconcile (keystore-ready only, once per JS process): two-sighting
-     * quarantine of adopted bearers KeyStore does not name. In-flight
-     * pending/adopting aliases are excluded. Reserved/awaiting flows have
-     * no session alias until persist.
+     * quarantine of adopted bearers KeyStore does not name. Report-only:
+     * subsequent sightings log an opaque alias id and keep the bearer.
+     * In-flight pending/adopting aliases are excluded. Reserved/awaiting
+     * flows have no session alias until persist.
      */
     @ReactMethod
     fun reconcileAdoptedSessions(knownSessionAlias: String?, promise: Promise) {
@@ -318,13 +319,22 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
             synchronized(pendingIo) {
                 val inFlight = HashSet(flows.inFlightSessionAliases())
                 inFlight.addAll(adoptingAliases)
-                PaykitLinkDurableReconcile.reconcileUnreferencedAdopted(
+                val result = PaykitLinkDurableReconcile.reconcileUnreferencedAdopted(
                     store,
                     known,
                     inFlight,
                     System.currentTimeMillis(),
                     PaykitLinkProcessIdentity.TOKEN,
-                ) { sessions.remove(it) }
+                )
+                for (alias in result.reported) {
+                    Log.i(
+                        PAYKIT_LINK_LOG_TAG,
+                        PaykitLinkDurableReconcile.subsequentSightingLogLine(
+                            alias,
+                            result.bootCounter,
+                        ),
+                    )
+                }
             }
             promise.resolve(null)
         }

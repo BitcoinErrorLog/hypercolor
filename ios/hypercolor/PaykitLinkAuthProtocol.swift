@@ -18,10 +18,11 @@ import Foundation
 /// Invariant: a valid bearer must never exist with neither a pending marker
 /// nor a JS KeyStore reference. JS writes KeyStore first; native adopt only
 /// deletes the marker. Boot reconciliation (keystore-ready only) uses
-/// two-sighting quarantine: first unowned sighting records
-/// `quarantined_at` + boot counter in a durable account that is not the
-/// bearer; a subsequent keystore-ready boot deletes. The process-start
-/// pending sweep deletes leftover markers.
+/// two-sighting quarantine as a report-only evidence trail: first unowned
+/// sighting records `quarantined_at` + boot counter in a durable account
+/// that is not the bearer; a subsequent keystore-ready boot logs the
+/// opaque alias id and keeps the bearer. The process-start pending sweep
+/// still deletes leftover pending markers that were never adopted.
 ///
 /// `session.$alias` vs `session.pending.$alias` collides if JS supplies
 /// alias `pending.X`. Production enable/signin aliases are UUID. A
@@ -87,7 +88,7 @@ enum PaykitLinkAuthProtocol {
         case skipInFlight
         case clearOwned
         case firstSighting
-        case subsequentDelete
+        case subsequentReport
         case none
     }
 
@@ -98,11 +99,11 @@ enum PaykitLinkAuthProtocol {
 
     /// Reserved/awaiting flows have no session alias until persist.
     /// Pending (durable or in-memory) and adopting aliases are in-flight.
-    /// Two-sighting quarantine. Second sighting deletes only when the boot
-    /// counter advanced *and* the process token differs from the recorded
-    /// sighting — a JS reload in one OS process cannot produce a delete.
-    /// A legacy two-field record (empty process token) is rewritten as a
-    /// first sighting so an upgrade cannot convert quarantine into a delete.
+    /// Two-sighting quarantine, report-only. Second sighting logs only when
+    /// the boot counter advanced *and* the process token differs from the
+    /// recorded sighting — a JS reload in one OS process cannot produce a
+    /// subsequent report. A legacy two-field record (empty process token)
+    /// is rewritten as a first sighting. This path never deletes a bearer.
     static func quarantineAction(
         ownedByKeyStore: Bool,
         inFlight: Bool,
@@ -122,9 +123,13 @@ enum PaykitLinkAuthProtocol {
            seen < currentBoot,
            recorded != currentProcessToken
         {
-            return .subsequentDelete
+            return .subsequentReport
         }
         return .none
+    }
+
+    static func subsequentSightingLogLine(alias: String, boot: UInt64) -> String {
+        "PaykitLinkReconcile subsequent-sighting alias=\(alias) boot=\(boot)"
     }
 
     static func nextBootCounter(_ current: UInt64) -> UInt64 {

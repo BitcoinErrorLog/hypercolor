@@ -1,7 +1,7 @@
 /**
- * KeyStore MMKV coverage: CSPRNG secret, HKDF 16-byte encryption key,
- * encrypted canary readiness, no plaintext placeholder, and one-time
- * migration from the legacy truncated key.
+ * KeyStore MMKV coverage: CSPRNG secret, HKDF → base64url 16-UTF-8-byte
+ * (96-bit) encryption key, encrypted canary readiness, no plaintext
+ * placeholder, and one-time migration from the legacy truncated key.
  */
 
 import { hkdf } from '@noble/hashes/hkdf';
@@ -28,8 +28,6 @@ jest.mock('react-native-keychain', () => ({
 }));
 
 const mockCreateMMKVCalls: Array<{ id: string; encryptionKey?: string }> = [];
-const mockMmkvThrowOnGet = { current: false };
-const mockUndecryptable = { current: false };
 const mockUndecryptableIds = new Set<string>();
 const mockVerifyFail = { id: null as string | null, key: null as string | null };
 const mockMmkvById = new Map<string, Map<string, string>>();
@@ -47,10 +45,7 @@ jest.mock('react-native-mmkv', () => ({
         data!.set(key, value);
       },
       getString: (key: string) => {
-        if (mockMmkvThrowOnGet.current) {
-          throw new Error('mmkv read failed');
-        }
-        if (mockUndecryptable.current || mockUndecryptableIds.has(config.id)) {
+        if (mockUndecryptableIds.has(config.id)) {
           return undefined;
         }
         if (mockVerifyFail.id === config.id && mockVerifyFail.key === key) {
@@ -59,7 +54,7 @@ jest.mock('react-native-mmkv', () => ({
         return data!.get(key);
       },
       contains: (key: string) => {
-        if (mockUndecryptable.current || mockUndecryptableIds.has(config.id)) return false;
+        if (mockUndecryptableIds.has(config.id)) return false;
         return data!.has(key);
       },
       remove: (key: string) => {
@@ -86,11 +81,20 @@ function derivedKey(secretHex: string): string {
     ikm[i] = Number.parseInt(secretHex.slice(i * 2, i * 2 + 2), 16);
   }
   const bytes = hkdf(sha256, ikm, undefined, MMKV_HKDF_INFO, 16);
-  let s = '';
-  for (let i = 0; i < bytes.length; i++) {
-    s += String.fromCharCode(bytes[i]!);
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+  let b64 = '';
+  for (let i = 0; i < bytes.length; i += 3) {
+    const remaining = bytes.length - i;
+    const a = bytes[i]!;
+    const b = remaining > 1 ? bytes[i + 1]! : 0;
+    const c = remaining > 2 ? bytes[i + 2]! : 0;
+    const triple = (a << 16) | (b << 8) | c;
+    b64 += alphabet[(triple >> 18) & 63];
+    b64 += alphabet[(triple >> 12) & 63];
+    if (remaining > 1) b64 += alphabet[(triple >> 6) & 63];
+    if (remaining > 2) b64 += alphabet[triple & 63];
   }
-  return s;
+  return b64.slice(0, 16);
 }
 
 type KeyStoreModule = typeof import('../KeyStore');
@@ -118,8 +122,6 @@ function removeCsprng(): () => void {
 function resetMocks(): void {
   mockKeychainStore.clear();
   mockCreateMMKVCalls.length = 0;
-  mockMmkvThrowOnGet.current = false;
-  mockUndecryptable.current = false;
   mockUndecryptableIds.clear();
   mockVerifyFail.id = null;
   mockVerifyFail.key = null;
@@ -129,7 +131,7 @@ function resetMocks(): void {
 describe('KeyStore MMKV encryption key', () => {
   beforeEach(resetMocks);
 
-  it('generates a 32-byte CSPRNG secret and opens MMKV with a 16-byte HKDF key', async () => {
+  it('generates a 32-byte CSPRNG secret and opens MMKV with a 96-bit HKDF key', async () => {
     const { initKeyStore } = await freshKeyStore();
     await initKeyStore();
 
@@ -139,8 +141,23 @@ describe('KeyStore MMKV encryption key', () => {
     expect(currentOpens.length).toBeGreaterThan(0);
     expect(currentOpens.every(c => c.encryptionKey === derivedKey(stored as string))).toBe(true);
     expect(currentOpens.every(c => c.encryptionKey?.length === 16)).toBe(true);
+    expect(
+      currentOpens.every(
+        c => new TextEncoder().encode(c.encryptionKey as string).byteLength === 16,
+      ),
+    ).toBe(true);
     expect(currentOpens.every(c => c.encryptionKey !== stored)).toBe(true);
     expect(mockCreateMMKVCalls.every(c => c.encryptionKey != null)).toBe(true);
+  });
+
+  it('derives a 16-UTF-8-byte (96-bit) MMKV key for a fixed vector', async () => {
+    mockKeychainStore.set(MMKV_KEY_SERVICE, SECRET_HEX);
+    const { initKeyStore } = await freshKeyStore();
+    await initKeyStore();
+    const key = mockCreateMMKVCalls.find(c => c.id === STORE_ID_CURRENT)?.encryptionKey;
+    expect(key).toBe(derivedKey(SECRET_HEX));
+    expect(key).toMatch(/^[A-Za-z0-9_-]{16}$/);
+    expect(new TextEncoder().encode(key as string).byteLength).toBe(16);
   });
 
   it('reuses the keychain-stored secret without needing a CSPRNG', async () => {
@@ -313,18 +330,15 @@ describe('KeyStore link-session readiness', () => {
     expect(ks.readLinkSession()).toEqual({ ok: true, alias: null });
   });
 
-  it('treats an undecryptable store (getString always undefined) as not ready', async () => {
-    mockUndecryptable.current = true;
+  it('treats a discarded MMKV file as ready-and-empty (pubky is gone too)', async () => {
+    mockKeychainStore.set(MMKV_KEY_SERVICE, SECRET_HEX);
     const ks = await freshKeyStore();
-    await expect(ks.initKeyStore()).rejects.toThrow(ks.KeyStoreNotReady);
-    expect(ks.isInitialized()).toBe(false);
-    expect(ks.readLinkSession()).toEqual({ ok: false });
-    expect(ks.getLinkSession()).toBeNull();
-    expect(() => ks.setLinkSession('alias-a')).toThrow(ks.KeyStoreNotReady);
-    expect(() => ks.getPubky()).toThrow(ks.KeyStoreNotReady);
-    expect(ks.deleteLinkSessionIfAlias('alias-a')).toBe(false);
-    expect(mockKeychainStore.get(MMKV_GENERATION_SERVICE)).toBeUndefined();
-    expect(mockMmkvById.get(STORE_ID_LEGACY)?.size ?? 0).toBe(0);
+    await ks.initKeyStore();
+    expect(ks.isInitialized()).toBe(true);
+    expect(ks.getPubky()).toBeNull();
+    expect(ks.readLinkSession()).toEqual({ ok: true, alias: null });
+    await expect(ks.hasPersistedSession()).resolves.toBe(false);
+    expect(mockKeychainStore.get(MMKV_GENERATION_SERVICE)).toBe('v2-hkdf');
   });
 
   it('ready-empty with canary and no alias is a successful empty read', async () => {
@@ -372,7 +386,7 @@ describe('KeyStore MMKV key migration', () => {
     expect(mockMmkvById.get(STORE_ID_CURRENT)?.get('pubky')).toBe('owner-pk');
   });
 
-  it('keeps the legacy store when a copied key does not round-trip', async () => {
+  it('keeps the legacy store when a copied key does not round-trip and wipes the destination', async () => {
     mockKeychainStore.set(MMKV_KEY_SERVICE, SECRET_HEX);
     mockMmkvById.set(
       STORE_ID_LEGACY,
@@ -393,6 +407,7 @@ describe('KeyStore MMKV key migration', () => {
     expect(ks.getLinkSession()).toBe('alias-legacy');
     expect(mockKeychainStore.get(MMKV_GENERATION_SERVICE)).toBeUndefined();
     expect(mockMmkvById.get(STORE_ID_LEGACY)?.get('pubky')).toBe('owner-pk');
+    expect(mockMmkvById.get(STORE_ID_CURRENT)?.size ?? 0).toBe(0);
   });
 
   it('keeps the legacy store when destination canary install fails after copy', async () => {
@@ -409,18 +424,139 @@ describe('KeyStore MMKV key migration', () => {
     expect(ks.getLinkSession()).toBe('alias-legacy');
     expect(mockKeychainStore.get(MMKV_GENERATION_SERVICE)).toBeUndefined();
     expect(mockMmkvById.get(STORE_ID_LEGACY)?.get('link_session')).toBe('alias-legacy');
+    expect(mockMmkvById.get(STORE_ID_CURRENT)?.size ?? 0).toBe(0);
   });
 
-  it('fails closed when legacy keys are listed but do not decrypt', async () => {
+  it('skips listed legacy keys whose getString is undefined rather than failing init', async () => {
     mockKeychainStore.set(MMKV_KEY_SERVICE, SECRET_HEX);
     mockMmkvById.set(STORE_ID_LEGACY, new Map([['link_session', 'alias-legacy']]));
     mockUndecryptableIds.add(STORE_ID_LEGACY);
 
     const ks = await freshKeyStore();
-    await expect(ks.initKeyStore()).rejects.toThrow(ks.KeyStoreNotReady);
-    expect(ks.isInitialized()).toBe(false);
-    expect(ks.readLinkSession()).toEqual({ ok: false });
+    await ks.initKeyStore();
+    expect(ks.isInitialized()).toBe(true);
+    expect(ks.getPubky()).toBeNull();
+    expect(ks.readLinkSession()).toEqual({ ok: true, alias: null });
+    expect(mockKeychainStore.get(MMKV_GENERATION_SERVICE)).toBe('v2-hkdf');
+    expect(mockMmkvById.get(STORE_ID_LEGACY)?.get('link_session')).toBe('alias-legacy');
+  });
+
+  it('overwrites a mismatched canary instead of bricking init', async () => {
+    mockKeychainStore.set(MMKV_KEY_SERVICE, SECRET_HEX);
+    mockKeychainStore.set(MMKV_GENERATION_SERVICE, 'v2-hkdf');
+    mockMmkvById.set(
+      STORE_ID_CURRENT,
+      new Map([
+        ['keystore.canary', 'old-canary'],
+        ['pubky', 'owner-pk'],
+      ]),
+    );
+    const ks = await freshKeyStore();
+    await ks.initKeyStore();
+    expect(ks.isInitialized()).toBe(true);
+    expect(ks.getPubky()).toBe('owner-pk');
+    expect(mockMmkvById.get(STORE_ID_CURRENT)?.get('keystore.canary')).toBe(
+      'hypercolor-keystore-ready-v1',
+    );
+  });
+
+  it('retries migration on boot 2 after verify fails on boot 1; legacy and session stay intact', async () => {
+    mockKeychainStore.set(MMKV_KEY_SERVICE, SECRET_HEX);
+    mockMmkvById.set(
+      STORE_ID_LEGACY,
+      new Map([
+        ['pubky', 'owner-pk'],
+        ['link_session', 'alias-legacy'],
+      ]),
+    );
+    mockVerifyFail.id = STORE_ID_CURRENT;
+    mockVerifyFail.key = 'link_session';
+
+    const boot1 = await freshKeyStore();
+    await boot1.initKeyStore();
+    expect(boot1.getLinkSession()).toBe('alias-legacy');
+    expect(boot1.getPubky()).toBe('owner-pk');
     expect(mockKeychainStore.get(MMKV_GENERATION_SERVICE)).toBeUndefined();
     expect(mockMmkvById.get(STORE_ID_LEGACY)?.get('link_session')).toBe('alias-legacy');
+    expect(mockMmkvById.get(STORE_ID_CURRENT)?.size ?? 0).toBe(0);
+
+    mockVerifyFail.id = null;
+    mockVerifyFail.key = null;
+    const boot2 = await freshKeyStore();
+    await boot2.initKeyStore();
+    expect(boot2.getLinkSession()).toBe('alias-legacy');
+    expect(boot2.getPubky()).toBe('owner-pk');
+    expect(mockKeychainStore.get(MMKV_GENERATION_SERVICE)).toBe('v2-hkdf');
+    expect(mockMmkvById.get(STORE_ID_LEGACY)?.size ?? 0).toBe(0);
+  });
+
+  it('commits on boot 2 after a kill between copy+canary and the generation mark', async () => {
+    mockKeychainStore.set(MMKV_KEY_SERVICE, SECRET_HEX);
+    mockMmkvById.set(
+      STORE_ID_CURRENT,
+      new Map([
+        ['pubky', 'owner-pk'],
+        ['link_session', 'alias-legacy'],
+        ['keystore.canary', 'hypercolor-keystore-ready-v1'],
+      ]),
+    );
+    mockMmkvById.set(
+      STORE_ID_LEGACY,
+      new Map([
+        ['pubky', 'owner-pk'],
+        ['link_session', 'alias-legacy'],
+      ]),
+    );
+    const ks = await freshKeyStore();
+    await ks.initKeyStore();
+    expect(ks.getLinkSession()).toBe('alias-legacy');
+    expect(ks.getPubky()).toBe('owner-pk');
+    expect(mockKeychainStore.get(MMKV_GENERATION_SERVICE)).toBe('v2-hkdf');
+    expect(mockMmkvById.get(STORE_ID_LEGACY)?.size ?? 0).toBe(0);
+  });
+
+  it('marks v2 on boot 2 after a kill between legacy.clearAll and the generation mark', async () => {
+    mockKeychainStore.set(MMKV_KEY_SERVICE, SECRET_HEX);
+    mockMmkvById.set(
+      STORE_ID_CURRENT,
+      new Map([
+        ['pubky', 'owner-pk'],
+        ['link_session', 'alias-legacy'],
+        ['keystore.canary', 'hypercolor-keystore-ready-v1'],
+      ]),
+    );
+    mockMmkvById.set(STORE_ID_LEGACY, new Map());
+    const ks = await freshKeyStore();
+    await ks.initKeyStore();
+    expect(ks.getLinkSession()).toBe('alias-legacy');
+    expect(ks.getPubky()).toBe('owner-pk');
+    expect(mockKeychainStore.get(MMKV_GENERATION_SERVICE)).toBe('v2-hkdf');
+  });
+
+  it('preserves the session alias across two boots when link_session failed to copy on boot 1', async () => {
+    mockKeychainStore.set(MMKV_KEY_SERVICE, SECRET_HEX);
+    mockMmkvById.set(
+      STORE_ID_LEGACY,
+      new Map([
+        ['pubky', 'owner-pk'],
+        ['link_session', 'alias-legacy'],
+      ]),
+    );
+    mockVerifyFail.id = STORE_ID_CURRENT;
+    mockVerifyFail.key = 'link_session';
+
+    const boot1 = await freshKeyStore();
+    await boot1.initKeyStore();
+    expect(boot1.getLinkSession()).toBe('alias-legacy');
+    expect(boot1.getPubky()).toBe('owner-pk');
+    expect(mockKeychainStore.get(MMKV_GENERATION_SERVICE)).toBeUndefined();
+
+    mockVerifyFail.id = null;
+    mockVerifyFail.key = null;
+    const boot2 = await freshKeyStore();
+    await boot2.initKeyStore();
+    expect(boot2.getLinkSession()).toBe('alias-legacy');
+    expect(boot2.readLinkSession()).toEqual({ ok: true, alias: 'alias-legacy' });
+    expect(mockKeychainStore.get(MMKV_GENERATION_SERVICE)).toBe('v2-hkdf');
   });
 });

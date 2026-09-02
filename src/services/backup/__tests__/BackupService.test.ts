@@ -446,4 +446,17 @@ describe('BackupService', () => {
     );
     expect(await StorageService.getContact(PEER, OTHER)).toBeNull();
   });
+
+  it('propagates KeyStoreNotReady from requireOwner on export and restore', async () => {
+    await openHarness();
+    const err = Object.assign(new Error('KeyStore.getPubky: encrypted store is not ready'), {
+      name: 'KeyStoreNotReady',
+      code: 'KeyStoreNotReady',
+    });
+    mockedKeyStore.getPubky.mockImplementation(() => {
+      throw err;
+    });
+    await expect(BackupService.exportBackup()).rejects.toBe(err);
+    await expect(BackupService.restoreBackup('recovery-code')).rejects.toBe(err);
+  });
 });

@@ -118,14 +118,14 @@ internal enum class PaykitLinkQuarantineAction {
     SkipInFlight,
     ClearOwned,
     FirstSighting,
-    SubsequentDelete,
+    SubsequentReport,
     None,
 }
 
 internal data class PaykitLinkReconcileResult(
     val bootCounter: Long,
     val quarantined: List<String>,
-    val deleted: List<String>,
+    val reported: List<String>,
     val cleared: List<String>,
     val skippedInFlight: List<String>,
 )
@@ -162,16 +162,17 @@ internal object PaykitLinkDurableReconcile {
 
     /**
      * Two-sighting quarantine for adopted bearers KeyStore does not name.
-     * First keystore-ready boot records [PaykitLinkQuarantineRecord] (not
-     * in the bearer) and leaves the bearer in place; [session] still
+     * Report-only: first keystore-ready boot records [PaykitLinkQuarantineRecord]
+     * (not in the bearer) and leaves the bearer in place; [session] still
      * refuses unknown aliases from JS. A subsequent keystore-ready boot
      * in a **different OS process** that still does not name the alias
-     * deletes it. Same-process sightings (JS reload) do not count.
-     * A legacy two-field record (empty process token) is rewritten as a
-     * first sighting so an upgrade cannot convert quarantine into a delete.
+     * logs a structured sighting (opaque alias id only) and keeps the
+     * bearer and the quarantine record. Same-process sightings (JS reload)
+     * do not count as a subsequent report. A legacy two-field record
+     * (empty process token) is rewritten as a first sighting.
      * KeyStore naming the alias at any point clears quarantine. In-flight
      * aliases (reserved/awaiting have no alias yet; pending/adopting do)
-     * are excluded.
+     * are excluded. This path never deletes a native bearer.
      */
     fun quarantineAction(
         ownedByKeyStore: Boolean,
@@ -193,9 +194,13 @@ internal object PaykitLinkDurableReconcile {
         val recorded = existingProcessToken.orEmpty()
         if (recorded.isEmpty()) return PaykitLinkQuarantineAction.FirstSighting
         if (existingQuarantineBoot < currentBoot && recorded != currentProcessToken) {
-            return PaykitLinkQuarantineAction.SubsequentDelete
+            return PaykitLinkQuarantineAction.SubsequentReport
         }
         return PaykitLinkQuarantineAction.None
+    }
+
+    fun subsequentSightingLogLine(alias: String, boot: Long): String {
+        return "PaykitLinkReconcile subsequent-sighting alias=$alias boot=$boot"
     }
 
     fun reconcileUnreferencedAdopted(
@@ -204,13 +209,12 @@ internal object PaykitLinkDurableReconcile {
         inFlightAliases: Set<String>,
         nowMs: Long,
         processToken: String,
-        evict: (String) -> Unit,
     ): PaykitLinkReconcileResult {
         val boot = store.getBootCounter() + 1L
         store.setBootCounter(boot)
         val pending = store.listPendingSessionAliases().toHashSet()
         val quarantined = ArrayList<String>()
-        val deleted = ArrayList<String>()
+        val reported = ArrayList<String>()
         val cleared = ArrayList<String>()
         val skipped = ArrayList<String>()
 
@@ -257,11 +261,8 @@ internal object PaykitLinkDurableReconcile {
                     )
                     quarantined.add(alias)
                 }
-                PaykitLinkQuarantineAction.SubsequentDelete -> {
-                    evict(alias)
-                    store.deleteSession(alias)
-                    store.clearQuarantine(alias)
-                    deleted.add(alias)
+                PaykitLinkQuarantineAction.SubsequentReport -> {
+                    reported.add(alias)
                 }
                 PaykitLinkQuarantineAction.None -> Unit
             }
@@ -269,7 +270,7 @@ internal object PaykitLinkDurableReconcile {
         return PaykitLinkReconcileResult(
             bootCounter = boot,
             quarantined = quarantined,
-            deleted = deleted,
+            reported = reported,
             cleared = cleared,
             skippedInFlight = skipped,
         )

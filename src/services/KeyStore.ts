@@ -15,15 +15,26 @@ import { createMMKV, type MMKV } from 'react-native-mmkv';
  *   - X25519 transport keypair (for Noise sessions)
  *   - AppCert (cert_body + sig proving delegation from root)
  *
- * Encrypted MMKV (never opened without a 16-byte derived key):
+ * Encrypted MMKV (never opened without a 16-UTF-8-byte derived key):
  *   - pubky (root Ed25519 public key, z-base32)
  *   - homeserver URL
  *   - session_secret
  *   - link_session alias
  *
- * Readiness is a positive canary on the encrypted instance, not the
- * absence of a throw: `react-native-mmkv` `getString` returns `undefined`
- * for both missing and undecryptable values.
+ * The MMKV encryption key is 96 bits, not 128. Nitro marshals
+ * `encryptionKey` as UTF-8 (`arg.asString().utf8()`) and MMKVCore keeps
+ * the first 16 bytes, so a 16-unit latin-1 string becomes ~24 UTF-8 bytes
+ * and is truncated. HKDF-SHA256 still produces 16 bytes; those are
+ * encoded as base64url and truncated to 16 single-byte characters.
+ *
+ * Readiness is a positive canary on the encrypted instance. MMKV encrypts
+ * the whole file with one AES key: a wrong key discards the instance
+ * (`OnErrorDiscard`) and continues as empty-and-writable. `installCanary`
+ * then succeeds and the store reports ready-and-empty — `pubky` is gone
+ * too, so `hasPersistedSession()` is false. Unreadable is
+ * indistinguishable from a fresh install. The canary cannot detect a
+ * wrong key; it only asserts that *this* instance round-trips a known
+ * value. `getString` returning `undefined` is not an error channel.
  */
 
 // ─── Keychain service identifiers ────────────────────────────────────────────
@@ -59,11 +70,17 @@ const STORE_ID_CURRENT = 'hypercolor-keystore-v2';
 const MMKV_KEY_SERVICE = 'hypercolor-mmkv-encryption-key';
 const MMKV_GENERATION_SERVICE = 'hypercolor-mmkv-store-generation';
 const MMKV_GENERATION_V2 = 'v2-hkdf';
+const ATTACHMENT_INDEX_PREFIX = 'attachment_key_services:';
+/** DEBUG-only MMKV slot when unsigned iOS sim keychain returns -34018. */
+const DEBUG_ATTACHMENT_PREFIX = 'debug.attachment:';
+const BASE64URL_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
 
 let _store: MMKV | null = null;
 let _mmkvKeyPromise: Promise<void> | null = null;
 /** True only after encrypted init verified the canary on the instance we hold. */
 let _initialized = false;
+/** Cached canary probe for `_store` only. Cleared when `_store` is cleared. */
+let _canaryOk = false;
 
 export const KEYSTORE_NOT_READY_CODE = 'KeyStoreNotReady' as const;
 
@@ -90,25 +107,37 @@ function hexToBytes32(hex: string): Uint8Array {
   return out;
 }
 
-function bytesToLatin1(bytes: Uint8Array): string {
+function utf8ByteLength(value: string): number {
+  return new TextEncoder().encode(value).byteLength;
+}
+
+function bytesToBase64Url(bytes: Uint8Array): string {
   let out = '';
-  for (let i = 0; i < bytes.length; i++) {
-    out += String.fromCharCode(bytes[i]!);
+  for (let i = 0; i < bytes.length; i += 3) {
+    const remaining = bytes.length - i;
+    const a = bytes[i]!;
+    const b = remaining > 1 ? bytes[i + 1]! : 0;
+    const c = remaining > 2 ? bytes[i + 2]! : 0;
+    const triple = (a << 16) | (b << 8) | c;
+    out += BASE64URL_ALPHABET[(triple >> 18) & 63];
+    out += BASE64URL_ALPHABET[(triple >> 12) & 63];
+    if (remaining > 1) out += BASE64URL_ALPHABET[(triple >> 6) & 63];
+    if (remaining > 2) out += BASE64URL_ALPHABET[triple & 63];
   }
   return out;
 }
 
 /**
- * 16-byte MMKV encryption key derived from the 32-byte keychain secret.
- * `react-native-mmkv` uses at most 16 bytes; a 64-char hex string was
- * silently truncated to 16 ASCII chars (~64 bits). HKDF-SHA256 mixes the
- * full secret into 16 bytes. The JS string is 16 latin-1 code units so
- * the call-site length equals the library maximum.
+ * 96-bit MMKV encryption key derived from the 32-byte keychain secret.
+ * HKDF-SHA256 mixes the full secret into 16 bytes, then base64url and
+ * take exactly 16 characters — 16 single-byte UTF-8 code points, which
+ * is the MMKV 16-byte cap under nitro's UTF-8 marshalling. A 64-char hex
+ * string was previously truncated to 16 ASCII chars (~64 bits).
  */
 function deriveMmkvEncryptionKey(secretHex: string): string {
   const ikm = hexToBytes32(secretHex);
   const keyBytes = hkdf(sha256, ikm, undefined, MMKV_HKDF_INFO, MMKV_KEY_BYTE_LENGTH);
-  const key = bytesToLatin1(keyBytes);
+  const key = bytesToBase64Url(keyBytes).slice(0, MMKV_KEY_BYTE_LENGTH);
   assertMmkvEncryptionKeyLength(key);
   return key;
 }
@@ -116,7 +145,7 @@ function deriveMmkvEncryptionKey(secretHex: string): string {
 /** First 16 chars of the stored hex — the key MMKV actually used before HKDF. */
 function legacyTruncatedMmkvKey(secretHex: string): string {
   if (secretHex.length < MMKV_KEY_BYTE_LENGTH) {
-    throw new Error('KeyStore: legacy MMKV key is shorter than 16 bytes');
+    throw new Error('KeyStore: legacy MMKV key is shorter than 16 UTF-8 bytes');
   }
   const truncated = secretHex.slice(0, MMKV_KEY_BYTE_LENGTH);
   assertMmkvEncryptionKeyLength(truncated);
@@ -124,8 +153,10 @@ function legacyTruncatedMmkvKey(secretHex: string): string {
 }
 
 function assertMmkvEncryptionKeyLength(key: string): void {
-  if (key.length !== MMKV_KEY_BYTE_LENGTH) {
-    throw new Error('KeyStore: MMKV encryptionKey must be exactly 16 bytes');
+  if (utf8ByteLength(key) !== MMKV_KEY_BYTE_LENGTH) {
+    throw new Error(
+      'KeyStore: MMKV encryptionKey must be exactly 16 UTF-8 bytes (96-bit; MMKV 16-byte key cap under UTF-8 marshalling)',
+    );
   }
 }
 
@@ -135,48 +166,56 @@ function openMmkv(id: string, encryptionKey: string): MMKV {
 }
 
 function readCanary(instance: MMKV): string | undefined {
-  try {
-    return instance.getString(MMKV_CANARY_KEY);
-  } catch {
-    return undefined;
-  }
+  return instance.getString(MMKV_CANARY_KEY);
 }
 
-function canaryIsVerified(instance: MMKV): boolean {
+function probeCanary(instance: MMKV): boolean {
   return readCanary(instance) === MMKV_CANARY_VALUE;
 }
 
+function canaryIsVerified(instance: MMKV): boolean {
+  if (_store === instance && _canaryOk) return true;
+  const ok = probeCanary(instance);
+  if (_store === instance) _canaryOk = ok;
+  return ok;
+}
+
 function installCanary(instance: MMKV): boolean {
-  const existing = readCanary(instance);
-  if (existing === MMKV_CANARY_VALUE) return true;
-  if (existing !== undefined) return false;
+  if (probeCanary(instance)) return true;
   try {
     instance.set(MMKV_CANARY_KEY, MMKV_CANARY_VALUE);
   } catch {
     return false;
   }
-  return canaryIsVerified(instance);
+  return probeCanary(instance);
 }
 
-function snapshotStringEntries(instance: MMKV): Map<string, string> | null {
-  let keys: string[];
-  try {
-    keys = instance.getAllKeys();
-  } catch {
-    return null;
-  }
+function isMigratableMmkvKey(key: string): boolean {
+  return (
+    key === PUBKY_KEY ||
+    key === HOMESERVER_KEY ||
+    key === SESSION_SECRET_KEY ||
+    key === LINK_SESSION_KEY ||
+    key.startsWith(ATTACHMENT_INDEX_PREFIX) ||
+    key.startsWith(DEBUG_ATTACHMENT_PREFIX)
+  );
+}
+
+function snapshotMigratableEntries(instance: MMKV): Map<string, string> {
   const out = new Map<string, string>();
-  for (const key of keys) {
-    let value: string | undefined;
-    try {
-      value = instance.getString(key);
-    } catch {
-      return null;
-    }
-    if (value === undefined) return null;
-    out.set(key, value);
+  for (const key of instance.getAllKeys()) {
+    if (!isMigratableMmkvKey(key)) continue;
+    const value = instance.getString(key);
+    if (typeof value === 'string') out.set(key, value);
   }
   return out;
+}
+
+function entriesMatch(entries: Map<string, string>, dest: MMKV): boolean {
+  for (const [key, value] of entries) {
+    if (dest.getString(key) !== value) return false;
+  }
+  return true;
 }
 
 function copyAndVerify(entries: Map<string, string>, dest: MMKV): boolean {
@@ -184,12 +223,17 @@ function copyAndVerify(entries: Map<string, string>, dest: MMKV): boolean {
     for (const [key, value] of entries) {
       dest.set(key, value);
     }
-    for (const [key, value] of entries) {
-      if (dest.getString(key) !== value) return false;
-    }
-    return true;
+    return entriesMatch(entries, dest);
   } catch {
     return false;
+  }
+}
+
+function clearStoreBestEffort(instance: MMKV): void {
+  try {
+    instance.clearAll();
+  } catch {
+    // Best-effort purge; leftover ciphertext must not block boot.
   }
 }
 
@@ -238,8 +282,13 @@ async function getOrCreateMmkvSecretHex(): Promise<string> {
 
 /**
  * Open the encrypted store. Prefer the HKDF-keyed v2 id. One-time migration
- * copies the legacy truncated-key store only after every key (and the
- * canary) round-trips. Migration failure keeps the legacy store readable.
+ * copies the legacy truncated-key store only after every key round-trips,
+ * and installs the destination canary only after that verification. The
+ * canary is the commit marker: it is never left on a store whose copy has
+ * not verified. On any verification failure the destination is wiped so
+ * no canary and no partial copy survive, and the legacy store stays
+ * readable. A boot that finds a canary on `current` before the generation
+ * is marked v2 re-verifies every remaining legacy key before committing.
  */
 async function openEncryptedStore(secretHex: string): Promise<MMKV> {
   const derivedKey = deriveMmkvEncryptionKey(secretHex);
@@ -247,6 +296,12 @@ async function openEncryptedStore(secretHex: string): Promise<MMKV> {
   const generation = await readStoreGeneration();
 
   if (generation === MMKV_GENERATION_V2) {
+    try {
+      const leftover = openMmkv(STORE_ID_LEGACY, legacyTruncatedMmkvKey(secretHex));
+      clearStoreBestEffort(leftover);
+    } catch {
+      // Legacy file may already be gone.
+    }
     if (!installCanary(current)) {
       throw new KeyStoreNotReady('initKeyStore');
     }
@@ -254,40 +309,30 @@ async function openEncryptedStore(secretHex: string): Promise<MMKV> {
   }
 
   const legacy = openMmkv(STORE_ID_LEGACY, legacyTruncatedMmkvKey(secretHex));
-  const legacySnap = snapshotStringEntries(legacy);
+  const legacySnap = snapshotMigratableEntries(legacy);
 
-  if (canaryIsVerified(current)) {
-    await markStoreGenerationV2();
-    try {
-      legacy.clearAll();
-    } catch {
-      // Current store is source of truth; leftover legacy must not block.
+  if (probeCanary(current)) {
+    if (legacySnap.size === 0) {
+      await markStoreGenerationV2();
+      return current;
     }
-    return current;
-  }
-
-  if (legacySnap === null) {
-    // Listed keys that do not decrypt: not empty. Fail closed.
-    throw new KeyStoreNotReady('initKeyStore');
+    if (entriesMatch(legacySnap, current)) {
+      await markStoreGenerationV2();
+      clearStoreBestEffort(legacy);
+      return current;
+    }
+    clearStoreBestEffort(current);
   }
 
   if (legacySnap.size > 0) {
     const copied = copyAndVerify(legacySnap, current);
-    if (copied && installCanary(current)) {
-      let verified = canaryIsVerified(current);
-      for (const [key, value] of legacySnap) {
-        if (current.getString(key) !== value) verified = false;
-      }
-      if (verified) {
-        await markStoreGenerationV2();
-        try {
-          legacy.clearAll();
-        } catch {
-          // Current store is source of truth.
-        }
-        return current;
-      }
+    const verified = copied && entriesMatch(legacySnap, current);
+    if (verified && installCanary(current)) {
+      await markStoreGenerationV2();
+      clearStoreBestEffort(legacy);
+      return current;
     }
+    clearStoreBestEffort(current);
     if (!installCanary(legacy)) {
       throw new KeyStoreNotReady('initKeyStore');
     }
@@ -303,6 +348,7 @@ async function openEncryptedStore(secretHex: string): Promise<MMKV> {
 
 function requireStore(operation: string): MMKV {
   if (!_initialized || !_store || !canaryIsVerified(_store)) {
+    _canaryOk = false;
     throw new KeyStoreNotReady(operation);
   }
   return _store;
@@ -325,6 +371,7 @@ export async function initKeyStore(): Promise<void> {
       }
       _store = instance;
       _initialized = true;
+      _canaryOk = true;
     })();
   }
   try {
@@ -336,14 +383,17 @@ export async function initKeyStore(): Promise<void> {
     _mmkvKeyPromise = null;
     _initialized = false;
     _store = null;
+    _canaryOk = false;
     throw err;
   }
 }
 
 /**
- * True only when the encrypted instance is held and the canary reads back
- * exactly. False before init, after a failed/hung init, and when the
- * store is present but undecryptable (`getString` → `undefined`).
+ * True only when the encrypted instance is held and the canary has been
+ * verified on that instance. False before init and after a failed/hung
+ * init. MMKV cannot produce a per-key undecryptable store: a wrong key
+ * discards the whole file, so this returns true for ready-and-empty
+ * (and `getPubky()` is then null).
  */
 export function isInitialized(): boolean {
   return _initialized && _store !== null && canaryIsVerified(_store);
@@ -614,10 +664,6 @@ export interface AttachmentSecretRef {
   senderPubky: string;
   eventId: string;
 }
-
-const ATTACHMENT_INDEX_PREFIX = 'attachment_key_services:';
-/** DEBUG-only MMKV slot when unsigned iOS sim keychain returns -34018. */
-const DEBUG_ATTACHMENT_PREFIX = 'debug.attachment:';
 
 function isUnsignedSimKeychainError(err: unknown): boolean {
   const message = err instanceof Error ? err.message : String(err);
