@@ -9,6 +9,7 @@ import { COPY } from '../../../copy/uxCopy';
 const mockGoBack = jest.fn();
 const mockDispatch = jest.fn();
 const mockSetOptions = jest.fn();
+const mockRoute = { params: {} as { section?: 'backup' | 'payments' } };
 let preventRemoveEnabled = false;
 let preventRemoveCallback: ((args: { data: { action: { type: string } } }) => void) | undefined;
 
@@ -25,7 +26,7 @@ jest.mock('@react-navigation/native', () => ({
     preventRemoveEnabled = enabled;
     preventRemoveCallback = cb;
   },
-  useRoute: () => ({ params: {} }),
+  useRoute: () => mockRoute,
 }));
 
 jest.mock('../../../flags', () => ({
@@ -75,6 +76,7 @@ describe('SettingsScreen recovery gate', () => {
     mockSetOptions.mockReset();
     preventRemoveEnabled = false;
     preventRemoveCallback = undefined;
+    mockRoute.params = {};
     (setLastBackupAt as jest.Mock).mockReset();
     (BackupService.exportBackup as jest.Mock).mockResolvedValue({
       recoveryCode: 'alpha-bravo-charlie',
@@ -234,6 +236,56 @@ describe('SettingsScreen recovery gate', () => {
     expect(mockGoBack).not.toHaveBeenCalled();
     addSpy.mockRestore();
     alertSpy.mockRestore();
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+});
+
+describe('SettingsScreen section routes', () => {
+  beforeEach(() => {
+    mockRoute.params = {};
+  });
+
+  it('scrolls and marks Encrypted backup when opened with section=backup', async () => {
+    mockRoute.params = { section: 'backup' };
+    let tree!: ReactTestRenderer;
+    await act(async () => {
+      tree = create(<SettingsScreen />);
+    });
+    await act(async () => {
+      tree.root
+        .findByProps({ testID: 'settingsFocusBackup' })
+        .props.onLayout({ nativeEvent: { layout: { y: 240, x: 0, width: 320, height: 400 } } });
+    });
+    expect(
+      tree.root.findByProps({ testID: 'settingsFocusBackup' }).props.accessibilityState.selected,
+    ).toBe(true);
+    expect(
+      tree.root.findByProps({ testID: 'settingsFocusPayments' }).props.accessibilityState.selected,
+    ).toBe(false);
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('scrolls and marks tip endpoints when opened with section=payments', async () => {
+    mockRoute.params = { section: 'payments' };
+    let tree!: ReactTestRenderer;
+    await act(async () => {
+      tree = create(<SettingsScreen />);
+    });
+    await act(async () => {
+      tree.root
+        .findByProps({ testID: 'settingsFocusPayments' })
+        .props.onLayout({ nativeEvent: { layout: { y: 720, x: 0, width: 320, height: 200 } } });
+    });
+    expect(
+      tree.root.findByProps({ testID: 'settingsFocusPayments' }).props.accessibilityState.selected,
+    ).toBe(true);
+    expect(
+      tree.root.findByProps({ testID: 'settingsFocusBackup' }).props.accessibilityState.selected,
+    ).toBe(false);
     await act(async () => {
       tree.unmount();
     });

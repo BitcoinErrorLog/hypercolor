@@ -1,6 +1,10 @@
 import { COPY } from '../../copy/uxCopy';
 import type { PaymentRequestRecord } from '../../types/payment';
-import { formatPaymentReceiptStatus, receiptWordForDisplay } from '../paymentReceiptStatus';
+import {
+  formatPaymentReceipt,
+  formatPaymentReceiptStatus,
+  receiptWordForDisplay,
+} from '../paymentReceiptStatus';
 
 function record(
   partial: Partial<PaymentRequestRecord> & Pick<PaymentRequestRecord, 'status'>,
@@ -44,7 +48,10 @@ describe('formatPaymentReceiptStatus', () => {
     ).toBe(COPY.paymentPaid);
     expect(
       formatPaymentReceiptStatus(record({ status: 'proof_received', proofVerified: false }), now),
-    ).toBe(COPY.paymentPaid);
+    ).toBe(COPY.paymentFailed);
+    expect(
+      formatPaymentReceiptStatus(record({ status: 'proof_received', proofVerified: null }), now),
+    ).toBe(COPY.paymentRequested);
     expect(formatPaymentReceiptStatus(record({ status: 'rejected' }), now)).toBe(
       COPY.paymentFailed,
     );
@@ -54,6 +61,19 @@ describe('formatPaymentReceiptStatus', () => {
     expect(formatPaymentReceiptStatus(record({ status: 'pending', expiresAt: now - 1 }), now)).toBe(
       COPY.paymentExpired,
     );
+  });
+
+  it('labels paid only when PaymentService verified the proof', () => {
+    const now = 1_000_000;
+    expect(
+      formatPaymentReceipt(record({ status: 'proof_received', proofVerified: true }), now),
+    ).toEqual({ word: COPY.paymentPaid, note: null });
+    expect(
+      formatPaymentReceipt(record({ status: 'proof_received', proofVerified: false }), now),
+    ).toEqual({ word: COPY.paymentFailed, note: COPY.proofNotVerified });
+    expect(
+      formatPaymentReceipt(record({ status: 'proof_received', proofVerified: null }), now),
+    ).toEqual({ word: COPY.paymentRequested, note: COPY.proofNotVerified });
   });
 
   it('never emits delivered', () => {
@@ -72,5 +92,8 @@ describe('formatPaymentReceiptStatus', () => {
     expect(new Set(words)).toEqual(
       new Set([COPY.paymentRequested, COPY.paymentPaid, COPY.paymentExpired, COPY.paymentFailed]),
     );
+    expect(receiptWordForDisplay('claimed')).toBe(COPY.paymentRequested);
+    expect(receiptWordForDisplay('proof_received')).toBe(COPY.paymentRequested);
+    expect(receiptWordForDisplay('verified')).toBe(COPY.paymentPaid);
   });
 });

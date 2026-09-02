@@ -78,7 +78,6 @@ function props(
     contacts: [],
     mode: 'private',
     publicOptIn: false,
-    publicReads: 0,
     createOpen: false,
     joinOpen: false,
     createPublicDefault: false,
@@ -112,11 +111,11 @@ describe('ChannelsScreenContent', () => {
 
   it('does not list public topics until Load public topics is pressed', async () => {
     const tree = await render(
-      <ChannelsScreenContent {...props({ mode: 'public', publicOptIn: false, publicReads: 0 })} />,
+      <ChannelsScreenContent {...props({ mode: 'public', publicOptIn: false })} />,
     );
     expect(byTestId(tree, 'channelRowPublic')).toHaveLength(0);
     expect(tree.root.findByProps({ testID: 'channelsLoadPublic' })).toBeTruthy();
-    expect(tree.root.findByProps({ testID: 'channelsPublicReadCount' }).props.children).toBe('0');
+    expect(tree.root.findAllByProps({ testID: 'channelsPublicReadCount' })).toHaveLength(0);
     expect(JSON.stringify(tree.toJSON())).toContain(COPY.publicSubstrateMobile);
     await unmount(tree);
   });

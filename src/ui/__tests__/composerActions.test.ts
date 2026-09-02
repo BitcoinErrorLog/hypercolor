@@ -1,6 +1,10 @@
 import { COPY } from '../../copy/uxCopy';
 import { LINK_MESSAGE_MAX_BYTES } from '../../types/link';
-import { composerActionItems, draftByteSize, draftExceedsByteCap } from '../composerActions';
+import {
+  composerActionItems,
+  draftEnvelopeByteSize,
+  draftExceedsByteCap,
+} from '../composerActions';
 
 const OPEN = { messagingEnabled: true, inboxClosed: false, hasTipEndpoints: true };
 
@@ -13,6 +17,12 @@ describe('composerActionItems', () => {
     });
     expect(items.every(item => item.disabled)).toBe(true);
     expect(items.map(item => item.reason)).toEqual(items.map(() => COPY.enableMessagingReason));
+  });
+
+  it('includes a visible icon for every action', () => {
+    const items = composerActionItems('dm', OPEN);
+    expect(items.map(item => item.icon)).toEqual(['▣', '▤', '₿', '↑', '≡']);
+    expect(items.every(item => item.icon.length > 0)).toBe(true);
   });
 
   it('disables DM actions with Inbox closed when the peer is not enrolled', () => {
@@ -44,11 +54,31 @@ describe('composerActionItems', () => {
   });
 });
 
-describe('draft byte cap', () => {
-  it('counts UTF-8 bytes and flags drafts over the Encrypted Link cap', () => {
-    expect(draftByteSize('a')).toBe(1);
-    expect(draftByteSize('é')).toBe(2);
-    expect(draftExceedsByteCap('a'.repeat(LINK_MESSAGE_MAX_BYTES))).toBe(false);
-    expect(draftExceedsByteCap('a'.repeat(LINK_MESSAGE_MAX_BYTES + 1))).toBe(true);
+describe('draft envelope byte cap', () => {
+  const dm = { surface: 'dm' as const };
+
+  it('counts the serialized envelope, not just the body', () => {
+    const body = 'hi';
+    const size = draftEnvelopeByteSize(body, dm);
+    expect(size).toBeGreaterThan(new TextEncoder().encode(body).byteLength);
+    expect(draftExceedsByteCap(body, dm)).toBe(false);
+  });
+
+  it('rejects a body that only fits if the cap were counted on plaintext', () => {
+    expect(draftExceedsByteCap('a'.repeat(LINK_MESSAGE_MAX_BYTES), dm)).toBe(true);
+    expect(draftExceedsByteCap('é'.repeat(500), dm)).toBe(true);
+  });
+
+  it('counts UTF-8 and JSON-escaped characters against the envelope budget', () => {
+    const quoted = `${'a'.repeat(850)}"quoted"`;
+    expect(draftEnvelopeByteSize(quoted, dm)).toBeGreaterThan(
+      new TextEncoder().encode(quoted).byteLength,
+    );
+    const groupSize = draftEnvelopeByteSize('hello', {
+      surface: 'private-group',
+      channelId: 'group-probe',
+    });
+    const dmSize = draftEnvelopeByteSize('hello', dm);
+    expect(groupSize).toBeGreaterThan(dmSize);
   });
 });

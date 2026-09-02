@@ -88,4 +88,34 @@ describe('PaymentComposeSheet', () => {
     expect(tree.root.findAllByProps({ testID: 'paymentComposeError' })).toHaveLength(0);
     await unmount(tree);
   });
+
+  it('requires a positive amount for a tip and skips the reference field', async () => {
+    const onSubmit = jest.fn();
+    const tree = await render(
+      <PaymentComposeSheet
+        visible
+        busy={false}
+        intent="tip"
+        onClose={jest.fn()}
+        onSubmit={onSubmit}
+      />,
+    );
+    expect(tree.root.findAllByProps({ testID: 'paymentComposeReference' })).toHaveLength(0);
+    expect(tree.root.findByProps({ testID: 'paymentComposeSubmit' }).props.disabled).toBe(true);
+    await act(async () => {
+      tree.root.findByProps({ testID: 'paymentComposeAmount' }).props.onChangeText('0');
+    });
+    await act(async () => {
+      tree.root.findByProps({ testID: 'paymentComposeSubmit' }).props.onPress();
+    });
+    expect(onSubmit).not.toHaveBeenCalled();
+    await act(async () => {
+      tree.root.findByProps({ testID: 'paymentComposeAmount' }).props.onChangeText('0.001');
+    });
+    await act(async () => {
+      tree.root.findByProps({ testID: 'paymentComposeSubmit' }).props.onPress();
+    });
+    expect(onSubmit).toHaveBeenCalledWith('0.001', '');
+    await unmount(tree);
+  });
 });
