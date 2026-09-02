@@ -6,10 +6,9 @@ import type {
   MessageRequestStatus,
   PubkyKey,
 } from '../types';
-import type { SqlExecutor } from '../db/sql';
+import type { SqlExecutor, SqlValue } from '../db/sql';
 import { LinkSendError } from './link/LinkSendError';
 import { activeOwnerAtCommit } from './paintedOwner';
-import type { SqlExecutor, SqlValue } from '../db/sql';
 import type {
   HandshakeBudget,
   HandshakeBudgetInput,
@@ -2662,7 +2661,7 @@ export const StorageService = {
     patch: PaymentRequestPatch,
   ): Promise<boolean> {
     return ownedWrite(ownerPubky, db =>
-      compareAndSetPaymentRequestRow(
+      casPaymentRequestRow(
         db,
         ownerPubky,
         peerPubky,
@@ -2689,7 +2688,7 @@ export const StorageService = {
   }): Promise<boolean> {
     try {
       await ownedTransact(input.ownerPubky, db => {
-        const applied = compareAndSetPaymentRequestRow(
+        const applied = casPaymentRequestRow(
           db,
           input.ownerPubky,
           input.peerPubky,
@@ -2800,15 +2799,12 @@ export const StorageService = {
     await ownedWrite(ownerPubky, db => {
       db.executeSync(
         `UPDATE payment_requests
-       SET displayed_payment_hash = ?, updated_at = ?
-       WHERE owner_pubky = ? AND peer_pubky = ? AND payment_request_id = ?`,
+         SET displayed_payment_hash = ?, updated_at = ?
+         WHERE owner_pubky = ? AND peer_pubky = ? AND payment_request_id = ?
+           AND (proof_verified IS NULL OR proof_verified != 1)`,
         [paymentHash, now(), ownerPubky, peerPubky, paymentRequestId],
       );
     });
-       WHERE owner_pubky = ? AND peer_pubky = ? AND payment_request_id = ?
-         AND (proof_verified IS NULL OR proof_verified != 1)`,
-      [paymentHash, now(), ownerPubky, peerPubky, paymentRequestId],
-    );
   },
 
   /**
@@ -2828,17 +2824,18 @@ export const StorageService = {
     invoiceAmountMsat?: string | null;
     invoiceExpiresAt?: number | null;
   }): Promise<void> {
-    const db = await getDb();
-    insertOwnInvoiceHash(
-      db,
-      input.ownerPubky,
-      input.endpointIdentifier,
-      input.paymentHash,
-      input.firstSeenAt,
-      input.invoiceAmountMsat ?? null,
-      input.invoiceExpiresAt ?? null,
-      { context: input.context, paymentRequestId: input.paymentRequestId },
-    );
+    await ownedWrite(input.ownerPubky, db => {
+      insertOwnInvoiceHash(
+        db,
+        input.ownerPubky,
+        input.endpointIdentifier,
+        input.paymentHash,
+        input.firstSeenAt,
+        input.invoiceAmountMsat ?? null,
+        input.invoiceExpiresAt ?? null,
+        { context: input.context, paymentRequestId: input.paymentRequestId },
+      );
+    });
   },
 
   /**
@@ -2995,18 +2992,16 @@ export const StorageService = {
       paymentHash?: string | null;
     }[],
     updatedAt: number,
-    await ownedTransact(ownerPubky, db => {
   ): Promise<boolean> {
-          const existing =
+    return ownedWrite(ownerPubky, db => {
+      const existing =
         db.executeSync(
           `SELECT identifier, payload, validation_status
              FROM tip_endpoints
             WHERE owner_pubky = ? AND peer_pubky = ?`,
           [ownerPubky, peerPubky],
         ).rows ?? [];
-      if (tipEndpointsUnchanged(existing, endpoints)) return;
-      changed = true;
-    });
+      if (tipEndpointsUnchanged(existing, endpoints)) return false;
       db.executeSync('DELETE FROM tip_endpoints WHERE owner_pubky = ? AND peer_pubky = ?', [
         ownerPubky,
         peerPubky,
@@ -3046,8 +3041,8 @@ export const StorageService = {
           );
         }
       }
+      return true;
     });
-    return changed;
   },
 
   async listTipEndpoints(

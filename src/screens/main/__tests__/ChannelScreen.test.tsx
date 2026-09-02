@@ -128,7 +128,11 @@ function contentProps(
     onBack: noop,
     onChangeDraft: noop,
     onSend: noop,
-    onAttachSent: noop,
+    actionMenuOpen: false,
+    composerNotice: null,
+    onOpenActionMenu: noop,
+    onCloseActionMenu: noop,
+    onComposerAction: noop,
     onReply: noop,
     onClearReply: noop,
     onToggleMembers: noop,
@@ -140,6 +144,8 @@ function contentProps(
     onRemoveMember: noop,
     onLeave: noop,
     onRefreshPublic: noop,
+    retryableEventIds: new Set<string>(),
+    onRetryFailed: noop,
     ...overrides,
   };
 }

@@ -25,7 +25,6 @@ import { PubkyService } from '../services/PubkyService';
 import {
   bindPendingPublicJoin,
   consumePendingPublicJoinRedirect,
-  GroupService,
   setPendingPublicJoin,
 } from '../services/group/GroupService';
 import { parsePublicChannelRef } from '../types/group';

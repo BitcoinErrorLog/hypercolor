@@ -217,12 +217,16 @@ describe('LinkService message requests', () => {
     mockedKeyStore.isInitialized.mockReturnValue(true);
     mockedKeyStore.getLinkSession.mockReturnValue(null);
     mockedKeyStore.setLinkSession.mockImplementation((alias: string) => {
+      mockedKeyStore.getLinkSession.mockReturnValue(alias);
     });
     mockedKeyStore.deleteLinkSession.mockImplementation(() => {
+      mockedKeyStore.getLinkSession.mockReturnValue(null);
+    });
     mockedKeyStore.deleteLinkSessionIfAlias.mockImplementation((alias: string) => {
       if (mockedKeyStore.getLinkSession() !== alias) return false;
       mockedKeyStore.deleteLinkSession();
       return true;
+    });
     wireSignOutMarkerMocks(mockedKeyStore, mockedStorage);
     mockedStorage.getLinkReceiver.mockResolvedValue(receiverRow);
     mockedStorage.getLink.mockResolvedValue(null);

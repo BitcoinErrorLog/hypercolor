@@ -454,8 +454,11 @@ describe('LinkService', () => {
     mockedKeyStore.isInitialized.mockReturnValue(true);
     mockedKeyStore.getLinkSession.mockReturnValue(null);
     mockedKeyStore.setLinkSession.mockImplementation((alias: string) => {
+      mockedKeyStore.getLinkSession.mockReturnValue(alias);
     });
     mockedKeyStore.deleteLinkSession.mockImplementation(() => {
+      mockedKeyStore.getLinkSession.mockReturnValue(null);
+    });
     mockedKeyStore.readLinkSession.mockImplementation(() => ({
       ok: true,
       alias: mockedKeyStore.getLinkSession() ?? null,
@@ -464,6 +467,7 @@ describe('LinkService', () => {
       if (mockedKeyStore.getLinkSession() !== alias) return false;
       mockedKeyStore.deleteLinkSession();
       return true;
+    });
     wireSignOutMarkerMocks(mockedKeyStore, mockedStorage);
     mockedStorage.getLinkReceiver.mockResolvedValue(receiverRow);
     mockedStorage.getLink.mockResolvedValue(null);

@@ -72,6 +72,7 @@ import {
   openFileDb as openFileDbRaw,
   openMemoryDb as openMemoryDbRaw,
 } from './betterSqliteAdapter';
+import {
   INVOICE_AMOUNT_UNKNOWN,
   INVOICE_AMOUNTLESS,
 } from '../../services/payments/invoiceAmountBind';
@@ -86,11 +87,11 @@ import {
   TESTNET_BOLT11_HASH,
 } from '../../services/payments/__tests__/bolt11Vectors';
 import { OWNER_BACKUP_VERSION } from '../../services/backup/snapshot';
+import {
   OWN_INVOICE_HASH_BACKFILL_META_KEY,
   OWN_INVOICE_HASH_BACKFILL_SCAN_FROM,
   OWN_INVOICE_HASH_REPAIR_RETRY_META_KEY,
 } from '../ownInvoiceHashes';
-import { openFileDb, openMemoryDb } from './betterSqliteAdapter';
 import { mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { dirname, join } from 'path';
