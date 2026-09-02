@@ -797,3 +797,79 @@ describe('applyPaymentInbound authorization (S2)', () => {
     expect(formatPaymentReceipt(row!, NOW).note).toBe(COPY.proofNotVerified);
   });
 });
+
+describe('applyPaymentInbound v1 amount gate', () => {
+  let store: Store;
+
+  beforeEach(() => {
+    jest.resetAllMocks();
+    store = { requests: new Map(), events: new Map(), ownInvoices: new Map() };
+    installStore(store);
+  });
+
+  function requestJson(
+    amount: { value: string; asset: string } | null,
+    eventId = EVENT_REQ,
+  ): string {
+    const request: Record<string, unknown> = {
+      payment_reference: 'invoice-2026-0001',
+      proposal_expires_at: null,
+      recurrence: null,
+      accepted_payment_endpoint_identifiers: [ENDPOINT_LIGHTNING_BOLT11],
+      metadata: {},
+    };
+    if (amount) request.amount = amount;
+    return JSON.stringify({
+      version: 1,
+      kind: PAYKIT_PAYMENT_REQUEST_KIND,
+      event_id: eventId,
+      payment_request_id: REQUEST_ID,
+      request,
+    });
+  }
+
+  async function expectUnappliedReject(rawJson: string): Promise<void> {
+    const result = await inbound(PEER_A, rawJson);
+    expect(result).toEqual({ action: 'rejected' });
+    expect(store.requests.size).toBe(0);
+    expect(mockedStorage.savePaymentRequest).not.toHaveBeenCalled();
+    const event = store.events.get(eventKey(OWNER, `dm:${PEER_A}`, PEER_A, EVENT_REQ));
+    expect(event?.applied).toBe(false);
+    expect(JSON.stringify(event)).not.toMatch(/usd/i);
+  }
+
+  it('rejects a missing inbound amount and marks the event unapplied', async () => {
+    await expectUnappliedReject(requestJson(null));
+  });
+
+  it('rejects a zero inbound amount and marks the event unapplied', async () => {
+    await expectUnappliedReject(requestJson({ value: '0', asset: 'btc' }));
+  });
+
+  it('rejects a negative inbound amount and marks the event unapplied', async () => {
+    await expectUnappliedReject(requestJson({ value: '-1', asset: 'btc' }));
+  });
+
+  it('rejects a non-BTC inbound amount and marks the event unapplied', async () => {
+    await expectUnappliedReject(requestJson({ value: '1', asset: 'usd' }));
+  });
+
+  it('rejects a sub-msat inbound amount and marks the event unapplied', async () => {
+    await expectUnappliedReject(requestJson({ value: '0.000000000001', asset: 'btc' }));
+  });
+
+  it('persists a valid inbound BTC amount', async () => {
+    const result = await inbound(PEER_A, requestJson({ value: '0.001', asset: 'btc' }));
+    expect(result.action).toBe('applied');
+    expect(store.requests.get(requestKey(OWNER, PEER_A, REQUEST_ID))).toEqual(
+      expect.objectContaining({
+        amountValue: '0.001',
+        amountAsset: 'btc',
+        status: 'pending',
+      }),
+    );
+    expect(store.events.get(eventKey(OWNER, `dm:${PEER_A}`, PEER_A, EVENT_REQ))?.applied).toBe(
+      true,
+    );
+  });
+});

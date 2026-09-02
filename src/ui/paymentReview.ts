@@ -5,7 +5,8 @@ import {
   type RequestHandoffResult,
 } from '../services/payments/walletHandoff';
 import {
-  isPositiveBtcAmount,
+  isSupportedV1PaymentAmount,
+  PAYMENT_ASSET_BTC,
   schemeForEndpointIdentifier,
   type TipEndpointRecord,
 } from '../types/payment';
@@ -69,17 +70,27 @@ export type PaymentReviewView = {
 
 export const PAYMENT_COMPOSE_DEFAULT_AMOUNT = '';
 
+function isReviewAmountSupported(input: PaymentReviewInput): boolean {
+  return isSupportedV1PaymentAmount({
+    value: input.requestAmountBtc,
+    asset: input.amountAsset,
+  });
+}
+
 function handoffFor(input: PaymentReviewInput): RequestHandoffResult | null {
   if (!input.endpoint) return null;
+  if (!isReviewAmountSupported(input)) return null;
   return prepareRequestHandoff({
     requestAmountBtc: input.requestAmountBtc,
     endpointIdentifier: input.endpoint.identifier,
     payload: input.endpoint.payload,
+    amountAsset: input.amountAsset,
   });
 }
 
 function tryUri(input: PaymentReviewInput): string | null {
   if (!input.endpoint) return null;
+  if (!isReviewAmountSupported(input)) return null;
   try {
     return buildPayUri(input.endpoint.identifier, input.endpoint.payload, input.requestAmountBtc)
       .uri;
@@ -130,8 +141,7 @@ export function mapPaymentReview(input: PaymentReviewInput): PaymentReviewView {
   const expiresAt = expiryMs(input, handoff);
   const expired = expiresAt !== null && expiresAt <= input.nowMs;
   const handoffError = handoff && !handoff.ok ? handoff.error : null;
-  const amountMissing =
-    input.requestAmountBtc.trim().length === 0 || !isPositiveBtcAmount(input.requestAmountBtc);
+  const amountMissing = !isReviewAmountSupported(input);
   const needsChoice = input.destinations.length > 1 && input.endpoint === null;
 
   let errorText: string | null = null;
@@ -140,7 +150,10 @@ export function mapPaymentReview(input: PaymentReviewInput): PaymentReviewView {
   } else if (needsChoice) {
     errorText = COPY.choosePaymentDestination;
   } else if (amountMissing) {
-    errorText = 'Enter a valid BTC amount';
+    errorText =
+      input.amountAsset !== PAYMENT_ASSET_BTC
+        ? COPY.unsupportedPaymentAmount
+        : 'Enter a valid BTC amount';
   } else if (expired) {
     errorText = COPY.invoiceExpired;
   } else if (handoffError && !mismatch) {

@@ -84,6 +84,18 @@ describe('prepareRequestHandoff', () => {
     expect(result.uri).toBe(`lightning:${MAINNET_BOLT11_AMOUNTLESS}`);
   });
 
+  it('refuses to treat a non-BTC request amount as bitcoin', () => {
+    const result = prepareRequestHandoff({
+      requestAmountBtc: '1',
+      amountAsset: 'usd',
+      endpointIdentifier: ENDPOINT_LIGHTNING_BOLT11,
+      payload: MAINNET_BOLT11_20U,
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toBe('This payment request is not a supported bitcoin amount.');
+  });
+
   it('binds bitcoin: URIs to the request amount', () => {
     const result = prepareRequestHandoff({
       requestAmountBtc: '0.001',

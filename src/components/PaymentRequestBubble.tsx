@@ -2,9 +2,13 @@ import React, { useCallback, useState } from 'react';
 import { Alert, View } from 'react-native';
 import { PaymentRequestCard, useTickingNow } from './PaymentRequestCard';
 import { PaymentService } from '../services/payments/PaymentService';
-import { type PaymentRequestRecord, type TipEndpointRecord } from '../types/payment';
 import { COPY } from '../copy/uxCopy';
 import { sanitizeError } from '../ui/sanitizedError';
+import {
+  isSupportedV1PaymentAmount,
+  type PaymentRequestRecord,
+  type TipEndpointRecord,
+} from '../types/payment';
 
 export type PaymentReviewRequest = {
   kind: 'request' | 'tip';
@@ -82,6 +86,15 @@ export function PaymentRequestBubble({
         }}
         onPayInWallet={() => {
           void run(async () => {
+            if (
+              !isSupportedV1PaymentAmount({
+                value: record.amountValue,
+                asset: record.amountAsset,
+              })
+            ) {
+              Alert.alert('Payment', COPY.unsupportedPaymentAmount);
+              return;
+            }
             const matches = await PaymentService.listMatchingTipEndpoints(
               record.peerPubky,
               record.endpointIds,

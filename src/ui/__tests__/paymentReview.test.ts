@@ -122,6 +122,21 @@ describe('mapPaymentReview', () => {
     }
   });
 
+  it('does not hand off a non-BTC request amount as bitcoin', () => {
+    const dest = endpoint();
+    const view = mapPaymentReview({
+      ...BASE,
+      requestAmountBtc: '1',
+      amountAsset: 'usd',
+      endpoint: dest,
+      destinations: [dest],
+    });
+    expect(view.primaryEnabled).toBe(false);
+    expect(view.uri).toBeNull();
+    expect(view.amountMismatch).toBe(false);
+    expect(view.errorText).toBe(COPY.unsupportedPaymentAmount);
+  });
+
   it('promotes Copy payment URI when no wallet can open the link', () => {
     const dest = endpoint();
     const view = mapPaymentReview({

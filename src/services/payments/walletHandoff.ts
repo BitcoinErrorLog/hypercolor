@@ -1,5 +1,11 @@
 import { Alert, Clipboard, Linking } from 'react-native';
-import { isValidOnchainAddress, schemeForEndpointIdentifier } from '../../types/payment';
+import { COPY } from '../../copy/uxCopy';
+import {
+  isSupportedV1PaymentAmount,
+  isValidOnchainAddress,
+  PAYMENT_ASSET_BTC,
+  schemeForEndpointIdentifier,
+} from '../../types/payment';
 import {
   amountsMatchExactly,
   decodeBolt11Invoice,
@@ -80,7 +86,19 @@ export function prepareRequestHandoff(input: {
   requestAmountBtc: string;
   endpointIdentifier: string;
   payload: string;
+  amountAsset?: string;
 }): RequestHandoffResult {
+  const amountAsset = input.amountAsset ?? PAYMENT_ASSET_BTC;
+  if (!isSupportedV1PaymentAmount({ value: input.requestAmountBtc, asset: amountAsset })) {
+    return {
+      ok: false,
+      error: COPY.unsupportedPaymentAmount,
+      requestAmountBtc: input.requestAmountBtc,
+      invoiceAmountBtc: null,
+      paymentHash: null,
+      expiresAtMs: null,
+    };
+  }
   const scheme = schemeForEndpointIdentifier(input.endpointIdentifier);
   if (scheme === 'bitcoin') {
     try {

@@ -30,6 +30,7 @@ import {
   isCanonicalThreePartEndpointId,
   isLenientAmountValue,
   isPositiveBtcAmount,
+  isSupportedV1PaymentAmount,
   isValidBolt11,
   isValidOnchainAddress,
   isValidPaymentEndpointIdentifier,
@@ -371,6 +372,9 @@ describe('amount validation', () => {
     expect(isPositiveBtcAmount('21000000.00000001')).toBe(false);
     expect(isPositiveBtcAmount('0')).toBe(false);
     expect(isPositiveBtcAmount('0.0')).toBe(false);
+    expect(isSupportedV1PaymentAmount({ value: '0.001', asset: 'btc' })).toBe(true);
+    expect(isSupportedV1PaymentAmount({ value: '1', asset: 'usd' })).toBe(false);
+    expect(isSupportedV1PaymentAmount({ value: '0', asset: 'btc' })).toBe(false);
     expect(isCanonicalAmountValue('1e-3')).toBe(false);
     expect(isCanonicalAmountValue('-1')).toBe(false);
     expect(isCanonicalAmountValue('')).toBe(false);

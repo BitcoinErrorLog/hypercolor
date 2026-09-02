@@ -102,8 +102,10 @@ export type PaymentAction = 'accept' | 'reject' | 'cancel' | 'proof';
  *
  * Wire policy (emit-strict / accept-lenient):
  * - Outbound amounts are canonical positive `btc` decimals only.
- * - Inbound amounts accept official Paykit decimals (`.5`, `10.`, any
- *   non-empty asset without controls) and store a normalized value.
+ * - Inbound amounts decode official Paykit decimals (`.5`, `10.`, any
+ *   non-empty asset without controls). App v1 persists a request only
+ *   when `asset === btc` and the normalized value is a positive BTC
+ *   amount; otherwise the event is marked unapplied.
  * - Inbound `proof` is an opaque JSON object (official Paykit JsonMap).
  *   Empty `{}` decodes. Render is neutral "Payment claimed" unless a
  *   bolt11 preimage is verified against a displayed invoice hash.
@@ -269,7 +271,7 @@ export interface OwnInvoiceHashRecord {
   endpointIdentifier: string;
   paymentHash: string;
   firstSeenAt: number;
-  /** Bolt11 msat string, the sentinel `amountless`, or null if unknown. */
+  /** Bolt11 msat, `amountless`, `unknown`, or null if not yet repaired. */
   invoiceAmountMsat: string | null;
   invoiceExpiresAt: number | null;
 }
@@ -356,6 +358,11 @@ export function isPositiveBtcAmount(value: string): boolean {
   if (!isCanonicalAmountValue(value)) return false;
   if (!isBtcAtMostCap(value)) return false;
   return !isZeroAmount(value);
+}
+
+/** App v1 chat payments: persist and hand off only positive bitcoin amounts. */
+export function isSupportedV1PaymentAmount(amount: PaymentAmount): boolean {
+  return amount.asset === PAYMENT_ASSET_BTC && isPositiveBtcAmount(amount.value);
 }
 
 function isZeroAmount(value: string): boolean {

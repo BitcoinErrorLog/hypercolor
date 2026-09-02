@@ -17,6 +17,7 @@ import {
   decodePrivatePaymentListEnvelope,
   expectedStatusesForAction,
   isProposalExpired,
+  isSupportedV1PaymentAmount,
   peekPaymentKind,
   rfc3339ZToUnixMs,
   PROOF_REASON_AMOUNT_MISMATCH,
@@ -194,6 +195,18 @@ async function applyRequest(
       false,
     );
     return { action: 'ignored' };
+  }
+
+  if (!isSupportedV1PaymentAmount(envelope.request.amount)) {
+    await markSeen(
+      input,
+      conversationId,
+      envelope.event_id,
+      envelope.kind,
+      envelope.payment_request_id,
+      false,
+    );
+    return { action: 'rejected' };
   }
 
   const expiresAt =
