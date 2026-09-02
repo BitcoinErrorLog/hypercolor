@@ -2688,13 +2688,13 @@ describe('schema upgrade union (v15 / dual-v16)', () => {
       'group_fanout_outcomes',
       'own_invoice_hashes',
     ]);
-    const blockedCols = (
-      db.executeSync('PRAGMA table_info(blocked_peers)').rows ?? []
-    ).map(row => String(row.name));
+    const blockedCols = (db.executeSync('PRAGMA table_info(blocked_peers)').rows ?? []).map(row =>
+      String(row.name),
+    );
     expect(blockedCols).toContain('cleanup_pending');
-    const invoiceCols = (
-      db.executeSync('PRAGMA table_info(own_invoice_hashes)').rows ?? []
-    ).map(row => String(row.name));
+    const invoiceCols = (db.executeSync('PRAGMA table_info(own_invoice_hashes)').rows ?? []).map(
+      row => String(row.name),
+    );
     for (const col of [
       'invoice_amount_msat',
       'invoice_expires_at',

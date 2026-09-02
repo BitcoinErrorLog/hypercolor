@@ -66,7 +66,6 @@ jest.mock('../../../stores/authStore', () => ({
   useAuthStore: (select: (state: { pubky: null }) => unknown) => select({ pubky: null }),
 }));
 
-const OWNER = 'operrr8wsbpr3ue9d4qj41ge1kcc6r7fdiy6o3ugjrrhi4y77rdo';
 const PEER = 'pxnu33x7jtpx9ar1ytsi4yxbp6a5o36gwhffs8zoxmbuptici1jy';
 const noop = () => undefined;
 
@@ -74,7 +73,6 @@ function contentProps(
   overrides: Partial<React.ComponentProps<typeof ThreadScreenContent>> = {},
 ): React.ComponentProps<typeof ThreadScreenContent> {
   return {
-
     participantPubky: PEER,
     localPubky: 'a'.repeat(52),
     draft: '',
@@ -118,7 +116,7 @@ function contentProps(
     onEnableMessaging: noop,
     onRetryFailed: noop,
     onCopyPubky: noop,
-        ...overrides,
+    ...overrides,
   };
 }
 

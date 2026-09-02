@@ -2661,14 +2661,7 @@ export const StorageService = {
     patch: PaymentRequestPatch,
   ): Promise<boolean> {
     return ownedWrite(ownerPubky, db =>
-      casPaymentRequestRow(
-        db,
-        ownerPubky,
-        peerPubky,
-        paymentRequestId,
-        expectedStatuses,
-        patch,
-      ),
+      casPaymentRequestRow(db, ownerPubky, peerPubky, paymentRequestId, expectedStatuses, patch),
     );
   },
 

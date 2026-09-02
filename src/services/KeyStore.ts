@@ -857,7 +857,6 @@ export async function isAppCertValid(): Promise<boolean> {
 
 // ─── Clear all ────────────────────────────────────────────────────────────────
 
-
 // ─── Sign-out incomplete markers (survive clearIfPubky) ───────────────────────
 
 /**

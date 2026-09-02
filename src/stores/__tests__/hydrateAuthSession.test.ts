@@ -40,10 +40,7 @@ jest.mock('../authStore', () => ({
   },
 }));
 
-import {
-  consumeInterruptedSignOutAtBoot,
-  hydratePersistedAuth,
-} from '../hydrateAuthSession';
+import { consumeInterruptedSignOutAtBoot, hydratePersistedAuth } from '../hydrateAuthSession';
 
 describe('consumeInterruptedSignOutAtBoot', () => {
   beforeEach(() => {
