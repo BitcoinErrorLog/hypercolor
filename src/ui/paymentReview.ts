@@ -87,14 +87,21 @@ function isSubSatBtcAmount(value: string): boolean {
   return isPositiveBtcAmount(value) && btcDecimalToSats(value) === null;
 }
 
-function payableDestinations(input: PaymentReviewInput): TipEndpointRecord[] {
-  if (!(isReviewAmountSupported(input) && isSubSatBtcAmount(input.requestAmountBtc))) {
-    return [...input.destinations];
+export function payableReviewDestinations(input: {
+  requestAmountBtc: string;
+  amountAsset: string;
+  destinations: readonly TipEndpointRecord[];
+}): TipEndpointRecord[] {
+  if (
+    isSupportedV1PaymentAmount({ value: input.requestAmountBtc, asset: input.amountAsset }) &&
+    isSubSatBtcAmount(input.requestAmountBtc)
+  ) {
+    return input.destinations.filter(row => !isBitcoinDestination(row));
   }
-  return input.destinations.filter(row => !isBitcoinDestination(row));
+  return [...input.destinations];
 }
 
-function resolveReviewEndpoint(
+export function resolvePaymentReviewEndpoint(
   requested: TipEndpointRecord | null,
   destinations: readonly TipEndpointRecord[],
 ): TipEndpointRecord | null {
@@ -174,8 +181,8 @@ function networkForEndpoint(endpoint: TipEndpointRecord | null): string | null {
 /** Maps request/tip + destination into the Payment Review sheet model. */
 export function mapPaymentReview(input: PaymentReviewInput): PaymentReviewView {
   const identity = peerIdentity(input.recipientPubky, input.recipientContact);
-  const destinations = payableDestinations(input);
-  const endpoint = resolveReviewEndpoint(input.endpoint, destinations);
+  const destinations = payableReviewDestinations(input);
+  const endpoint = resolvePaymentReviewEndpoint(input.endpoint, destinations);
   const droppedOnchain =
     isReviewAmountSupported(input) &&
     isSubSatBtcAmount(input.requestAmountBtc) &&

@@ -1,11 +1,12 @@
 import React from 'react';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import { COPY } from '../../copy/uxCopy';
-import { ENDPOINT_LIGHTNING_BOLT11 } from '../../types/payment';
+import { ENDPOINT_BITCOIN_P2TR, ENDPOINT_LIGHTNING_BOLT11 } from '../../types/payment';
 import {
   MAINNET_BOLT11_20U,
   MAINNET_BOLT11_20U_BTC,
   MAINNET_BOLT11_20U_HASH,
+  MAINNET_P2TR,
 } from '../../services/payments/__tests__/bolt11Vectors';
 import { mapPaymentReview } from '../../ui/paymentReview';
 import { PaymentReviewSheet } from '../PaymentReviewSheet';
@@ -186,6 +187,49 @@ describe('PaymentReviewSheet', () => {
         .props.onPress();
     });
     expect(onSelect).toHaveBeenCalledWith(ENDPOINT_LIGHTNING_BOLT11);
+    await unmount(tree);
+  });
+
+  it('renders the Lightning-only note with a disabled primary for an only-on-chain sub-sat request', async () => {
+    const onchain = {
+      ownerPubky: 'a'.repeat(52),
+      peerPubky: PEER,
+      identifier: ENDPOINT_BITCOIN_P2TR,
+      payload: MAINNET_P2TR,
+      updatedAt: 1,
+      validationStatus: 'valid' as const,
+      invoiceAmount: null,
+      paymentHash: null,
+      invoiceExpiresAt: null,
+    };
+    const review = mapPaymentReview({
+      kind: 'request',
+      recipientPubky: PEER,
+      recipientContact: null,
+      requestAmountBtc: '0.000000001',
+      amountAsset: 'btc',
+      reference: null,
+      endpoint: onchain,
+      destinations: [onchain],
+      nowMs: Date.now(),
+      destinationsEmpty: false,
+      walletUnavailable: false,
+    });
+    const tree = await render(
+      <PaymentReviewSheet
+        visible
+        review={review}
+        busy={false}
+        onClose={jest.fn()}
+        onContinue={jest.fn()}
+        onCopyUri={jest.fn()}
+      />,
+    );
+    expect(tree.root.findByProps({ testID: 'paymentReviewSheet' })).toBeTruthy();
+    expect(tree.root.findByProps({ testID: 'paymentReviewContinue' }).props.disabled).toBe(true);
+    expect(tree.root.findByProps({ testID: 'paymentReviewWarning' })).toBeTruthy();
+    expect(JSON.stringify(tree.toJSON())).toContain(COPY.onlyLightningCanPayAmount);
+    expect(tree.root.findAllByProps({ testID: 'paymentReviewCopy' })).toHaveLength(0);
     await unmount(tree);
   });
 });

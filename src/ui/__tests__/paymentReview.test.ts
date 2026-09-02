@@ -269,4 +269,25 @@ describe('mapPaymentReview', () => {
     expect(view.primaryEnabled).toBe(true);
     expect(view.errorText).toBeNull();
   });
+
+  it('shows the Lightning-only note and disables primary when only on-chain remains for a sub-sat amount', () => {
+    const onchain = endpoint({
+      identifier: ENDPOINT_BITCOIN_P2TR,
+      payload: MAINNET_P2TR,
+      invoiceAmount: null,
+      paymentHash: null,
+    });
+    const view = mapPaymentReview({
+      ...BASE,
+      requestAmountBtc: '0.000000001',
+      endpoint: onchain,
+      destinations: [onchain],
+    });
+    expect(view.warningText).toBe(COPY.onlyLightningCanPayAmount);
+    expect(view.errorText).toBe(COPY.noMatchingDestination);
+    expect(view.primaryEnabled).toBe(false);
+    expect(view.uri).toBeNull();
+    expect(view.secondaryAction).toBeNull();
+    expect(view.destinations).toHaveLength(0);
+  });
 });

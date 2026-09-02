@@ -867,7 +867,10 @@ the requested amount, the sheet shows a warning row `The invoice is for {invoice
 brand-filled. Confirm still records the displayed invoice (when a hash is present) and may
 open the wallet. When `prepareRequestHandoff` returns `ok: false` for any other reason, the
 primary button is disabled, the error renders in the warnings region, and confirm does not
-record an invoice or open a URI.
+record an invoice or open a URI. Confirm always prepares the destination the sheet shows (the
+resolved Review endpoint) with the request `amountAsset` before `canOpenURL` / `openUri`. If
+no destination is resolved, confirm does not record an invoice or open a URI. Amount mismatch
+is the only `ok: false` preparation that may still record and open.
 
 **Sub-satoshi amounts.** App v1 accepts positive `btc` amounts down to millisatoshi precision
 (up to 11 decimal places). Lightning stays exact via integer millisatoshis. Bitcoin on-chain
@@ -913,7 +916,7 @@ primary.
      invoice amount must satisfy the request: invoice millisatoshis ≥ request
      millisatoshis. Over-payment is `paid`. Under-payment is not. An amountless
      invoice cannot satisfy an amount-bearing request (v1 requests always carry
-     an amount).      An invoice that expired at or before the request was created
+     an amount). An invoice that expired at or before the request was created
      cannot corroborate it. Amount mismatch does not occupy the verified-hash
      unique index, so the matching request can still be marked `paid` by the
      same preimage.
@@ -925,6 +928,7 @@ primary.
      appear valid for a newly created request. Current-time invoice expiry
      is intentionally not checked, so a payment that settled while the
      invoice was valid can still corroborate after delayed delivery.
+
    - `expired` — proposal expiry has passed while the request is still
      `pending`. An `accepted` request past proposal expiry still accepts proofs
      and is shown as `requested`, not `expired`.

@@ -1,9 +1,12 @@
 import { COPY } from '../../copy/uxCopy';
 import type { PaymentReviewRequest } from '../../components/PaymentRequestBubble';
 import {
+  buildPayUri,
   prepareRequestHandoff,
   type RequestHandoffResult,
 } from '../../services/payments/walletHandoff';
+import type { TipEndpointRecord } from '../../types/payment';
+import { payableReviewDestinations, resolvePaymentReviewEndpoint } from '../../ui/paymentReview';
 import { sanitizeError } from '../../ui/sanitizedError';
 
 export type ContinuePaymentReviewResult = {
@@ -28,40 +31,72 @@ function isAmountMismatchFailure(prepared: RequestHandoffResult): boolean {
   return !prepared.ok && prepared.error.toLowerCase().includes('does not match');
 }
 
+function uriForEndpoint(endpoint: TipEndpointRecord, requestAmountBtc: string): string | null {
+  try {
+    return buildPayUri(endpoint.identifier, endpoint.payload, requestAmountBtc).uri;
+  } catch {
+    return null;
+  }
+}
+
+function missingEndpointError(destinationCount: number): string {
+  return destinationCount === 0 ? COPY.noMatchingDestination : COPY.choosePaymentDestination;
+}
+
 /**
  * Confirm path for Payment Review. Every awaited step is caught so a rejecting
  * `canOpenURL` / `recordDisplayedInvoice` / `openURL` cannot leave the sheet
  * silently dead. Copy remains reachable whenever the wallet cannot be opened.
  */
 export async function continuePaymentReview(
-  uri: string,
   review: PaymentReviewRequest,
   deps: ContinuePaymentReviewDeps,
 ): Promise<ContinuePaymentReviewResult> {
   const fallback = COPY.couldNotOpenWallet;
   const prepare = deps.prepare ?? prepareRequestHandoff;
+  const destinations = payableReviewDestinations({
+    requestAmountBtc: review.amountBtc,
+    amountAsset: review.amountAsset,
+    destinations: review.destinations,
+  });
+  const endpoint = resolvePaymentReviewEndpoint(review.selected, destinations);
+  if (!endpoint) {
+    return {
+      closeReview: false,
+      walletUnavailable: false,
+      recordFailed: false,
+      error: missingEndpointError(destinations.length),
+    };
+  }
 
-  let prepared: RequestHandoffResult | null = null;
-  if (review.selected) {
-    prepared = prepare({
-      requestAmountBtc: review.amountBtc,
-      endpointIdentifier: review.selected.identifier,
-      payload: review.selected.payload,
-      amountAsset: review.amountAsset,
-    });
-    if (!prepared.ok && !isAmountMismatchFailure(prepared)) {
-      return {
-        closeReview: false,
-        walletUnavailable: false,
-        recordFailed: false,
-        error: prepared.error,
-      };
-    }
+  const prepared = prepare({
+    requestAmountBtc: review.amountBtc,
+    endpointIdentifier: endpoint.identifier,
+    payload: endpoint.payload,
+    amountAsset: review.amountAsset,
+  });
+  if (!prepared.ok && !isAmountMismatchFailure(prepared)) {
+    return {
+      closeReview: false,
+      walletUnavailable: false,
+      recordFailed: false,
+      error: prepared.error,
+    };
+  }
+
+  const targetUri = prepared.ok ? prepared.uri : uriForEndpoint(endpoint, review.amountBtc);
+  if (!targetUri) {
+    return {
+      closeReview: false,
+      walletUnavailable: false,
+      recordFailed: false,
+      error: fallback,
+    };
   }
 
   let canOpen = false;
   try {
-    canOpen = await deps.canOpenURL(uri);
+    canOpen = await deps.canOpenURL(targetUri);
   } catch (err) {
     return {
       closeReview: false,
@@ -78,7 +113,6 @@ export async function continuePaymentReview(
   if (
     review.kind === 'request' &&
     review.record &&
-    prepared &&
     prepared.paymentHash &&
     (prepared.ok || isAmountMismatchFailure(prepared))
   ) {
@@ -94,7 +128,7 @@ export async function continuePaymentReview(
   }
 
   try {
-    await deps.openUri(uri);
+    await deps.openUri(targetUri);
   } catch (err) {
     return {
       closeReview: false,

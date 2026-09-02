@@ -312,11 +312,11 @@ export default function ThreadScreen({ route }: Props) {
         setComposePayment(true);
         setTipPickerOpen(false);
       }}
-      onContinueReview={uri => {
+      onContinueReview={() => {
         if (!review) return;
         void (async () => {
           try {
-            const result = await continuePaymentReview(uri, review, {
+            const result = await continuePaymentReview(review, {
               canOpenURL: url => Linking.canOpenURL(url),
               openUri: url => openBuiltUri(url),
               recordDisplayedInvoice: (peer, paymentRequestId, paymentHash) =>

@@ -252,6 +252,73 @@ describe('Thread payment compose → Review → handoff', () => {
     });
   });
 
+  it('enables Continue on the auto-resolved Lightning destination for a sub-sat mixed request', async () => {
+    const lightning = endpoint({
+      payload: MAINNET_BOLT11_AMOUNTLESS,
+      invoiceAmount: null,
+      paymentHash: null,
+    });
+    const onchain = endpoint({
+      identifier: ENDPOINT_BITCOIN_P2TR,
+      payload: MAINNET_P2TR,
+      invoiceAmount: null,
+      paymentHash: null,
+    });
+    const onContinueReview = jest.fn();
+    const review: PaymentReviewRequest = {
+      kind: 'request',
+      record: null,
+      peerPubky: PEER,
+      amountBtc: '0.000000001',
+      amountAsset: 'btc',
+      reference: 'invoice-1',
+      destinations: [lightning, onchain],
+      selected: null,
+    };
+    const tree = await render(<ThreadScreenContent {...props({ review, onContinueReview })} />);
+    const primary = tree.root.findByProps({ testID: 'paymentReviewContinue' });
+    expect(primary.props.disabled).toBe(false);
+    await act(async () => {
+      primary.props.onPress();
+    });
+    expect(onContinueReview).toHaveBeenCalledTimes(1);
+    expect(onContinueReview.mock.calls[0][0]).toBe(`lightning:${MAINNET_BOLT11_AMOUNTLESS}`);
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('shows the Lightning-only note and keeps Continue disabled for an only-on-chain sub-sat request', async () => {
+    const onchain = endpoint({
+      identifier: ENDPOINT_BITCOIN_P2TR,
+      payload: MAINNET_P2TR,
+      invoiceAmount: null,
+      paymentHash: null,
+    });
+    const onContinueReview = jest.fn();
+    const review: PaymentReviewRequest = {
+      kind: 'request',
+      record: null,
+      peerPubky: PEER,
+      amountBtc: '0.000000001',
+      amountAsset: 'btc',
+      reference: 'invoice-1',
+      destinations: [onchain],
+      selected: onchain,
+    };
+    const tree = await render(<ThreadScreenContent {...props({ review, onContinueReview })} />);
+    expect(tree.root.findByProps({ testID: 'paymentReviewSheet' })).toBeTruthy();
+    expect(tree.root.findByProps({ testID: 'paymentReviewContinue' }).props.disabled).toBe(true);
+    expect(JSON.stringify(tree.toJSON())).toContain(COPY.onlyLightningCanPayAmount);
+    await act(async () => {
+      tree.root.findByProps({ testID: 'paymentReviewContinue' }).props.onPress();
+    });
+    expect(onContinueReview).not.toHaveBeenCalled();
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
   it('keeps Copy reachable and shows a sanitized handoff error', async () => {
     const dest = endpoint();
     const review: PaymentReviewRequest = {
