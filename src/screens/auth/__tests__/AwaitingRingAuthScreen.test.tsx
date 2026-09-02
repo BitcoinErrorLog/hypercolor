@@ -26,7 +26,6 @@ jest.mock('../../../utils/copyText', () => ({
 jest.mock('../../../services/PubkyRingAuthService', () => ({
   PubkyRingAuthService: {
     cancelPendingDelegation: jest.fn().mockResolvedValue(undefined),
-    getPendingDelegationExpiresAt: jest.fn().mockReturnValue(null),
     getPendingDelegationSnapshot: jest.fn().mockReturnValue(null),
     isStaleDelegationRequestError: jest.fn().mockReturnValue(false),
     requestDelegation: jest.fn(),
@@ -60,7 +59,6 @@ describe('AwaitingRingAuthScreen', () => {
         generation: 1,
       },
     });
-    (PubkyRingAuthService.getPendingDelegationExpiresAt as jest.Mock).mockReturnValue(null);
     (PubkyRingAuthService.getPendingDelegationSnapshot as jest.Mock).mockReturnValue(null);
     (PubkyRingAuthService.isStaleDelegationRequestError as jest.Mock).mockReturnValue(false);
     (PubkyRingAuthService.requestDelegation as jest.Mock).mockReset();
@@ -197,7 +195,6 @@ describe('AwaitingRingAuthScreen', () => {
   it('shows expired recovery when restored without a coherent pending record', async () => {
     mockUseRoute.mockReturnValue({ params: undefined });
     (PubkyRingAuthService.getPendingDelegationSnapshot as jest.Mock).mockReturnValue(null);
-    (PubkyRingAuthService.getPendingDelegationExpiresAt as jest.Mock).mockReturnValue(null);
     const tree = await render(<AwaitingRingAuthScreen />);
     expect(JSON.stringify(tree.toJSON())).toContain(COPY.authorizationExpired);
     expect(tree.root.findAllByProps({ testID: 'authQr' })).toHaveLength(0);
