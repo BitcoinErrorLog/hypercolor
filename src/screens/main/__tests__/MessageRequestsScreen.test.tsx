@@ -37,6 +37,7 @@ jest.mock('../../../services/StorageService', () => ({
 jest.mock('../../../services/link/LinkService', () => ({
   LinkService: {
     acceptMessageRequest: jest.fn(),
+    acceptDeclinedRequest: jest.fn(),
     declineMessageRequest: jest.fn(),
   },
 }));
@@ -52,17 +53,23 @@ describe('MessageRequestsScreen', () => {
     (StorageService.getContact as jest.Mock).mockResolvedValue(null);
     (LinkService.declineMessageRequest as jest.Mock).mockResolvedValue(undefined);
     (LinkService.acceptMessageRequest as jest.Mock).mockResolvedValue(undefined);
+    (LinkService.acceptDeclinedRequest as jest.Mock).mockResolvedValue(undefined);
   });
 
   it('sets the pending request count to the remaining list after decline', async () => {
-    (StorageService.listMessageRequests as jest.Mock)
-      .mockResolvedValueOnce([
-        { ownerPubky: mockOwnerPubky, peerPubky: PEER_A, status: 'pending' },
-        { ownerPubky: mockOwnerPubky, peerPubky: PEER_B, status: 'pending' },
-      ])
-      .mockResolvedValueOnce([
-        { ownerPubky: mockOwnerPubky, peerPubky: PEER_B, status: 'pending' },
-      ]);
+    let pending = [
+      { ownerPubky: mockOwnerPubky, peerPubky: PEER_A, status: 'pending' },
+      { ownerPubky: mockOwnerPubky, peerPubky: PEER_B, status: 'pending' },
+    ];
+    (StorageService.listMessageRequests as jest.Mock).mockImplementation(
+      async (_owner: string, status?: string) => {
+        if (status === 'declined') return [];
+        return pending;
+      },
+    );
+    (LinkService.declineMessageRequest as jest.Mock).mockImplementation(async (peer: string) => {
+      pending = pending.filter(row => row.peerPubky !== peer);
+    });
 
     let tree!: ReactTestRenderer;
     await act(async () => {
@@ -85,6 +92,42 @@ describe('MessageRequestsScreen', () => {
     expect(LinkService.declineMessageRequest).toHaveBeenCalledWith(PEER_A);
     expect(mockSetPendingRequestCount).toHaveBeenLastCalledWith(1);
     expect(useSessionStatusStore.getState().setPendingRequestCount).toHaveBeenCalledWith(1);
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('lists declined rows with Accept that calls acceptDeclinedRequest', async () => {
+    (StorageService.listMessageRequests as jest.Mock).mockImplementation(
+      async (_owner: string, status?: string) => {
+        if (status === 'declined') {
+          return [{ ownerPubky: mockOwnerPubky, peerPubky: PEER_A, status: 'declined' }];
+        }
+        return [];
+      },
+    );
+
+    let tree!: ReactTestRenderer;
+    await act(async () => {
+      tree = create(<MessageRequestsScreen />);
+    });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(tree.root.findByProps({ testID: 'messageRequestsDeclinedSection' }).props.children).toBe(
+      'Declined',
+    );
+    const accept = tree.root.findByProps({ testID: 'messageRequestAcceptDeclined' });
+    await act(async () => {
+      accept.props.onPress();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(LinkService.acceptDeclinedRequest).toHaveBeenCalledWith(PEER_A);
+    expect(LinkService.acceptMessageRequest).not.toHaveBeenCalled();
+    expect(mockNavigate).toHaveBeenCalledWith('Thread', expect.anything());
     await act(async () => {
       tree.unmount();
     });

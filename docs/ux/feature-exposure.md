@@ -28,7 +28,7 @@ Every shipped service/capability vs how (or whether) the UI exposes it. Entry cl
 | Contacts manual add | `src/services/ContactsService.ts` `addManualContact` | `ContactSearchScreen.tsx` | Chats `+`, Contacts `+` | Contacts empty: “add someone by pubky” is **text**; `+` is header-only | — | No | QR block is a **non-functional notice** (no `expo-camera` in `app.json`) |
 | Follows import (homeserver `/pub/pubky.app/follows/`) | `ContactsService.importFollows` + `PubkyService.list` | `ContactsScreen.tsx` `handleRefresh` | **Pull-to-refresh on a non-empty list only** | Empty copy says “Pull to import follows” but empty state is a centered `View` **without** `RefreshControl` | — | No | **Gap:** import exists and is tested (`src/services/__tests__/ContactsService.test.ts`) but is unreachable from empty Contacts |
 | Relationship sync (Nexus following/followers/friends) | `ContactsService.syncRelationships`; `src/services/NexusClient.ts` | same pull-to-refresh | same | same lie on empty | — | No | Errors shown as `nexusNote` amber text |
-| Username search | `NexusClient.user` (`GET /v0/user/{id}`) | **none** | — | — | — | — | **Hidden/none** | Method defined `NexusClient.ts` `user(pubky)`; zero product callers (see dead-code) |
+| Username search | — (removed) | **none** | — | — | — | — | **Removed** | `NexusClient.user` / `GET /v0/user/{id}` is gone. `NexusClient` exposes `followers` / `following` / `friends` only. |
 | Discover / public tags | — | **none** | — | — | — | — | **Hidden/none** | No `Discover` screen/component. Public channels are invite-only (`src/types/group.ts`, Channels create hint) |
 | Notifications (OS / in-app inbox) | Foreground `LinkService.syncInbox` from `App.tsx` / Chats / Thread | **no notification UI** | Unread badge on Chats rows only | — | — | — | **Hidden/none** as a feature | `docs/NOTIFICATIONS.md`: no push, no permission |
 | BLE mesh | `src/services/MeshService.ts`; flag `mesh_transport` | Settings Transport switch only | — | — | — | **Settings-only** | Product path never calls `MeshService.start` | Flag default **false** (`src/flags/index.ts`). Toggle does not start BLE |
@@ -50,7 +50,7 @@ Every shipped service/capability vs how (or whether) the UI exposes it. Entry cl
 
 ## Discover — exists on mobile?
 
-**No.** Grep of `src/**/*.tsx` found no Discover screen, public-tag timeline, or Nexus tag API usage. `NexusClient` only exposes `followers` / `following` / `friends` / `user`. “Discovery” in `PubkyService.getHomeserver` is PKDNS homeserver lookup for manual add, not a Discover product surface.
+**No.** Grep of `src/**/*.tsx` found no Discover screen, public-tag timeline, or Nexus tag API usage. `NexusClient` only exposes `followers` / `following` / `friends`. `NexusClient.user` was removed. “Discovery” in `PubkyService.getHomeserver` is PKDNS homeserver lookup for manual add, not a Discover product surface.
 
 ## Dead-code candidates
 
@@ -62,8 +62,8 @@ Nothing was deleted. Each row is a symbol or file with **zero product callers** 
 | `MeshService.start` | method | `rg -n "MeshService\.start" --glob '!**/node_modules/**'` | **no matches** besides none — definition-only; start is uncalled |
 | `modules/mesh-transport` JS API | native module | only imported from unused `MeshService.ts` (`from '../../modules/mesh-transport/src'`) | Product path never loads it |
 | `PubkyService.publishProfile` | method | `rg -n "publishProfile" --glob '!**/node_modules/**' --glob '!**/.ai/**'` | only `PubkyService.ts:66` |
-| `PubkyService.publishContact` | method | `rg -n "publishContact" --glob '!**/node_modules/**' --glob '!**/.ai/**'` | only `PubkyService.ts:124` |
-| `NexusClient.user` / `.user(` | API | `rg -n "\.user\(|NexusClient\.user" --glob '!**/node_modules/**' --glob '!**/.ai/**'` | **no callers**; method at `NexusClient.ts:164` |
+| `PubkyService.publishContact` | method | `rg -n "publishContact" --glob '!**/node_modules/**' --glob '!**/.ai/**'` | **Removed.** No definition and no callers. |
+| `NexusClient.user` / `.user(` | API | `rg -n "\.user\(|NexusClient\.user" --glob '!**/node_modules/**' --glob '!**/.ai/**'` | **Removed.** `NexusClientApi` is `followers` / `following` / `friends` only. |
 | `useAuthStore.setProfile` | store action | `rg -n "setProfile" --glob '!**/node_modules/**' --glob '!**/.ai/**'` | only `src/stores/authStore.ts` |
 | `contactStore.upsertMeshPeer` / `removeMeshPeer` / `meshPeers` | store | `rg -n "upsertMeshPeer\|removeMeshPeer\|meshPeers" --glob '!**/node_modules/**'` | only `src/stores/contactStore.ts` (plus unrelated `removeContact` in generated `ios/hypercolor/paykit.swift`) |
 | `contactStore.removeContact` (JS) | store | same grep | only defined in `contactStore.ts`; UI never removes a contact |
@@ -77,11 +77,11 @@ Nothing was deleted. Each row is a symbol or file with **zero product callers** 
 | `FeatureFlags.get('trust_scoring')` | flag | `rg -n "FeatureFlags\.get\('trust_scoring'\)"` | **no matches** (`TrustEngine` runs anyway) |
 | `AppConfig.setNexusBaseUrl` | config | `rg -n "setNexusBaseUrl" --glob '*.{ts,tsx}' --glob '!**/__tests__/**'` | definition in `flags/index.ts` + comment in `flags/config.ts`; **no Settings UI** |
 | `__tests__/` at repo root | empty dir | `ls __tests__` | empty placeholder (no specs) |
-| ContactSearch “Scan QR” block | UI that cannot run | `ContactSearchScreen.tsx` `qrFallback` | Renders copy only; no camera module |
+| ContactSearch “Scan QR” block | UI | `ContactSearchScreen.tsx` `qrFallback` | **Removed.** Paste z32 only; no `qrFallback` symbol, no Scan QR control. |
 
 **Not dead (do not treat as unused):** all files under `src/screens/` (wired in navigators); all files under `src/components/` (each imported by a screen); `ThreadScreenContent` / `ChannelsScreenContent` / etc. (used by their parent screens); `paymentComposeError` (used by sheet + `PaymentComposeSheet.test.tsx`); `TrustEngine.explain` (called from `ContactsScreen.tsx`); `Telemetry.record` (called from `RetryQueue.ts`).
 
-**Count: 19 dead-code candidates** in the table above (18 symbols/files + the non-functional QR block).
+**Count: 16 dead-code candidates** in the table above. `PubkyService.publishContact`, `NexusClient.user`, and ContactSearch `qrFallback` are removed (not merely unused).
 
 ## Gap summary for later waves
 

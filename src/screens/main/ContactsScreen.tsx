@@ -1,93 +1,301 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import {
-  View,
-  Text,
-  FlatList,
-  TouchableOpacity,
-  StyleSheet,
-  SafeAreaView,
-  RefreshControl,
-  ActivityIndicator,
-} from 'react-native';
-import { useNavigation } from '@react-navigation/native';
+import { AccessibilityInfo } from 'react-native';
+import { useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import type { Contact, RootStackParamList } from '../../types';
-import { threadRouteParams } from '../../types/link';
+import type { Contact, MainTabParamList, RootStackParamList } from '../../types';
 import { useAuthStore } from '../../stores/authStore';
 import { useContactStore } from '../../stores/contactStore';
 import { StorageService } from '../../services/StorageService';
 import { ContactsService } from '../../services/ContactsService';
 import { TrustEngine } from '../../services/TrustEngine';
+import { FollowsImportSettings } from '../../services/contacts/followsImportSettings';
+import { contactsForOwner } from '../../services/contacts/contactOwnerScope';
+import type { ImportFollowsRefreshResult } from '../../services/ContactsService';
+import { ConfirmSheet } from '../../ui/contacts/ConfirmSheet';
+import { CONTACTS_COPY } from '../../ui/contacts/contactsCopy';
+import { partitionContacts } from '../../ui/contacts/relationshipBadge';
+import { ContactDetailContainer } from './contacts/ContactDetailScreen';
+import { pullToRefreshFollows } from './contacts/contactsActions';
+import {
+  CONTACTS_EMPTY_BODY,
+  CONTACTS_EMPTY_PRIMARY,
+  CONTACTS_EMPTY_SECONDARY,
+  CONTACTS_EMPTY_TITLE,
+  ContactsScreenContent,
+  IMPORT_FAILED,
+  IMPORT_OFF_NOTE,
+  LOAD_FAILED,
+} from './contacts/ContactsScreenContent';
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
 
+export {
+  CONTACTS_EMPTY_BODY,
+  CONTACTS_EMPTY_PRIMARY,
+  CONTACTS_EMPTY_SECONDARY,
+  CONTACTS_EMPTY_TITLE,
+  ContactsScreenContent,
+};
+
+function importStatusText(result: ImportFollowsRefreshResult): string | null {
+  if (result.skipped) return null;
+  if (!result.ok) return null;
+  if (result.imported === 0) return 'No confirmed follows yet.';
+  return `Imported ${result.imported} confirmed follows as suggestions.`;
+}
+
 export default function ContactsScreen() {
   const nav = useNavigation<Nav>();
+  const route = useRoute<RouteProp<MainTabParamList, 'Contacts'>>();
   const ownerPubky = useAuthStore(s => s.pubky);
+  const storeOwner = useContactStore(s => s.ownerPubky);
+  const replaceContacts = useContactStore(s => s.replaceContacts);
   const upsertContact = useContactStore(s => s.upsertContact);
   const contactsMap = useContactStore(s => s.contacts);
-  const storeContacts = Object.values(contactsMap);
-  const [pendingCount, setPendingCount] = useState(0);
+  const detailPubky = useContactStore(s => s.detailPubky);
+  const openContactDetail = useContactStore(s => s.openContactDetail);
+  const closeContactDetail = useContactStore(s => s.closeContactDetail);
+  const [, setConsentTick] = useState(0);
+
+  useEffect(() => FollowsImportSettings.subscribe(() => setConsentTick(t => t + 1)), []);
+
+  const followsImportEnabled = ownerPubky
+    ? FollowsImportSettings.getFollowsImportEnabled(ownerPubky)
+    : false;
+
+  const storeContacts = contactsForOwner(
+    ownerPubky && storeOwner === ownerPubky ? ownerPubky : null,
+    contactsMap,
+  );
+
   const [refreshing, setRefreshing] = useState(false);
-  const [syncing, setSyncing] = useState(false);
-  const [nexusNote, setNexusNote] = useState<string | null>(null);
+  const [importing, setImporting] = useState(false);
+  const [consentOpen, setConsentOpen] = useState(false);
+  const [importStatus, setImportStatus] = useState<string | null>(null);
+  const [importError, setImportError] = useState<string | null>(null);
+  const [importErrorDetails, setImportErrorDetails] = useState<string | null>(null);
+  const [usedNexusFallback, setUsedNexusFallback] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [loadErrorDetails, setLoadErrorDetails] = useState<string | null>(null);
+  const [offline, setOffline] = useState(false);
+  const [unblockAndAddPubky, setUnblockAndAddPubky] = useState<string | null>(null);
 
   const loadLocal = useCallback(async () => {
-    if (!ownerPubky) return;
-    const [rows, pending] = await Promise.all([
-      StorageService.getAllContacts(ownerPubky),
-      StorageService.countPendingMessageRequests(ownerPubky),
-    ]);
-    for (const row of rows) {
-      await TrustEngine.explain(row.pubky, ownerPubky);
+    const owner = useAuthStore.getState().pubky;
+    if (!owner) return;
+    try {
+      const rows = await StorageService.getAllContacts(owner);
+      for (const row of rows) {
+        await TrustEngine.explain(row.pubky, owner);
+      }
+      if (useAuthStore.getState().pubky !== owner) return;
+      const scored = await StorageService.getAllContacts(owner);
+      if (useAuthStore.getState().pubky !== owner) return;
+      replaceContacts(owner, scored);
+      setLoadError(null);
+      setLoadErrorDetails(null);
+    } catch (err) {
+      setLoadError(LOAD_FAILED);
+      setLoadErrorDetails(err instanceof Error ? err.message : String(err));
     }
-    const scored = await StorageService.getAllContacts(ownerPubky);
-    scored.forEach(upsertContact);
-    setPendingCount(pending);
-  }, [ownerPubky, upsertContact]);
+  }, [replaceContacts]);
 
   useEffect(() => {
-    void loadLocal();
-  }, [loadLocal]);
-
-  const handleRefresh = useCallback(async () => {
     if (!ownerPubky) return;
-    setRefreshing(true);
-    setSyncing(true);
+    setUsedNexusFallback(false);
+    setImportError(null);
+    setImportErrorDetails(null);
+    void loadLocal();
+  }, [loadLocal, ownerPubky]);
+
+  useEffect(() => {
+    const focus = route.params?.focusPubky;
+    if (focus) openContactDetail(focus);
+  }, [openContactDetail, route.params?.focusPubky]);
+
+  const applyRefreshResult = useCallback((result: ImportFollowsRefreshResult) => {
+    if (result.skipped) return;
+    setUsedNexusFallback(result.usedNexusFallback);
+    if (!result.ok) {
+      setImportError(IMPORT_FAILED);
+      setImportErrorDetails(result.message);
+      setImportStatus(null);
+      const lower = result.message.toLowerCase();
+      if (
+        lower.includes('network') ||
+        lower.includes('offline') ||
+        lower.includes('failed to fetch')
+      ) {
+        setOffline(true);
+      }
+      return;
+    }
+    setOffline(false);
+    setImportError(null);
+    setImportErrorDetails(null);
+    setImportStatus(importStatusText(result));
+    AccessibilityInfo.announceForAccessibility(
+      result.imported === 0
+        ? 'No confirmed follows yet.'
+        : `Imported ${result.imported} confirmed follows as suggestions.`,
+    );
+  }, []);
+
+  const runImport = useCallback(async () => {
+    const owner = useAuthStore.getState().pubky;
+    if (!owner) return;
+    if (!FollowsImportSettings.getFollowsImportEnabled(owner)) return;
+    setImporting(true);
     try {
-      const notes: string[] = [];
-      const imported = await ContactsService.importFollows(ownerPubky);
-      if (!imported.ok) {
-        notes.push(`Import failed: ${imported.message}`);
-      }
-      const rel = await ContactsService.syncRelationships(ownerPubky);
-      if (!rel.nexusReachable && rel.nexusError) {
-        notes.push(rel.nexusError);
-      }
-      setNexusNote(notes.length > 0 ? notes.join('\n') : null);
+      const result = await ContactsService.refreshFollowsIfEnabled(owner);
+      if (useAuthStore.getState().pubky !== owner) return;
+      if (!FollowsImportSettings.getFollowsImportEnabled(owner)) return;
+      applyRefreshResult(result);
       await loadLocal();
     } finally {
-      setSyncing(false);
+      setImporting(false);
+    }
+  }, [applyRefreshResult, loadLocal]);
+
+  const handleRefresh = useCallback(async () => {
+    const owner = useAuthStore.getState().pubky;
+    if (!owner) return;
+    setRefreshing(true);
+    try {
+      const result = await pullToRefreshFollows({
+        ownerPubky: owner,
+        refreshFollowsIfEnabled: ContactsService.refreshFollowsIfEnabled,
+      });
+      if (useAuthStore.getState().pubky !== owner) return;
+      if (result) applyRefreshResult(result);
+      await loadLocal();
+    } finally {
       setRefreshing(false);
     }
-  }, [ownerPubky, loadLocal]);
+  }, [applyRefreshResult, loadLocal]);
+
+  const handleConfirmConsent = useCallback(() => {
+    const owner = useAuthStore.getState().pubky;
+    if (!owner) return;
+    FollowsImportSettings.setFollowsImportEnabled(owner, true);
+    setConsentOpen(false);
+  }, []);
+
+  useEffect(() => {
+    if (!ownerPubky || !followsImportEnabled) return;
+    void runImport();
+  }, [ownerPubky, followsImportEnabled, runImport]);
+
+  const handleStopFollows = useCallback(async () => {
+    const owner = useAuthStore.getState().pubky;
+    if (!owner) return;
+    try {
+      await ContactsService.stopUsingFollows(owner);
+      if (useAuthStore.getState().pubky !== owner) return;
+      setUsedNexusFallback(false);
+      setImportStatus(IMPORT_OFF_NOTE);
+      setImportError(null);
+      setImportErrorDetails(null);
+      await loadLocal();
+    } catch (err) {
+      setImportError('Could not stop using follows.');
+      setImportErrorDetails(err instanceof Error ? err.message : String(err));
+    }
+  }, [loadLocal]);
+
+  const handleAddSuggestion = useCallback(
+    (pubky: string, confirmUnblock = false) => {
+      const owner = useAuthStore.getState().pubky;
+      if (!owner) return;
+      void ContactsService.addManualContact(
+        owner,
+        pubky,
+        confirmUnblock ? { confirmUnblock: true } : undefined,
+      ).then(result => {
+        if (useAuthStore.getState().pubky !== owner) return;
+        if (!result.ok) {
+          if (result.reason === 'blocked') setUnblockAndAddPubky(pubky);
+          return;
+        }
+        upsertContact(result.contact);
+        openContactDetail(result.contact.pubky);
+      });
+    },
+    [openContactDetail, upsertContact],
+  );
+
+  if (detailPubky) {
+    return <ContactDetailContainer pubky={detailPubky} onBack={closeContactDetail} />;
+  }
 
   const sorted = sortContactsForDisplay(storeContacts);
+  const { contacts, suggestions } = partitionContacts(sorted);
+  const blockState: Record<string, 'blocked' | 'cleanup-pending'> = {};
+  if (ownerPubky) {
+    for (const row of sorted) {
+      if (!FollowsImportSettings.isBlocked(ownerPubky, row.pubky)) continue;
+      blockState[row.pubky] = FollowsImportSettings.isBlockCleanupPending(ownerPubky, row.pubky)
+        ? 'cleanup-pending'
+        : 'blocked';
+    }
+  }
 
   return (
-    <ContactsScreenContent
-      contacts={sorted}
-      pendingCount={pendingCount}
-      refreshing={refreshing}
-      syncing={syncing}
-      nexusNote={nexusNote}
-      onRefresh={() => {
-        void handleRefresh();
-      }}
-      onAdd={() => nav.navigate('ContactSearch')}
-      onRequests={() => nav.navigate('MessageRequests')}
-      onOpenChat={pubky => nav.navigate('Thread', threadRouteParams(pubky))}
-    />
+    <>
+      <ContactsScreenContent
+        contacts={contacts}
+        suggestions={followsImportEnabled ? suggestions : []}
+        followsImportEnabled={followsImportEnabled}
+        blockState={blockState}
+        refreshing={refreshing}
+        importing={importing}
+        consentOpen={consentOpen}
+        importStatus={importStatus}
+        importError={importError}
+        importErrorDetails={importErrorDetails}
+        usedNexusFallback={usedNexusFallback}
+        loadError={loadError}
+        loadErrorDetails={loadErrorDetails}
+        offline={offline}
+        onRefresh={() => {
+          void handleRefresh();
+        }}
+        onAdd={() => nav.navigate('ContactSearch')}
+        onOpenContact={openContactDetail}
+        onUseFollows={() => setConsentOpen(true)}
+        onConsentConfirm={() => {
+          handleConfirmConsent();
+        }}
+        onConsentDismiss={() => setConsentOpen(false)}
+        onRefreshFollows={() => {
+          void runImport();
+        }}
+        onStopFollows={() => {
+          void handleStopFollows();
+        }}
+        onAddSuggestion={pubky => {
+          handleAddSuggestion(pubky);
+        }}
+        onRetryLoad={() => {
+          void loadLocal();
+        }}
+        onRetryImport={() => {
+          void runImport();
+        }}
+      />
+      <ConfirmSheet
+        visible={unblockAndAddPubky !== null}
+        title={CONTACTS_COPY.unblockAndAddTitle}
+        body={CONTACTS_COPY.unblockBody}
+        confirmLabel={CONTACTS_COPY.unblockAndAddConfirm}
+        onDismiss={() => setUnblockAndAddPubky(null)}
+        onConfirm={() => {
+          const target = unblockAndAddPubky;
+          setUnblockAndAddPubky(null);
+          if (target) handleAddSuggestion(target, true);
+        }}
+      />
+    </>
   );
 }
 
@@ -99,190 +307,3 @@ function sortContactsForDisplay(contacts: Contact[]): Contact[] {
     return b.trustScore - a.trustScore;
   });
 }
-
-export function ContactsScreenContent({
-  contacts,
-  pendingCount,
-  refreshing,
-  syncing,
-  nexusNote,
-  onRefresh,
-  onAdd,
-  onRequests,
-  onOpenChat,
-}: {
-  contacts: Contact[];
-  pendingCount: number;
-  refreshing: boolean;
-  syncing: boolean;
-  nexusNote: string | null;
-  onRefresh: () => void;
-  onAdd: () => void;
-  onRequests: () => void;
-  onOpenChat: (pubky: string) => void;
-}) {
-  const renderContact = useCallback(
-    ({ item }: { item: Contact }) => (
-      <TouchableOpacity
-        testID="contactRow"
-        accessibilityLabel={item.pubky}
-        style={styles.row}
-        onPress={() => onOpenChat(item.pubky)}
-      >
-        <View style={styles.avatar}>
-          <Text style={styles.avatarLetter}>
-            {(item.displayName ?? item.pubky).charAt(0).toUpperCase()}
-          </Text>
-        </View>
-        <View style={styles.body}>
-          <Text style={styles.name} numberOfLines={1}>
-            {item.displayName ?? shortPubky(item.pubky)}
-          </Text>
-          <Text style={styles.pubky} numberOfLines={1} ellipsizeMode="middle">
-            {item.pubky}
-          </Text>
-          <View style={styles.badges}>
-            {relationshipBadges(item).map(badge => (
-              <View key={badge} style={styles.badge}>
-                <Text style={styles.badgeText}>{badge}</Text>
-              </View>
-            ))}
-          </View>
-        </View>
-      </TouchableOpacity>
-    ),
-    [onOpenChat],
-  );
-
-  return (
-    <SafeAreaView style={styles.container} testID="contactsScreen">
-      <View style={styles.header}>
-        <Text style={styles.title}>Contacts</Text>
-        <View style={styles.headerActions}>
-          <TouchableOpacity
-            testID="contactsRequests"
-            accessibilityLabel="Message requests"
-            onPress={onRequests}
-            style={styles.requestsBtn}
-          >
-            <Text style={styles.requestsLabel}>Requests</Text>
-            {pendingCount > 0 ? (
-              <View style={styles.countBadge}>
-                <Text style={styles.countBadgeText}>
-                  {pendingCount > 99 ? '99+' : pendingCount}
-                </Text>
-              </View>
-            ) : null}
-          </TouchableOpacity>
-          <TouchableOpacity testID="contactsAdd" accessibilityLabel="Add contact" onPress={onAdd}>
-            <Text style={styles.add}>+</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
-      {syncing && !refreshing ? (
-        <View style={styles.syncBar}>
-          <ActivityIndicator size="small" color="#7c3aed" />
-          <Text style={styles.syncText}>Updating follows…</Text>
-        </View>
-      ) : null}
-      {nexusNote ? <Text style={styles.nexusNote}>{nexusNote}</Text> : null}
-      {contacts.length === 0 ? (
-        <View style={styles.empty}>
-          <Text style={styles.emptyText}>No contacts yet.</Text>
-          <Text style={styles.emptyHint}>Pull to import follows, or add someone by pubky.</Text>
-        </View>
-      ) : (
-        <FlatList
-          data={contacts}
-          keyExtractor={item => item.pubky}
-          renderItem={renderContact}
-          contentContainerStyle={styles.list}
-          refreshControl={
-            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#7c3aed" />
-          }
-        />
-      )}
-    </SafeAreaView>
-  );
-}
-
-function relationshipBadges(contact: Contact): string[] {
-  const badges: string[] = [];
-  if (contact.isMutual) badges.push('Mutual');
-  else if (contact.isFollowing) badges.push('Following');
-  if (contact.isFollower && !contact.isMutual) badges.push('Follower');
-  if (contact.addedManually) badges.push('Added');
-  return badges;
-}
-
-function shortPubky(pubky: string): string {
-  return `${pubky.slice(0, 6)}…${pubky.slice(-4)}`;
-}
-
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#0a0a0a' },
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingVertical: 16,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#1a1a1a',
-  },
-  title: { fontSize: 24, fontWeight: '700', color: '#f9fafb' },
-  headerActions: { flexDirection: 'row', alignItems: 'center', gap: 16 },
-  requestsBtn: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  requestsLabel: { color: '#7c3aed', fontSize: 16, fontWeight: '600' },
-  countBadge: {
-    backgroundColor: '#7c3aed',
-    borderRadius: 10,
-    minWidth: 20,
-    height: 20,
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingHorizontal: 6,
-  },
-  countBadgeText: { color: '#fff', fontSize: 11, fontWeight: '700' },
-  add: { fontSize: 28, color: '#7c3aed', fontWeight: '600' },
-  syncBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    paddingHorizontal: 20,
-    paddingVertical: 8,
-  },
-  syncText: { color: '#6b7280', fontSize: 13 },
-  nexusNote: { color: '#f59e0b', fontSize: 12, paddingHorizontal: 20, paddingBottom: 8 },
-  list: { paddingVertical: 4 },
-  row: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingVertical: 14,
-    gap: 14,
-  },
-  avatar: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: '#1f2937',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  avatarLetter: { fontSize: 20, fontWeight: '600', color: '#7c3aed' },
-  body: { flex: 1, gap: 3 },
-  name: { fontSize: 15, fontWeight: '600', color: '#f9fafb' },
-  pubky: { fontSize: 12, color: '#4b5563', fontFamily: 'monospace' },
-  badges: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 4 },
-  badge: {
-    backgroundColor: '#1f2937',
-    borderRadius: 6,
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-  },
-  badgeText: { color: '#c4b5fd', fontSize: 11, fontWeight: '600' },
-  empty: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: 8, paddingHorizontal: 32 },
-  emptyText: { color: '#6b7280', fontSize: 16 },
-  emptyHint: { color: '#4b5563', fontSize: 14, textAlign: 'center' },
-});

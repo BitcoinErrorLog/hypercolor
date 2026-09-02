@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { immer } from 'zustand/middleware/immer';
 import type { PubkyKey, UserProfile } from '../types';
+import { paintOwner, registerAuthOwnerReader } from '../services/paintedOwner';
 
 interface AuthState {
   isAuthenticated: boolean;
@@ -20,12 +21,14 @@ export const useAuthStore = create<AuthState>()(
     homeserver: null,
     profile: null,
 
-    setAuthenticated: (pubky, homeserver) =>
+    setAuthenticated: (pubky, homeserver) => {
+      paintOwner(pubky);
       set(state => {
         state.isAuthenticated = true;
         state.pubky = pubky;
         state.homeserver = homeserver;
-      }),
+      });
+    },
 
     setProfile: profile =>
       set(state => {
@@ -41,3 +44,5 @@ export const useAuthStore = create<AuthState>()(
       }),
   })),
 );
+
+registerAuthOwnerReader(() => useAuthStore.getState().pubky);

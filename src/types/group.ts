@@ -415,6 +415,24 @@ export interface GroupMessage {
   deleted: boolean;
 }
 
+/**
+ * Per-recipient private-group fan-out row. `pending` is seeded atomically
+ * with the send intent so the expected recipient set is known before any
+ * native send. `sent` / `failed` are terminal.
+ */
+export type GroupFanoutStatus = 'pending' | 'sent' | 'failed';
+
+export interface GroupFanoutOutcome {
+  ownerPubky: PubkyKey;
+  channelId: string;
+  eventId: string;
+  senderPubky: PubkyKey;
+  recipientPubky: PubkyKey;
+  status: GroupFanoutStatus;
+  reason: 'blocked' | null;
+  updatedAt: number;
+}
+
 /** Bounded deferred reaction / edit / delete waiting for its target. */
 export interface GroupDeferredEvent {
   ownerPubky: PubkyKey;

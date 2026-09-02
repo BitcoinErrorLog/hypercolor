@@ -23,13 +23,30 @@ describe('pubkyId', () => {
     expect(parsePubky(`pubky://${VALID}/pub/pubky.app/follows/x`)).toBe(VALID);
   });
 
+  it('accepts uppercase input by lowercasing to the canonical form', () => {
+    expect(parsePubky(VALID.toUpperCase())).toBe(VALID);
+  });
+
+  it('trims surrounding whitespace', () => {
+    expect(parsePubky(`  ${VALID}  `)).toBe(VALID);
+  });
+
+  it('does not accept pk: compact URIs', () => {
+    expect(parsePubky(`pk:${VALID}`)).toBeNull();
+  });
+
   it('rejects wrong length and forbidden charset (0, 2, l, v)', () => {
     expect(isValidPubky('short')).toBe(false);
-    expect(isValidPubky('a'.repeat(PUBKY_ID_LENGTH))).toBe(true);
+    expect(isValidPubky('y'.repeat(PUBKY_ID_LENGTH))).toBe(true);
     expect(isValidPubky('0'.repeat(PUBKY_ID_LENGTH))).toBe(false);
     expect(isValidPubky('2'.repeat(PUBKY_ID_LENGTH))).toBe(false);
     expect(isValidPubky('l'.repeat(PUBKY_ID_LENGTH))).toBe(false);
     expect(isValidPubky('v'.repeat(PUBKY_ID_LENGTH))).toBe(false);
+  });
+
+  it('rejects alphabet-legal strings that do not decode to a 32-byte canonical key', () => {
+    expect(isValidPubky('a'.repeat(PUBKY_ID_LENGTH))).toBe(false);
+    expect(parsePubky('a'.repeat(PUBKY_ID_LENGTH))).toBeNull();
   });
 
   it('decodes a pkarr z-base-32 pubky to 32-byte hex', () => {
@@ -40,5 +57,6 @@ describe('pubkyId', () => {
   it('throws a clean error for malformed z-base-32 instead of hex-radix failure', () => {
     expect(() => pubkyZ32ToHex('tf')).toThrow(/52-character z-base-32/);
     expect(() => pubkyZ32ToHex('0'.repeat(PUBKY_ID_LENGTH))).toThrow(/52-character z-base-32/);
+    expect(() => pubkyZ32ToHex('a'.repeat(PUBKY_ID_LENGTH))).toThrow(/52-character z-base-32/);
   });
 });

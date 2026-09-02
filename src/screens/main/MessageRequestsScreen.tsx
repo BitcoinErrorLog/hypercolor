@@ -23,6 +23,7 @@ import { peerIdentity } from '../../ui/peerIdentity';
 import { copyText } from '../../utils/copyText';
 import { sanitizeError } from '../../ui/sanitizedError';
 import { useSessionStatusStore } from '../../stores/sessionStatusStore';
+import { CONTACTS_COPY } from '../../ui/contacts/contactsCopy';
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
 
@@ -34,18 +35,26 @@ type RequestRow = {
 export default function MessageRequestsScreen() {
   const nav = useNavigation<Nav>();
   const ownerPubky = useAuthStore(s => s.pubky);
-  const [rows, setRows] = useState<RequestRow[]>([]);
+  const [pendingRows, setPendingRows] = useState<RequestRow[]>([]);
+  const [declinedRows, setDeclinedRows] = useState<RequestRow[]>([]);
   const [busyPeer, setBusyPeer] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     if (!ownerPubky) return;
-    const pending = await StorageService.listMessageRequests(ownerPubky, 'pending');
-    const next: RequestRow[] = [];
-    for (const request of pending) {
-      const contact = await StorageService.getContact(request.peerPubky, ownerPubky);
-      next.push({ request, contact });
-    }
-    setRows(next);
+    const [pending, declined] = await Promise.all([
+      StorageService.listMessageRequests(ownerPubky, 'pending'),
+      StorageService.listMessageRequests(ownerPubky, 'declined'),
+    ]);
+    const toRows = async (requests: MessageRequest[]): Promise<RequestRow[]> => {
+      const next: RequestRow[] = [];
+      for (const request of requests) {
+        const contact = await StorageService.getContact(request.peerPubky, ownerPubky);
+        next.push({ request, contact });
+      }
+      return next;
+    };
+    setPendingRows(await toRows(pending));
+    setDeclinedRows(await toRows(declined));
     useSessionStatusStore.getState().setPendingRequestCount(pending.length);
   }, [ownerPubky]);
 
@@ -58,6 +67,24 @@ export default function MessageRequestsScreen() {
       setBusyPeer(peerPubky);
       try {
         await LinkService.acceptMessageRequest(peerPubky);
+        await load();
+        nav.navigate('Thread', threadRouteParams(peerPubky));
+      } catch (err) {
+        const sanitized = sanitizeError(err, 'Could not accept this request.');
+        Alert.alert('Could not accept this request.', sanitized.message);
+        await load();
+      } finally {
+        setBusyPeer(null);
+      }
+    },
+    [load, nav],
+  );
+
+  const handleAcceptDeclined = useCallback(
+    async (peerPubky: string) => {
+      setBusyPeer(peerPubky);
+      try {
+        await LinkService.acceptDeclinedRequest(peerPubky);
         await load();
         nav.navigate('Thread', threadRouteParams(peerPubky));
       } catch (err) {
@@ -90,12 +117,16 @@ export default function MessageRequestsScreen() {
 
   return (
     <MessageRequestsContent
-      rows={rows}
+      pendingRows={pendingRows}
+      declinedRows={declinedRows}
       busyPeer={busyPeer}
       ownerPubky={ownerPubky}
       onBack={() => nav.goBack()}
       onAccept={peer => {
         void handleAccept(peer);
+      }}
+      onAcceptDeclined={peer => {
+        void handleAcceptDeclined(peer);
       }}
       onDecline={peer => {
         void handleDecline(peer);
@@ -105,21 +136,25 @@ export default function MessageRequestsScreen() {
 }
 
 export function MessageRequestsContent({
-  rows,
+  pendingRows,
+  declinedRows,
   busyPeer,
   ownerPubky,
   onBack,
   onAccept,
+  onAcceptDeclined,
   onDecline,
 }: {
-  rows: RequestRow[];
+  pendingRows: RequestRow[];
+  declinedRows: RequestRow[];
   busyPeer: string | null;
   ownerPubky: string | null;
   onBack: () => void;
   onAccept: (peerPubky: string) => void;
+  onAcceptDeclined: (peerPubky: string) => void;
   onDecline: (peerPubky: string) => void;
 }) {
-  const renderRow = useCallback(
+  const renderPending = useCallback(
     ({ item }: { item: RequestRow }) => {
       const peer = item.request.peerPubky;
       const identity = peerIdentity(peer, item.contact);
@@ -166,6 +201,42 @@ export function MessageRequestsContent({
     [busyPeer, onAccept, onDecline],
   );
 
+  const renderDeclined = useCallback(
+    ({ item }: { item: RequestRow }) => {
+      const peer = item.request.peerPubky;
+      const identity = peerIdentity(peer, item.contact);
+      const busy = busyPeer === peer;
+      return (
+        <View style={styles.row}>
+          <View style={styles.body}>
+            <Text style={styles.name}>{identity.title}</Text>
+            {identity.subtitle ? <Text style={styles.hint}>{identity.subtitle}</Text> : null}
+            <Text style={styles.pubky} selectable>
+              {peer}
+            </Text>
+            <Text style={styles.hint}>{CONTACTS_COPY.declinedSection}</Text>
+          </View>
+          <View style={styles.actions}>
+            {busy ? (
+              <ActivityIndicator color="#7c3aed" />
+            ) : (
+              <TouchableOpacity
+                testID="messageRequestAcceptDeclined"
+                accessibilityRole="button"
+                accessibilityLabel="Accept declined request"
+                style={styles.accept}
+                onPress={() => onAcceptDeclined(peer)}
+              >
+                <Text style={styles.acceptText}>{COPY.accept}</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        </View>
+      );
+    },
+    [busyPeer, onAcceptDeclined],
+  );
+
   const inviteBlock = (
     <View style={styles.invite} testID="messageRequestsInvite">
       <Text style={styles.inviteBody}>{COPY.inviteBlockBody}</Text>
@@ -196,6 +267,8 @@ export function MessageRequestsContent({
     </View>
   );
 
+  const empty = pendingRows.length === 0 && declinedRows.length === 0;
+
   return (
     <SafeAreaView style={styles.container} testID="messageRequestsScreen">
       <View style={styles.header}>
@@ -213,7 +286,7 @@ export function MessageRequestsContent({
         <View style={styles.backHit} />
       </View>
       <Text style={styles.explainer}>{COPY.requestsExplainer}</Text>
-      {rows.length === 0 ? (
+      {empty ? (
         <View style={styles.empty}>
           <Text style={styles.emptyText}>{COPY.noPendingRequests}</Text>
           <Text style={styles.emptyHint}>{COPY.requestsEmptyBody}</Text>
@@ -221,10 +294,24 @@ export function MessageRequestsContent({
         </View>
       ) : (
         <FlatList
-          data={rows}
+          data={pendingRows}
           keyExtractor={item => item.request.peerPubky}
-          renderItem={renderRow}
-          ListFooterComponent={inviteBlock}
+          renderItem={renderPending}
+          ListFooterComponent={
+            <>
+              {declinedRows.length > 0 ? (
+                <View>
+                  <Text testID="messageRequestsDeclinedSection" style={styles.section}>
+                    {CONTACTS_COPY.declinedSection}
+                  </Text>
+                  {declinedRows.map(item => (
+                    <View key={item.request.peerPubky}>{renderDeclined({ item })}</View>
+                  ))}
+                </View>
+              ) : null}
+              {inviteBlock}
+            </>
+          }
         />
       )}
     </SafeAreaView>
@@ -251,6 +338,15 @@ const styles = StyleSheet.create({
     color: '#808692',
     fontSize: 14,
     lineHeight: 20,
+  },
+  section: {
+    paddingHorizontal: 20,
+    paddingTop: 16,
+    paddingBottom: 8,
+    color: '#c4b5fd',
+    fontSize: 13,
+    fontWeight: '700',
+    textTransform: 'uppercase',
   },
   row: {
     paddingHorizontal: 20,

@@ -181,8 +181,10 @@ describe('handleE2eDeepLink debug-signup', () => {
   });
 
   it('adds a saved slot as a contact without a peer query param', async () => {
+    const slotPubky = 'pxnu33x7jtpx9ar1ytsi4yxbp6a5o36gwhffs8zoxmbuptici1jy';
+    const ownerPubky = 'operrr8wsbpr3ue9d4qj41ge1kcc6r7fdiy6o3ugjrrhi4y77rdo';
     saveE2eIdentity('A', {
-      pubky: 'b'.repeat(52),
+      pubky: slotPubky,
       secretHex: 'cd'.repeat(32),
       homeserverPubky: 'hs',
     });
@@ -192,14 +194,14 @@ describe('handleE2eDeepLink debug-signup', () => {
     const { useContactStore } = jest.requireMock('../../stores/contactStore') as {
       useContactStore: { getState: () => { upsertContact: jest.Mock } };
     };
-    jest.mocked(KeyStore.getPubky).mockReturnValue('y'.repeat(52));
+    jest.mocked(KeyStore.getPubky).mockReturnValue(ownerPubky);
     ContactsService.addManualContact.mockResolvedValue({
       ok: true,
-      contact: { pubky: 'b'.repeat(52), displayName: 'B' },
+      contact: { pubky: slotPubky, displayName: 'B' },
     });
 
     await expect(handleE2eDeepLink('hypercolor://e2e/add-contact?slot=A')).resolves.toBe(true);
-    expect(ContactsService.addManualContact).toHaveBeenCalledWith('y'.repeat(52), 'b'.repeat(52));
+    expect(ContactsService.addManualContact).toHaveBeenCalledWith(ownerPubky, slotPubky);
     expect(useContactStore.getState().upsertContact).toHaveBeenCalled();
   });
 

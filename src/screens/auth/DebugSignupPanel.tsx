@@ -16,6 +16,10 @@ import { defaultRandomBytes, identitySecretHex } from '../../services/link/liveP
 import { STAGING_HOMESERVER_PUBKY } from '../../services/homeserverOrigin';
 import { saveE2eIdentity } from '../../navigation/e2eSignupResult';
 import { completeDebugSignup, type DebugSignupResult } from './debugSignupController';
+import { INTERRUPTED_SIGN_OUT_MARKER_UNREADABLE, PubkyService } from '../../services/PubkyService';
+import { COPY } from '../../copy/uxCopy';
+import { isWipeWaitTimeoutError } from '../../services/paintedOwner';
+import { sanitizeError } from '../../ui/sanitizedError';
 
 function errorMessage(err: unknown): string {
   if (err instanceof Error && err.message.length > 0) return err.message;
@@ -45,6 +49,7 @@ export function DebugSignupPanel({
     setError(null);
     setResult(null);
     try {
+      await PubkyService.awaitSignOutWipe();
       const next = await completeDebugSignup(
         {
           signupWithSecret: (secret, homeserver, token) =>
@@ -70,7 +75,14 @@ export function DebugSignupPanel({
         });
       }
     } catch (err) {
-      setError(errorMessage(err));
+      if (
+        isWipeWaitTimeoutError(err) ||
+        (err instanceof Error && err.message === INTERRUPTED_SIGN_OUT_MARKER_UNREADABLE)
+      ) {
+        setError(sanitizeError(err, COPY.signOutIncompleteTryAgain).message);
+      } else {
+        setError(errorMessage(err));
+      }
     } finally {
       setBusy(false);
     }

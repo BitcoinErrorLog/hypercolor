@@ -582,6 +582,18 @@ decline.` This replaces web's version at `src/components/requests-page.tsx:72-77
 (`src/screens/main/MessageRequestsScreen.tsx:172`), which is wrong for the same reason as
 §B.5 — the follow relationship is not what gates the queue.
 
+**Decline is not a block.** The user may still open a thread and send to that pubky.
+Sending a message to a declined-not-blocked peer accepts the request (`declined →
+accepted`) atomically before Encrypted Link establishment. The thread shows a
+one-line notice above the composer until that send (or until Accept from the
+Declined section): `You declined a request from this person. Sending a message
+accepts it.` Requests lists declined rows under `Declined` with an explicit
+`Accept` that performs the same user-initiated promotion without messaging.
+`acceptMessageRequest` still refuses a declined row — inbound Accept is unchanged.
+Sticky `upsertMessageRequest` cannot overwrite `declined`. Inbound from that peer
+is not adopted until the row is `accepted`. Unblock remains the release path only
+for a peer who was blocked.
+
 **Held request row.** Display name or `shortPubky`, full pubky in monospace secondary, arrival
 time, and any held group invitations as `Group invitation · {name}` (web already does this at
 `src/components/requests-page.tsx:98-107`; mobile must add it — mobile currently shows only
@@ -728,11 +740,72 @@ send payments.` — a block whose own subtitle says it cannot be acted on, which
 network read on every contact open. It is deleted from web rather than reworded.
 
 **Danger block.** `Block` and `Remove contact`, each behind a confirmation sheet naming what is
-deleted locally.
+deleted locally. `Block` is fail-closed and inbound-authoritative: the owner-scoped deny is
+persisted first; leftover Encrypted Link cleanup is retryable. Unblock is an explicit user
+action, never a side effect of adding a pubky.
+
+**Block / Unblock contract.**
+
+- **Blocked.** Contact detail (and the search/add flow for that pubky) shows `Blocked` and an
+  `Unblock` action. Message and Block are hidden. The Unblock confirmation body is: `They can
+  send you a message request again. No chats, encrypted link, or contact data is restored.`
+- **Blocked · cleanup pending.** A leftover contact row stays in the list with that label after
+  a Block whose decline/delete failed. Contact detail shows the same label, `Retry` (finishes
+  cleanup while the deny stays), and `Unblock`. Navigating away and back keeps Retry — cleanup
+  pending is a SQLite column on `blocked_peers` (`cleanup_pending`), set to 1 in the same deny
+  insert that commits the block and cleared to 0 after leftover Encrypted Link / message /
+  contact cleanup succeeds. It is not an MMKV flag. Relaunch hydrates it with the deny list.
+- **Unblock and add.** Pasting a blocked pubky does not lift the deny. Search (and Add as
+  contact) returns a blocked result and opens `This pubky is blocked. Unblock and add?`
+  Decline keeps the block. Confirm persists the contact first, then lifts the deny and
+  releases the terminal `declined` row. If persist fails, the deny remains.
+- **Fail-closed ordering.** Block: durable SQLite deny (`blocked_peers`, owner+peer
+  primary key) commits first; decline and contact deletion run only after that write
+  succeeds. If the deny write fails, Block returns an error and no Encrypted Link,
+  messages, or contact row is deleted. Unblock: release declined row, then drop the
+  deny. Manual add of a blocked pubky: persist contact, then unblock. Deny state is
+  `denied`, `clear`, or `unavailable`. Read failure, malformed leftover MMKV, or a
+  missing cache is `unavailable`, never an empty set. Encrypted-Link inbound,
+  handshake, retry drain, mesh (when the peer pubky is known), and outbound send
+  fail closed on `denied` and `unavailable`. A leftover MMKV `blocked:{owner}` blob
+  is migrated once into SQLite; the MMKV key is deleted only after the SQL commit.
+  Queued payloads for a denied peer are dropped as `Failed` (not delivered), not
+  retried. Deny-unavailable defers the queue item instead of sending or destroying
+  it. Group fan-out seeds one `pending` outcome per recipient in the same
+  transaction as the send intent, then upserts that row in the same transaction
+  that advances the snapshot and deletes the queue item (or writes a terminal
+  failure). The Channel view labels an outbound private-group message from those
+  persisted rows, never from drain order or the coarse
+  `group_messages.delivery_state` alone:
+
+  | Persisted recipient state | Label |
+  | --- | --- |
+  | every row `pending`, or pending with zero `sent` | `Sending` |
+  | mixed `sent` + `pending` | `Sending · N of M sent` |
+  | every row `sent` | `Sent` |
+  | mixed `sent` + `failed` (no pending) | `Sent to N of M` |
+  | every row `failed`, one `blocked` | `Not delivered to {name} (blocked)` |
+  | every row `failed` otherwise | `Not delivered` |
+
+  One-to-one DMs still use the coarse delivery word. A declined message
+  request is not a deny at this choke. User send pins the owner at start.
+  Persistence is owner-conditional at commit time: after every `await getDb()`,
+  the storage layer reads the painted identity from the auth store (falling
+  back to KeyStore) synchronously immediately before `BEGIN IMMEDIATE` /
+  `executeSync`, in the same tick as the write so no further await can
+  interleave, and refuses with typed `owner-changed` instead of writing.
+  Nested send-path handshake helpers take `expectedOwner` and check after
+  every external await before persistence or a native side effect.
+- **Send to a blocked pubky.** The thread shows `You blocked this contact. Unblock
+  to message them.` with `Unblock`. Send never surfaces an internal error string.
+- **Block sheet.** Names local deletion (contact row, Encrypted Link, one-to-one messages,
+  follows-import skip) and states that Unblock is a separate action — adding the pubky again
+  does not lift the block.
 
 **States.** Loading skeleton; `Could not load this contact.` with `Try again`; Offline renders
 from local storage with the payment block (mobile) collapsed and labelled `Unavailable
-offline`.
+offline`; `Blocked`; `Blocked · cleanup pending` with `Retry`; send-to-blocked
+`You blocked this contact. Unblock to message them.` with `Unblock`.
 
 **AC.**
 1. The full pubky is selectable and copyable on both platforms.

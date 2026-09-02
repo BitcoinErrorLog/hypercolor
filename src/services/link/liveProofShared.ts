@@ -3,6 +3,8 @@ import { LINK_RECEIVER_PATH } from '../../types/link';
 import { LinkService, type LinkEnableFlow } from './LinkService';
 import { StorageService } from '../StorageService';
 import { KeyStore } from '../KeyStore';
+import { paintOwner } from '../paintedOwner';
+import { stripSensitive } from '../../ui/sanitizedError';
 
 export type LiveProofConfig = {
   homeserverPubky: string;
@@ -275,7 +277,9 @@ export function createLiveProofRecorder(
         const detail = redactLiveProofForLog(await body(), redactSecrets);
         const entry: LiveProofStep = { step, ok: true, detail, elapsedMs: now() - started };
         steps.push(entry);
-        console.log('[liveproof]', JSON.stringify(entry));
+        if (__DEV__) {
+          console.log('[liveproof]', stripSensitive(JSON.stringify(entry)));
+        }
         return true;
       } catch (err) {
         const entry: LiveProofStep = {
@@ -285,7 +289,9 @@ export function createLiveProofRecorder(
           elapsedMs: now() - started,
         };
         steps.push(entry);
-        console.log('[liveproof]', JSON.stringify(entry));
+        if (__DEV__) {
+          console.log('[liveproof]', stripSensitive(JSON.stringify(entry)));
+        }
         return false;
       }
     },
@@ -398,6 +404,7 @@ export async function adoptAndProvision(
       requirePartyField(party.sessionAlias, `${party.label}.sessionAlias`),
       requirePartyField(party.pubky, `${party.label}.pubky`),
     );
+    paintOwner(requirePartyField(party.pubky, `${party.label}.pubky`));
     return requirePartyField(party.pubky, `${party.label}.pubky`);
   });
   if (!adopted) return false;
@@ -413,6 +420,7 @@ export async function switchToParty(link: LiveProofLinkApi, party: ProofParty): 
     requirePartyField(party.sessionAlias, `${party.label}.sessionAlias`),
     requirePartyField(party.pubky, `${party.label}.pubky`),
   );
+  paintOwner(requirePartyField(party.pubky, `${party.label}.pubky`));
 }
 
 export async function establishProductLink(
@@ -554,6 +562,7 @@ export async function addPastedContact(
   contactPubky: string,
   now: () => number,
 ): Promise<void> {
+  paintOwner(ownerPubky);
   await storage.upsertContact({
     pubky: contactPubky,
     ownerPubky,

@@ -17,7 +17,12 @@ import {
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { Contact, RootStackParamList } from '../../types';
-import type { GroupChannel, GroupMember, GroupMessage } from '../../types/group';
+import type {
+  GroupChannel,
+  GroupFanoutOutcome,
+  GroupMember,
+  GroupMessage,
+} from '../../types/group';
 import {
   GROUP_REACTION_KIND,
   GROUP_MEMBERSHIP_KIND,
@@ -32,6 +37,7 @@ import { GroupService, subscribeGroupEvents } from '../../services/group/GroupSe
 import { AttachmentBubble } from '../../components/AttachmentBubble';
 import { ComposerAttachButton } from '../../components/ComposerAttachButton';
 import { formatDeliveryState } from '../../ui/messageStatus';
+import { formatGroupFanoutAggregate } from '../../ui/groupFanoutStatus';
 import { HIT_SLOP_44, minHitStyle } from '../../ui/hitTarget';
 import { peerIdentity } from '../../ui/peerIdentity';
 import { COPY } from '../../copy/uxCopy';
@@ -64,20 +70,25 @@ export default function ChannelScreen({ route }: Props) {
   const [showMembers, setShowMembers] = useState(false);
   const [addPubky, setAddPubky] = useState('');
   const [editingEventId, setEditingEventId] = useState<string | null>(null);
+  const [fanoutOutcomes, setFanoutOutcomes] = useState<GroupFanoutOutcome[]>([]);
 
   const reload = useCallback(async () => {
-    const [ch, msgs, mems, atts] = await Promise.all([
+    const [ch, msgs, mems, atts, outcomes] = await Promise.all([
       GroupService.getChannel(channelId),
       GroupService.listMessages(channelId),
       GroupService.listMembers(channelId),
       ownerPubky
         ? StorageService.listAttachmentsForChannel(ownerPubky, channelId)
         : Promise.resolve([] as AttachmentRecord[]),
+      ownerPubky
+        ? StorageService.listGroupFanoutOutcomesForChannel(ownerPubky, channelId)
+        : Promise.resolve([] as GroupFanoutOutcome[]),
     ]);
     setChannel(ch);
     setMessages(msgs);
     setMembers(mems);
     setAttachments(atts);
+    setFanoutOutcomes(outcomes);
     if (ownerPubky) {
       setContacts(await StorageService.getAllContacts(ownerPubky));
     }
@@ -151,6 +162,7 @@ export default function ChannelScreen({ route }: Props) {
       attachments={attachments}
       members={members}
       contacts={contacts}
+      fanoutOutcomes={fanoutOutcomes}
       localPubky={localPubky}
       draft={draft}
       replyTo={replyTo}
@@ -241,6 +253,7 @@ export function ChannelScreenContent({
   attachments,
   members,
   contacts,
+  fanoutOutcomes,
   localPubky,
   draft,
   replyTo,
@@ -272,6 +285,7 @@ export function ChannelScreenContent({
   attachments: AttachmentRecord[];
   members: GroupMember[];
   contacts: Contact[];
+  fanoutOutcomes: GroupFanoutOutcome[];
   localPubky: string | null;
   draft: string;
   replyTo: GroupMessage | null;
@@ -327,6 +341,23 @@ export function ChannelScreenContent({
 
   const visible = messages.filter(isGroupTimelineVisible);
   const activeMembers = members.filter(m => m.status === 'active');
+  const memberNames = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const member of members) {
+      const contact = contacts.find(c => c.pubky === member.memberPubky) ?? null;
+      map.set(member.memberPubky, peerIdentity(member.memberPubky, contact).title);
+    }
+    return map;
+  }, [members, contacts]);
+  const fanoutByEvent = useMemo(() => {
+    const map = new Map<string, GroupFanoutOutcome[]>();
+    for (const row of fanoutOutcomes) {
+      const list = map.get(row.eventId) ?? [];
+      list.push(row);
+      map.set(row.eventId, list);
+    }
+    return map;
+  }, [fanoutOutcomes]);
   const isPublic = channel?.isPublic === true;
 
   const renderMessage = useCallback(
@@ -341,6 +372,13 @@ export function ChannelScreenContent({
         );
       }
       const isMine = item.senderPubky === localPubky;
+      const fanout = fanoutByEvent.get(item.eventId);
+      const outboundLabel =
+        isMine && !isPublic
+          ? fanout && fanout.length > 0
+            ? formatGroupFanoutAggregate(fanout, memberNames)
+            : formatDeliveryState(item.deliveryState)
+          : null;
       const parent = item.replyToEventId
         ? item.replyToAuthorPubky
           ? byAuthorEvent.get(`${item.replyToAuthorPubky}:${item.replyToEventId}`)
@@ -375,9 +413,7 @@ export function ChannelScreenContent({
           <View style={styles.meta}>
             <Text style={styles.time}>{formatTime(item.sentAt)}</Text>
             {item.editedAt ? <Text style={styles.time}> · edited</Text> : null}
-            {isMine && !isPublic ? (
-              <Text style={styles.time}> · {formatDeliveryState(item.deliveryState)}</Text>
-            ) : null}
+            {outboundLabel ? <Text style={styles.time}> · {outboundLabel}</Text> : null}
           </View>
           {reactions && reactions.size > 0 ? (
             <View style={styles.reactionRow}>
@@ -444,6 +480,8 @@ export function ChannelScreenContent({
       attachments,
       localPubky,
       contacts,
+      fanoutByEvent,
+      memberNames,
       byAuthorEvent,
       byEventId,
       reactionsByTarget,

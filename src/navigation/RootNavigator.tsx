@@ -21,6 +21,7 @@ import { useAuthStore } from '../stores/authStore';
 import ThreadScreen from '../screens/main/ThreadScreen';
 import ChannelScreen from '../screens/main/ChannelScreen';
 import { PubkyRingAuthService } from '../services/PubkyRingAuthService';
+import { PubkyService } from '../services/PubkyService';
 import { GroupService, setPendingPublicJoin } from '../services/group/GroupService';
 import { parsePublicChannelRef } from '../types/group';
 import { sanitizeError } from '../ui/sanitizedError';
@@ -32,6 +33,9 @@ import { stackTransitionAnimation, useReduceMotion } from '../ui/reduceMotion';
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
 const ContactSearchScreen = React.lazy(() => import('../screens/main/ContactSearchScreen'));
+const ContactDetailScreen = React.lazy(
+  () => import('../screens/main/contacts/ContactDetailScreen'),
+);
 const MessageRequestsScreen = React.lazy(() => import('../screens/main/MessageRequestsScreen'));
 const SettingsScreen = React.lazy(() => import('../screens/main/SettingsScreen'));
 const EnableMessagingScreen = React.lazy(() => import('../screens/main/EnableMessagingScreen'));
@@ -129,6 +133,7 @@ export function RootNavigator() {
       if (!url.startsWith('hypercolor://ring-callback')) return;
 
       try {
+        await PubkyService.awaitSignOutWipe();
         const { pubky, homeserver } = await PubkyRingAuthService.handleRingCallback(url);
         setAuthenticated(pubky as import('../types').PubkyKey, homeserver);
         notifyEnableMessagingResume();
@@ -189,6 +194,11 @@ export function RootNavigator() {
                   name="ContactSearch"
                   component={ContactSearchScreen}
                   options={{ animation: stackAnimation('slide_from_bottom'), headerShown: false }}
+                />
+                <Stack.Screen
+                  name="ContactDetail"
+                  component={ContactDetailScreen}
+                  options={{ animation: stackAnimation('slide_from_right'), headerShown: false }}
                 />
                 <Stack.Screen
                   name="MessageRequests"

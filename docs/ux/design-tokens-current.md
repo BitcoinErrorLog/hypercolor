@@ -39,7 +39,7 @@ python3  # walk src, regex #[0-9A-Fa-f]{3,8}, rgba?(...), fontSize, borderRadius
 | `#a78bfa` | 3 | CTA hint, tip “Pay in wallet” |
 | `#f59e0b` (warning) | 3 | Validation, nexus note |
 | `#ef4444` | 2 | Profile disconnect |
-| singles | 1 each | `#e9d5ff` `#141414` ThreadTipBar; `#fbbf24` payment warning; `#1f1b2e` EnableMessagingCta; `#4c1d95` Channels toggleOn; `#e5e7eb` `#f87171` ChannelScreen; `#d1d5db` MessageRequests decline; `#111827` ContactSearch qrFallback |
+| singles | 1 each | `#e9d5ff` `#141414` ThreadTipBar; `#fbbf24` payment warning; `#1f1b2e` EnableMessagingCta; `#4c1d95` Channels toggleOn; `#e5e7eb` `#f87171` ChannelScreen; `#d1d5db` MessageRequests decline |
 
 Android splash XML: `android/app/src/main/res/values/colors.xml` `splashscreen_background` **`#FFFFFF`** (light), opposite the in-app dark canvas.
 

@@ -3,6 +3,8 @@ import { PaykitLinkNative } from '../PaykitLinkNative';
 import { StorageService } from '../../StorageService';
 import { KeyStore } from '../../KeyStore';
 import { RetryQueue } from '../../RetryQueue';
+import { FollowsImportSettings } from '../../contacts/followsImportSettings';
+import { wireSignOutMarkerMocks } from '../../__tests__/wireSignOutMarkerMocks';
 import { LINK_RECEIVER_PATH, type LinkReceiver, type LinkRecord } from '../../../types/link';
 import { buildGroupMembershipEnvelope } from '../../../types/group';
 import type { Contact, MessageRequest } from '../../../types';
@@ -75,6 +77,10 @@ jest.mock('../../StorageService', () => ({
     getLinkReadCursor: jest.fn(),
     setLinkReadCursor: jest.fn(),
     clearAccountData: jest.fn(),
+    persistSignOutIncompleteJournal: jest.fn().mockResolvedValue(undefined),
+    hasSignOutIncompleteJournal: jest.fn().mockResolvedValue(false),
+    getSignOutIncompleteJournalOwner: jest.fn().mockResolvedValue(null),
+    clearSignOutIncompleteJournal: jest.fn().mockResolvedValue(undefined),
     retryPendingCleanup: jest.fn(),
     markGroupEventSeen: jest.fn(),
     listDeliveryQueue: jest.fn(),
@@ -87,6 +93,8 @@ jest.mock('../../StorageService', () => ({
     insertInboundPrivateCreate: jest.fn(),
     saveGroupMessage: jest.fn(),
     upsertMessageRequest: jest.fn(),
+    acceptDeclinedMessageRequest: jest.fn(),
+    deleteMessageRequest: jest.fn(),
     listMessageRequests: jest.fn(),
     countPendingMessageRequests: jest.fn(),
     deleteLinkStreamItemsForPeer: jest.fn(),
@@ -96,6 +104,11 @@ jest.mock('../../StorageService', () => ({
     deleteGroupDeferredForSender: jest.fn(),
     deleteGroupSeenEventsForSender: jest.fn(),
     setContactRelationshipFlags: jest.fn(),
+    listBlockedPeers: jest.fn(),
+    listBlockedPeerCleanupPending: jest.fn(),
+    setBlockedPeerCleanupPending: jest.fn(),
+    insertBlockedPeer: jest.fn(),
+    deleteBlockedPeer: jest.fn(),
   },
 }));
 
@@ -117,12 +130,15 @@ jest.mock('../../KeyStore', () => ({
     deleteLinkSessionIfAlias: jest.fn(),
     isInitialized: jest.fn(() => true),
     readLinkSession: jest.fn(() => ({ ok: true, alias: null })),
+    markSignOutIncomplete: jest.fn(),
+    isSignOutIncomplete: jest.fn(() => false),
+    getSignOutIncompleteOwner: jest.fn(() => null),
+    clearSignOutIncomplete: jest.fn(),
   },
 }));
 
 jest.mock('../../RetryQueue', () => ({
   RetryQueue: {
-    enqueue: jest.fn(),
     getDue: jest.fn(),
     recordFailure: jest.fn(),
     recordSuccess: jest.fn(),
@@ -179,6 +195,7 @@ describe('LinkService message requests', () => {
   beforeEach(async () => {
     jest.resetAllMocks();
     jest.spyOn(Date, 'now').mockReturnValue(NOW);
+    FollowsImportSettings.resetForTests();
     mockedNative.isAvailable.mockReturnValue(true);
     mockedNative.signinWithSecret.mockResolvedValue({ sessionAlias: SESSION_ALIAS, pubky: OWNER });
     mockedNative.adoptAuthSession.mockResolvedValue(undefined);
@@ -200,16 +217,13 @@ describe('LinkService message requests', () => {
     mockedKeyStore.isInitialized.mockReturnValue(true);
     mockedKeyStore.getLinkSession.mockReturnValue(null);
     mockedKeyStore.setLinkSession.mockImplementation((alias: string) => {
-      mockedKeyStore.getLinkSession.mockReturnValue(alias);
     });
     mockedKeyStore.deleteLinkSession.mockImplementation(() => {
-      mockedKeyStore.getLinkSession.mockReturnValue(null);
-    });
     mockedKeyStore.deleteLinkSessionIfAlias.mockImplementation((alias: string) => {
       if (mockedKeyStore.getLinkSession() !== alias) return false;
       mockedKeyStore.deleteLinkSession();
       return true;
-    });
+    wireSignOutMarkerMocks(mockedKeyStore, mockedStorage);
     mockedStorage.getLinkReceiver.mockResolvedValue(receiverRow);
     mockedStorage.getLink.mockResolvedValue(null);
     mockedStorage.getAllLinks.mockResolvedValue([]);
@@ -219,10 +233,16 @@ describe('LinkService message requests', () => {
     mockedStorage.getContact.mockResolvedValue(null);
     mockedStorage.getAllContacts.mockResolvedValue([]);
     mockedStorage.getMessageRequest.mockResolvedValue(null);
+    mockedStorage.acceptDeclinedMessageRequest.mockResolvedValue(false);
     mockedStorage.countLinkMessagesForPeer.mockResolvedValue(0);
+    mockedStorage.listBlockedPeers.mockResolvedValue([]);
+    mockedStorage.listBlockedPeerCleanupPending.mockResolvedValue([]);
+    mockedStorage.getHandshakeBudget.mockResolvedValue(null);
     mockedRetryQueue.getDue.mockResolvedValue([]);
 
     await LinkService.clearSession();
+    mockedKeyStore.clearSignOutIncomplete();
+    await mockedStorage.clearSignOutIncompleteJournal();
     await LinkService.signinWithSecret('signin-secret-hex');
   });
 
@@ -455,10 +475,40 @@ describe('LinkService message requests', () => {
     );
 
     expect(mockedStorage.upsertMessageRequest).not.toHaveBeenCalled();
+    expect(mockedStorage.acceptDeclinedMessageRequest).not.toHaveBeenCalled();
     expect(mockedNative.receivePrivateMessages).not.toHaveBeenCalled();
     expect(mockedNative.restoreLink).not.toHaveBeenCalled();
     expect(mockedStorage.saveLinkMessage).not.toHaveBeenCalled();
     expect(mockedStorage.saveLinkStreamItems).not.toHaveBeenCalled();
+  });
+
+  it('acceptDeclinedRequest promotes declined to accepted without using sticky upsert', async () => {
+    let status: MessageRequest['status'] = 'declined';
+    mockedStorage.getMessageRequest.mockImplementation(async () => pendingRequest(status));
+    mockedStorage.acceptDeclinedMessageRequest.mockImplementation(async () => {
+      status = 'accepted';
+      return true;
+    });
+    mockedStorage.getLink.mockResolvedValue({
+      ownerPubky: OWNER,
+      peerPubky: PEER,
+      role: 'responder',
+      status: 'established',
+      snapshot: 'est-in',
+      remoteNoisePublicKey: PEER_NOISE,
+      localReceiverPath: LINK_RECEIVER_PATH,
+      remoteReceiverPath: LINK_RECEIVER_PATH,
+      consecutiveFailures: 0,
+      updatedAt: NOW,
+    } satisfies LinkRecord);
+    mockedNative.restoreLink.mockResolvedValue({ linkId: 'handle-1' });
+    mockedStorage.getUnprocessedLinkStreamItems.mockResolvedValue([]);
+
+    await LinkService.acceptDeclinedRequest(PEER);
+
+    expect(mockedStorage.acceptDeclinedMessageRequest).toHaveBeenCalledWith(OWNER, PEER);
+    expect(mockedStorage.upsertMessageRequest).not.toHaveBeenCalled();
+    expect(mockedNative.restoreLink).toHaveBeenCalled();
   });
 
   it('classifies a wiped established conversation as auto-accept, not a new request', async () => {
