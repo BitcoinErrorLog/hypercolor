@@ -5,6 +5,7 @@ import SettingsScreen from '../SettingsScreen';
 import { BackupService } from '../../../services/backup/BackupService';
 import { setLastBackupAt } from '../../../stores/backupMetaStore';
 import { COPY } from '../../../copy/uxCopy';
+import { scrollSettingsToSection, focusSettingsSection } from '../../../ui/settingsSectionFocus';
 
 const mockGoBack = jest.fn();
 const mockDispatch = jest.fn();
@@ -67,6 +68,11 @@ jest.mock('../../../services/link/liveProof', () => ({
 
 jest.mock('../../../utils/copyText', () => ({
   copyText: jest.fn(),
+}));
+
+jest.mock('../../../ui/settingsSectionFocus', () => ({
+  scrollSettingsToSection: jest.fn(),
+  focusSettingsSection: jest.fn(),
 }));
 
 describe('SettingsScreen recovery gate', () => {
@@ -245,6 +251,8 @@ describe('SettingsScreen recovery gate', () => {
 describe('SettingsScreen section routes', () => {
   beforeEach(() => {
     mockRoute.params = {};
+    jest.mocked(scrollSettingsToSection).mockClear();
+    jest.mocked(focusSettingsSection).mockClear();
   });
 
   it('scrolls and marks Encrypted backup when opened with section=backup', async () => {
@@ -264,6 +272,8 @@ describe('SettingsScreen section routes', () => {
     expect(
       tree.root.findByProps({ testID: 'settingsFocusPayments' }).props.accessibilityState.selected,
     ).toBe(false);
+    expect(scrollSettingsToSection).toHaveBeenCalledWith(expect.anything(), 240, false);
+    expect(focusSettingsSection).toHaveBeenCalled();
     await act(async () => {
       tree.unmount();
     });
@@ -286,6 +296,8 @@ describe('SettingsScreen section routes', () => {
     expect(
       tree.root.findByProps({ testID: 'settingsFocusBackup' }).props.accessibilityState.selected,
     ).toBe(false);
+    expect(scrollSettingsToSection).toHaveBeenCalledWith(expect.anything(), 720, false);
+    expect(focusSettingsSection).toHaveBeenCalled();
     await act(async () => {
       tree.unmount();
     });

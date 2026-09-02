@@ -11,8 +11,6 @@ import {
   ActivityIndicator,
   Alert,
   BackHandler,
-  AccessibilityInfo,
-  findNodeHandle,
 } from 'react-native';
 import {
   useNavigation,
@@ -42,6 +40,8 @@ import { sanitizeError } from '../../ui/sanitizedError';
 import { setLastBackupAt } from '../../stores/backupMetaStore';
 import { shortPubky } from '../../ui/shortPubky';
 import { copyText } from '../../utils/copyText';
+import { useReduceMotion } from '../../ui/reduceMotion';
+import { scrollSettingsToSection, focusSettingsSection } from '../../ui/settingsSectionFocus';
 
 type Nav = NativeStackNavigationProp<RootStackParamList, 'Settings'>;
 type SettingsRoute = RouteProp<RootStackParamList, 'Settings'>;
@@ -70,18 +70,18 @@ export default function SettingsScreen() {
   const paymentsRef = useRef<View>(null);
   const backupY = useRef(0);
   const paymentsY = useRef(0);
+  const reduceMotion = useReduceMotion();
 
   useEffect(() => {
     if (section !== 'backup' && section !== 'payments') return;
     const y = section === 'backup' ? backupY.current : paymentsY.current;
     const node = section === 'backup' ? backupRef.current : paymentsRef.current;
     const timer = setTimeout(() => {
-      scrollRef.current?.scrollTo({ y, animated: true });
-      const tag = findNodeHandle(node);
-      if (tag != null) AccessibilityInfo.setAccessibilityFocus(tag);
+      scrollSettingsToSection(scrollRef.current, y, reduceMotion);
+      focusSettingsSection(node);
     }, 50);
     return () => clearTimeout(timer);
-  }, [section]);
+  }, [section, reduceMotion]);
 
   const leaveSettings = useCallback(
     (action?: NavigationAction) => {
@@ -216,9 +216,8 @@ export default function SettingsScreen() {
           onLayout={event => {
             backupY.current = event.nativeEvent.layout.y;
             if (section === 'backup') {
-              scrollRef.current?.scrollTo({ y: event.nativeEvent.layout.y, animated: true });
-              const tag = findNodeHandle(backupRef.current);
-              if (tag != null) AccessibilityInfo.setAccessibilityFocus(tag);
+              scrollSettingsToSection(scrollRef.current, event.nativeEvent.layout.y, reduceMotion);
+              focusSettingsSection(backupRef.current);
             }
           }}
           style={styles.section}
@@ -396,9 +395,8 @@ export default function SettingsScreen() {
           onLayout={event => {
             paymentsY.current = event.nativeEvent.layout.y;
             if (section === 'payments') {
-              scrollRef.current?.scrollTo({ y: event.nativeEvent.layout.y, animated: true });
-              const tag = findNodeHandle(paymentsRef.current);
-              if (tag != null) AccessibilityInfo.setAccessibilityFocus(tag);
+              scrollSettingsToSection(scrollRef.current, event.nativeEvent.layout.y, reduceMotion);
+              focusSettingsSection(paymentsRef.current);
             }
           }}
         >

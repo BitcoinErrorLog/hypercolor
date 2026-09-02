@@ -33,6 +33,7 @@ import { StorageService } from '../../services/StorageService';
 import { GroupService, subscribeGroupEvents } from '../../services/group/GroupService';
 import { LinkService } from '../../services/link/LinkService';
 import { AttachmentBubble } from '../../components/AttachmentBubble';
+import { eventIdsWithDeliveryQueue } from '../../ui/failedSendRetry';
 import {
   pickAndSendFile,
   pickAndSendPhoto,
@@ -81,6 +82,7 @@ export default function ChannelScreen({ route }: Props) {
   const [editingEventId, setEditingEventId] = useState<string | null>(null);
   const [actionMenuOpen, setActionMenuOpen] = useState(false);
   const [composerNotice, setComposerNotice] = useState<ComposerAttachNotice | null>(null);
+  const [retryableEventIds, setRetryableEventIds] = useState<Set<string>>(() => new Set());
 
   const reload = useCallback(async () => {
     const [ch, msgs, mems, atts] = await Promise.all([
@@ -95,6 +97,11 @@ export default function ChannelScreen({ route }: Props) {
     setMessages(msgs);
     setMembers(mems);
     setAttachments(atts);
+    const failedIds = [
+      ...msgs.filter(row => row.deliveryState === 'failed').map(row => row.eventId),
+      ...atts.filter(row => row.deliveryState === 'failed').map(row => row.eventId),
+    ];
+    setRetryableEventIds(await eventIdsWithDeliveryQueue(failedIds));
     if (ownerPubky) {
       setContacts(await StorageService.getAllContacts(ownerPubky));
     }
@@ -274,13 +281,19 @@ export default function ChannelScreen({ route }: Props) {
           alertSanitized(err, COPY.couldNotRefreshChannel);
         }
       }}
-      onRetryFailed={() => {
+      retryableEventIds={retryableEventIds}
+      onRetryFailed={eventId => {
         void (async () => {
+          if (!retryableEventIds.has(eventId)) return;
           try {
             await LinkService.recoverPendingSends();
             await LinkService.drainRetries();
           } catch {
-            // Bubble stays Failed until a drain succeeds.
+            setRetryableEventIds(prev => {
+              const next = new Set(prev);
+              next.delete(eventId);
+              return next;
+            });
           }
           await reload();
         })();
@@ -324,6 +337,7 @@ export function ChannelScreenContent({
   onRemoveMember,
   onLeave,
   onRefreshPublic,
+  retryableEventIds,
   onRetryFailed,
 }: {
   channel: GroupChannel | null;
@@ -362,7 +376,8 @@ export function ChannelScreenContent({
   onRemoveMember: (pubky: string) => void;
   onLeave: () => void;
   onRefreshPublic: () => void;
-  onRetryFailed: () => void;
+  retryableEventIds: ReadonlySet<string>;
+  onRetryFailed: (eventId: string) => void;
 }) {
   const flatListRef = useRef<FlatList<GroupMessage>>(null);
   const plusRef = useRef<View>(null);
@@ -457,7 +472,15 @@ export function ChannelScreenContent({
             </Text>
           ) : null}
           {item.kind === CHAT_ATTACHMENT_KIND && attachment && !item.deleted ? (
-            <AttachmentBubble record={attachment} isMine={isMine} onRetrySend={onRetryFailed} />
+            <AttachmentBubble
+              record={attachment}
+              isMine={isMine}
+              onRetrySend={
+                retryableEventIds.has(attachment.eventId)
+                  ? () => onRetryFailed(attachment.eventId)
+                  : undefined
+              }
+            />
           ) : (
             <Text style={[styles.bubbleText, isMine ? styles.mineText : styles.theirsText]}>
               {item.deleted ? 'Message deleted' : item.body}
@@ -467,7 +490,37 @@ export function ChannelScreenContent({
             <Text style={styles.time}>{formatTime(item.sentAt)}</Text>
             {item.editedAt ? <Text style={styles.time}> · edited</Text> : null}
             {isMine && !isPublic ? (
-              <Text style={styles.time}> · {formatDeliveryState(item.deliveryState)}</Text>
+              <>
+                <Text
+                  style={[
+                    styles.time,
+                    item.deliveryState === 'failed' ? styles.statusFailed : null,
+                  ]}
+                >
+                  {' '}
+                  · {formatDeliveryState(item.deliveryState)}
+                </Text>
+                {item.deliveryState === 'failed' ? (
+                  retryableEventIds.has(item.eventId) ? (
+                    <TouchableOpacity
+                      accessibilityRole="button"
+                      accessibilityLabel={COPY.retry}
+                      hitSlop={HIT_SLOP_44}
+                      onPress={() => onRetryFailed(item.eventId)}
+                    >
+                      <Text style={styles.retry}>{COPY.retry}</Text>
+                    </TouchableOpacity>
+                  ) : (
+                    <Text
+                      testID="channelSendTerminal"
+                      accessibilityRole="text"
+                      style={styles.statusFailed}
+                    >
+                      {COPY.couldNotSendStartAgain}
+                    </Text>
+                  )
+                ) : null}
+              </>
             ) : null}
           </View>
           {reactions && reactions.size > 0 ? (
@@ -545,6 +598,7 @@ export function ChannelScreenContent({
       onEdit,
       onDelete,
       onRetryFailed,
+      retryableEventIds,
     ],
   );
 
@@ -838,8 +892,10 @@ const styles = StyleSheet.create({
   bubbleText: { fontSize: 15, lineHeight: 20 },
   mineText: { color: '#fff' },
   theirsText: { color: '#f9fafb' },
-  meta: { flexDirection: 'row', marginTop: 4 },
+  meta: { flexDirection: 'row', marginTop: 4, flexWrap: 'wrap', alignItems: 'center', gap: 6 },
   time: { fontSize: 10, color: 'rgba(255,255,255,0.4)' },
+  statusFailed: { color: '#fca5a5' },
+  retry: { fontSize: 12, color: '#c4b5fd', fontWeight: '700', textDecorationLine: 'underline' },
   reactionRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 6 },
   reactionChip: { fontSize: 12, color: '#e5e7eb' },
   actionRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 6 },

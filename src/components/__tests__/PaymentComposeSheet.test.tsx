@@ -118,4 +118,18 @@ describe('PaymentComposeSheet', () => {
     expect(onSubmit).toHaveBeenCalledWith('0.001', '');
     await unmount(tree);
   });
+
+  it('shows a live sats conversion for the BTC amount', async () => {
+    const tree = await render(
+      <PaymentComposeSheet visible busy={false} onClose={jest.fn()} onSubmit={jest.fn()} />,
+    );
+    expect(tree.root.findAllByProps({ testID: 'paymentComposeSats' })).toHaveLength(0);
+    await act(async () => {
+      tree.root.findByProps({ testID: 'paymentComposeAmount' }).props.onChangeText('0.001');
+    });
+    expect(tree.root.findByProps({ testID: 'paymentComposeSats' }).props.children).toBe(
+      '≈ 100000 sats',
+    );
+    await unmount(tree);
+  });
 });

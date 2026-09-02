@@ -81,4 +81,16 @@ describe('draft envelope byte cap', () => {
     const dmSize = draftEnvelopeByteSize('hello', dm);
     expect(groupSize).toBeGreaterThan(dmSize);
   });
+
+  it('allows a draft at the envelope cap and rejects one extra character', () => {
+    let fit = 0;
+    for (let n = 1; n <= LINK_MESSAGE_MAX_BYTES; n += 1) {
+      if (draftExceedsByteCap('a'.repeat(n), dm)) break;
+      fit = n;
+    }
+    expect(fit).toBeGreaterThan(0);
+    expect(draftEnvelopeByteSize('a'.repeat(fit), dm)).toBeLessThanOrEqual(LINK_MESSAGE_MAX_BYTES);
+    expect(draftExceedsByteCap('a'.repeat(fit), dm)).toBe(false);
+    expect(draftExceedsByteCap('a'.repeat(fit + 1), dm)).toBe(true);
+  });
 });

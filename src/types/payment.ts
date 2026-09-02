@@ -409,6 +409,22 @@ export function satsToBtcDecimal(sats: number): string {
   return `${whole}.${frac.toString().padStart(8, '0').replace(/0+$/, '')}`;
 }
 
+/** Whole sats for a BTC decimal, or null when the amount is not sat-exact. */
+export function btcDecimalToSats(value: string): number | null {
+  const trimmed = value.trim();
+  if (!isLenientAmountValue(trimmed)) return null;
+  const normalized = normalizeAmountValue(trimmed);
+  if (normalized === null) return null;
+  const parts = normalized.split('.');
+  const whole = parts[0] ?? '0';
+  const fracRaw = parts[1] ?? '';
+  if (fracRaw.length > 8 && /[1-9]/.test(fracRaw.slice(8))) return null;
+  const frac = (fracRaw + '00000000').slice(0, 8);
+  const sats = Number(whole) * 100_000_000 + Number(frac);
+  if (!Number.isSafeInteger(sats) || sats < 0) return null;
+  return sats;
+}
+
 export function serializedPaymentBytes(value: unknown): number {
   return new TextEncoder().encode(JSON.stringify(value)).byteLength;
 }

@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, Modal } from 'react-native';
-import { isPositiveBtcAmount, isValidPaymentReference } from '../types/payment';
-import { COPY } from '../copy/uxCopy';
+import { isPositiveBtcAmount, isValidPaymentReference, btcDecimalToSats } from '../types/payment';
+import { COPY, amountSatsApprox } from '../copy/uxCopy';
 import { HIT_SLOP_44 } from '../ui/hitTarget';
 import { PAYMENT_COMPOSE_DEFAULT_AMOUNT } from '../ui/paymentReview';
 import { modalAnimationType, useReduceMotion } from '../ui/reduceMotion';
@@ -55,6 +55,7 @@ export function PaymentComposeSheet({
   }
 
   const canSubmit = paymentComposeError(amount, reference, intent) === null;
+  const sats = btcDecimalToSats(amount);
 
   function handleSubmit() {
     const amountValue = amount.trim();
@@ -91,6 +92,11 @@ export function PaymentComposeSheet({
             placeholderTextColor="#4b5563"
             autoCapitalize="none"
           />
+          {sats !== null ? (
+            <Text testID="paymentComposeSats" style={styles.satsHint}>
+              {amountSatsApprox(sats)}
+            </Text>
+          ) : null}
           {intent === 'request' ? (
             <>
               <Text style={styles.label}>Reference</Text>
@@ -160,6 +166,7 @@ const styles = StyleSheet.create({
   sheet: { backgroundColor: '#111', borderRadius: 16, padding: 20, gap: 10 },
   title: { color: '#f9fafb', fontSize: 17, fontWeight: '700', marginBottom: 4 },
   label: { color: '#9ca3af', fontSize: 12, fontWeight: '600' },
+  satsHint: { color: '#808692', fontSize: 13 },
   validation: { color: '#f59e0b', fontSize: 13, flex: 1 },
   errorRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
   errorIcon: { color: '#f59e0b', fontSize: 14, fontWeight: '700' },

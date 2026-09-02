@@ -2,7 +2,9 @@ import React, { useCallback, useState } from 'react';
 import { Alert, View } from 'react-native';
 import { PaymentRequestCard, useTickingNow } from './PaymentRequestCard';
 import { PaymentService } from '../services/payments/PaymentService';
-import { PaymentError, type PaymentRequestRecord, type TipEndpointRecord } from '../types/payment';
+import { type PaymentRequestRecord, type TipEndpointRecord } from '../types/payment';
+import { COPY } from '../copy/uxCopy';
+import { sanitizeError } from '../ui/sanitizedError';
 
 export type PaymentReviewRequest = {
   kind: 'request' | 'tip';
@@ -39,13 +41,8 @@ export function PaymentRequestBubble({
         await body();
         onChanged();
       } catch (err) {
-        const message =
-          err instanceof PaymentError
-            ? err.message
-            : err instanceof Error
-              ? err.message
-              : 'Payment action failed';
-        Alert.alert('Payment', message);
+        const sanitized = sanitizeError(err, COPY.couldNotCompletePaymentAction);
+        Alert.alert('Payment', sanitized.message);
       } finally {
         setBusy(false);
       }

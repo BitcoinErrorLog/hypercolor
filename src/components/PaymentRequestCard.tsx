@@ -52,7 +52,10 @@ export function PaymentRequestCard({
           {receipt.note}
         </Text>
       ) : null}
-      {isPayer && record.status === 'pending' && statusWord === COPY.paymentRequested ? (
+      {isPayer &&
+      record.status === 'pending' &&
+      statusWord === COPY.paymentRequested &&
+      record.pendingEventId === null ? (
         <View style={styles.actions}>
           <ActionButton label="Accept" onPress={onAccept} disabled={busy} primary />
           <ActionButton label="Reject" onPress={onReject} disabled={busy} />

@@ -50,4 +50,18 @@ describe('AttachmentBubble', () => {
       tree.unmount();
     });
   });
+
+  it('shows a terminal state with no Retry when the send cannot be re-queued', async () => {
+    let tree!: ReactTestRenderer;
+    await act(async () => {
+      tree = create(<AttachmentBubble record={record()} isMine />);
+    });
+    expect(tree.root.findAllByProps({ testID: 'attachmentRetrySend' })).toHaveLength(0);
+    expect(tree.root.findByProps({ testID: 'attachmentSendTerminal' }).props.children).toBe(
+      COPY.couldNotSendStartAgain,
+    );
+    await act(async () => {
+      tree.unmount();
+    });
+  });
 });

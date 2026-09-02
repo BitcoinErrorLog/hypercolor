@@ -15,7 +15,7 @@ export function AttachmentBubble({
 }: {
   record: AttachmentRecord;
   isMine: boolean;
-  onRetrySend?: () => void;
+  onRetrySend?: (() => void) | undefined;
 }) {
   const [uri, setUri] = useState<string | null>(record.localCachePath);
   const [thumbUri, setThumbUri] = useState<string | null>(null);
@@ -108,7 +108,15 @@ export function AttachmentBubble({
           >
             <Text style={styles.retryText}>{COPY.retry}</Text>
           </TouchableOpacity>
-        ) : null}
+        ) : (
+          <Text
+            testID="attachmentSendTerminal"
+            accessibilityRole="text"
+            style={[styles.meta, styles.error, { color: textColor }]}
+          >
+            {COPY.couldNotSendStartAgain}
+          </Text>
+        )}
       </View>
     );
   }

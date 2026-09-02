@@ -36,6 +36,7 @@ import {
   isValidPaymentReference,
   normalizeAmountValue,
   satsToBtcDecimal,
+  btcDecimalToSats,
 } from '../payment';
 import {
   MAINNET_BOLT11_20U,
@@ -375,6 +376,9 @@ describe('amount validation', () => {
     expect(normalizeAmountValue('10.')).toBe('10');
     expect(satsToBtcDecimal(1000)).toBe('0.00001');
     expect(satsToBtcDecimal(100_000_000)).toBe('1');
+    expect(btcDecimalToSats('0.00001')).toBe(1000);
+    expect(btcDecimalToSats('1')).toBe(100_000_000);
+    expect(btcDecimalToSats('0.001')).toBe(100_000);
   });
 
   it('accepts lenient inbound amounts and any asset on decode, emits remain strict', () => {

@@ -1,6 +1,5 @@
+import type { SettingsSection } from '../types';
 import type { ChannelMode } from './channelList';
-
-export type SettingsSection = 'backup' | 'payments';
 
 function settingsRouteParams(section: SettingsSection): { section: SettingsSection } {
   return { section };
