@@ -73,6 +73,7 @@ import { continuePaymentReview } from './continuePaymentReview';
 import { eventIdsWithDeliveryQueue } from '../../ui/failedSendRetry';
 import { useReduceMotion } from '../../ui/reduceMotion';
 import { color, space, radius, typeRole, measure } from '../../theme';
+import { Icon } from '../../ui/primitives';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Thread'>;
 
@@ -475,7 +476,7 @@ export function ThreadScreenContent({
   onCopyPubky: () => void;
 }) {
   const flatListRef = useRef<FlatList<ThreadItem>>(null);
-  const plusRef = useRef<View>(null);
+  const plusRef = useRef<TouchableOpacity>(null);
   const menuWasOpen = useRef(false);
   const reduceMotion = useReduceMotion();
   const items = useMemo(
@@ -604,11 +605,10 @@ export function ThreadScreenContent({
     inboxClosed,
     hasTipEndpoints: tipEndpoints.some(row => row.validationStatus !== 'rejected'),
   });
+  const byteSize = draftEnvelopeByteSize(draft, { surface: 'dm' });
   const overCap = draftExceedsByteCap(draft, { surface: 'dm' });
-  const byteLabel = messageByteCountLabel(
-    draftEnvelopeByteSize(draft, { surface: 'dm' }),
-    LINK_MESSAGE_MAX_BYTES,
-  );
+  const showByteCap = byteSize >= LINK_MESSAGE_MAX_BYTES * 0.8 || overCap;
+  const byteLabel = messageByteCountLabel(byteSize, LINK_MESSAGE_MAX_BYTES);
   const nowMs = useTickingNow();
   const reviewView = review
     ? mapPaymentReview({
@@ -639,7 +639,7 @@ export function ThreadScreenContent({
           hitSlop={HIT_SLOP_44}
           style={styles.backBtn}
         >
-          <Text style={styles.backText}>←</Text>
+          <Icon name="chevron-back" tone="brand" />
         </TouchableOpacity>
         <TouchableOpacity
           style={styles.titleWrap}
@@ -785,7 +785,7 @@ export function ThreadScreenContent({
               onPress={onOpenActionMenu}
               style={styles.plusBtn}
             >
-              <Text style={styles.plusIcon}>+</Text>
+              <Icon name="add" tone="secondary" />
             </TouchableOpacity>
             <TextInput
               testID="threadComposer"
@@ -816,17 +816,28 @@ export function ThreadScreenContent({
               {sending ? (
                 <ActivityIndicator color={color.textOnBrand} size="small" />
               ) : (
-                <Text style={styles.sendIcon}>↑</Text>
+                <Icon
+                  name="arrow-up"
+                  tone={
+                    !draft.trim() || sending || !composerEnabled || overCap ? 'muted' : 'onBrand'
+                  }
+                />
               )}
             </TouchableOpacity>
           </View>
-          <Text
-            testID="threadByteCap"
-            accessibilityLabel={byteLabel}
-            style={[styles.byteCap, overCap && styles.byteCapOver]}
-          >
-            {byteLabel}. {COPY.messageByteCap}
-          </Text>
+          {showByteCap ? (
+            <Text
+              testID="threadByteCap"
+              accessibilityLabel={byteLabel}
+              numberOfLines={1}
+              style={[
+                styles.byteCap,
+                byteSize >= LINK_MESSAGE_MAX_BYTES * 0.95 && styles.byteCapOver,
+              ]}
+            >
+              {byteLabel}
+            </Text>
+          ) : null}
           {tipPickerOpen ? (
             <TouchableOpacity
               accessibilityRole="button"

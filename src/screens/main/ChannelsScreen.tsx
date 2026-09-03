@@ -42,6 +42,7 @@ import {
 import { modalAnimationType, useReduceMotion } from '../../ui/reduceMotion';
 import { sanitizeError } from '../../ui/sanitizedError';
 import { color, space, radius, typeRole, measure } from '../../theme';
+import { Icon } from '../../ui/primitives';
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
 type ChannelsRoute = RouteProp<MainTabParamList, 'Channels'>;
@@ -378,7 +379,7 @@ export function ChannelsScreenContent({
             onPress={() => onOpenCreate(mode === 'public')}
             style={styles.headerHit}
           >
-            <Text style={styles.add}>+</Text>
+            <Icon name="add" tone="brand" />
           </TouchableOpacity>
         </View>
       </View>
@@ -693,7 +694,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  segmentOn: { backgroundColor: color.brandDeep },
+  segmentOn: { backgroundColor: color.brand },
   segmentText: { color: color.textPrimary, fontWeight: '600' },
   warning: {
     marginHorizontal: space.lg,

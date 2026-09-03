@@ -211,6 +211,7 @@ export const ENABLE_AUTH_URL = 'pubkyauth://vrt-fixture-authorization';
 
 export const PAYMENT_REVIEW_FIXTURE: PaymentReviewView = {
   recipientTitle: aster.name,
+  recipientPubky: PEER,
   recipientShortPubky: `${PEER.slice(0, 4)}…${PEER.slice(-4)}`,
   amountText: '0.00010000 BTC',
   invoiceAmountText: null,

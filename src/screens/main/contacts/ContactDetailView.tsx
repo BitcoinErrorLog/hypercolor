@@ -1,13 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import {
-  BackHandler,
-  Pressable,
-  SafeAreaView,
-  ScrollView,
-  StyleSheet,
-  Text,
-  View,
-} from 'react-native';
+import { BackHandler, SafeAreaView, ScrollView, StyleSheet, Text, View } from 'react-native';
 import type { Contact } from '../../../types';
 import type { TrustExplanation } from '../../../services/TrustEngine';
 import { formatTipIdentifierDisplay } from '../../../utils/displaySanitize';
@@ -18,16 +10,20 @@ import { groupedPubky } from '../../../ui/contacts/shortPubky';
 import { CONTACTS_COPY } from '../../../ui/contacts/contactsCopy';
 import {
   CONTACTS_BODY,
-  CONTACTS_BRAND,
   CONTACTS_CANVAS,
   CONTACTS_ERROR,
-  CONTACTS_HAIRLINE,
   CONTACTS_MUTED,
-  CONTACTS_RADIUS,
-  MIN_TARGET,
 } from '../../../ui/contacts/tokens';
 import { contactPrimaryText, contactSecondaryText } from './contactIdentity';
-import { radius, color, space, typeRole } from '../../../theme';
+import { space, typeRole } from '../../../theme';
+import {
+  Avatar,
+  Button,
+  DetailRow,
+  LoadingState,
+  PageHeader,
+  PubkyChip,
+} from '../../../ui/primitives';
 
 export function linkStateLabel(status: 'established' | 'handshaking' | null): string {
   if (status === 'established') return 'Encrypted link ready';
@@ -111,42 +107,26 @@ export function ContactDetailView({
 
   return (
     <SafeAreaView style={styles.container} testID="contactDetailScreen">
-      <View style={styles.header}>
-        <Pressable
-          testID="contactDetailBack"
-          accessibilityRole="button"
-          accessibilityLabel="Back to Contacts"
-          onPress={onBack}
-          style={styles.headerBtn}
-        >
-          <Text style={styles.headerBtnLabel}>Back</Text>
-        </Pressable>
-        <Text style={styles.headerTitle} accessibilityRole="header">
-          Contact
-        </Text>
-        <View style={styles.headerBtn} />
-      </View>
+      <PageHeader
+        title="Contact"
+        onBack={onBack}
+        backLabel="Back to Contacts"
+        testID="contactDetail"
+      />
       {loading ? (
-        <View testID="contactDetailLoading" style={styles.centered}>
-          <Text style={styles.muted}>Loading…</Text>
-        </View>
+        <LoadingState label="Loading contact" testID="contactDetailLoading" />
       ) : loadError && !blocked ? (
         <ContactErrorBlock message={loadError} details={loadErrorDetails} onRetry={onRetry} />
       ) : blocked ? (
         <ScrollView contentContainerStyle={styles.body}>
-          <View style={styles.avatar}>
-            <Text style={styles.avatarLetter}>{primary.charAt(0).toUpperCase()}</Text>
-          </View>
+          <Avatar name={primary} pubky={pubky} size="lg" testID="contactDetailAvatar" />
           <Text style={styles.name}>{primary}</Text>
           {secondary ? <Text style={styles.secondary}>{secondary}</Text> : null}
-          <Text
-            testID="contactDetailFullPubky"
-            style={styles.fullPubky}
-            selectable
-            accessibilityLabel={`Full pubky ${groupedPubky(contact?.pubky ?? pubky)}`}
-          >
-            {contact?.pubky ?? pubky}
-          </Text>
+          <PubkyChip
+            pubky={contact?.pubky ?? pubky}
+            onCopy={onCopy}
+            testID="contactDetailPubkyChip"
+          />
           <Text testID="contactDetailBlockedState" style={styles.blockedBanner}>
             {blockedLabel}
           </Text>
@@ -158,129 +138,99 @@ export function ContactDetailView({
               retryLabel={CONTACTS_COPY.blockedCleanupRetry}
             />
           ) : null}
-          <Pressable
+          <Button
             testID="contactDetailCopy"
-            accessibilityRole="button"
-            accessibilityLabel="Copy pubky"
+            label="Copy pubky"
+            variant="secondary"
             onPress={onCopy}
-            style={styles.outlineBtn}
-          >
-            <Text style={styles.outlineLabel}>Copy pubky</Text>
-          </Pressable>
+          />
           <View style={styles.danger}>
-            <Pressable
+            <Button
               testID="contactDetailUnblock"
-              accessibilityRole="button"
-              accessibilityLabel={CONTACTS_COPY.unblockConfirm}
+              label={CONTACTS_COPY.unblockConfirm}
+              variant="secondary"
               onPress={() => setUnblockOpen(true)}
-              style={styles.dangerBtn}
-            >
-              <Text style={styles.dangerLabel}>{CONTACTS_COPY.unblockConfirm}</Text>
-            </Pressable>
+            />
             {contact ? (
-              <Pressable
+              <Button
                 testID="contactDetailRemove"
-                accessibilityRole="button"
-                accessibilityLabel="Remove contact"
+                label="Remove contact"
+                variant="destructive"
                 onPress={() => setRemoveOpen(true)}
-                style={styles.dangerBtn}
-              >
-                <Text style={styles.dangerLabel}>Remove contact</Text>
-              </Pressable>
+              />
             ) : null}
           </View>
         </ScrollView>
       ) : contact ? (
         <ScrollView contentContainerStyle={styles.body}>
-          <View style={styles.avatar}>
-            <Text style={styles.avatarLetter}>{primary.charAt(0).toUpperCase()}</Text>
-          </View>
+          <Avatar name={primary} pubky={pubky} size="lg" testID="contactDetailAvatar" />
           <Text style={styles.name}>{primary}</Text>
           {secondary ? <Text style={styles.secondary}>{secondary}</Text> : null}
-          <Text
-            testID="contactDetailFullPubky"
-            style={styles.fullPubky}
-            selectable
-            accessibilityLabel={`Full pubky ${groupedPubky(contact?.pubky ?? pubky)}`}
-          >
-            {contact?.pubky ?? pubky}
-          </Text>
-          <Pressable
+          <PubkyChip
+            pubky={contact?.pubky ?? pubky}
+            onCopy={onCopy}
+            testID="contactDetailPubkyChip"
+          />
+          <Button
             testID="contactDetailCopy"
-            accessibilityRole="button"
-            accessibilityLabel="Copy pubky"
+            label="Copy pubky"
+            variant="secondary"
             onPress={onCopy}
-            style={styles.outlineBtn}
-          >
-            <Text style={styles.outlineLabel}>Copy pubky</Text>
-          </Pressable>
-          <Text style={styles.sectionLabel}>Relationship</Text>
-          <Text testID="contactDetailRelationship" style={styles.sectionValue}>
-            {relation}
-          </Text>
-          <Text style={styles.sectionLabel}>Link</Text>
-          <Text testID="contactDetailLink" style={styles.sectionValue}>
-            {linkLabel}
-          </Text>
-          <Text style={styles.sectionLabel}>Trust</Text>
-          {trust && trust.reasons.length > 0 ? (
-            trust.reasons.map(reason => (
-              <Text key={reason.code} style={styles.trustLine}>
-                {reason.label}
-              </Text>
-            ))
-          ) : (
-            <Text style={styles.sectionValue}>No relationship</Text>
-          )}
-          <Text style={styles.sectionLabel}>Public payment methods</Text>
-          {paymentsUnavailableOffline ? (
-            <Text style={styles.sectionValue}>Unavailable offline</Text>
-          ) : paymentIdentifiers.length === 0 ? (
-            <Text style={styles.sectionValue}>No public payment methods on file.</Text>
-          ) : (
-            paymentIdentifiers.map(id => (
-              <Text key={id} style={styles.sectionValue}>
-                {formatTipIdentifierDisplay(id)}
-              </Text>
-            ))
-          )}
-          <Pressable
-            testID="contactDetailMessage"
-            accessibilityRole="button"
-            accessibilityLabel="Message"
-            onPress={onMessage}
-            style={styles.primaryBtn}
-          >
-            <Text style={styles.primaryLabel}>Message</Text>
-          </Pressable>
-          <Pressable
-            testID="contactDetailShare"
-            accessibilityRole="button"
-            accessibilityLabel="Share"
-            onPress={onShare}
-            style={styles.outlineBtn}
-          >
-            <Text style={styles.outlineLabel}>Share</Text>
-          </Pressable>
+          />
+          <View style={styles.details}>
+            <DetailRow label="Relationship" value={relation} testID="contactDetailRelationship" />
+            <DetailRow label="Link" value={linkLabel} testID="contactDetailLink" />
+            <DetailRow
+              label="Trust"
+              value={
+                trust && trust.reasons.length > 0 ? (
+                  <View style={styles.detailStack}>
+                    {trust.reasons.map(reason => (
+                      <Text key={reason.code} style={styles.detailValue}>
+                        {reason.label}
+                      </Text>
+                    ))}
+                  </View>
+                ) : (
+                  'No relationship'
+                )
+              }
+            />
+            <DetailRow
+              label="Public payment methods"
+              value={
+                paymentsUnavailableOffline ? (
+                  'Unavailable offline'
+                ) : paymentIdentifiers.length === 0 ? (
+                  'No public payment methods on file.'
+                ) : (
+                  <View style={styles.detailStack}>
+                    {paymentIdentifiers.map(id => (
+                      <Text key={id} style={styles.detailValue}>
+                        {formatTipIdentifierDisplay(id)}
+                      </Text>
+                    ))}
+                  </View>
+                )
+              }
+              last
+            />
+          </View>
+          <Button testID="contactDetailMessage" label="Message" onPress={onMessage} />
+          <Button testID="contactDetailShare" label="Share" variant="secondary" onPress={onShare} />
           <View style={styles.danger}>
-            <Pressable
+            <Button
               testID="contactDetailBlock"
-              accessibilityRole="button"
-              accessibilityLabel="Block"
+              label="Block"
+              variant="destructive"
               onPress={() => setBlockOpen(true)}
-              style={styles.dangerBtn}
-            >
-              <Text style={styles.dangerLabel}>Block</Text>
-            </Pressable>
-            <Pressable
+            />
+            <Button
               testID="contactDetailRemove"
-              accessibilityRole="button"
-              accessibilityLabel="Remove contact"
+              label="Remove contact"
+              variant="destructive"
               onPress={() => setRemoveOpen(true)}
-              style={styles.dangerBtn}
-            >
-              <Text style={styles.dangerLabel}>Remove contact</Text>
-            </Pressable>
+            />
           </View>
         </ScrollView>
       ) : (
@@ -327,31 +277,7 @@ export function ContactDetailView({
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: CONTACTS_CANVAS },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: space.md,
-    paddingVertical: space.sm,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: CONTACTS_HAIRLINE,
-  },
-  headerBtn: { minWidth: MIN_TARGET, minHeight: MIN_TARGET, justifyContent: 'center' },
-  headerBtnLabel: { color: color.brandText, fontSize: typeRole.body.fontSize, fontWeight: '600' },
-  headerTitle: { color: CONTACTS_BODY, fontSize: typeRole.titleStack.fontSize, fontWeight: '600' },
-  centered: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  muted: { color: CONTACTS_MUTED, fontSize: typeRole.callout.fontSize },
   body: { padding: space.xl, gap: space.md, paddingBottom: space.xxl + space.lg },
-  avatar: {
-    width: 64,
-    height: 64,
-    borderRadius: radius.xxl,
-    backgroundColor: color.well,
-    alignItems: 'center',
-    justifyContent: 'center',
-    alignSelf: 'center',
-  },
-  avatarLetter: { fontSize: typeRole.title.fontSize, fontWeight: '600', color: CONTACTS_BRAND },
   name: {
     color: CONTACTS_BODY,
     fontSize: typeRole.heading.fontSize,
@@ -365,39 +291,12 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     textAlign: 'center',
   },
-  fullPubky: {
-    color: CONTACTS_MUTED,
-    fontSize: typeRole.caption.fontSize,
-    fontFamily: 'monospace',
-    textAlign: 'center',
+  details: { gap: space.lg, marginTop: space.sm },
+  detailStack: { gap: space.xs },
+  detailValue: {
+    color: CONTACTS_BODY,
+    fontSize: typeRole.body.fontSize,
+    lineHeight: typeRole.body.lineHeight,
   },
-  sectionLabel: {
-    color: CONTACTS_MUTED,
-    fontSize: typeRole.caption.fontSize,
-    marginTop: space.sm,
-    fontWeight: '600',
-  },
-  sectionValue: { color: CONTACTS_BODY, fontSize: typeRole.callout.fontSize },
-  trustLine: { color: CONTACTS_BODY, fontSize: typeRole.callout.fontSize },
-  primaryBtn: {
-    minHeight: MIN_TARGET,
-    borderRadius: CONTACTS_RADIUS,
-    backgroundColor: CONTACTS_BRAND,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: space.md,
-  },
-  primaryLabel: { color: color.textOnBrand, fontSize: typeRole.body.fontSize, fontWeight: '600' },
-  outlineBtn: {
-    minHeight: MIN_TARGET,
-    borderRadius: CONTACTS_RADIUS,
-    borderWidth: 1,
-    borderColor: CONTACTS_BRAND,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  outlineLabel: { color: color.brandText, fontSize: typeRole.body.fontSize, fontWeight: '600' },
   danger: { marginTop: space.xxl, gap: space.sm },
-  dangerBtn: { minHeight: MIN_TARGET, justifyContent: 'center' },
-  dangerLabel: { color: color.danger, fontSize: typeRole.body.fontSize, fontWeight: '600' },
 });

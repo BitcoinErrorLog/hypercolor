@@ -46,6 +46,7 @@ export type PaymentReviewDestinationOption = {
 
 export type PaymentReviewView = {
   recipientTitle: string;
+  recipientPubky: string;
   recipientShortPubky: string;
   amountText: string;
   invoiceAmountText: string | null;
@@ -245,6 +246,7 @@ export function mapPaymentReview(input: PaymentReviewInput): PaymentReviewView {
 
   return {
     recipientTitle: identity.title,
+    recipientPubky: input.recipientPubky,
     recipientShortPubky: shortPubky(input.recipientPubky),
     amountText: `${input.requestAmountBtc} ${input.amountAsset.toUpperCase()}`.trim(),
     invoiceAmountText: invoiceAmount ? `${invoiceAmount} BTC` : null,

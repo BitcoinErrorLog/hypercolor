@@ -60,6 +60,7 @@ import {
 } from '../../ui/composerActions';
 import { LINK_MESSAGE_MAX_BYTES } from '../../types/link';
 import { color, space, radius, typeRole, measure } from '../../theme';
+import { Icon } from '../../ui/primitives';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'ChannelScreen'>;
 
@@ -395,7 +396,7 @@ export function ChannelScreenContent({
   onRetryFailed: (eventId: string) => void;
 }) {
   const flatListRef = useRef<FlatList<GroupMessage>>(null);
-  const plusRef = useRef<View>(null);
+  const plusRef = useRef<TouchableOpacity>(null);
   const menuWasOpen = useRef(false);
   const byAuthorEvent = useMemo(() => {
     const map = new Map<string, GroupMessage>();
@@ -450,11 +451,10 @@ export function ChannelScreenContent({
   if (localPubky) envelopeCtx.authorPubky = localPubky;
   if (replyTo?.eventId) envelopeCtx.replyToEventId = replyTo.eventId;
   if (replyTo?.senderPubky) envelopeCtx.replyToAuthorPubky = replyTo.senderPubky;
+  const byteSize = draftEnvelopeByteSize(draft, envelopeCtx);
   const overCap = draftExceedsByteCap(draft, envelopeCtx);
-  const byteLabel = messageByteCountLabel(
-    draftEnvelopeByteSize(draft, envelopeCtx),
-    LINK_MESSAGE_MAX_BYTES,
-  );
+  const showByteCap = byteSize >= LINK_MESSAGE_MAX_BYTES * 0.8 || overCap;
+  const byteLabel = messageByteCountLabel(byteSize, LINK_MESSAGE_MAX_BYTES);
 
   useEffect(() => {
     if (actionMenuOpen) {
@@ -666,7 +666,7 @@ export function ChannelScreenContent({
           onPress={onBack}
           style={styles.backBtn}
         >
-          <Text style={styles.backText}>←</Text>
+          <Icon name="chevron-back" tone="brand" />
         </TouchableOpacity>
         <Text
           style={styles.title}
@@ -847,7 +847,7 @@ export function ChannelScreenContent({
               onPress={onOpenActionMenu}
               style={styles.plusBtn}
             >
-              <Text style={styles.plusIcon}>+</Text>
+              <Icon name="add" tone="secondary" />
             </TouchableOpacity>
             <TextInput
               accessibilityLabel="Message"
@@ -874,17 +874,26 @@ export function ChannelScreenContent({
               {sending ? (
                 <ActivityIndicator color={color.textOnBrand} size="small" />
               ) : (
-                <Text style={styles.sendIcon}>↑</Text>
+                <Icon
+                  name="arrow-up"
+                  tone={!draft.trim() || sending || overCap ? 'muted' : 'onBrand'}
+                />
               )}
             </TouchableOpacity>
           </View>
-          <Text
-            testID="channelByteCap"
-            accessibilityLabel={byteLabel}
-            style={[styles.byteCap, overCap && styles.byteCapOver]}
-          >
-            {byteLabel}. {COPY.messageByteCap}
-          </Text>
+          {showByteCap ? (
+            <Text
+              testID="channelByteCap"
+              accessibilityLabel={byteLabel}
+              numberOfLines={1}
+              style={[
+                styles.byteCap,
+                byteSize >= LINK_MESSAGE_MAX_BYTES * 0.95 && styles.byteCapOver,
+              ]}
+            >
+              {byteLabel}
+            </Text>
+          ) : null}
         </KeyboardAvoidingView>
       ) : null}
     </SafeAreaView>

@@ -11,8 +11,8 @@ import {
 import { AuthQr } from '../../components/AuthQr';
 import { COPY } from '../../copy/uxCopy';
 import { CustodyLine } from '../../ui/CustodyLine';
-import { HIT_SLOP_44 } from '../../ui/hitTarget';
 import { color, space, radius, typeRole, measure } from '../../theme';
+import { Button, ErrorState, LoadingState, PageHeader } from '../../ui/primitives';
 
 export type AwaitPhase = 'waiting' | 'expired' | 'denied' | 'offline';
 
@@ -59,54 +59,37 @@ export function AwaitingRingAuthScreenContent({
   return (
     <SafeAreaView style={styles.container} testID="awaitingRingAuthScreen">
       <ScrollView contentContainerStyle={styles.scroll}>
-        <View style={styles.header}>
-          <TouchableOpacity
-            testID="awaitingRingAuthCancel"
-            accessibilityRole="button"
-            accessibilityLabel="Cancel Pubky Ring connection"
-            hitSlop={HIT_SLOP_44}
-            onPress={onCancel}
-            style={styles.backHit}
-          >
-            <Text style={styles.backText}>← Back</Text>
-          </TouchableOpacity>
-        </View>
+        <PageHeader
+          title={title}
+          onBack={onCancel}
+          backLabel="Cancel Pubky Ring connection"
+          testID="awaitingRingAuth"
+        />
         <View style={styles.content}>
           {phase === 'waiting' ? (
-            <ActivityIndicator size="large" color={color.brand} style={styles.spinner} />
-          ) : null}
-          <Text style={styles.title}>{title}</Text>
-          <Text style={styles.description}>{body}</Text>
+            <LoadingState label={COPY.waitingForRing} testID="awaitingRingAuthWaiting" />
+          ) : (
+            <ErrorState title={title} body={body} testID="awaitingRingAuthError" />
+          )}
+          {phase === 'waiting' ? <Text style={styles.description}>{body}</Text> : null}
           {phase === 'waiting' && ringAuthUrl ? (
             <View style={styles.urlBlock}>
               <Text style={styles.sectionTitle}>Paykit-connect link</Text>
-              <Text testID="awaitingRingAuthScanHint" style={styles.hint}>
-                {COPY.waitingForRingBody}
-              </Text>
               <AuthQr value={ringAuthUrl} />
               <Text selectable style={styles.hint} testID="mask-auth-url">
                 {ringAuthUrl}
               </Text>
-              <TouchableOpacity
+              <Button
                 testID="awaitingRingAuthOpenRing"
-                accessibilityRole="button"
-                accessibilityLabel={COPY.openPubkyRing}
-                style={styles.primaryButton}
+                label={COPY.openPubkyRing}
                 onPress={onOpenRing}
-              >
-                <Text style={styles.primaryButtonText}>{COPY.openPubkyRing}</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
+              />
+              <Button
                 testID="awaitingRingAuthCopy"
-                accessibilityRole="button"
-                accessibilityLabel={COPY.copyPaykitConnectUrl}
-                style={styles.secondaryButton}
+                label={copied ? COPY.copied : COPY.copyPaykitConnectUrl}
+                variant="secondary"
                 onPress={onCopy}
-              >
-                <Text style={styles.secondaryButtonText}>
-                  {copied ? COPY.copied : COPY.copyPaykitConnectUrl}
-                </Text>
-              </TouchableOpacity>
+              />
             </View>
           ) : null}
           {phase === 'expired' ? (
