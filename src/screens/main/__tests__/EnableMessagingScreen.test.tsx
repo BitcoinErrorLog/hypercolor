@@ -5,6 +5,10 @@ import EnableMessagingScreen from '../EnableMessagingScreen';
 import { LinkService } from '../../../services/link/LinkService';
 import { COPY } from '../../../copy/uxCopy';
 
+jest.mock('react-native-safe-area-context', () => ({
+  useSafeAreaInsets: () => ({ top: 0, bottom: 24, left: 0, right: 0 }),
+}));
+
 beforeEach(() => {
   jest.spyOn(Linking, 'openURL').mockResolvedValue(undefined);
 });

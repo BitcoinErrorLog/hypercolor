@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Linking, SafeAreaView, StatusBar, StyleSheet, Text, View } from 'react-native';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { color, space, typeRole } from '../src/theme';
 import { catalogById, VRT_CATALOG } from './catalog';
 import { VRT_SCENE_READY_ID, vrtSceneMarkerId } from './sceneReady';
@@ -71,16 +72,18 @@ export function VrtCatalogRoot(): React.ReactElement {
 
   if (!resolved.ok) {
     return (
-      <SafeAreaView style={styles.root} testID={VRT_SCENE_READY_ID}>
-        <Text
-          testID="vrt-scene-missing"
-          accessibilityLabel={`vrt-scene-missing:${resolved.requested}`}
-          style={styles.markerText}
-        >
-          {`vrt-scene-missing:${resolved.requested}`}
-        </Text>
-        <Text style={styles.meta}>Unknown VRT scene: {resolved.requested}</Text>
-      </SafeAreaView>
+      <SafeAreaProvider>
+        <SafeAreaView style={styles.root} testID={VRT_SCENE_READY_ID}>
+          <Text
+            testID="vrt-scene-missing"
+            accessibilityLabel={`vrt-scene-missing:${resolved.requested}`}
+            style={styles.markerText}
+          >
+            {`vrt-scene-missing:${resolved.requested}`}
+          </Text>
+          <Text style={styles.meta}>Unknown VRT scene: {resolved.requested}</Text>
+        </SafeAreaView>
+      </SafeAreaProvider>
     );
   }
 
@@ -88,21 +91,22 @@ export function VrtCatalogRoot(): React.ReactElement {
   const markerId = vrtSceneMarkerId(entry.id);
 
   return (
-    <SafeAreaView style={styles.root} testID={VRT_SCENE_READY_ID}>
-      {/* Tiny on-canvas Text marker — iOS XCUITest needs an accessibility element. */}
-      <Text
-        testID={markerId}
-        accessibilityLabel={markerId}
-        accessibilityHint="vrt-scene-marker"
-        accessible
-        style={styles.markerText}
-      >
-        {markerId}
-      </Text>
-      <View style={styles.body} pointerEvents="box-none">
-        {entry.render()}
-      </View>
-    </SafeAreaView>
+    <SafeAreaProvider>
+      <SafeAreaView style={styles.root} testID={VRT_SCENE_READY_ID}>
+        <Text
+          testID={markerId}
+          accessibilityLabel={markerId}
+          accessibilityHint="vrt-scene-marker"
+          accessible
+          style={styles.markerText}
+        >
+          {markerId}
+        </Text>
+        <View style={styles.body} pointerEvents="box-none">
+          {entry.render()}
+        </View>
+      </SafeAreaView>
+    </SafeAreaProvider>
   );
 }
 
