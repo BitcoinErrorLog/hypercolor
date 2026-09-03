@@ -364,12 +364,10 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
     @ReactMethod
     fun clearAllNativeSecrets(promise: Promise) {
         launch(promise) {
-            sessions.clear()
             // Sign-out: same idle/owner split as invalidate(). Close idle
             // now; cancel admitted owners and let only AuthFlowAwait.finally
             // close. Owners reject auth_flow_cancelled and must not persist.
-            // drainLive also clears in-memory pending; store.clearAll drops
-            // durable pending markers and bearers.
+            // drainLive also clears in-memory pending.
             val snapshot = flows.drainLive()
             for (cancellable in snapshot.ownerCancellables) {
                 cancellable.cancel()
@@ -380,7 +378,15 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
             handles.clear()
             keepalive.releaseAll()
             clientMutex.withLock { client = null }
-            store.clearAll()
+            // Full-clear under the same monitor as the session() rotated
+            // bearer write-back: the write-back either completes before
+            // this section (and is wiped here) or runs after it and sees
+            // the cleared store. Sessions are evicted in the same section
+            // so an in-memory session cannot outlive its bearer.
+            synchronized(pendingIo) {
+                sessions.clear()
+                store.clearAll()
+            }
             promise.resolve(null)
         }
     }

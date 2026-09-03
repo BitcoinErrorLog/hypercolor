@@ -46,6 +46,13 @@ const APP_PATH = '/pub/hypercolor.app/v1';
 /** Fixed log string when the interrupted-sign-out marker cannot be read. */
 export const INTERRUPTED_SIGN_OUT_MARKER_UNREADABLE = 'interrupted sign-out marker unreadable';
 
+/**
+ * Fixed opaque string when the marker is present but its owner row is
+ * missing/invalid. Thrown so boot records a wipe failure — silent return
+ * would loop Welcome forever with the marker never cleared.
+ */
+export const INTERRUPTED_SIGN_OUT_OWNER_MISSING = 'interrupted sign-out owner missing';
+
 // ─── Path builders ────────────────────────────────────────────────────────────
 
 function profilePath(pubky: PubkyKey): string {
@@ -161,7 +168,14 @@ export const PubkyService = {
     const release = claimWipeInFlight();
     try {
       const owner = await readInterruptedSignOutOwner();
-      if (!owner) return;
+      if (!owner) {
+        // Marker present but the owner row is missing/invalid: nothing can
+        // be wiped owner-safely. Fail like any other boot wipe failure so
+        // the boot path records it (reset hatch after two launches) instead
+        // of returning success with the marker stuck.
+        console.warn(INTERRUPTED_SIGN_OUT_OWNER_MISSING);
+        throw new Error(INTERRUPTED_SIGN_OUT_OWNER_MISSING);
+      }
       const alias = await readInterruptedSignOutAlias(owner);
       ensureSignOutPaint();
       invalidateSignOutRestore();

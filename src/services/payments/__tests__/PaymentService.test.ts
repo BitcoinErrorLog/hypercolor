@@ -29,7 +29,6 @@ jest.mock('../../StorageService', () => ({
     listPaymentRequestsForPeer: jest.fn(),
     setDisplayedPaymentHash: jest.fn(),
     getTipEndpoint: jest.fn(),
-    hasDisplayedPaymentHash: jest.fn(),
   },
 }));
 
@@ -134,7 +133,6 @@ describe('PaymentService', () => {
     mockedStorage.persistPaymentEventWithSendIntent.mockResolvedValue(undefined);
     mockedStorage.getTipEndpoint.mockResolvedValue(null);
     mockedStorage.recordOwnInvoiceDisplay.mockResolvedValue(undefined);
-    mockedStorage.hasDisplayedPaymentHash.mockResolvedValue(false);
   });
 
   it('persists and sends a payment_request within the link byte budget', async () => {
@@ -413,7 +411,6 @@ describe('PaymentService', () => {
       invoiceExpiresAt: null,
       paymentHash: 'ab'.repeat(32),
     });
-    mockedStorage.hasDisplayedPaymentHash.mockResolvedValue(true);
     mockedStorage.getPaymentRequest.mockResolvedValue(
       row({
         direction: 'sent',

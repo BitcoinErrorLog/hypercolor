@@ -139,7 +139,11 @@ import { runMigrations } from '../../db/migrations';
 import { openFileDb, openMemoryDb } from '../../db/__tests__/betterSqliteAdapter';
 import { StorageService } from '../StorageService';
 import { KeyStore } from '../KeyStore';
-import { INTERRUPTED_SIGN_OUT_MARKER_UNREADABLE, PubkyService } from '../PubkyService';
+import {
+  INTERRUPTED_SIGN_OUT_MARKER_UNREADABLE,
+  INTERRUPTED_SIGN_OUT_OWNER_MISSING,
+  PubkyService,
+} from '../PubkyService';
 import { FollowsImportSettings } from '../contacts/followsImportSettings';
 import {
   LinkService,
@@ -154,6 +158,7 @@ import { CHAT_MESSAGE_KIND, LINK_RECEIVER_PATH, buildDmConversationId } from '..
 import { GROUP_MESSAGE_KIND } from '../../types/group';
 import {
   activeOwnerAtCommit,
+  claimWipeInFlight,
   ensureSignOutPaint,
   isNeedsSignInPaint,
   paintOwner,
@@ -161,7 +166,6 @@ import {
   resetPaintedOwnerModuleForTests,
   shouldHoldPreAuthWork,
   SIGNING_OUT,
-  trackWipeInFlight,
   waitForWipeInFlight,
   WIPE_WAIT_TIMEOUT_MS,
 } from '../paintedOwner';
@@ -1321,14 +1325,11 @@ describe('owner-conditional persist at commit time', () => {
     mockedKeyStore.setLinkSession.mockImplementation((alias: string) => {
       mockedKeyStore.getLinkSession.mockReturnValue(alias);
     });
-    let resolveWipe = (): void => undefined;
-    const hung = new Promise<void>(resolve => {
-      resolveWipe = resolve;
-    });
     jest.spyOn(Date, 'now').mockRestore();
     jest.useFakeTimers();
     try {
-      void trackWipeInFlight(hung);
+      // Claim the wipe gate; releaseWipe settles it like a finished wipe.
+      const releaseWipe = claimWipeInFlight();
       const pending = LinkService.signinWithSecret('b-secret');
       const assertion = expect(pending).rejects.toMatchObject({
         name: 'WipeWaitTimeoutError',
@@ -1339,8 +1340,7 @@ describe('owner-conditional persist at commit time', () => {
       await assertion;
       expect(pendingWipeInFlight()).not.toBeNull();
       expect(mockedNative.signinWithSecret).not.toHaveBeenCalled();
-      resolveWipe();
-      await hung;
+      releaseWipe();
       await waitForWipeInFlight();
       await LinkService.signinWithSecret('b-secret');
       expect(mockedNative.signinWithSecret).toHaveBeenCalledWith('b-secret');
@@ -1451,5 +1451,57 @@ describe('owner-conditional persist at commit time', () => {
     expect(mockedNative.clearAllNativeSecrets).not.toHaveBeenCalled();
     expect(mockedNative.signOutSession).not.toHaveBeenCalled();
     expect(mockedKeyStore.isSignOutIncomplete()).toBe(true);
+  });
+
+  it('opens the reset hatch for an ownerless corrupt journal marker after two launches', async () => {
+    db?.close();
+    const dir = mkdtempSync(join(tmpdir(), 'hypercolor-reset-ownerless-'));
+    const path = join(dir, 'hypercolor.db');
+    db = openFileDb(path);
+    setDbForTests(db);
+    await runMigrations(db);
+    // Journal row whose owner is not a valid pubky: the marker is present
+    // but readInterruptedSignOutOwner() can never name an owner.
+    await StorageService.persistSignOutIncompleteJournal('ownerless-corrupt-row', SESSION_ALIAS);
+    resetPaintedOwnerModuleForTests();
+    mockedKeyStore.getPubky.mockReturnValue(null);
+    mockedKeyStore.hasPersistedSession.mockResolvedValue(false);
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    await simulateRelaunch();
+    expect(warn).toHaveBeenCalledWith(INTERRUPTED_SIGN_OUT_OWNER_MISSING);
+    expect(await shouldOfferResetAfterFailedWipe()).toBe(false);
+    await simulateRelaunch();
+    expect(await shouldOfferResetAfterFailedWipe()).toBe(true);
+
+    await resetAppDataAfterFailedWipe();
+    expect(existsSync(path)).toBe(false);
+    expect(mockedNative.signOutSession).not.toHaveBeenCalled();
+    expect(mockedNative.clearAllNativeSecrets).not.toHaveBeenCalled();
+    expect(mockedKeyStore.clearIfPubky).not.toHaveBeenCalled();
+    expect(isNeedsSignInPaint()).toBe(true);
+  });
+
+  it('refuses an ownerless-marker reset while a live owner is signed in', async () => {
+    db?.close();
+    const dir = mkdtempSync(join(tmpdir(), 'hypercolor-reset-ownerless-live-'));
+    const path = join(dir, 'hypercolor.db');
+    db = openFileDb(path);
+    setDbForTests(db);
+    await runMigrations(db);
+    await StorageService.persistSignOutIncompleteJournal('ownerless-corrupt-row', SESSION_ALIAS);
+    await StorageService.persistSignOutWipeFailureCount(
+      'interrupted-sign-out-owner-unknown',
+      BOOT_WIPE_FAILURES_BEFORE_RESET,
+    );
+    // OTHER is live and painted: the coarse reset would destroy live data.
+    mockedKeyStore.getPubky.mockReturnValue(OTHER);
+    paintOwner(OTHER);
+    await expect(resetAppDataAfterFailedWipe()).rejects.toMatchObject({
+      code: 'reset-app-data-failed',
+    });
+    expect(existsSync(path)).toBe(true);
+    expect(mockedKeyStore.getPubky()).toBe(OTHER);
+    expect(await StorageService.hasSignOutIncompleteJournal()).toBe(true);
   });
 });

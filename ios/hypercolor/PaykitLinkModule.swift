@@ -37,7 +37,9 @@ class PaykitLinkModule: NSObject, RCTInvalidating {
     /// `lock.withLock` while this lock is held (P0-1: `awaitAuthApproval`
     /// used to call `sweepDurablePendingIfNeeded` inside the critical
     /// section and deadlocked). Sweep, persist, and Keychain I/O run
-    /// outside this lock. `lock` and `pendingIoLock` are never held together.
+    /// outside this lock. Lock order: `pendingIoLock` may nest `lock`
+    /// (rotated-bearer write-back, full-clear); `lock` must never nest
+    /// `pendingIoLock`.
     private let lock = NSLock()
     private var client: ChatClient?
     private var sessions: [String: ChatSession] = [:]
@@ -64,7 +66,9 @@ class PaykitLinkModule: NSObject, RCTInvalidating {
     /// durable pending in one IO critical section.
     private var adoptingAliases = Set<String>()
     private var sweptDurablePending = false
-    /// Serializes pending Keychain I/O. Never held together with `lock`.
+    /// Serializes pending Keychain I/O, the rotated-bearer write-back, and
+    /// the full-clear. May nest `lock` (pendingIoLock → lock only); the
+    /// reverse order is forbidden so the two locks cannot deadlock.
     private let pendingIoLock = NSLock()
     /// Per OS-process nonce. JS reloads in this process reuse it.
     private static let reconcileProcessToken: String = {
@@ -557,7 +561,16 @@ class PaykitLinkModule: NSObject, RCTInvalidating {
                 task.cancel()
             }
             withExtendedLifetime(idleFlows) {}
-            try PaykitLinkStore.deleteAll()
+            // Full-clear under the same lock the session() rotated-bearer
+            // write-back holds: the write-back either completes before this
+            // section (and is wiped here) or runs after it and refuses on
+            // the cleared store. Sessions are evicted again inside this
+            // section so an in-memory session cannot outlive its bearer.
+            // Nests pendingIoLock → lock; no path nests the other way.
+            try self.pendingIoLock.withLock {
+                try PaykitLinkStore.deleteAll()
+                self.lock.withLock { self.sessions.removeAll() }
+            }
             return NSNull()
         }
     }
@@ -1435,18 +1448,26 @@ class PaykitLinkModule: NSObject, RCTInvalidating {
             let rotated = restored.exportSession()
             // Re-check liveness under pendingIoLock before write-back so a
             // concurrent signOut / clearAllNativeSecrets cannot resurrect a
-            // deleted alias via the rotated export.
+            // deleted alias via the rotated export. The sessions insert is
+            // inside the same critical section (nests pendingIoLock → lock;
+            // no path nests the other way), so a full-clear either wipes
+            // this write-back or commits first and makes it refuse.
             try pendingIoLock.withLock {
-                if self.adoptingAliases.contains(alias) {
-                    throw PaykitLinkBridgeError(code: "unavailable", message: Self.staticMessage("unavailable"))
-                }
+                let adopting = self.adoptingAliases.contains(alias)
                 let stillPresent = try PaykitLinkStore.getString(account: PaykitLinkStore.sessionAccount(alias))
-                guard let stillPresent, !stillPresent.isEmpty else {
+                let bearerPresent = stillPresent.map { !$0.isEmpty } ?? false
+                guard PaykitLinkAuthProtocol.shouldWriteBackRotatedBearer(
+                    adopting: adopting,
+                    bearerStillPresent: bearerPresent
+                ) else {
+                    if adopting {
+                        throw PaykitLinkBridgeError(code: "unavailable", message: Self.staticMessage("unavailable"))
+                    }
                     throw PaykitLinkBridgeError(code: "auth", message: "session alias not found")
                 }
                 try PaykitLinkStore.put(rotated, account: PaykitLinkStore.sessionAccount(alias))
+                self.lock.withLock { self.sessions[alias] = restored }
             }
-            lock.withLock { sessions[alias] = restored }
             return restored
         case .notFound:
             throw PaykitLinkBridgeError(code: "auth", message: "session alias not found")
@@ -1788,19 +1809,14 @@ enum PaykitLinkStore {
     static let snapshotAccount = "snapshot-key"
     static let attachmentServicePrefix = "hypercolor-attachment-key"
 
-    /// Simulator unsigned / entitlement-mismatch reads return -34018
-    /// (`errSecMissingEntitlement`) instead of not-found. Treat as absent so
-    /// persistSession can add a new item instead of failing signup.
-    /// True only when the item is definitively not present. Lock-state and
-    /// keychain-unavailable must NOT fold into absent — callers treat those
-    /// as non-destructive `unavailable` so JS does not delete a live alias.
+    /// Delete paths only: simulator unsigned / entitlement-mismatch statuses
+    /// return -34018 (`errSecMissingEntitlement`) instead of not-found, and a
+    /// delete of an unwritable/absent item is already the desired end state.
+    /// Reads classify through `PaykitLinkAuthProtocol.classifyItemReadStatus`
+    /// instead, so lock-state surfaces as `unavailable` rather than absent.
     private static func isAbsent(_ status: OSStatus) -> Bool {
         status == errSecItemNotFound
             || status == errSecMissingEntitlement
-    }
-
-    private static func isKeychainUnavailable(_ status: OSStatus) -> Bool {
-        status == errSecInteractionNotAllowed || status == errSecNotAvailable
     }
 
     static func receiverAccount(_ alias: String) -> String { "receiver.\(alias)" }
@@ -1854,10 +1870,18 @@ enum PaykitLinkStore {
         }
         var add = identity
         // Accessibility: AfterFirstUnlockThisDeviceOnly (not WhenUnlocked).
-        // PaykitLink background keepalive / session restore must read the
-        // bearer while the device is locked after first unlock (FGS /
-        // BGProcessing). WhenUnlockedThisDeviceOnly would break those
-        // paths. Still ThisDeviceOnly — no backup/escrow.
+        // Info.plist declares no UIBackgroundModes / BGTaskScheduler
+        // identifiers — this is not about background tasks. Reads must
+        // succeed while the device is locked-after-first-unlock because
+        // in-progress auth approval / keepalive completion and restore can
+        // race the user locking the device mid-flow, and the JS KeyStore
+        // writes its half with WhenUnlockedThisDeviceOnly: if this store
+        // also required WhenUnlocked, a restore that needs both halves
+        // could not make progress against a locked-after-first-unlock
+        // device (each side waiting on the other's readable window).
+        // Tightening to WhenUnlockedThisDeviceOnly would need a data
+        // migration of existing items — out of scope here. Still
+        // ThisDeviceOnly — no backup/escrow.
         add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
         add[kSecValueData as String] = value
         let status = SecItemAdd(add as CFDictionary, nil)
@@ -1907,19 +1931,27 @@ enum PaykitLinkStore {
         ]
         var result: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
-        if isAbsent(status) {
+        // Simulator unsigned / entitlement-mismatch reads return -34018:
+        // treat as absent so a DEBUG write can fall back to the sandbox.
+        // classifyItemReadStatus has no entitlement case on purpose — this
+        // carve-out stays at the call site.
+        if status == errSecMissingEntitlement {
             return nil
         }
-        if isKeychainUnavailable(status) {
+        switch PaykitLinkAuthProtocol.classifyItemReadStatus(Int32(status)) {
+        case .absent:
+            return nil
+        case .unavailable:
             throw PaykitLinkBridgeError(
                 code: "unavailable",
                 message: "keychain unavailable (\(status))",
             )
+        case .presentOrOther:
+            if status != errSecSuccess {
+                throw PaykitLinkBridgeError(code: "protocol", message: "keychain read failed (\(status))")
+            }
+            return result as? Data
         }
-        if status != errSecSuccess {
-            throw PaykitLinkBridgeError(code: "protocol", message: "keychain read failed (\(status))")
-        }
-        return result as? Data
     }
 
     static func getString(account: String) throws -> String? {

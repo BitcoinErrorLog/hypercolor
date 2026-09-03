@@ -5,11 +5,11 @@ jest.mock('../KeyStore', () => ({
 }));
 
 import {
+  claimWipeInFlight,
   paintOwner,
   pendingWipeInFlight,
   registerOnOwnerPainted,
   resetPaintedOwnerModuleForTests,
-  trackWipeInFlight,
   waitForWipeInFlight,
   WIPE_WAIT_TIMEOUT_MS,
 } from '../paintedOwner';
@@ -25,8 +25,8 @@ describe('paintedOwner wipe wait and drain hook', () => {
 
   it('rejects waitForWipeInFlight after 30s without clearing the in-flight gate', async () => {
     jest.useFakeTimers();
-    const hung = new Promise<void>(() => undefined);
-    void trackWipeInFlight(hung);
+    // Claim the gate and never release: equivalent to a hung wipe.
+    claimWipeInFlight();
     const pending = waitForWipeInFlight();
     const assertion = expect(pending).rejects.toMatchObject({
       name: 'WipeWaitTimeoutError',

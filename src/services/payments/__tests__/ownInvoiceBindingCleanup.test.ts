@@ -120,7 +120,5 @@ describe('invoice reuse decided inside create transaction', () => {
     expect(source).toMatch(
       /const invoiceReused =\s*displayed !== null && hasDisplayedPaymentHashSync/,
     );
-    const pay = fs.readFileSync(path.join(__dirname, '../PaymentService.ts'), 'utf8');
-    expect(pay).not.toMatch(/hasDisplayedPaymentHash\(/);
   });
 });

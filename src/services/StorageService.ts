@@ -2860,23 +2860,6 @@ export const StorageService = {
   },
 
   /**
-   * True when this owner already has any request whose displayed invoice hash
-   * is `paymentHash`, including cancelled, rejected, expired, and paid rows.
-   * Used to flag a new request that reused an invoice.
-   */
-  async hasDisplayedPaymentHash(ownerPubky: PubkyKey, paymentHash: string): Promise<boolean> {
-    const db = await getDb();
-    const result = db.executeSync(
-      `SELECT 1 FROM payment_requests
-       WHERE owner_pubky = ?
-         AND displayed_payment_hash = ?
-       LIMIT 1`,
-      [ownerPubky, paymentHash],
-    );
-    return (result.rows?.length ?? 0) > 0;
-  },
-
-  /**
    * Clear `own_invoice_hashes.payment_request_id` when the bound request is
    * cancelled, rejected, or proposal-expired. Verified/paid bindings stay.
    */
@@ -3672,6 +3655,12 @@ function tipEndpointsUnchanged(
   return true;
 }
 
+/**
+ * True when this owner already has any request whose displayed invoice hash
+ * is `paymentHash`, including cancelled, rejected, expired, and paid rows.
+ * Used inside the create transaction to flag a new request that reused an
+ * invoice.
+ */
 function hasDisplayedPaymentHashSync(
   db: SqlExecutor,
   ownerPubky: string,

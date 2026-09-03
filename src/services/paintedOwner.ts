@@ -171,11 +171,6 @@ export function claimWipeInFlight(): () => void {
   };
 }
 
-export function trackWipeInFlight<T>(work: Promise<T>): Promise<T> {
-  const release = claimWipeInFlight();
-  return work.finally(release);
-}
-
 export async function waitForWipeInFlight(): Promise<void> {
   const gate = wipeInFlight;
   if (!gate) return;

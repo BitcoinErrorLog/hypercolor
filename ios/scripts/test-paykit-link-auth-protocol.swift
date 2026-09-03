@@ -49,7 +49,8 @@ enum PaykitLinkAuthProtocolTests {
         testProcessTokenGatesSecondSighting()
         testItemReadAbsentVsUnavailable()
         testRotatedBearerWriteBackGate()
-        fputs("PaykitLinkAuthProtocol: 10 checks passed\n", stdout)
+        testClearAllSerializedAgainstWriteBack()
+        fputs("PaykitLinkAuthProtocol: 11 checks passed\n", stdout)
     }
 
     static func testKeyNamespacing() {
@@ -506,6 +507,52 @@ enum PaykitLinkAuthProtocolTests {
             ),
             "deleted alias refuses write-back"
         )
+    }
+
+    /// Mirrors PaykitLinkModule: the session() rotated-bearer write-back
+    /// (liveness re-check + put + sessions insert) and clearAllNativeSecrets
+    /// (deleteAll + sessions eviction) both serialize on pendingIoLock, so
+    /// the resurrect interleave [check passes → clear commits → put] cannot
+    /// occur. Runs the hostile ordering attempt on two racing threads; the
+    /// shared lock admits only serialized outcomes, and every serialized
+    /// outcome leaves no residue.
+    static func testClearAllSerializedAgainstWriteBack() {
+        let account = PaykitLinkAuthProtocol.sessionAccount("a1")
+        for iteration in 0 ..< 200 {
+            let ioLock = NSLock()
+            var store: [String: String] = [account: "bearer-old"]
+            var sessions: [String: String] = [:]
+            let writeBack = {
+                ioLock.lock()
+                defer { ioLock.unlock() }
+                let stillPresent = store[account].map { !$0.isEmpty } ?? false
+                guard PaykitLinkAuthProtocol.shouldWriteBackRotatedBearer(
+                    adopting: false,
+                    bearerStillPresent: stillPresent
+                ) else { return }
+                store[account] = "bearer-rotated"
+                sessions["a1"] = "bearer-rotated"
+            }
+            let clearAll = {
+                ioLock.lock()
+                defer { ioLock.unlock() }
+                store.removeAll()
+                sessions.removeAll()
+            }
+            let writer = Thread { writeBack() }
+            let clearer = Thread { clearAll() }
+            writer.start()
+            clearer.start()
+            while !writer.isFinished || !clearer.isFinished {}
+            expect(
+                store[account] == nil,
+                "iteration \(iteration): bearer must not resurrect after clearAll"
+            )
+            expect(
+                sessions["a1"] == nil,
+                "iteration \(iteration): in-memory session must not outlive the wipe"
+            )
+        }
     }
 
     static func expect(_ condition: Bool, _ message: String) {

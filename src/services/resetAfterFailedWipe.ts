@@ -9,6 +9,14 @@ import { StorageService } from './StorageService';
 /** Distinct boot launches whose wipe failed before Welcome offers a coarse reset. */
 export const BOOT_WIPE_FAILURES_BEFORE_RESET = 2;
 
+/**
+ * Counter key for an interrupted-sign-out marker whose owner row is
+ * missing/invalid: the failure cannot be attributed to an owner, so it is
+ * stamped on this opaque sentinel. Never a valid pubky, so the MMKV half of
+ * the counter refuses it and only the SQL journal half lands.
+ */
+export const UNKNOWN_MARKER_OWNER = 'interrupted-sign-out-owner-unknown';
+
 export class ResetAppDataError extends Error {
   readonly code = 'reset-app-data-failed';
   readonly retryable = true;
@@ -38,19 +46,21 @@ async function wipeFailureCount(owner: PubkyKey): Promise<number> {
 /**
  * Count a boot-path wipe failure. In-app sign-out and same-launch
  * `awaitSignOutWipe` retries must not call this — the counter is
- * "distinct launches", owner-stamped like the markers.
+ * "distinct launches", owner-stamped like the markers. A marker whose
+ * owner cannot be read counts under {@link UNKNOWN_MARKER_OWNER} so the
+ * reset hatch still opens instead of looping Welcome forever.
  */
 export async function recordBootWipeFailure(): Promise<void> {
   const owner = await readInterruptedSignOutOwner();
-  if (!owner) return;
-  const next = (await wipeFailureCount(owner)) + 1;
+  const counterKey = owner ?? UNKNOWN_MARKER_OWNER;
+  const next = (await wipeFailureCount(counterKey)) + 1;
   try {
-    KeyStore.setSignOutWipeFailureCount(owner, next);
+    KeyStore.setSignOutWipeFailureCount(counterKey, next);
   } catch {
     // SQL journal may still land.
   }
   try {
-    await StorageService.persistSignOutWipeFailureCount(owner, next);
+    await StorageService.persistSignOutWipeFailureCount(counterKey, next);
   } catch {
     // MMKV half may still have landed.
   }
@@ -65,8 +75,8 @@ export async function shouldOfferResetAfterFailedWipe(): Promise<boolean> {
     return false;
   }
   const owner = await readInterruptedSignOutOwner();
-  if (!owner) return false;
-  return (await wipeFailureCount(owner)) >= BOOT_WIPE_FAILURES_BEFORE_RESET;
+  const counterKey = owner ?? UNKNOWN_MARKER_OWNER;
+  return (await wipeFailureCount(counterKey)) >= BOOT_WIPE_FAILURES_BEFORE_RESET;
 }
 
 function foreignLiveOwner(markerOwner: PubkyKey): boolean {
@@ -80,19 +90,23 @@ function foreignLiveOwner(markerOwner: PubkyKey): boolean {
  * Coarse last-resort wipe after repeated boot retries. Destructive steps
  * run first; markers and the failure counter clear last and only on
  * zero-error. Never runs against a different live owner than the marker.
+ * A marker with no readable owner resets only when nothing is live or
+ * painted (any live owner is foreign to {@link UNKNOWN_MARKER_OWNER});
+ * owner-scoped steps (alias sign-out, native wipe, identity clear) are
+ * skipped because there is no owner to scope them to.
  */
 export async function resetAppDataAfterFailedWipe(): Promise<void> {
   if (!(await shouldOfferResetAfterFailedWipe())) {
     throw new ResetAppDataError();
   }
   const owner = await readInterruptedSignOutOwner();
-  if (!owner) throw new ResetAppDataError();
-  if (foreignLiveOwner(owner)) throw new ResetAppDataError();
+  const counterKey = owner ?? UNKNOWN_MARKER_OWNER;
+  if (foreignLiveOwner(counterKey)) throw new ResetAppDataError();
 
-  const alias = await readInterruptedSignOutAlias(owner);
+  const alias = owner ? await readInterruptedSignOutAlias(owner) : null;
   // Capture before clearIfPubky removes PUBKY_KEY — otherwise the native
   // wipe gate can never fire on a successful identity clear.
-  const namedOwner = KeyStore.getPubky() === owner;
+  const namedOwner = owner !== null && KeyStore.getPubky() === owner;
 
   try {
     closeAndDeleteSqliteDatabase();
@@ -102,14 +116,18 @@ export async function resetAppDataAfterFailedWipe(): Promise<void> {
     if (namedOwner) {
       await PaykitLinkNative.clearAllNativeSecrets();
     }
-    await KeyStore.clearIfPubky(owner);
+    if (owner) {
+      await KeyStore.clearIfPubky(owner);
+    }
   } catch {
     throw new ResetAppDataError();
   }
 
-  if (KeyStore.getSignOutIncompleteOwner() === owner) {
+  if (owner === null || KeyStore.getSignOutIncompleteOwner() === owner) {
+    // Ownerless journal marker: MMKV can hold at most a stale invalid
+    // literal (a valid MMKV owner would have been read above) — clear it.
     KeyStore.clearSignOutIncomplete();
   }
-  KeyStore.clearSignOutWipeFailures(owner);
+  KeyStore.clearSignOutWipeFailures(counterKey);
   paintNeedsSignIn();
 }

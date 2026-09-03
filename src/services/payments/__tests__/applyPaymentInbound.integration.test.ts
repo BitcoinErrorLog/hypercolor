@@ -425,7 +425,9 @@ describe('invoice reuse and terminal unbind', () => {
     const idA = 'b7f9c2a1-6d43-4b0e-a8d4-0fe2c712ab33';
     const idB = 'c7f9c2a1-6d43-4b0e-a8d4-0fe2c712ab44';
     await StorageService.savePaymentRequest(sentAccepted(PEER_A, idA, hash));
-    expect(await StorageService.hasDisplayedPaymentHash(OWNER, hash)).toBe(true);
+    expect((await StorageService.getPaymentRequest(OWNER, PEER_A, idA))?.displayedPaymentHash).toBe(
+      hash,
+    );
     await StorageService.savePaymentRequest({
       ...sentAccepted(PEER_B, idB, hash),
       invoiceReused: true,
@@ -471,7 +473,9 @@ describe('invoice reuse and terminal unbind', () => {
       (await StorageService.getOwnInvoiceHash(OWNER, ENDPOINT_LIGHTNING_BOLT11, paymentHash))
         ?.paymentRequestId,
     ).toBeNull();
-    expect(await StorageService.hasDisplayedPaymentHash(OWNER, paymentHash)).toBe(true);
+    expect((await StorageService.getPaymentRequest(OWNER, PEER_A, idA))?.displayedPaymentHash).toBe(
+      paymentHash,
+    );
     await StorageService.savePaymentRequest({
       ...sentAccepted(PEER_A, idB, paymentHash),
       invoiceReused: true,
@@ -597,7 +601,15 @@ describe('invoice reuse and terminal unbind', () => {
       ...sentAccepted(PEER_A, 'b7f9c2a1-6d43-4b0e-a8d4-0fe2c712ab33', hash),
       status: 'pending',
     });
-    expect(await StorageService.hasDisplayedPaymentHash(OWNER, hash)).toBe(true);
+    expect(
+      (
+        await StorageService.getPaymentRequest(
+          OWNER,
+          PEER_A,
+          'b7f9c2a1-6d43-4b0e-a8d4-0fe2c712ab33',
+        )
+      )?.displayedPaymentHash,
+    ).toBe(hash);
   });
 });
 
