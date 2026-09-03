@@ -1,6 +1,7 @@
 import React from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import { HIT_SLOP_44 } from './hitTarget';
+import { color, space, typeRole, measure } from '../theme';
 
 export function StatusBanner({
   label,
@@ -44,14 +45,14 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    gap: 12,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    backgroundColor: '#1f1b2e',
+    gap: space.md,
+    paddingHorizontal: space.lg,
+    paddingVertical: space.md,
+    backgroundColor: color.surfaceBrand,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#7c3aed',
+    borderBottomColor: color.brand,
   },
-  label: { flex: 1, color: '#f9fafb', fontSize: 14, lineHeight: 20 },
-  action: { minHeight: 44, minWidth: 44, justifyContent: 'center', paddingHorizontal: 8 },
-  actionText: { color: '#8f57f0', fontSize: 15, fontWeight: '700' },
+  label: { flex: 1, color: color.textPrimary, fontSize: typeRole.secondary.fontSize, lineHeight: 20 },
+  action: { minHeight: measure.hitTarget, minWidth: measure.hitTarget, justifyContent: 'center', paddingHorizontal: space.sm },
+  actionText: { color: color.brandText, fontSize: typeRole.callout.fontSize, fontWeight: '700' },
 });

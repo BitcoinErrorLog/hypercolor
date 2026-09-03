@@ -2,6 +2,7 @@ import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { CONTACTS_COPY } from '../../../ui/contacts/contactsCopy';
 import { CONTACTS_MUTED } from '../../../ui/contacts/tokens';
+import { color, space, typeRole } from '../../../theme';
 
 export function ThreadDeclinedNotice() {
   return (
@@ -17,10 +18,10 @@ export function ThreadDeclinedNotice() {
 
 const styles = StyleSheet.create({
   notice: {
-    paddingHorizontal: 16,
-    paddingVertical: 10,
+    paddingHorizontal: space.lg,
+    paddingVertical: space.md,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#1a1a1a',
+    borderBottomColor: color.surfaceRaised,
   },
-  text: { color: CONTACTS_MUTED, fontSize: 14, lineHeight: 20 },
+  text: { color: CONTACTS_MUTED, fontSize: typeRole.secondary.fontSize, lineHeight: 20 },
 });

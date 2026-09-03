@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { CONTACTS_ERROR, CONTACTS_MUTED, MIN_TARGET } from './tokens';
+import { color, space, typeRole } from '../../theme';
 
 export function ContactErrorBlock({
   message,
@@ -55,19 +56,19 @@ export function ContactErrorBlock({
 }
 
 const styles = StyleSheet.create({
-  wrap: { gap: 8, paddingHorizontal: 20, paddingVertical: 8 },
-  row: { flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
+  wrap: { gap: space.sm, paddingHorizontal: space.xl, paddingVertical: space.sm },
+  row: { flexDirection: 'row', alignItems: 'flex-start', gap: space.sm },
   mark: {
     color: CONTACTS_ERROR,
-    fontSize: 16,
+    fontSize: typeRole.body.fontSize,
     fontWeight: '700',
     minWidth: 16,
     marginTop: 1,
   },
-  message: { color: CONTACTS_ERROR, fontSize: 14, flex: 1, flexShrink: 1 },
+  message: { color: CONTACTS_ERROR, fontSize: typeRole.secondary.fontSize, flex: 1, flexShrink: 1 },
   detailsToggle: { minHeight: MIN_TARGET, justifyContent: 'center' },
-  detailsLabel: { color: CONTACTS_MUTED, fontSize: 14, textDecorationLine: 'underline' },
-  details: { color: CONTACTS_MUTED, fontSize: 13, fontFamily: 'monospace' },
+  detailsLabel: { color: CONTACTS_MUTED, fontSize: typeRole.secondary.fontSize, textDecorationLine: 'underline' },
+  details: { color: CONTACTS_MUTED, fontSize: typeRole.caption.fontSize, fontFamily: 'monospace' },
   retry: { minHeight: MIN_TARGET, justifyContent: 'center' },
-  retryLabel: { color: '#8f57f0', fontSize: 16, fontWeight: '600' },
+  retryLabel: { color: color.brandText, fontSize: typeRole.body.fontSize, fontWeight: '600' },
 });

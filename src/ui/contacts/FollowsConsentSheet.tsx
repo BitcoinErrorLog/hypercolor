@@ -10,6 +10,7 @@ import {
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { color, space, radius, typeRole } from '../../theme';
 import {
   CONTACTS_BODY,
   CONTACTS_BRAND,
@@ -148,7 +149,7 @@ export function FollowsConsentSheet({
 const styles = StyleSheet.create({
   backdrop: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.72)',
+    backgroundColor: color.overlay,
     justifyContent: 'flex-end',
   },
   sheet: {
@@ -157,25 +158,25 @@ const styles = StyleSheet.create({
     borderTopRightRadius: CONTACTS_RADIUS,
     borderColor: CONTACTS_HAIRLINE,
     borderWidth: StyleSheet.hairlineWidth,
-    paddingHorizontal: 20,
-    paddingTop: 20,
-    gap: 14,
+    paddingHorizontal: space.xl,
+    paddingTop: space.xl,
+    gap: space.lg,
   },
-  scrollContent: { gap: 14, paddingBottom: 8 },
-  title: { color: CONTACTS_BODY, fontSize: 20, fontWeight: '700' },
-  body: { color: CONTACTS_MUTED, fontSize: 15, lineHeight: 22 },
+  scrollContent: { gap: space.lg, paddingBottom: space.sm },
+  title: { color: CONTACTS_BODY, fontSize: typeRole.heading.fontSize, fontWeight: '700' },
+  body: { color: CONTACTS_MUTED, fontSize: typeRole.callout.fontSize, lineHeight: 22 },
   checkRow: {
     flexDirection: 'row',
     alignItems: 'flex-start',
-    gap: 12,
+    gap: space.md,
     minHeight: MIN_TARGET,
-    paddingVertical: 8,
+    paddingVertical: space.sm,
   },
   box: {
     width: 24,
     height: 24,
     marginTop: 2,
-    borderRadius: 4,
+    borderRadius: radius.bubbleTail,
     borderWidth: 2,
     borderColor: CONTACTS_BRAND,
     alignItems: 'center',
@@ -183,23 +184,23 @@ const styles = StyleSheet.create({
     backgroundColor: CONTACTS_CANVAS,
   },
   boxOn: { backgroundColor: CONTACTS_BRAND },
-  tick: { color: '#fff', fontSize: 14, fontWeight: '700' },
-  checkLabel: { color: CONTACTS_BODY, fontSize: 15, flex: 1, flexShrink: 1, lineHeight: 22 },
-  actions: { gap: 8 },
+  tick: { color: color.textOnBrand, fontSize: typeRole.secondary.fontSize, fontWeight: '700' },
+  checkLabel: { color: CONTACTS_BODY, fontSize: typeRole.callout.fontSize, flex: 1, flexShrink: 1, lineHeight: 22 },
+  actions: { gap: space.sm },
   primary: {
     minHeight: MIN_TARGET,
     borderRadius: CONTACTS_RADIUS,
     backgroundColor: CONTACTS_BRAND,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: 16,
+    paddingHorizontal: space.lg,
   },
-  primaryLabel: { color: '#fff', fontSize: 16, fontWeight: '600' },
+  primaryLabel: { color: color.textOnBrand, fontSize: typeRole.body.fontSize, fontWeight: '600' },
   disabled: { opacity: 0.4 },
   secondary: {
     minHeight: MIN_TARGET,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  secondaryLabel: { color: CONTACTS_BRAND_TEXT, fontSize: 16, fontWeight: '600' },
+  secondaryLabel: { color: CONTACTS_BRAND_TEXT, fontSize: typeRole.body.fontSize, fontWeight: '600' },
 });

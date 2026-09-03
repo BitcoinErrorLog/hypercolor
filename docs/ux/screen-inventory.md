@@ -166,3 +166,18 @@ Not trapped: Welcome, tabs, Thread, Channel chat, Settings, Message Requests, Pa
 ## Sign-out
 
 `ProfileScreen.tsx` `handleSignOut` → Alert → `PubkyService.signOut` (`src/services/PubkyService.ts`: best-effort `rnSignOut`, `LinkService.clearSession`, `KeyStore.clear`) → `useAuthStore.clearSession`. Root navigator remounts Auth. No dedicated sign-out screen.
+
+
+## Primitives (Wave 3)
+
+Migrated onto `src/ui/primitives/*` + `src/theme/tokens.ts`:
+
+| Surface | Primitive(s) |
+|---|---|
+| Welcome / Connect | `PageHeader`, `Button`, `StatusBanner`, `AuthQrPanel` |
+| Enable messaging | `PageHeader`, `LoadingState`, `EmptyState`, `AuthQrPanel` |
+| Chats | `PageHeader`, `ListRow`, `EmptyState`, `StatusBanner` |
+| Thread / composer | `PageHeader`, `EmptyState`, `Button`, attachment/payment sheets on tokens |
+| Contacts / detail / requests | `PageHeader`, `ListRow`, `EmptyState`, `Avatar`, `Badge` |
+| Channels | `PageHeader`, `ListRow`, `EmptyState` |
+| Settings / recovery / sign-out | `PageHeader`, `ListRow`, `RecoveryCodeGate`, `SheetChrome` |

@@ -319,6 +319,18 @@ export async function handleE2eDeepLink(url: string): Promise<boolean> {
 async function handleE2eDeepLinkOnce(url: string): Promise<boolean> {
   try {
     const { path, params } = parseE2eUrl(url);
+
+    if (path === 'e2e/vrt') {
+      const scene = (params.get('scene') ?? '').trim();
+      if (!scene) throw new Error('e2e/vrt requires scene');
+      if (__DEV__) {
+        const { setVrtScene } =
+          require('../../vrt/VrtCatalogRoot') as typeof import('../../vrt/VrtCatalogRoot');
+        setVrtScene(scene);
+      }
+      writeE2eReply(scene);
+      return true;
+    }
     if (path === 'e2e/send-dm') {
       const peer = requirePeerOrSlot(params);
       const body = (params.get('body') ?? '').trim();

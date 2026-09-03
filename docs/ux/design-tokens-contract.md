@@ -1,6 +1,6 @@
 # Hypercolor design token contract
 
-Status: **awaiting owner approval before Part 2 screen migration**. This is the
+Status: **OWNER-APPROVED 2026-09-02 by John Carvalho — Part 2 migration authorized**. This is the
 mapping from the as-implemented literals in `docs/ux/design-tokens-current.md`
 to `src/theme/tokens.ts`. Identity rule: premium cohesive evolution of the
 current dark-violet Hypercolor — black canvas, violet brand, hairline surfaces,

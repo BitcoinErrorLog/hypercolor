@@ -3,6 +3,7 @@ import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { ConfirmSheet } from '../../../ui/contacts/ConfirmSheet';
 import { CONTACTS_COPY } from '../../../ui/contacts/contactsCopy';
 import { CONTACTS_ERROR, MIN_TARGET } from '../../../ui/contacts/tokens';
+import { color, space, typeRole } from '../../../theme';
 
 export function ThreadDeniedBanner({ onUnblock }: { onUnblock: () => void | Promise<void> }) {
   const [unblockOpen, setUnblockOpen] = useState(false);
@@ -45,13 +46,13 @@ export function ThreadDeniedBanner({ onUnblock }: { onUnblock: () => void | Prom
 
 const styles = StyleSheet.create({
   blockedBanner: {
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    gap: 8,
+    paddingHorizontal: space.lg,
+    paddingVertical: space.md,
+    gap: space.sm,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#1a1a1a',
+    borderBottomColor: color.surfaceRaised,
   },
-  blockedBannerText: { color: CONTACTS_ERROR, fontSize: 15, fontWeight: '600' },
+  blockedBannerText: { color: CONTACTS_ERROR, fontSize: typeRole.callout.fontSize, fontWeight: '600' },
   unblockBtn: { minHeight: MIN_TARGET, justifyContent: 'center' },
-  unblockLabel: { color: '#8f57f0', fontSize: 16, fontWeight: '600' },
+  unblockLabel: { color: color.brandText, fontSize: typeRole.body.fontSize, fontWeight: '600' },
 });

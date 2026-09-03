@@ -19,6 +19,7 @@ import { ErrorDetails } from '../../ui/ErrorDetails';
 import { sanitizeError } from '../../ui/sanitizedError';
 import { ConfirmSheet } from '../../ui/contacts/ConfirmSheet';
 import { PubkyService } from '../../services/PubkyService';
+import { color, space, radius, typeRole, measure } from '../../theme';
 import {
   finishConnectDelegation,
   subscribeConnectDelegationIdle,
@@ -138,7 +139,7 @@ export default function WelcomeScreen() {
             disabled={loading}
           >
             <View style={styles.primaryButtonInner}>
-              {loading || connectPending ? <ActivityIndicator color="#fff" /> : null}
+              {loading || connectPending ? <ActivityIndicator color={color.textOnBrand} /> : null}
               <Text style={styles.primaryButtonText}>{COPY.connectWithPubkyRing}</Text>
             </View>
           </TouchableOpacity>
@@ -184,7 +185,7 @@ export default function WelcomeScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#0a0a0a',
+    backgroundColor: color.canvas,
   },
   scroll: {
     flexGrow: 1,
@@ -193,70 +194,70 @@ const styles = StyleSheet.create({
     flexGrow: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    paddingHorizontal: 32,
+    paddingHorizontal: space.xxxl,
     paddingTop: 48,
-    gap: 16,
+    gap: space.lg,
   },
   logo: {
-    fontSize: 40,
+    fontSize: typeRole.display.fontSize,
     fontWeight: '700',
-    color: '#7c3aed',
+    color: color.brand,
     letterSpacing: -1,
   },
   tagline: {
-    fontSize: 16,
-    color: '#808692',
+    fontSize: typeRole.body.fontSize,
+    color: color.textSecondary,
     textAlign: 'center',
   },
   hint: {
-    fontSize: 14,
-    color: '#808692',
+    fontSize: typeRole.secondary.fontSize,
+    color: color.textSecondary,
     textAlign: 'center',
     lineHeight: 20,
   },
   actions: {
-    paddingHorizontal: 32,
+    paddingHorizontal: space.xxxl,
     paddingBottom: 48,
-    gap: 20,
+    gap: space.xl,
   },
   errorBox: {
     borderWidth: 1,
-    borderColor: '#fca5a5',
-    borderRadius: 12,
-    padding: 12,
-    gap: 8,
+    borderColor: color.danger,
+    borderRadius: radius.md,
+    padding: space.md,
+    gap: space.sm,
   },
-  errorText: { color: '#fca5a5', fontSize: 14, lineHeight: 20 },
+  errorText: { color: color.danger, fontSize: typeRole.secondary.fontSize, lineHeight: 20 },
   primaryButton: {
-    backgroundColor: '#7c3aed',
-    borderRadius: 12,
-    paddingVertical: 16,
-    minHeight: 44,
+    backgroundColor: color.brand,
+    borderRadius: radius.md,
+    paddingVertical: space.lg,
+    minHeight: measure.hitTarget,
     alignItems: 'center',
   },
   primaryButtonInner: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 8,
+    gap: space.sm,
   },
   buttonDisabled: {
     opacity: 0.6,
   },
   primaryButtonText: {
-    color: '#fff',
-    fontSize: 16,
+    color: color.textOnBrand,
+    fontSize: typeRole.body.fontSize,
     fontWeight: '600',
   },
   resetButton: {
-    minHeight: 44,
+    minHeight: measure.hitTarget,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 12,
+    paddingVertical: space.md,
   },
   resetButtonText: {
-    color: '#fca5a5',
-    fontSize: 15,
+    color: color.danger,
+    fontSize: typeRole.callout.fontSize,
     fontWeight: '600',
   },
 });

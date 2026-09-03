@@ -59,6 +59,7 @@ import {
   type DraftEnvelopeContext,
 } from '../../ui/composerActions';
 import { LINK_MESSAGE_MAX_BYTES } from '../../types/link';
+import { color, space, radius, typeRole, measure } from '../../theme';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'ChannelScreen'>;
 
@@ -699,7 +700,7 @@ export function ChannelScreenContent({
 
       {loading ? (
         <View style={styles.loadingContainer}>
-          <ActivityIndicator color="#7c3aed" />
+          <ActivityIndicator color={color.brand} />
         </View>
       ) : showMembers ? (
         <ScrollView contentContainerStyle={styles.memberPane}>
@@ -741,7 +742,7 @@ export function ChannelScreenContent({
                 value={addPubky}
                 onChangeText={onChangeAddPubky}
                 placeholder="Add member pubky"
-                placeholderTextColor="#4b5563"
+                placeholderTextColor={color.textSecondary}
                 autoCapitalize="none"
               />
               <TouchableOpacity
@@ -854,7 +855,7 @@ export function ChannelScreenContent({
               value={draft}
               onChangeText={onChangeDraft}
               placeholder="Message…"
-              placeholderTextColor="#4b5563"
+              placeholderTextColor={color.textSecondary}
               multiline
             />
             <TouchableOpacity
@@ -871,7 +872,7 @@ export function ChannelScreenContent({
               disabled={!draft.trim() || sending || overCap}
             >
               {sending ? (
-                <ActivityIndicator color="#fff" size="small" />
+                <ActivityIndicator color={color.textOnBrand} size="small" />
               ) : (
                 <Text style={styles.sendIcon}>↑</Text>
               )}
@@ -899,134 +900,134 @@ function formatTime(ms: number): string {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#0a0a0a' },
+  container: { flex: 1, backgroundColor: color.canvas },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
+    paddingHorizontal: space.lg,
+    paddingVertical: space.md,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#1a1a1a',
+    borderBottomColor: color.surfaceRaised,
   },
   backBtn: { ...minHitStyle },
-  backText: { fontSize: 22, color: '#7c3aed' },
-  title: { flex: 1, fontSize: 17, fontWeight: '700', color: '#f9fafb', textAlign: 'center' },
+  backText: { fontSize: typeRole.heading.fontSize, color: color.brand },
+  title: { flex: 1, fontSize: typeRole.titleStack.fontSize, fontWeight: '700', color: color.textPrimary, textAlign: 'center' },
   loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  messageList: { padding: 16, gap: 8 },
+  messageList: { padding: space.lg, gap: space.sm },
   bubble: {
     maxWidth: '78%',
-    borderRadius: 16,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
+    borderRadius: radius.lg,
+    paddingHorizontal: space.lg,
+    paddingVertical: space.md,
     marginVertical: 2,
   },
   mine: {
     alignSelf: 'flex-end',
-    backgroundColor: '#7c3aed',
+    backgroundColor: color.brand,
     borderBottomRightRadius: 4,
   },
   theirs: {
     alignSelf: 'flex-start',
-    backgroundColor: '#1f1f1f',
+    backgroundColor: color.bubbleIncoming,
     borderBottomLeftRadius: 4,
   },
-  sender: { fontSize: 10, color: '#c4b5fd', marginBottom: 2 },
-  replyPreview: { fontSize: 12, color: 'rgba(255,255,255,0.55)', marginBottom: 4 },
-  bubbleText: { fontSize: 15, lineHeight: 20 },
-  mineText: { color: '#fff' },
-  theirsText: { color: '#f9fafb' },
-  meta: { flexDirection: 'row', marginTop: 4, flexWrap: 'wrap', alignItems: 'center', gap: 6 },
-  time: { fontSize: 10, color: 'rgba(255,255,255,0.4)' },
-  statusFailed: { color: '#fca5a5' },
-  retry: { fontSize: 12, color: '#c4b5fd', fontWeight: '700', textDecorationLine: 'underline' },
-  reactionRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 6 },
-  reactionChip: { fontSize: 12, color: '#e5e7eb' },
-  actionRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 6 },
-  action: { color: '#c4b5fd', fontSize: 12, fontWeight: '600' },
-  systemLine: { alignSelf: 'center', paddingVertical: 6 },
-  systemText: { color: '#6b7280', fontSize: 12 },
+  sender: { fontSize: typeRole.meta.fontSize, color: color.brandMuted, marginBottom: 2 },
+  replyPreview: { fontSize: typeRole.meta.fontSize, color: color.textOnBrandUi, marginBottom: space.xs },
+  bubbleText: { fontSize: typeRole.callout.fontSize, lineHeight: 20 },
+  mineText: { color: color.textOnBrand },
+  theirsText: { color: color.textPrimary },
+  meta: { flexDirection: 'row', marginTop: space.xs, flexWrap: 'wrap', alignItems: 'center', gap: space.sm },
+  time: { fontSize: typeRole.meta.fontSize, color: color.textOnBrandUi },
+  statusFailed: { color: color.danger },
+  retry: { fontSize: typeRole.meta.fontSize, color: color.brandMuted, fontWeight: '700', textDecorationLine: 'underline' },
+  reactionRow: { flexDirection: 'row', flexWrap: 'wrap', gap: space.sm, marginTop: space.sm },
+  reactionChip: { fontSize: typeRole.meta.fontSize, color: color.textPrimary },
+  actionRow: { flexDirection: 'row', flexWrap: 'wrap', gap: space.sm, marginTop: space.sm },
+  action: { color: color.brandMuted, fontSize: typeRole.meta.fontSize, fontWeight: '600' },
+  systemLine: { alignSelf: 'center', paddingVertical: space.sm },
+  systemText: { color: color.textSecondary, fontSize: typeRole.meta.fontSize },
   composer: {
     flexDirection: 'row',
     alignItems: 'flex-end',
-    gap: 8,
-    padding: 12,
+    gap: space.sm,
+    padding: space.md,
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: '#1a1a1a',
-    backgroundColor: '#0a0a0a',
+    borderTopColor: color.surfaceRaised,
+    backgroundColor: color.canvas,
   },
   input: {
     flex: 1,
-    backgroundColor: '#1a1a1a',
-    borderRadius: 20,
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    color: '#f9fafb',
-    fontSize: 15,
+    backgroundColor: color.surfaceRaised,
+    borderRadius: radius.xl,
+    paddingHorizontal: space.lg,
+    paddingVertical: space.md,
+    color: color.textPrimary,
+    fontSize: typeRole.callout.fontSize,
     maxHeight: 160,
   },
   plusBtn: {
     ...minHitStyle,
     width: 44,
     height: 44,
-    borderRadius: 22,
-    backgroundColor: '#1f1f1f',
+    borderRadius: radius.xxl,
+    backgroundColor: color.bubbleIncoming,
   },
-  plusIcon: { color: '#c4b5fd', fontSize: 22, fontWeight: '700', marginTop: -2 },
-  byteCap: { color: '#808692', fontSize: 12, paddingHorizontal: 16, paddingBottom: 8 },
-  byteCapOver: { color: '#fca5a5' },
+  plusIcon: { color: color.brandMuted, fontSize: typeRole.heading.fontSize, fontWeight: '700', marginTop: -2 },
+  byteCap: { color: color.textSecondary, fontSize: typeRole.meta.fontSize, paddingHorizontal: space.lg, paddingBottom: space.sm },
+  byteCapOver: { color: color.danger },
   notice: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
-    paddingHorizontal: 16,
-    paddingTop: 8,
+    gap: space.sm,
+    paddingHorizontal: space.lg,
+    paddingTop: space.sm,
   },
-  noticeText: { flex: 1, color: '#fca5a5', fontSize: 13 },
+  noticeText: { flex: 1, color: color.danger, fontSize: typeRole.caption.fontSize },
   destBanner: {
-    paddingHorizontal: 16,
-    paddingVertical: 8,
+    paddingHorizontal: space.lg,
+    paddingVertical: space.sm,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#1a1a1a',
-    gap: 4,
+    borderBottomColor: color.surfaceRaised,
+    gap: space.xs,
   },
-  destMeta: { color: '#c4b5fd', fontSize: 12, fontWeight: '700' },
-  destLine: { color: '#808692', fontSize: 13, lineHeight: 18 },
-  destWarning: { color: '#fbbf24', fontSize: 12, lineHeight: 16 },
+  destMeta: { color: color.brandMuted, fontSize: typeRole.meta.fontSize, fontWeight: '700' },
+  destLine: { color: color.textSecondary, fontSize: typeRole.caption.fontSize, lineHeight: 18 },
+  destWarning: { color: color.warningStrong, fontSize: typeRole.meta.fontSize, lineHeight: 16 },
   sendBtn: {
-    minWidth: 44,
-    minHeight: 44,
+    minWidth: measure.hitTarget,
+    minHeight: measure.hitTarget,
     width: 44,
     height: 44,
-    borderRadius: 22,
-    backgroundColor: '#7c3aed',
+    borderRadius: radius.xxl,
+    backgroundColor: color.brand,
     justifyContent: 'center',
     alignItems: 'center',
   },
   sendBtnDisabled: { opacity: 0.4 },
-  sendIcon: { color: '#fff', fontSize: 18, fontWeight: '700' },
+  sendIcon: { color: color.textOnBrand, fontSize: typeRole.numeric.fontSize, fontWeight: '700' },
   replyBar: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingTop: 8,
+    paddingHorizontal: space.lg,
+    paddingTop: space.sm,
   },
-  replyBarText: { color: '#9ca3af', flex: 1, marginRight: 8 },
-  memberPane: { padding: 20, gap: 10 },
-  memberHeading: { color: '#f9fafb', fontSize: 16, fontWeight: '700', marginBottom: 8 },
-  memberRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 6 },
+  replyBarText: { color: color.textMuted, flex: 1, marginRight: space.sm },
+  memberPane: { padding: space.xl, gap: space.md },
+  memberHeading: { color: color.textPrimary, fontSize: typeRole.body.fontSize, fontWeight: '700', marginBottom: space.sm },
+  memberRow: { flexDirection: 'row', alignItems: 'center', gap: space.sm, paddingVertical: space.sm },
   memberBody: { flex: 1 },
-  memberName: { color: '#f9fafb', fontSize: 14 },
-  memberMeta: { color: '#6b7280', fontSize: 12 },
-  addRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 12 },
+  memberName: { color: color.textPrimary, fontSize: typeRole.secondary.fontSize },
+  memberMeta: { color: color.textSecondary, fontSize: typeRole.meta.fontSize },
+  addRow: { flexDirection: 'row', alignItems: 'center', gap: space.sm, marginTop: space.md },
   addInput: {
     flex: 1,
-    backgroundColor: '#1a1a1a',
-    borderRadius: 10,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    color: '#f9fafb',
+    backgroundColor: color.surfaceRaised,
+    borderRadius: radius.md,
+    paddingHorizontal: space.md,
+    paddingVertical: space.sm,
+    color: color.textPrimary,
   },
-  leaveBtn: { marginTop: 16 },
-  danger: { color: '#f87171', fontWeight: '600' },
+  leaveBtn: { marginTop: space.lg },
+  danger: { color: color.danger, fontWeight: '600' },
 });

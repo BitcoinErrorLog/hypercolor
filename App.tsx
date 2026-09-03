@@ -31,6 +31,7 @@ import {
 } from './src/stores/hydrateAuthSession';
 import { useSessionStatusStore } from './src/stores/sessionStatusStore';
 import { ReduceMotionProvider } from './src/ui/reduceMotion';
+import { color, space, typeRole, measure } from './src/theme';
 
 if (__DEV__) {
   startE2eClipboardChannel();
@@ -108,7 +109,7 @@ export default function App() {
         if (LinkService.hasSession()) {
           await LinkService.syncInbox();
         }
-      } catch (err) {
+      } catch {
         console.warn('[App] link send recovery failed');
       }
     };
@@ -229,7 +230,7 @@ export default function App() {
   if (!ready) {
     return (
       <View style={styles.loading}>
-        <ActivityIndicator size="large" color="#7c3aed" />
+        <ActivityIndicator size="large" color={color.brand} />
         {allowContinue ? (
           <TouchableOpacity
             testID="appSplashContinue"
@@ -251,6 +252,18 @@ export default function App() {
     );
   }
 
+  if (__DEV__) {
+    // Catalog is unreachable in release (__DEV__ false). Env gate keeps
+    // normal debug builds on the real navigator. require() keeps the catalog
+    // module out of the static production graph.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports -- VRT-only debug mount
+    const vrtMod = require('./vrt/VrtCatalogRoot') as typeof import('./vrt/VrtCatalogRoot');
+    if (vrtMod.isVrtCatalogEnabled()) {
+      const Catalog = vrtMod.VrtCatalogRoot;
+      return <Catalog />;
+    }
+  }
+
   return (
     <ReduceMotionProvider>
       <RootNavigator />
@@ -261,16 +274,20 @@ export default function App() {
 const styles = StyleSheet.create({
   loading: {
     flex: 1,
-    backgroundColor: '#0a0a0a',
+    backgroundColor: color.canvas,
     justifyContent: 'center',
     alignItems: 'center',
-    gap: 24,
+    gap: space.xxl,
   },
   splashContinue: {
-    minHeight: 44,
-    minWidth: 44,
-    paddingHorizontal: 24,
+    minHeight: measure.hitTarget,
+    minWidth: measure.hitTarget,
+    paddingHorizontal: space.xxl,
     justifyContent: 'center',
   },
-  splashContinueText: { color: '#8f57f0', fontSize: 16, fontWeight: '600' },
+  splashContinueText: {
+    color: color.brandText,
+    fontSize: typeRole.body.fontSize,
+    fontWeight: '600',
+  },
 });

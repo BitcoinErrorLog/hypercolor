@@ -42,6 +42,7 @@ import { shortPubky } from '../../ui/shortPubky';
 import { copyText } from '../../utils/copyText';
 import { useReduceMotion } from '../../ui/reduceMotion';
 import { scrollSettingsToSection, focusSettingsSection } from '../../ui/settingsSectionFocus';
+import { color, space, radius, typeRole, measure } from '../../theme';
 
 type Nav = NativeStackNavigationProp<RootStackParamList, 'Settings'>;
 type SettingsRoute = RouteProp<RootStackParamList, 'Settings'>;
@@ -241,7 +242,7 @@ export default function SettingsScreen() {
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Transport</Text>
           <View style={styles.row}>
-            <View style={{ flex: 1, paddingRight: 12 }}>
+            <View style={{ flex: 1, paddingRight: space.md }}>
               <Text style={styles.rowLabel}>BLE Mesh (quarantined)</Text>
               <Text style={styles.rowHint}>
                 Research-era path. Off for v1. Re-integration over Encrypted Links is future work.
@@ -250,7 +251,7 @@ export default function SettingsScreen() {
             <Switch
               value={meshEnabled}
               onValueChange={toggleMesh}
-              trackColor={{ true: '#7c3aed' }}
+              trackColor={{ true: color.brand }}
               accessibilityRole="switch"
               accessibilityLabel="BLE Mesh (quarantined)"
               accessibilityState={{ checked: meshEnabled }}
@@ -302,7 +303,7 @@ export default function SettingsScreen() {
             }}
           >
             {backupBusy ? (
-              <ActivityIndicator color="#fff" />
+              <ActivityIndicator color={color.textOnBrand} />
             ) : (
               <Text style={styles.liveButtonText}>Backup now</Text>
             )}
@@ -361,7 +362,7 @@ export default function SettingsScreen() {
             value={restoreCode}
             onChangeText={setRestoreCode}
             placeholder="Paste recovery code to restore"
-            placeholderTextColor="#4b5563"
+            placeholderTextColor={color.textSecondary}
             autoCapitalize="none"
             autoCorrect={false}
           />
@@ -413,7 +414,7 @@ export default function SettingsScreen() {
             <Switch
               value={telemetryEnabled}
               onValueChange={toggleTelemetry}
-              trackColor={{ true: '#7c3aed' }}
+              trackColor={{ true: color.brand }}
               accessibilityRole="switch"
               accessibilityLabel="Telemetry"
               accessibilityState={{ checked: telemetryEnabled }}
@@ -430,7 +431,7 @@ export default function SettingsScreen() {
             style={styles.row}
             onPress={() => nav.navigate('EnableMessaging')}
           >
-            <View style={{ flex: 1, paddingRight: 12 }}>
+            <View style={{ flex: 1, paddingRight: space.md }}>
               <Text style={styles.rowLabel}>{session.label}</Text>
               <Text style={styles.rowHint}>{COPY.approveScopesBody}</Text>
             </View>
@@ -457,96 +458,96 @@ export default function SettingsScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#0a0a0a' },
+  container: { flex: 1, backgroundColor: color.canvas },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 20,
-    paddingVertical: 14,
+    paddingHorizontal: space.xl,
+    paddingVertical: space.lg,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#1a1a1a',
+    borderBottomColor: color.surfaceRaised,
   },
-  backHit: { minWidth: 44, minHeight: 44, justifyContent: 'center' },
-  back: { color: '#8f57f0', fontSize: 16 },
-  title: { fontSize: 17, fontWeight: '600', color: '#f9fafb' },
-  content: { paddingVertical: 24 },
-  section: { marginBottom: 32 },
+  backHit: { minWidth: measure.hitTarget, minHeight: measure.hitTarget, justifyContent: 'center' },
+  back: { color: color.brandText, fontSize: typeRole.body.fontSize },
+  title: { fontSize: typeRole.titleStack.fontSize, fontWeight: '600', color: color.textPrimary },
+  content: { paddingVertical: space.xxl },
+  section: { marginBottom: space.xxxl },
   sectionTitle: {
-    fontSize: 12,
+    fontSize: typeRole.meta.fontSize,
     fontWeight: '600',
-    color: '#6b7280',
+    color: color.textSecondary,
     textTransform: 'uppercase',
     letterSpacing: 0.8,
-    paddingHorizontal: 20,
-    marginBottom: 8,
+    paddingHorizontal: space.xl,
+    marginBottom: space.sm,
   },
   row: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 20,
-    paddingVertical: 14,
+    paddingHorizontal: space.xl,
+    paddingVertical: space.lg,
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: '#1a1a1a',
+    borderTopColor: color.surfaceRaised,
   },
-  rowLabel: { fontSize: 16, color: '#f9fafb' },
-  rowValue: { fontSize: 13, color: '#6b7280', maxWidth: 200 },
-  rowHint: { fontSize: 12, color: '#4b5563', marginTop: 2, flexShrink: 1 },
-  chevron: { fontSize: 20, color: '#6b7280' },
+  rowLabel: { fontSize: typeRole.body.fontSize, color: color.textPrimary },
+  rowValue: { fontSize: typeRole.caption.fontSize, color: color.textSecondary, maxWidth: 200 },
+  rowHint: { fontSize: typeRole.meta.fontSize, color: color.textSecondary, marginTop: 2, flexShrink: 1 },
+  chevron: { fontSize: typeRole.heading.fontSize, color: color.textSecondary },
   recoveryCode: {
-    fontSize: 13,
-    color: '#c4b5fd',
+    fontSize: typeRole.caption.fontSize,
+    color: color.brandMuted,
     fontFamily: 'monospace',
-    marginTop: 8,
+    marginTop: space.sm,
   },
   liveInput: {
-    backgroundColor: '#1a1a1a',
+    backgroundColor: color.surfaceRaised,
     borderWidth: 1,
-    borderColor: '#374151',
-    borderRadius: 10,
-    color: '#f9fafb',
-    fontSize: 13,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    marginHorizontal: 20,
-    marginBottom: 10,
+    borderColor: color.hairlineStrong,
+    borderRadius: radius.md,
+    color: color.textPrimary,
+    fontSize: typeRole.caption.fontSize,
+    paddingHorizontal: space.lg,
+    paddingVertical: space.md,
+    marginHorizontal: space.xl,
+    marginBottom: space.md,
     fontFamily: 'monospace',
   },
   liveButton: {
-    backgroundColor: '#7c3aed',
-    borderRadius: 12,
-    paddingVertical: 14,
+    backgroundColor: color.brand,
+    borderRadius: radius.md,
+    paddingVertical: space.lg,
     alignItems: 'center',
-    marginHorizontal: 20,
-    marginTop: 4,
+    marginHorizontal: space.xl,
+    marginTop: space.xs,
   },
   liveButtonDisabled: { opacity: 0.4 },
-  liveButtonText: { color: '#fff', fontSize: 16, fontWeight: '600' },
+  liveButtonText: { color: color.textOnBrand, fontSize: typeRole.body.fontSize, fontWeight: '600' },
   gateButton: {
-    minHeight: 44,
+    minHeight: measure.hitTarget,
     justifyContent: 'center',
-    marginTop: 8,
+    marginTop: space.sm,
   },
-  gateButtonText: { color: '#8f57f0', fontSize: 15, fontWeight: '600' },
+  gateButtonText: { color: color.brandText, fontSize: typeRole.callout.fontSize, fontWeight: '600' },
   checkRow: {
-    minHeight: 44,
+    minHeight: measure.hitTarget,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
-    marginTop: 8,
+    gap: space.md,
+    marginTop: space.sm,
   },
-  checkMark: { color: '#f9fafb', fontSize: 18, width: 24 },
-  checkLabel: { color: '#f9fafb', fontSize: 15, flex: 1 },
+  checkMark: { color: color.textPrimary, fontSize: typeRole.numeric.fontSize, width: 24 },
+  checkLabel: { color: color.textPrimary, fontSize: typeRole.callout.fontSize, flex: 1 },
   liveStep: {
-    paddingHorizontal: 20,
-    paddingVertical: 8,
+    paddingHorizontal: space.xl,
+    paddingVertical: space.sm,
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: '#1a1a1a',
+    borderTopColor: color.surfaceRaised,
   },
-  liveStepOk: { fontSize: 13, color: '#86efac' },
-  liveStepFail: { fontSize: 13, color: '#fca5a5' },
-  liveStepDetail: { fontSize: 12, color: '#6b7280', marginTop: 2 },
+  liveStepOk: { fontSize: typeRole.caption.fontSize, color: color.success },
+  liveStepFail: { fontSize: typeRole.caption.fontSize, color: color.danger },
+  liveStepDetail: { fontSize: typeRole.meta.fontSize, color: color.textSecondary, marginTop: 2 },
 });
 
 function LiveProofSettingsPanel() {
@@ -588,7 +589,7 @@ function LiveProofSettingsPanel() {
         value={homeserverPubky}
         onChangeText={setHomeserverPubky}
         placeholder="Homeserver public key"
-        placeholderTextColor="#4b5563"
+        placeholderTextColor={color.textSecondary}
         autoCapitalize="none"
         autoCorrect={false}
       />
@@ -597,7 +598,7 @@ function LiveProofSettingsPanel() {
         value={tokenA}
         onChangeText={setTokenA}
         placeholder="Signup token A (or A,B)"
-        placeholderTextColor="#4b5563"
+        placeholderTextColor={color.textSecondary}
         autoCapitalize="none"
         autoCorrect={false}
       />
@@ -606,7 +607,7 @@ function LiveProofSettingsPanel() {
         value={tokenB}
         onChangeText={setTokenB}
         placeholder="Signup token B"
-        placeholderTextColor="#4b5563"
+        placeholderTextColor={color.textSecondary}
         autoCapitalize="none"
         autoCorrect={false}
       />
@@ -618,7 +619,7 @@ function LiveProofSettingsPanel() {
         disabled={!canRun || running}
       >
         {running ? (
-          <ActivityIndicator color="#fff" />
+          <ActivityIndicator color={color.textOnBrand} />
         ) : (
           <Text style={styles.liveButtonText}>Run live proof</Text>
         )}

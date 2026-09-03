@@ -10,6 +10,7 @@ import {
 } from 'react-native';
 import { parsePubky } from '../../../utils/pubkyId';
 import { ContactErrorBlock } from '../../../ui/contacts/ContactErrorBlock';
+import { color, space, radius, typeRole } from '../../../theme';
 import {
   CONTACTS_BODY,
   CONTACTS_BRAND,
@@ -105,7 +106,7 @@ export function ContactSearchView({
           disabled={!valid || loading}
         >
           {loading ? (
-            <ActivityIndicator color="#fff" />
+            <ActivityIndicator color={color.textOnBrand} />
           ) : (
             <Text style={styles.buttonText}>Add contact</Text>
           )}
@@ -121,45 +122,45 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 12,
-    paddingVertical: 8,
+    paddingHorizontal: space.md,
+    paddingVertical: space.sm,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: CONTACTS_HAIRLINE,
     flexWrap: 'wrap',
   },
   headerBtn: { minWidth: MIN_TARGET, minHeight: MIN_TARGET, justifyContent: 'center' },
-  cancel: { color: '#8f57f0', fontSize: 16 },
+  cancel: { color: color.brandText, fontSize: typeRole.body.fontSize },
   title: {
-    fontSize: 17,
+    fontSize: typeRole.titleStack.fontSize,
     fontWeight: '600',
     color: CONTACTS_BODY,
     flexShrink: 1,
     textAlign: 'center',
   },
-  content: { padding: 24, gap: 16 },
+  content: { padding: space.xxl, gap: space.lg },
   input: {
     minHeight: MIN_TARGET,
-    backgroundColor: '#1a1a1a',
+    backgroundColor: color.surfaceRaised,
     borderWidth: 1,
-    borderColor: '#374151',
-    borderRadius: 10,
+    borderColor: color.hairlineStrong,
+    borderRadius: radius.md,
     color: CONTACTS_BODY,
-    fontSize: 14,
-    paddingHorizontal: 16,
-    paddingVertical: 14,
+    fontSize: typeRole.secondary.fontSize,
+    paddingHorizontal: space.lg,
+    paddingVertical: space.lg,
   },
   inputInvalid: { borderColor: CONTACTS_ERROR },
-  validationRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
-  validationMark: { color: CONTACTS_ERROR, fontWeight: '700', fontSize: 16 },
-  validation: { color: CONTACTS_ERROR, fontSize: 14, flex: 1, flexShrink: 1 },
+  validationRow: { flexDirection: 'row', alignItems: 'flex-start', gap: space.sm },
+  validationMark: { color: CONTACTS_ERROR, fontWeight: '700', fontSize: typeRole.body.fontSize },
+  validation: { color: CONTACTS_ERROR, fontSize: typeRole.secondary.fontSize, flex: 1, flexShrink: 1 },
   button: {
     minHeight: MIN_TARGET,
     backgroundColor: CONTACTS_BRAND,
     borderRadius: CONTACTS_RADIUS,
-    paddingVertical: 14,
+    paddingVertical: space.lg,
     alignItems: 'center',
     justifyContent: 'center',
   },
   buttonDisabled: { opacity: 0.4 },
-  buttonText: { color: '#fff', fontSize: 16, fontWeight: '600' },
+  buttonText: { color: color.textOnBrand, fontSize: typeRole.body.fontSize, fontWeight: '600' },
 });

@@ -21,7 +21,7 @@ describe('VRT catalog', () => {
         );
       }
     }
-    expect(names.size).toBe(4);
+    expect(names.size).toBe(VRT_CATALOG_META.length * 4);
     expect(VRT_CATALOG).toHaveLength(VRT_CATALOG_META.length);
   });
 

@@ -5,6 +5,7 @@ import { useTickingNow } from './PaymentRequestCard';
 import { formatTipIdentifierDisplay } from '../utils/displaySanitize';
 import { COPY } from '../copy/uxCopy';
 import { HIT_SLOP_44 } from '../ui/hitTarget';
+import { color, space, radius, typeRole, measure } from '../theme';
 
 /** Endpoint list for Send a tip. Chip row removed — entry is the composer menu. */
 export function ThreadTipBarContent({
@@ -63,21 +64,21 @@ export function ThreadTipBarContent({
 }
 
 const styles = StyleSheet.create({
-  wrap: { paddingHorizontal: 12, paddingBottom: 8, gap: 6 },
-  empty: { color: '#808692', fontSize: 13, paddingHorizontal: 4 },
+  wrap: { paddingHorizontal: space.md, paddingBottom: space.sm, gap: space.sm },
+  empty: { color: color.textSecondary, fontSize: typeRole.caption.fontSize, paddingHorizontal: space.xs },
   endpoint: {
-    backgroundColor: '#141414',
-    borderRadius: 10,
-    paddingHorizontal: 12,
-    paddingVertical: 12,
-    minHeight: 44,
+    backgroundColor: color.surface,
+    borderRadius: radius.md,
+    paddingHorizontal: space.md,
+    paddingVertical: space.md,
+    minHeight: measure.hitTarget,
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
   },
-  endpointCopy: { flex: 1, gap: 2, paddingRight: 8 },
-  endpointId: { color: '#f9fafb', fontSize: 12, fontFamily: 'monospace' },
-  endpointHint: { color: '#a78bfa', fontSize: 12, fontWeight: '600' },
-  meta: { color: '#9ca3af', fontSize: 11 },
-  expired: { color: '#fca5a5', fontSize: 11, fontWeight: '600' },
+  endpointCopy: { flex: 1, gap: 2, paddingRight: space.sm },
+  endpointId: { color: color.textPrimary, fontSize: typeRole.meta.fontSize, fontFamily: 'monospace' },
+  endpointHint: { color: color.brandSoft, fontSize: typeRole.meta.fontSize, fontWeight: '600' },
+  meta: { color: color.textMuted, fontSize: typeRole.meta.fontSize },
+  expired: { color: color.danger, fontSize: typeRole.meta.fontSize, fontWeight: '600' },
 });

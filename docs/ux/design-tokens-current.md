@@ -1,3 +1,5 @@
+Status: **SUPERSEDED** by `docs/ux/design-tokens-contract.md` and `src/theme/tokens.ts` (owner-approved 2026-09-02).
+
 # Hypercolor mobile design tokens (as implemented)
 
 There is **no theme module, no `colors.ts`, no spacing scale, and no typography tokens** in `src/`. Every value is a `StyleSheet.create` literal (plus `App.tsx`). Counts from a Python scan of `src/**/*.ts(x)` excluding `__tests__`, plus `App.tsx` for hex. Commands:

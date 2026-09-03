@@ -12,6 +12,7 @@ import { COPY, lastBackupLine } from '../copy/uxCopy';
 import { HIT_SLOP_44 } from './hitTarget';
 import { ErrorDetails } from './ErrorDetails';
 import { modalAnimationType, useReduceMotion } from './reduceMotion';
+import { color, space, radius, typeRole, measure } from '../theme';
 
 export function SignOutSheet({
   visible,
@@ -97,37 +98,37 @@ export function SignOutSheet({
 const styles = StyleSheet.create({
   backdrop: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.7)',
+    backgroundColor: color.overlay,
     justifyContent: 'center',
-    padding: 24,
+    padding: space.xxl,
   },
   card: {
-    backgroundColor: '#111111',
-    borderRadius: 12,
-    padding: 20,
-    gap: 12,
+    backgroundColor: color.surface,
+    borderRadius: radius.md,
+    padding: space.xl,
+    gap: space.md,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#1a1a1a',
+    borderColor: color.surfaceRaised,
   },
-  title: { color: '#f9fafb', fontSize: 18, fontWeight: '700' },
-  body: { color: '#808692', fontSize: 15, lineHeight: 22 },
-  error: { color: '#fca5a5', fontSize: 14, lineHeight: 20 },
+  title: { color: color.textPrimary, fontSize: typeRole.numeric.fontSize, fontWeight: '700' },
+  body: { color: color.textSecondary, fontSize: typeRole.callout.fontSize, lineHeight: 22 },
+  error: { color: color.danger, fontSize: typeRole.secondary.fontSize, lineHeight: 20 },
   cancel: {
-    minHeight: 44,
-    borderRadius: 12,
+    minHeight: measure.hitTarget,
+    borderRadius: radius.md,
     borderWidth: 1,
-    borderColor: '#374151',
+    borderColor: color.hairlineStrong,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  cancelText: { color: '#f9fafb', fontSize: 16, fontWeight: '600' },
+  cancelText: { color: color.textPrimary, fontSize: typeRole.body.fontSize, fontWeight: '600' },
   destructive: {
-    minHeight: 44,
-    borderRadius: 12,
+    minHeight: measure.hitTarget,
+    borderRadius: radius.md,
     borderWidth: 1,
-    borderColor: '#ef4444',
+    borderColor: color.dangerStrong,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  destructiveText: { color: '#ef4444', fontSize: 16, fontWeight: '600' },
+  destructiveText: { color: color.dangerStrong, fontSize: typeRole.body.fontSize, fontWeight: '600' },
 });

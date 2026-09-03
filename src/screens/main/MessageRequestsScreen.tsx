@@ -24,6 +24,7 @@ import { copyText } from '../../utils/copyText';
 import { sanitizeError } from '../../ui/sanitizedError';
 import { useSessionStatusStore } from '../../stores/sessionStatusStore';
 import { CONTACTS_COPY } from '../../ui/contacts/contactsCopy';
+import { color, space, radius, typeRole, measure } from '../../theme';
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
 
@@ -171,7 +172,7 @@ export function MessageRequestsContent({
           </View>
           <View style={styles.actions}>
             {busy ? (
-              <ActivityIndicator color="#7c3aed" />
+              <ActivityIndicator color={color.brand} />
             ) : (
               <>
                 <TouchableOpacity
@@ -218,7 +219,7 @@ export function MessageRequestsContent({
           </View>
           <View style={styles.actions}>
             {busy ? (
-              <ActivityIndicator color="#7c3aed" />
+              <ActivityIndicator color={color.brand} />
             ) : (
               <TouchableOpacity
                 testID="messageRequestAcceptDeclined"
@@ -319,80 +320,80 @@ export function MessageRequestsContent({
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#0a0a0a' },
+  container: { flex: 1, backgroundColor: color.canvas },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 20,
-    paddingVertical: 14,
+    paddingHorizontal: space.xl,
+    paddingVertical: space.lg,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#1a1a1a',
+    borderBottomColor: color.surfaceRaised,
   },
-  backHit: { minWidth: 44, minHeight: 44, justifyContent: 'center' },
-  back: { color: '#8f57f0', fontSize: 16 },
-  title: { fontSize: 17, fontWeight: '600', color: '#f9fafb' },
+  backHit: { minWidth: measure.hitTarget, minHeight: measure.hitTarget, justifyContent: 'center' },
+  back: { color: color.brandText, fontSize: typeRole.body.fontSize },
+  title: { fontSize: typeRole.titleStack.fontSize, fontWeight: '600', color: color.textPrimary },
   explainer: {
-    paddingHorizontal: 20,
-    paddingVertical: 12,
-    color: '#808692',
-    fontSize: 14,
+    paddingHorizontal: space.xl,
+    paddingVertical: space.md,
+    color: color.textSecondary,
+    fontSize: typeRole.secondary.fontSize,
     lineHeight: 20,
   },
   section: {
-    paddingHorizontal: 20,
-    paddingTop: 16,
-    paddingBottom: 8,
-    color: '#c4b5fd',
-    fontSize: 13,
+    paddingHorizontal: space.xl,
+    paddingTop: space.lg,
+    paddingBottom: space.sm,
+    color: color.brandMuted,
+    fontSize: typeRole.caption.fontSize,
     fontWeight: '700',
     textTransform: 'uppercase',
   },
   row: {
-    paddingHorizontal: 20,
-    paddingVertical: 16,
+    paddingHorizontal: space.xl,
+    paddingVertical: space.lg,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#1a1a1a',
-    gap: 12,
+    borderBottomColor: color.surfaceRaised,
+    gap: space.md,
   },
-  body: { gap: 4 },
-  name: { fontSize: 16, fontWeight: '600', color: '#f9fafb' },
-  pubky: { fontSize: 12, color: '#4b5563', fontFamily: 'monospace' },
-  hint: { fontSize: 13, color: '#6b7280' },
-  actions: { flexDirection: 'row', gap: 12, alignItems: 'center' },
+  body: { gap: space.xs },
+  name: { fontSize: typeRole.body.fontSize, fontWeight: '600', color: color.textPrimary },
+  pubky: { fontSize: typeRole.meta.fontSize, color: color.textSecondary, fontFamily: 'monospace' },
+  hint: { fontSize: typeRole.caption.fontSize, color: color.textSecondary },
+  actions: { flexDirection: 'row', gap: space.md, alignItems: 'center' },
   accept: {
-    backgroundColor: '#7c3aed',
-    borderRadius: 10,
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    minHeight: 44,
+    backgroundColor: color.brand,
+    borderRadius: radius.md,
+    paddingHorizontal: space.lg,
+    paddingVertical: space.md,
+    minHeight: measure.hitTarget,
     justifyContent: 'center',
   },
-  acceptText: { color: '#fff', fontWeight: '600' },
+  acceptText: { color: color.textOnBrand, fontWeight: '600' },
   decline: {
     borderWidth: 1,
-    borderColor: '#374151',
-    borderRadius: 10,
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    minHeight: 44,
+    borderColor: color.hairlineStrong,
+    borderRadius: radius.md,
+    paddingHorizontal: space.lg,
+    paddingVertical: space.md,
+    minHeight: measure.hitTarget,
     justifyContent: 'center',
   },
-  declineText: { color: '#d1d5db', fontWeight: '600' },
-  empty: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: 8, paddingHorizontal: 32 },
-  emptyText: { color: '#f9fafb', fontSize: 16, fontWeight: '600' },
-  emptyHint: { color: '#808692', fontSize: 14, textAlign: 'center' },
-  invite: { paddingHorizontal: 20, paddingVertical: 16, gap: 12 },
-  inviteBody: { color: '#808692', fontSize: 14, lineHeight: 20 },
-  inviteActions: { flexDirection: 'row', gap: 12, flexWrap: 'wrap' },
+  declineText: { color: color.textMuted, fontWeight: '600' },
+  empty: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: space.sm, paddingHorizontal: space.xxxl },
+  emptyText: { color: color.textPrimary, fontSize: typeRole.body.fontSize, fontWeight: '600' },
+  emptyHint: { color: color.textSecondary, fontSize: typeRole.secondary.fontSize, textAlign: 'center' },
+  invite: { paddingHorizontal: space.xl, paddingVertical: space.lg, gap: space.md },
+  inviteBody: { color: color.textSecondary, fontSize: typeRole.secondary.fontSize, lineHeight: 20 },
+  inviteActions: { flexDirection: 'row', gap: space.md, flexWrap: 'wrap' },
   secondaryButton: {
     borderWidth: 1,
-    borderColor: '#374151',
-    borderRadius: 12,
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    minHeight: 44,
+    borderColor: color.hairlineStrong,
+    borderRadius: radius.md,
+    paddingVertical: space.md,
+    paddingHorizontal: space.lg,
+    minHeight: measure.hitTarget,
     justifyContent: 'center',
   },
-  secondaryButtonText: { color: '#9ca3af', fontSize: 15, fontWeight: '600' },
+  secondaryButtonText: { color: color.textMuted, fontSize: typeRole.callout.fontSize, fontWeight: '600' },
 });

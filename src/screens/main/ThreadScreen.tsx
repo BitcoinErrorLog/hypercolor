@@ -72,6 +72,7 @@ import { openBuiltUri } from '../../services/payments/walletHandoff';
 import { continuePaymentReview } from './continuePaymentReview';
 import { eventIdsWithDeliveryQueue } from '../../ui/failedSendRetry';
 import { useReduceMotion } from '../../ui/reduceMotion';
+import { color, space, radius, typeRole, measure } from '../../theme';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Thread'>;
 
@@ -679,7 +680,7 @@ export function ThreadScreenContent({
 
       {loading ? (
         <View style={styles.loadingContainer}>
-          <ActivityIndicator color="#7c3aed" />
+          <ActivityIndicator color={color.brand} />
         </View>
       ) : items.length === 0 ? (
         <View style={styles.empty}>
@@ -793,7 +794,7 @@ export function ThreadScreenContent({
               value={draft}
               onChangeText={onChangeDraft}
               placeholder="Message…"
-              placeholderTextColor="#4b5563"
+              placeholderTextColor={color.textSecondary}
               multiline
               editable={composerEnabled}
               returnKeyType="default"
@@ -813,7 +814,7 @@ export function ThreadScreenContent({
               disabled={!draft.trim() || sending || !composerEnabled || overCap}
             >
               {sending ? (
-                <ActivityIndicator color="#fff" size="small" />
+                <ActivityIndicator color={color.textOnBrand} size="small" />
               ) : (
                 <Text style={styles.sendIcon}>↑</Text>
               )}
@@ -903,102 +904,102 @@ function formatTime(ms: number): string {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#0a0a0a' },
+  container: { flex: 1, backgroundColor: color.canvas },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
+    paddingHorizontal: space.lg,
+    paddingVertical: space.md,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#1a1a1a',
+    borderBottomColor: color.surfaceRaised,
   },
   backBtn: { ...minHitStyle },
-  backText: { fontSize: 22, color: '#7c3aed' },
-  titleWrap: { flex: 1, alignItems: 'center', paddingHorizontal: 8 },
-  title: { fontSize: 15, fontWeight: '600', color: '#f9fafb', textAlign: 'center' },
-  claimed: { fontSize: 12, color: '#c4b5fd', textAlign: 'center' },
-  linkStatus: { fontSize: 12, color: '#fbbf24', textAlign: 'center', marginTop: 2 },
-  empty: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24, gap: 8 },
-  emptyTitle: { color: '#f9fafb', fontSize: 16, fontWeight: '600' },
-  emptyBody: { color: '#808692', fontSize: 14, textAlign: 'center', lineHeight: 20 },
+  backText: { fontSize: typeRole.heading.fontSize, color: color.brand },
+  titleWrap: { flex: 1, alignItems: 'center', paddingHorizontal: space.sm },
+  title: { fontSize: typeRole.callout.fontSize, fontWeight: '600', color: color.textPrimary, textAlign: 'center' },
+  claimed: { fontSize: typeRole.meta.fontSize, color: color.brandMuted, textAlign: 'center' },
+  linkStatus: { fontSize: typeRole.meta.fontSize, color: color.warningStrong, textAlign: 'center', marginTop: 2 },
+  empty: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: space.xxl, gap: space.sm },
+  emptyTitle: { color: color.textPrimary, fontSize: typeRole.body.fontSize, fontWeight: '600' },
+  emptyBody: { color: color.textSecondary, fontSize: typeRole.secondary.fontSize, textAlign: 'center', lineHeight: 20 },
   loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  messageList: { padding: 16, gap: 8 },
+  messageList: { padding: space.lg, gap: space.sm },
   bubble: {
     maxWidth: '78%',
-    borderRadius: 16,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
+    borderRadius: radius.lg,
+    paddingHorizontal: space.lg,
+    paddingVertical: space.md,
     marginVertical: 2,
   },
   mine: {
     alignSelf: 'flex-end',
-    backgroundColor: '#7c3aed',
+    backgroundColor: color.brand,
     borderBottomRightRadius: 4,
   },
   theirs: {
     alignSelf: 'flex-start',
-    backgroundColor: '#1f1f1f',
+    backgroundColor: color.bubbleIncoming,
     borderBottomLeftRadius: 4,
   },
-  bubbleText: { fontSize: 15, lineHeight: 20 },
-  mineText: { color: '#fff' },
-  theirsText: { color: '#f9fafb' },
-  meta: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 4 },
-  time: { fontSize: 10, color: 'rgba(255,255,255,0.5)' },
-  status: { fontSize: 12, color: 'rgba(255,255,255,0.85)' },
-  statusFailed: { color: '#fca5a5' },
-  retry: { fontSize: 12, color: '#fff', fontWeight: '700', textDecorationLine: 'underline' },
+  bubbleText: { fontSize: typeRole.callout.fontSize, lineHeight: 20 },
+  mineText: { color: color.textOnBrand },
+  theirsText: { color: color.textPrimary },
+  meta: { flexDirection: 'row', alignItems: 'center', gap: space.xs, marginTop: space.xs },
+  time: { fontSize: typeRole.meta.fontSize, color: color.textOnBrandUi },
+  status: { fontSize: typeRole.meta.fontSize, color: color.textOnBrandMuted },
+  statusFailed: { color: color.danger },
+  retry: { fontSize: typeRole.meta.fontSize, color: color.textOnBrand, fontWeight: '700', textDecorationLine: 'underline' },
   composer: {
     flexDirection: 'row',
     alignItems: 'flex-end',
-    gap: 8,
-    padding: 12,
+    gap: space.sm,
+    padding: space.md,
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: '#1a1a1a',
-    backgroundColor: '#0a0a0a',
+    borderTopColor: color.surfaceRaised,
+    backgroundColor: color.canvas,
   },
   input: {
     flex: 1,
-    backgroundColor: '#1a1a1a',
-    borderRadius: 20,
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    color: '#f9fafb',
-    fontSize: 15,
+    backgroundColor: color.surfaceRaised,
+    borderRadius: radius.xl,
+    paddingHorizontal: space.lg,
+    paddingVertical: space.md,
+    color: color.textPrimary,
+    fontSize: typeRole.callout.fontSize,
     maxHeight: 160,
   },
   sendBtn: {
-    minWidth: 44,
-    minHeight: 44,
+    minWidth: measure.hitTarget,
+    minHeight: measure.hitTarget,
     width: 44,
     height: 44,
-    borderRadius: 22,
-    backgroundColor: '#7c3aed',
+    borderRadius: radius.xxl,
+    backgroundColor: color.brand,
     justifyContent: 'center',
     alignItems: 'center',
   },
   sendBtnDisabled: { opacity: 0.4 },
-  sendIcon: { color: '#fff', fontSize: 18, fontWeight: '700' },
-  composerColumn: { backgroundColor: '#0a0a0a' },
+  sendIcon: { color: color.textOnBrand, fontSize: typeRole.numeric.fontSize, fontWeight: '700' },
+  composerColumn: { backgroundColor: color.canvas },
   plusBtn: {
     ...minHitStyle,
     width: 44,
     height: 44,
-    borderRadius: 22,
-    backgroundColor: '#1f1f1f',
+    borderRadius: radius.xxl,
+    backgroundColor: color.bubbleIncoming,
   },
-  plusIcon: { color: '#c4b5fd', fontSize: 22, fontWeight: '700', marginTop: -2 },
-  byteCap: { color: '#808692', fontSize: 12, paddingHorizontal: 16, paddingBottom: 8 },
-  byteCapOver: { color: '#fca5a5' },
+  plusIcon: { color: color.brandMuted, fontSize: typeRole.heading.fontSize, fontWeight: '700', marginTop: -2 },
+  byteCap: { color: color.textSecondary, fontSize: typeRole.meta.fontSize, paddingHorizontal: space.lg, paddingBottom: space.sm },
+  byteCapOver: { color: color.danger },
   notice: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
-    paddingHorizontal: 16,
-    paddingTop: 8,
+    gap: space.sm,
+    paddingHorizontal: space.lg,
+    paddingTop: space.sm,
   },
-  noticeText: { flex: 1, color: '#fca5a5', fontSize: 13 },
-  noticeAction: { minHeight: 44, justifyContent: 'center', paddingHorizontal: 8 },
-  noticeActionText: { color: '#8f57f0', fontSize: 14, fontWeight: '700' },
+  noticeText: { flex: 1, color: color.danger, fontSize: typeRole.caption.fontSize },
+  noticeAction: { minHeight: measure.hitTarget, justifyContent: 'center', paddingHorizontal: space.sm },
+  noticeActionText: { color: color.brandText, fontSize: typeRole.secondary.fontSize, fontWeight: '700' },
 });

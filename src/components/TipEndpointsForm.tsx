@@ -6,6 +6,7 @@ import {
   type TipEndpointRecord,
 } from '../types/payment';
 import { HIT_SLOP_44 } from '../ui/hitTarget';
+import { color, space, radius, typeRole, measure } from '../theme';
 
 export function TipEndpointsForm({
   endpoints,
@@ -37,7 +38,7 @@ export function TipEndpointsForm({
         value={bolt11}
         onChangeText={setBolt11}
         placeholder="lnbc1…"
-        placeholderTextColor="#4b5563"
+        placeholderTextColor={color.textSecondary}
         autoCapitalize="none"
         autoCorrect={false}
       />
@@ -47,7 +48,7 @@ export function TipEndpointsForm({
         value={address}
         onChangeText={setAddress}
         placeholder="bc1p…"
-        placeholderTextColor="#4b5563"
+        placeholderTextColor={color.textSecondary}
         autoCapitalize="none"
         autoCorrect={false}
       />
@@ -73,43 +74,43 @@ export function TipEndpointsForm({
 }
 
 const styles = StyleSheet.create({
-  hint: { fontSize: 12, color: '#6b7280', paddingHorizontal: 20, marginBottom: 10 },
+  hint: { fontSize: typeRole.meta.fontSize, color: color.textSecondary, paddingHorizontal: space.xl, marginBottom: space.md },
   label: {
-    fontSize: 12,
-    color: '#9ca3af',
-    paddingHorizontal: 20,
-    marginBottom: 6,
+    fontSize: typeRole.meta.fontSize,
+    color: color.textMuted,
+    paddingHorizontal: space.xl,
+    marginBottom: space.sm,
     fontWeight: '600',
   },
   input: {
-    backgroundColor: '#1a1a1a',
-    borderRadius: 10,
-    color: '#f9fafb',
-    marginHorizontal: 20,
-    marginBottom: 12,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    fontSize: 13,
+    backgroundColor: color.surfaceRaised,
+    borderRadius: radius.md,
+    color: color.textPrimary,
+    marginHorizontal: space.xl,
+    marginBottom: space.md,
+    paddingHorizontal: space.md,
+    paddingVertical: space.md,
+    fontSize: typeRole.caption.fontSize,
     fontFamily: 'monospace',
   },
-  error: { color: '#fca5a5', fontSize: 12, flex: 1 },
+  error: { color: color.danger, fontSize: typeRole.meta.fontSize, flex: 1 },
   errorRow: {
     flexDirection: 'row',
     alignItems: 'flex-start',
-    gap: 8,
-    paddingHorizontal: 20,
-    marginBottom: 8,
+    gap: space.sm,
+    paddingHorizontal: space.xl,
+    marginBottom: space.sm,
   },
-  errorIcon: { color: '#fca5a5', fontSize: 12, fontWeight: '700' },
+  errorIcon: { color: color.danger, fontSize: typeRole.meta.fontSize, fontWeight: '700' },
   save: {
-    backgroundColor: '#7c3aed',
-    borderRadius: 12,
-    marginHorizontal: 20,
-    paddingVertical: 12,
-    minHeight: 44,
+    backgroundColor: color.brand,
+    borderRadius: radius.md,
+    marginHorizontal: space.xl,
+    paddingVertical: space.md,
+    minHeight: measure.hitTarget,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  saveText: { color: '#fff', fontSize: 15, fontWeight: '600' },
+  saveText: { color: color.textOnBrand, fontSize: typeRole.callout.fontSize, fontWeight: '600' },
   disabled: { opacity: 0.4 },
 });

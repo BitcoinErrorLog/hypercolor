@@ -7,6 +7,7 @@ import { COPY } from '../copy/uxCopy';
 import { HIT_SLOP_44 } from '../ui/hitTarget';
 import { ErrorDetails } from '../ui/ErrorDetails';
 import { sanitizeError } from '../ui/sanitizedError';
+import { color, space, radius, typeRole, measure } from '../theme';
 
 export function AttachmentBubble({
   record,
@@ -74,7 +75,7 @@ export function AttachmentBubble({
     record.resolveState,
   ]);
 
-  const textColor = isMine ? '#fff' : '#f9fafb';
+  const textColor = isMine ? color.textOnBrand : color.textPrimary;
   const preview = uri ?? thumbUri;
 
   if (record.resolveState === 'unavailable-from-backup') {
@@ -128,7 +129,7 @@ export function AttachmentBubble({
         accessibilityLabel="Uploading attachment"
         style={styles.card}
       >
-        <ActivityIndicator color="#c4b5fd" />
+        <ActivityIndicator color={color.brandMuted} />
         <Text style={[styles.meta, { color: textColor }]}>Uploading…</Text>
       </View>
     );
@@ -153,7 +154,7 @@ export function AttachmentBubble({
             style={[styles.placeholder, isMine ? styles.placeholderMine : styles.placeholderTheirs]}
           >
             {loading ? (
-              <ActivityIndicator color="#c4b5fd" />
+              <ActivityIndicator color={color.brandMuted} />
             ) : (
               <Text style={styles.placeholderText}>Image</Text>
             )}
@@ -201,7 +202,7 @@ export function AttachmentBubble({
       <Text style={[styles.fileName, { color: textColor }]}>{fileLabel(record.contentType)}</Text>
       <Text style={[styles.meta, { color: textColor }]}>{formatBytes(record.size)}</Text>
       {loading ? (
-        <ActivityIndicator color="#c4b5fd" style={styles.spinner} />
+        <ActivityIndicator color={color.brandMuted} style={styles.spinner} />
       ) : uri ? (
         <Text style={[styles.meta, { color: textColor }]}>Saved on this device</Text>
       ) : (
@@ -240,25 +241,25 @@ function formatBytes(size: number): string {
 }
 
 const styles = StyleSheet.create({
-  card: { minWidth: 140, gap: 4 },
-  image: { width: 220, height: 160, borderRadius: 12, backgroundColor: '#111' },
+  card: { minWidth: 140, gap: space.xs },
+  image: { width: 220, height: 160, borderRadius: radius.md, backgroundColor: color.surface },
   placeholder: {
     width: 220,
     height: 120,
-    borderRadius: 12,
+    borderRadius: radius.md,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  placeholderMine: { backgroundColor: 'rgba(255,255,255,0.12)' },
-  placeholderTheirs: { backgroundColor: '#111' },
-  placeholderText: { color: '#9ca3af', fontWeight: '600' },
-  fileName: { fontSize: 15, fontWeight: '600' },
-  meta: { fontSize: 11, opacity: 0.7 },
-  action: { fontSize: 13, fontWeight: '700', marginTop: 4 },
-  error: { color: '#fca5a5', fontSize: 11, flex: 1 },
-  errorRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 4, flexWrap: 'wrap' },
-  errorIcon: { color: '#fca5a5', fontSize: 12, fontWeight: '700' },
-  retry: { minHeight: 44, justifyContent: 'center', paddingHorizontal: 4 },
-  retryText: { color: '#c4b5fd', fontSize: 12, fontWeight: '700', textDecorationLine: 'underline' },
-  spinner: { marginTop: 6 },
+  placeholderMine: { backgroundColor: color.overlayOnBrandFaint },
+  placeholderTheirs: { backgroundColor: color.surface },
+  placeholderText: { color: color.textMuted, fontWeight: '600' },
+  fileName: { fontSize: typeRole.callout.fontSize, fontWeight: '600' },
+  meta: { fontSize: typeRole.meta.fontSize, opacity: 0.7 },
+  action: { fontSize: typeRole.caption.fontSize, fontWeight: '700', marginTop: space.xs },
+  error: { color: color.danger, fontSize: typeRole.meta.fontSize, flex: 1 },
+  errorRow: { flexDirection: 'row', alignItems: 'center', gap: space.sm, marginTop: space.xs, flexWrap: 'wrap' },
+  errorIcon: { color: color.danger, fontSize: typeRole.meta.fontSize, fontWeight: '700' },
+  retry: { minHeight: measure.hitTarget, justifyContent: 'center', paddingHorizontal: space.xs },
+  retryText: { color: color.brandMuted, fontSize: typeRole.meta.fontSize, fontWeight: '700', textDecorationLine: 'underline' },
+  spinner: { marginTop: space.sm },
 });

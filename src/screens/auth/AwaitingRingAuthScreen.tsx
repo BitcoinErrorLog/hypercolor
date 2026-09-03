@@ -25,6 +25,7 @@ import {
   type PendingDelegationSnapshot,
 } from '../../services/PubkyRingAuthService';
 import { subscribeConnectAuthFeedback } from '../../ui/connectAuthFeedback';
+import { color, space, radius, typeRole, measure } from '../../theme';
 import {
   finishConnectDelegation,
   tryBeginConnectDelegation,
@@ -215,7 +216,7 @@ export default function AwaitingRingAuthScreen() {
         </View>
         <View style={styles.content}>
           {phase === 'waiting' ? (
-            <ActivityIndicator size="large" color="#7c3aed" style={styles.spinner} />
+            <ActivityIndicator size="large" color={color.brand} style={styles.spinner} />
           ) : null}
           <Text style={styles.title}>{title}</Text>
           <Text style={styles.description}>{body}</Text>
@@ -284,7 +285,7 @@ export default function AwaitingRingAuthScreen() {
                 }}
               >
                 {delegationBusy ? (
-                  <ActivityIndicator color="#fff" />
+                  <ActivityIndicator color={color.textOnBrand} />
                 ) : (
                   <Text style={styles.primaryButtonText}>{COPY.tryAgain}</Text>
                 )}
@@ -310,49 +311,49 @@ export default function AwaitingRingAuthScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#0a0a0a' },
-  scroll: { flexGrow: 1, paddingBottom: 24 },
-  header: { paddingHorizontal: 16, paddingTop: 8 },
-  backHit: { minWidth: 44, minHeight: 44, justifyContent: 'center' },
-  backText: { color: '#8f57f0', fontSize: 16, fontWeight: '600' },
+  container: { flex: 1, backgroundColor: color.canvas },
+  scroll: { flexGrow: 1, paddingBottom: space.xxl },
+  header: { paddingHorizontal: space.lg, paddingTop: space.sm },
+  backHit: { minWidth: measure.hitTarget, minHeight: measure.hitTarget, justifyContent: 'center' },
+  backText: { color: color.brandText, fontSize: typeRole.body.fontSize, fontWeight: '600' },
   content: {
     flexGrow: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    paddingHorizontal: 32,
-    paddingTop: 16,
-    gap: 16,
+    paddingHorizontal: space.xxxl,
+    paddingTop: space.lg,
+    gap: space.lg,
   },
-  spinner: { marginBottom: 8 },
-  title: { fontSize: 22, fontWeight: '700', color: '#f9fafb', textAlign: 'center' },
-  description: { fontSize: 15, color: '#808692', lineHeight: 22, textAlign: 'center' },
-  urlBlock: { width: '100%', gap: 12, marginTop: 8 },
+  spinner: { marginBottom: space.sm },
+  title: { fontSize: typeRole.heading.fontSize, fontWeight: '700', color: color.textPrimary, textAlign: 'center' },
+  description: { fontSize: typeRole.callout.fontSize, color: color.textSecondary, lineHeight: 22, textAlign: 'center' },
+  urlBlock: { width: '100%', gap: space.md, marginTop: space.sm },
   sectionTitle: {
-    fontSize: 12,
+    fontSize: typeRole.meta.fontSize,
     fontWeight: '600',
-    color: '#808692',
+    color: color.textSecondary,
     textTransform: 'uppercase',
     letterSpacing: 0.8,
   },
-  hint: { fontSize: 13, color: '#9ca3af', lineHeight: 20 },
+  hint: { fontSize: typeRole.caption.fontSize, color: color.textMuted, lineHeight: 20 },
   primaryButton: {
-    backgroundColor: '#7c3aed',
-    borderRadius: 12,
-    paddingVertical: 16,
-    minHeight: 44,
+    backgroundColor: color.brand,
+    borderRadius: radius.md,
+    paddingVertical: space.lg,
+    minHeight: measure.hitTarget,
     alignItems: 'center',
     alignSelf: 'stretch',
   },
-  primaryButtonText: { color: '#fff', fontSize: 16, fontWeight: '600' },
+  primaryButtonText: { color: color.textOnBrand, fontSize: typeRole.body.fontSize, fontWeight: '600' },
   buttonDisabled: { opacity: 0.6 },
   secondaryButton: {
     borderWidth: 1,
-    borderColor: '#374151',
-    borderRadius: 12,
-    paddingVertical: 14,
-    minHeight: 44,
+    borderColor: color.hairlineStrong,
+    borderRadius: radius.md,
+    paddingVertical: space.lg,
+    minHeight: measure.hitTarget,
     alignItems: 'center',
     alignSelf: 'stretch',
   },
-  secondaryButtonText: { color: '#9ca3af', fontSize: 16 },
+  secondaryButtonText: { color: color.textMuted, fontSize: typeRole.body.fontSize },
 });

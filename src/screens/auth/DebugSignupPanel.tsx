@@ -20,6 +20,7 @@ import { INTERRUPTED_SIGN_OUT_MARKER_UNREADABLE, PubkyService } from '../../serv
 import { COPY } from '../../copy/uxCopy';
 import { isWipeWaitTimeoutError } from '../../services/paintedOwner';
 import { sanitizeError } from '../../ui/sanitizedError';
+import { color, space, radius, typeRole } from '../../theme';
 
 function errorMessage(err: unknown): string {
   if (err instanceof Error && err.message.length > 0) return err.message;
@@ -108,7 +109,7 @@ export function DebugSignupPanel({
         value={homeserverPubky}
         onChangeText={setHomeserverPubky}
         placeholder="Homeserver public key"
-        placeholderTextColor="#4b5563"
+        placeholderTextColor={color.textSecondary}
         autoCapitalize="none"
         autoCorrect={false}
         editable={!busy}
@@ -120,7 +121,7 @@ export function DebugSignupPanel({
         value={signupToken}
         onChangeText={setSignupToken}
         placeholder="Signup token (empty to sign in)"
-        placeholderTextColor="#4b5563"
+        placeholderTextColor={color.textSecondary}
         autoCapitalize="none"
         autoCorrect={false}
         editable={!busy}
@@ -132,7 +133,7 @@ export function DebugSignupPanel({
         value={identitySecret}
         onChangeText={setIdentitySecret}
         placeholder="Identity secret (64 hex, optional)"
-        placeholderTextColor="#4b5563"
+        placeholderTextColor={color.textSecondary}
         autoCapitalize="none"
         autoCorrect={false}
         editable={!busy}
@@ -147,7 +148,7 @@ export function DebugSignupPanel({
         disabled={busy}
       >
         {busy ? (
-          <ActivityIndicator color="#fff" />
+          <ActivityIndicator color={color.textOnBrand} />
         ) : (
           <Text style={styles.buttonText}>{submitLabel}</Text>
         )}
@@ -194,43 +195,43 @@ export function DebugSignupPanel({
 
 const styles = StyleSheet.create({
   panel: {
-    gap: 10,
-    padding: 16,
-    borderRadius: 12,
+    gap: space.md,
+    padding: space.lg,
+    borderRadius: radius.md,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#374151',
-    backgroundColor: '#111111',
+    borderColor: color.hairlineStrong,
+    backgroundColor: color.surface,
   },
-  title: { color: '#f9fafb', fontSize: 15, fontWeight: '700' },
-  hint: { color: '#6b7280', fontSize: 12, lineHeight: 18 },
+  title: { color: color.textPrimary, fontSize: typeRole.callout.fontSize, fontWeight: '700' },
+  hint: { color: color.textSecondary, fontSize: typeRole.meta.fontSize, lineHeight: 18 },
   input: {
-    backgroundColor: '#1a1a1a',
+    backgroundColor: color.surfaceRaised,
     borderWidth: 1,
-    borderColor: '#374151',
-    borderRadius: 10,
-    color: '#f9fafb',
-    fontSize: 13,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
+    borderColor: color.hairlineStrong,
+    borderRadius: radius.md,
+    color: color.textPrimary,
+    fontSize: typeRole.caption.fontSize,
+    paddingHorizontal: space.md,
+    paddingVertical: space.md,
     fontFamily: 'monospace',
   },
   button: {
-    backgroundColor: '#7c3aed',
-    borderRadius: 10,
-    paddingVertical: 12,
+    backgroundColor: color.brand,
+    borderRadius: radius.md,
+    paddingVertical: space.md,
     alignItems: 'center',
   },
   buttonDisabled: { opacity: 0.5 },
-  buttonText: { color: '#fff', fontSize: 15, fontWeight: '600' },
-  error: { color: '#fca5a5', fontSize: 13 },
-  result: { gap: 8 },
-  status: { color: '#86efac', fontSize: 14, fontWeight: '600' },
+  buttonText: { color: color.textOnBrand, fontSize: typeRole.callout.fontSize, fontWeight: '600' },
+  error: { color: color.danger, fontSize: typeRole.caption.fontSize },
+  result: { gap: space.sm },
+  status: { color: color.success, fontSize: typeRole.secondary.fontSize, fontWeight: '600' },
   resultLabel: {
-    color: '#6b7280',
-    fontSize: 11,
+    color: color.textSecondary,
+    fontSize: typeRole.meta.fontSize,
     fontWeight: '600',
     textTransform: 'uppercase',
     letterSpacing: 0.6,
   },
-  mono: { color: '#c4b5fd', fontSize: 12, fontFamily: 'monospace' },
+  mono: { color: color.brandMuted, fontSize: typeRole.meta.fontSize, fontFamily: 'monospace' },
 });

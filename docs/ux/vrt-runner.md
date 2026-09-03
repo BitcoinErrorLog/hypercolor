@@ -134,3 +134,16 @@ the run. Public hosting of a report still needs explicit user approval.
 import `vrt/catalog.ts` from `App.tsx` in a production path. Part 2 must keep
 the catalog behind `__DEV__` and `E2E_VRT=1` so Metro can tree-shake it out of
 release builds.
+
+
+## Mounted catalog (Part 2)
+
+Set `EXPO_PUBLIC_E2E_VRT=1` (and/or `E2E_VRT=1`) on a **debug** build. `App.tsx` replaces the navigator with `VrtCatalogRoot` only when `__DEV__` and that env flag are set — release builds never mount the catalog.
+
+Switch scenes via clipboard/file channel:
+
+```
+HC_E2E:hypercolor://e2e/vrt?scene=auth.welcome.idle
+```
+
+Maestro flows wait on `vrtSceneReady`, then `takeScreenshot`. Generated flows live under `.maestro/vrt/generated/`.

@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Text, TouchableOpacity, StyleSheet, View } from 'react-native';
 import { HIT_SLOP_44 } from './hitTarget';
+import { color, space, typeRole, measure } from '../theme';
 
 export function ErrorDetails({ details, testID }: { details: string | null; testID?: string }) {
   const [open, setOpen] = useState(false);
@@ -26,7 +27,7 @@ export function ErrorDetails({ details, testID }: { details: string | null; test
 }
 
 const styles = StyleSheet.create({
-  toggle: { minHeight: 44, justifyContent: 'center' },
-  toggleText: { color: '#8f57f0', fontSize: 14, fontWeight: '600' },
-  body: { color: '#808692', fontSize: 13, lineHeight: 18, marginTop: 4, fontFamily: 'monospace' },
+  toggle: { minHeight: measure.hitTarget, justifyContent: 'center' },
+  toggleText: { color: color.brandText, fontSize: typeRole.secondary.fontSize, fontWeight: '600' },
+  body: { color: color.textSecondary, fontSize: typeRole.caption.fontSize, lineHeight: 18, marginTop: space.xs, fontFamily: 'monospace' },
 });

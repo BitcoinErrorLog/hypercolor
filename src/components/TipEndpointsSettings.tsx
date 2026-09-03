@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { TipEndpointsForm } from './TipEndpointsForm';
 import { PaymentService } from '../services/payments/PaymentService';
+import { color, space, typeRole } from '../theme';
 import {
   ENDPOINT_BITCOIN_P2TR,
   ENDPOINT_LIGHTNING_BOLT11,
@@ -62,14 +63,14 @@ export function TipEndpointsSettings() {
 }
 
 const styles = StyleSheet.create({
-  section: { marginBottom: 32 },
+  section: { marginBottom: space.xxxl },
   sectionTitle: {
-    fontSize: 12,
+    fontSize: typeRole.meta.fontSize,
     fontWeight: '600',
-    color: '#6b7280',
+    color: color.textSecondary,
     textTransform: 'uppercase',
     letterSpacing: 0.8,
-    paddingHorizontal: 20,
-    marginBottom: 8,
+    paddingHorizontal: space.xl,
+    marginBottom: space.sm,
   },
 });

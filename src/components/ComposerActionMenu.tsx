@@ -13,6 +13,7 @@ import { COPY } from '../copy/uxCopy';
 import { HIT_SLOP_44 } from '../ui/hitTarget';
 import { modalAnimationType, useReduceMotion } from '../ui/reduceMotion';
 import type { ComposerActionItem } from '../ui/composerActions';
+import { color, space, radius, typeRole, measure } from '../theme';
 
 export function ComposerActionMenu({
   visible,
@@ -108,7 +109,7 @@ export function ComposerActionMenu({
 const styles = StyleSheet.create({
   backdrop: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.6)',
+    backgroundColor: color.overlay,
     justifyContent: 'flex-end',
   },
   backdropHit: {
@@ -116,37 +117,37 @@ const styles = StyleSheet.create({
     zIndex: 0,
   },
   sheet: {
-    backgroundColor: '#111',
+    backgroundColor: color.surface,
     borderTopLeftRadius: 16,
     borderTopRightRadius: 16,
-    padding: 20,
-    gap: 4,
+    padding: space.xl,
+    gap: space.xs,
     zIndex: 1,
   },
-  title: { color: '#f9fafb', fontSize: 18, fontWeight: '700', marginBottom: 8 },
+  title: { color: color.textPrimary, fontSize: typeRole.numeric.fontSize, fontWeight: '700', marginBottom: space.sm },
   row: {
-    minHeight: 44,
-    paddingVertical: 10,
+    minHeight: measure.hitTarget,
+    paddingVertical: space.md,
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: '#1a1a1a',
+    borderTopColor: color.surfaceRaised,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
+    gap: space.md,
   },
   rowDisabled: { opacity: 0.55 },
-  rowCopy: { flex: 1, gap: 4 },
-  icon: { color: '#c4b5fd', fontSize: 18, width: 24, textAlign: 'center' },
-  label: { color: '#f9fafb', fontSize: 16, fontWeight: '600' },
-  labelDisabled: { color: '#808692' },
-  reason: { color: '#808692', fontSize: 13 },
+  rowCopy: { flex: 1, gap: space.xs },
+  icon: { color: color.brandMuted, fontSize: typeRole.numeric.fontSize, width: 24, textAlign: 'center' },
+  label: { color: color.textPrimary, fontSize: typeRole.body.fontSize, fontWeight: '600' },
+  labelDisabled: { color: color.textSecondary },
+  reason: { color: color.textSecondary, fontSize: typeRole.caption.fontSize },
   cancel: {
-    minHeight: 44,
-    marginTop: 8,
-    borderRadius: 12,
+    minHeight: measure.hitTarget,
+    marginTop: space.sm,
+    borderRadius: radius.md,
     borderWidth: 1,
-    borderColor: '#374151',
+    borderColor: color.hairlineStrong,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  cancelText: { color: '#f9fafb', fontSize: 16, fontWeight: '600' },
+  cancelText: { color: color.textPrimary, fontSize: typeRole.body.fontSize, fontWeight: '600' },
 });
