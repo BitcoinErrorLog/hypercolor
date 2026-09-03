@@ -2,10 +2,8 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   View,
   Text,
-  Switch,
   TouchableOpacity,
   StyleSheet,
-  SafeAreaView,
   ScrollView,
   TextInput,
   ActivityIndicator,
@@ -32,16 +30,13 @@ import {
 import { TipEndpointsSettings } from '../../components/TipEndpointsSettings';
 import { BackupService } from '../../services/backup/BackupService';
 import { COPY } from '../../copy/uxCopy';
-import { CustodyLine } from '../../ui/CustodyLine';
-import { ErrorDetails } from '../../ui/ErrorDetails';
-import { HIT_SLOP_44 } from '../../ui/hitTarget';
 import { sessionUiModel } from '../../ui/sessionUi';
 import { sanitizeError } from '../../ui/sanitizedError';
 import { setLastBackupAt } from '../../stores/backupMetaStore';
-import { shortPubky } from '../../ui/shortPubky';
 import { copyText } from '../../utils/copyText';
 import { useReduceMotion } from '../../ui/reduceMotion';
 import { scrollSettingsToSection, focusSettingsSection } from '../../ui/settingsSectionFocus';
+import { SettingsScreenContent } from './SettingsScreenContent';
 import { color, space, radius, typeRole, measure } from '../../theme';
 
 type Nav = NativeStackNavigationProp<RootStackParamList, 'Settings'>;
@@ -195,265 +190,86 @@ export default function SettingsScreen() {
   }
 
   return (
-    <SafeAreaView style={styles.container} testID="settingsScreen">
-      <View style={styles.header}>
-        <TouchableOpacity
-          testID="settingsBack"
-          accessibilityRole="button"
-          accessibilityLabel="Back"
-          hitSlop={HIT_SLOP_44}
-          onPress={() => requestLeave()}
-          style={styles.backHit}
-        >
-          <Text style={styles.back}>← Back</Text>
-        </TouchableOpacity>
-        <Text style={styles.title}>Settings</Text>
-        <View style={styles.backHit} />
-      </View>
-
-      <ScrollView ref={scrollRef} testID="settingsScroll" contentContainerStyle={styles.content}>
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Identity</Text>
-          <View style={styles.row}>
-            <Text style={styles.rowLabel}>{pubky ? shortPubky(pubky) : COPY.notConnected}</Text>
-          </View>
-          {pubky ? (
-            <View style={styles.row}>
-              <Text style={styles.rowValue} selectable>
-                {pubky}
-              </Text>
-            </View>
-          ) : null}
-          <View style={styles.row}>
-            <CustodyLine />
-          </View>
-        </View>
-
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Homeserver</Text>
-          <View style={styles.row}>
-            <Text style={styles.rowLabel}>Current</Text>
-            <Text style={styles.rowValue} numberOfLines={1} ellipsizeMode="middle">
-              {homeserver ?? 'Not connected'}
-            </Text>
-          </View>
-        </View>
-
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Transport</Text>
-          <View style={styles.row}>
-            <View style={{ flex: 1, paddingRight: space.md }}>
-              <Text style={styles.rowLabel}>BLE Mesh (quarantined)</Text>
-              <Text style={styles.rowHint}>
-                Research-era path. Off for v1. Re-integration over Encrypted Links is future work.
-              </Text>
-            </View>
-            <Switch
-              value={meshEnabled}
-              onValueChange={toggleMesh}
-              trackColor={{ true: color.brand }}
-              accessibilityRole="switch"
-              accessibilityLabel="BLE Mesh (quarantined)"
-              accessibilityState={{ checked: meshEnabled }}
-            />
-          </View>
-        </View>
-
-        <View
-          ref={backupRef}
-          testID="settingsFocusBackup"
-          accessibilityState={{ selected: markedSection === 'backup' }}
-          onLayout={event => {
-            backupY.current = event.nativeEvent.layout.y;
-            consumeSectionFocus('backup', event.nativeEvent.layout.y, backupRef.current);
-          }}
-          style={styles.section}
-        >
-          <Text style={styles.sectionTitle}>Encrypted backup</Text>
-          <View style={styles.row}>
-            <Text style={styles.rowHint}>{COPY.backupExplanation}</Text>
-          </View>
-          <View style={styles.row}>
-            <Text style={styles.rowHint}>{COPY.backupCustodyLine}</Text>
-          </View>
-          <TouchableOpacity
-            accessibilityRole="button"
-            accessibilityLabel="Backup now"
-            style={[styles.liveButton, backupBusy && styles.liveButtonDisabled]}
-            disabled={backupBusy}
-            onPress={() => {
-              setBackupBusy(true);
-              setRestoreNote(null);
-              setRestoreError(null);
-              void BackupService.exportBackup()
-                .then(result => {
-                  leavingRef.current = false;
-                  alertVisibleRef.current = false;
-                  setRecoveryCode(result.recoveryCode);
-                  setRecoveryConfirmed(false);
-                  setRecoveryCopied(false);
-                  setRecoveryGateActive(true);
-                })
-                .catch(err => {
-                  const sanitized = sanitizeError(err, 'Could not create a backup.');
-                  setRestoreNote(sanitized.message);
-                  setRestoreError(sanitized.details);
-                })
-                .finally(() => setBackupBusy(false));
-            }}
-          >
-            {backupBusy ? (
-              <ActivityIndicator color={color.textOnBrand} />
-            ) : (
-              <Text style={styles.liveButtonText}>Backup now</Text>
-            )}
-          </TouchableOpacity>
-          {recoveryCode ? (
-            <View style={styles.row}>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.rowLabel}>{COPY.writeRecoveryCodeDown}</Text>
-                <Text style={styles.recoveryCode} selectable>
-                  {recoveryCode}
-                </Text>
-                <TouchableOpacity
-                  testID="settingsRecoveryCopy"
-                  accessibilityRole="button"
-                  accessibilityLabel={COPY.copyRecoveryCode}
-                  style={styles.gateButton}
-                  onPress={() => {
-                    copyText(recoveryCode);
-                    setRecoveryCopied(true);
-                  }}
-                >
-                  <Text style={styles.gateButtonText}>
-                    {recoveryCopied ? COPY.copied : COPY.copyRecoveryCode}
-                  </Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  testID="settingsRecoveryConfirm"
-                  accessibilityRole="checkbox"
-                  accessibilityLabel={COPY.writtenRecoveryCode}
-                  accessibilityState={{ checked: recoveryConfirmed }}
-                  style={styles.checkRow}
-                  onPress={() => setRecoveryConfirmed(value => !value)}
-                >
-                  <Text style={styles.checkMark}>{recoveryConfirmed ? '☑' : '☐'}</Text>
-                  <Text style={styles.checkLabel}>{COPY.writtenRecoveryCode}</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  testID="settingsRecoveryDone"
-                  accessibilityRole="button"
-                  accessibilityLabel={COPY.done}
-                  accessibilityState={{ disabled: !recoveryConfirmed }}
-                  disabled={!recoveryConfirmed}
-                  style={[styles.liveButton, !recoveryConfirmed && styles.liveButtonDisabled]}
-                  onPress={() => {
-                    setLastBackupAt(Date.now());
-                    setRecoveryGateActive(false);
-                  }}
-                >
-                  <Text style={styles.liveButtonText}>{COPY.done}</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-          ) : null}
-          <TextInput
-            style={styles.liveInput}
-            value={restoreCode}
-            onChangeText={setRestoreCode}
-            placeholder="Paste recovery code to restore"
-            placeholderTextColor={color.textSecondary}
-            autoCapitalize="none"
-            autoCorrect={false}
-          />
-          <TouchableOpacity
-            accessibilityRole="button"
-            accessibilityLabel="Restore from backup"
-            style={[
-              styles.liveButton,
-              (backupBusy || restoreCode.trim().length === 0) && styles.liveButtonDisabled,
-            ]}
-            disabled={backupBusy || restoreCode.trim().length === 0}
-            onPress={() => {
-              setBackupBusy(true);
-              setRestoreNote(null);
-              setRestoreError(null);
-              void BackupService.restoreBackup(restoreCode)
-                .then(() => {
-                  setRestoreNote(
-                    'Restore complete. History is local. Enable messaging again so links re-handshake. Attachments without keys stay unavailable until re-shared.',
-                  );
-                })
-                .catch(err => {
-                  const sanitized = sanitizeError(err, 'That recovery code did not work.');
-                  setRestoreNote(sanitized.message);
-                  setRestoreError(sanitized.details);
-                })
-                .finally(() => setBackupBusy(false));
-            }}
-          >
-            <Text style={styles.liveButtonText}>Restore from backup</Text>
-          </TouchableOpacity>
-          {restoreNote ? (
-            <View style={styles.row}>
-              <View>
-                <Text style={styles.rowHint}>{restoreNote}</Text>
-                <ErrorDetails details={restoreError} />
-              </View>
-            </View>
-          ) : null}
-        </View>
-
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Privacy</Text>
-          <View style={styles.row}>
-            <View>
-              <Text style={styles.rowLabel}>Telemetry</Text>
-              <Text style={styles.rowHint}>Anonymous delivery counters only</Text>
-            </View>
-            <Switch
-              value={telemetryEnabled}
-              onValueChange={toggleTelemetry}
-              trackColor={{ true: color.brand }}
-              accessibilityRole="switch"
-              accessibilityLabel="Telemetry"
-              accessibilityState={{ checked: telemetryEnabled }}
-            />
-          </View>
-        </View>
-
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Messaging</Text>
-          <TouchableOpacity
-            testID="settingsEnableMessaging"
-            accessibilityRole="button"
-            accessibilityLabel={COPY.enableEncryptedMessaging}
-            style={styles.row}
-            onPress={() => nav.navigate('EnableMessaging')}
-          >
-            <View style={{ flex: 1, paddingRight: space.md }}>
-              <Text style={styles.rowLabel}>{session.label}</Text>
-              <Text style={styles.rowHint}>{COPY.approveScopesBody}</Text>
-            </View>
-            <Text style={styles.chevron}>›</Text>
-          </TouchableOpacity>
-        </View>
-
-        <View
-          ref={paymentsRef}
-          testID="settingsFocusPayments"
-          accessibilityState={{ selected: markedSection === 'payments' }}
-          onLayout={event => {
-            paymentsY.current = event.nativeEvent.layout.y;
-            consumeSectionFocus('payments', event.nativeEvent.layout.y, paymentsRef.current);
-          }}
-        >
-          <TipEndpointsSettings />
-        </View>
-
-        {__DEV__ ? <LiveProofSettingsPanel /> : null}
-      </ScrollView>
-    </SafeAreaView>
+    <SettingsScreenContent
+      pubky={pubky}
+      homeserver={homeserver}
+      session={session}
+      meshEnabled={meshEnabled}
+      telemetryEnabled={telemetryEnabled}
+      backupBusy={backupBusy}
+      recoveryCode={recoveryCode}
+      recoveryConfirmed={recoveryConfirmed}
+      recoveryCopied={recoveryCopied}
+      restoreCode={restoreCode}
+      restoreNote={restoreNote}
+      restoreError={restoreError}
+      markedSection={markedSection}
+      scrollRef={scrollRef}
+      backupSectionRef={backupRef}
+      paymentsSectionRef={paymentsRef}
+      paymentsSlot={<TipEndpointsSettings />}
+      liveProofSlot={__DEV__ ? <LiveProofSettingsPanel /> : null}
+      onBack={() => requestLeave()}
+      onToggleMesh={toggleMesh}
+      onToggleTelemetry={toggleTelemetry}
+      onBackup={() => {
+        setBackupBusy(true);
+        setRestoreNote(null);
+        setRestoreError(null);
+        void BackupService.exportBackup()
+          .then(result => {
+            leavingRef.current = false;
+            alertVisibleRef.current = false;
+            setRecoveryCode(result.recoveryCode);
+            setRecoveryConfirmed(false);
+            setRecoveryCopied(false);
+            setRecoveryGateActive(true);
+          })
+          .catch(err => {
+            const sanitized = sanitizeError(err, 'Could not create a backup.');
+            setRestoreNote(sanitized.message);
+            setRestoreError(sanitized.details);
+          })
+          .finally(() => setBackupBusy(false));
+      }}
+      onCopyRecovery={() => {
+        if (!recoveryCode) return;
+        copyText(recoveryCode);
+        setRecoveryCopied(true);
+      }}
+      onToggleRecoveryConfirmed={() => setRecoveryConfirmed(value => !value)}
+      onRecoveryDone={() => {
+        setLastBackupAt(Date.now());
+        setRecoveryGateActive(false);
+      }}
+      onChangeRestoreCode={setRestoreCode}
+      onRestore={() => {
+        setBackupBusy(true);
+        setRestoreNote(null);
+        setRestoreError(null);
+        void BackupService.restoreBackup(restoreCode)
+          .then(() => {
+            setRestoreNote(
+              'Restore complete. History is local. Enable messaging again so links re-handshake. Attachments without keys stay unavailable until re-shared.',
+            );
+          })
+          .catch(err => {
+            const sanitized = sanitizeError(err, 'That recovery code did not work.');
+            setRestoreNote(sanitized.message);
+            setRestoreError(sanitized.details);
+          })
+          .finally(() => setBackupBusy(false));
+      }}
+      onEnableMessaging={() => nav.navigate('EnableMessaging')}
+      onBackupLayout={y => {
+        backupY.current = y;
+        consumeSectionFocus('backup', y, backupRef.current);
+      }}
+      onPaymentsLayout={y => {
+        paymentsY.current = y;
+        consumeSectionFocus('payments', y, paymentsRef.current);
+      }}
+    />
   );
 }
 
