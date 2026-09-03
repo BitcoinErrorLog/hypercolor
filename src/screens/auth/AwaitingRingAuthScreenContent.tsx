@@ -1,17 +1,10 @@
 import React from 'react';
-import {
-  ActivityIndicator,
-  SafeAreaView,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TouchableOpacity,
-  View,
-} from 'react-native';
+import { SafeAreaView, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AuthQr } from '../../components/AuthQr';
 import { COPY } from '../../copy/uxCopy';
 import { CustodyLine } from '../../ui/CustodyLine';
-import { color, space, radius, typeRole, measure } from '../../theme';
+import { color, space, typeRole } from '../../theme';
 import { Button, ErrorState, LoadingState, PageHeader } from '../../ui/primitives';
 
 export type AwaitPhase = 'waiting' | 'expired' | 'denied' | 'offline';
@@ -39,6 +32,7 @@ export function AwaitingRingAuthScreenContent({
   onGenerateNew,
   onTryAgain,
 }: AwaitingRingAuthScreenContentProps): React.ReactElement {
+  const insets = useSafeAreaInsets();
   const title =
     phase === 'expired'
       ? COPY.authorizationExpired
@@ -58,9 +52,11 @@ export function AwaitingRingAuthScreenContent({
 
   return (
     <SafeAreaView style={styles.container} testID="awaitingRingAuthScreen">
-      <ScrollView contentContainerStyle={styles.scroll}>
+      <ScrollView
+        contentContainerStyle={[styles.scroll, { paddingBottom: space.xl + insets.bottom }]}
+      >
         <PageHeader
-          title={title}
+          title={COPY.connectWithPubkyRing}
           onBack={onCancel}
           backLabel={COPY.back}
           backAccessibilityLabel="Cancel Pubky Ring connection"
@@ -104,44 +100,34 @@ export function AwaitingRingAuthScreenContent({
             </View>
           ) : null}
           {phase === 'expired' ? (
-            <TouchableOpacity
+            <Button
               testID="awaitingRingAuthGenerateNew"
-              accessibilityRole="button"
               accessibilityLabel={COPY.generateNewLink}
               accessibilityState={{ busy: delegationBusy, disabled: delegationBusy }}
               disabled={delegationBusy}
-              style={[styles.primaryButton, delegationBusy && styles.buttonDisabled]}
+              busy={delegationBusy}
+              label={COPY.generateNewLink}
               onPress={onGenerateNew}
-            >
-              <Text style={styles.primaryButtonText}>{COPY.generateNewLink}</Text>
-            </TouchableOpacity>
+            />
           ) : null}
           {phase === 'denied' || phase === 'offline' ? (
             <>
-              <TouchableOpacity
+              <Button
                 testID="awaitingRingAuthTryAgain"
-                accessibilityRole="button"
                 accessibilityLabel={COPY.tryAgain}
                 accessibilityState={{ busy: delegationBusy, disabled: delegationBusy }}
                 disabled={delegationBusy}
-                style={[styles.primaryButton, delegationBusy && styles.buttonDisabled]}
+                busy={delegationBusy}
+                label={COPY.tryAgain}
                 onPress={onTryAgain}
-              >
-                {delegationBusy ? (
-                  <ActivityIndicator color={color.textOnBrand} />
-                ) : (
-                  <Text style={styles.primaryButtonText}>{COPY.tryAgain}</Text>
-                )}
-              </TouchableOpacity>
-              <TouchableOpacity
+              />
+              <Button
                 testID="awaitingRingAuthSecondaryCancel"
-                accessibilityRole="button"
                 accessibilityLabel={COPY.cancel}
-                style={styles.secondaryButton}
+                label={COPY.cancel}
+                variant="secondary"
                 onPress={onCancel}
-              >
-                <Text style={styles.secondaryButtonText}>{COPY.cancel}</Text>
-              </TouchableOpacity>
+              />
             </>
           ) : null}
           <CustodyLine />
@@ -153,10 +139,7 @@ export function AwaitingRingAuthScreenContent({
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: color.canvas },
-  scroll: { flexGrow: 1, paddingBottom: space.xxl },
-  header: { paddingHorizontal: space.lg, paddingTop: space.sm },
-  backHit: { minWidth: measure.hitTarget, minHeight: measure.hitTarget, justifyContent: 'center' },
-  backText: { color: color.brandText, fontSize: typeRole.body.fontSize, fontWeight: '600' },
+  scroll: { flexGrow: 1 },
   content: {
     flexGrow: 1,
     justifyContent: 'center',
@@ -187,28 +170,4 @@ const styles = StyleSheet.create({
     letterSpacing: 0.8,
   },
   hint: { fontSize: typeRole.caption.fontSize, color: color.textMuted, lineHeight: 20 },
-  primaryButton: {
-    backgroundColor: color.brand,
-    borderRadius: radius.md,
-    paddingVertical: space.lg,
-    minHeight: measure.hitTarget,
-    alignItems: 'center',
-    alignSelf: 'stretch',
-  },
-  primaryButtonText: {
-    color: color.textOnBrand,
-    fontSize: typeRole.body.fontSize,
-    fontWeight: '600',
-  },
-  buttonDisabled: { opacity: 0.6 },
-  secondaryButton: {
-    borderWidth: 1,
-    borderColor: color.hairlineStrong,
-    borderRadius: radius.md,
-    paddingVertical: space.lg,
-    minHeight: measure.hitTarget,
-    alignItems: 'center',
-    alignSelf: 'stretch',
-  },
-  secondaryButtonText: { color: color.textMuted, fontSize: typeRole.body.fontSize },
 });

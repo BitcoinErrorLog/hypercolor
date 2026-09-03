@@ -9,6 +9,7 @@ export type IconProps = {
   size?: number;
   tone?: 'primary' | 'secondary' | 'muted' | 'brand' | 'danger' | 'warning' | 'success' | 'onBrand';
   testID?: string;
+  accessibilityLabel?: string;
 };
 
 const toneColor: Record<NonNullable<IconProps['tone']>, string> = {
@@ -22,8 +23,20 @@ const toneColor: Record<NonNullable<IconProps['tone']>, string> = {
   onBrand: color.textOnBrand,
 };
 
-export function Icon({ name, size = iconSize.md, tone = 'secondary', testID }: IconProps) {
+export function Icon({
+  name,
+  size = iconSize.md,
+  tone = 'secondary',
+  testID,
+  accessibilityLabel,
+}: IconProps) {
   return (
-    <Ionicons {...(testID ? { testID } : {})} name={name} size={size} color={toneColor[tone]} />
+    <Ionicons
+      {...(testID ? { testID } : {})}
+      {...(accessibilityLabel ? { accessibilityLabel } : {})}
+      name={name}
+      size={size}
+      color={toneColor[tone]}
+    />
   );
 }

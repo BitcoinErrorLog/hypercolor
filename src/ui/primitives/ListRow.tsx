@@ -73,6 +73,7 @@ export function ListRow({
       ) : null}
       {trailing ? <View style={styles.trailing}>{trailing}</View> : null}
       {navigates ? <Icon name="chevron-forward" tone="muted" /> : null}
+      {hideDivider ? null : <View pointerEvents="none" style={styles.divider} />}
     </>
   );
 
@@ -117,12 +118,19 @@ const styles = StyleSheet.create({
     gap: space.md,
     paddingHorizontal: space.xl,
     paddingVertical: space.md,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: color.hairline,
     backgroundColor: color.canvas,
+    position: 'relative',
   },
   last: {
     borderBottomWidth: 0,
+  },
+  divider: {
+    position: 'absolute',
+    left: space.xl + measure.hitTarget + space.md,
+    right: space.xl,
+    bottom: 0,
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: color.hairline,
   },
   selected: {
     backgroundColor: color.surfaceBrand,
@@ -179,7 +187,7 @@ const styles = StyleSheet.create({
     lineHeight: typeRole.meta.lineHeight,
   },
   unreadMeta: {
-    color: color.brand,
+    color: color.brandText,
   },
   metaSlot: {
     height: typeRole.meta.lineHeight,

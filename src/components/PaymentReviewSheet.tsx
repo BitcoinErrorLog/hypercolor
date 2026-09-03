@@ -10,6 +10,7 @@ import {
   AccessibilityInfo,
   findNodeHandle,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { COPY } from '../copy/uxCopy';
 import { HIT_SLOP_44 } from '../ui/hitTarget';
 import type { PaymentReviewView } from '../ui/paymentReview';
@@ -24,6 +25,7 @@ export function PaymentReviewSheet({
   onClose,
   onContinue,
   onCopyUri,
+  onCopyRecipientPubky,
   onSelectDestination,
 }: {
   visible: boolean;
@@ -32,9 +34,11 @@ export function PaymentReviewSheet({
   onClose: () => void;
   onContinue: () => void;
   onCopyUri: () => void;
+  onCopyRecipientPubky?: () => void;
   onSelectDestination?: (identifier: string) => void;
 }) {
   const reduceMotion = useReduceMotion();
+  const insets = useSafeAreaInsets();
   const titleRef = useRef<Text>(null);
   const primaryDisabled = busy || !review.primaryEnabled;
 
@@ -67,7 +71,10 @@ export function PaymentReviewSheet({
       accessibilityViewIsModal
     >
       <View style={styles.backdrop}>
-        <View testID="paymentReviewSheet" style={styles.sheet}>
+        <View
+          testID="paymentReviewSheet"
+          style={[styles.sheet, { paddingBottom: space.lg + insets.bottom }]}
+        >
           <ScrollView>
             <Text ref={titleRef} accessibilityRole="header" style={styles.title}>
               {COPY.reviewBeforePaying}
@@ -87,7 +94,11 @@ export function PaymentReviewSheet({
                 <Text testID="paymentReviewRecipient" style={styles.value}>
                   {review.recipientTitle}
                 </Text>
-                <PubkyChip pubky={review.recipientPubky} testID="paymentReviewShortPubky" />
+                <PubkyChip
+                  pubky={review.recipientPubky}
+                  {...(onCopyRecipientPubky ? { onCopy: onCopyRecipientPubky } : {})}
+                  testID="paymentReviewShortPubky"
+                />
               </View>
             </View>
             {review.referenceText ? (

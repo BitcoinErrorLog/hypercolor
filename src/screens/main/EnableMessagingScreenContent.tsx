@@ -91,6 +91,7 @@ export function EnableMessagingScreenContent({
     state.phase === 'error' ||
     state.phase === 'native-missing' ||
     state.phase === 'session-offline';
+  const showStatusCard = !isFailure;
 
   return (
     <SafeAreaView style={styles.container} testID="enableMessagingScreen">
@@ -106,18 +107,20 @@ export function EnableMessagingScreenContent({
         <Text style={styles.explanation}>{COPY.approveScopesBody}</Text>
         <Text style={styles.scopeDetail}>{RING_GRANT_SCOPE_DETAIL}</Text>
 
-        <View
-          style={styles.statusCard}
-          accessibilityRole="summary"
-          accessibilityLabel={enableStatusLabel(state.phase)}
-        >
-          <Text style={styles.statusLabel}>Status</Text>
-          <Text testID="enableMessagingStatus" style={styles.statusValue}>
-            {enableStatusLabel(state.phase)}
-          </Text>
-          {state.message ? <Text style={styles.statusMessage}>{state.message}</Text> : null}
-          {state.details ? <ErrorDetails details={state.details} /> : null}
-        </View>
+        {showStatusCard ? (
+          <View
+            style={styles.statusCard}
+            accessibilityRole="summary"
+            accessibilityLabel={enableStatusLabel(state.phase)}
+          >
+            <Text style={styles.statusLabel}>Status</Text>
+            <Text testID="enableMessagingStatus" style={styles.statusValue}>
+              {enableStatusLabel(state.phase)}
+            </Text>
+            {state.message ? <Text style={styles.statusMessage}>{state.message}</Text> : null}
+            {state.details ? <ErrorDetails details={state.details} /> : null}
+          </View>
+        ) : null}
 
         {state.phase === 'checking' ? (
           <LoadingState label={COPY.checkingMessaging} testID="enableMessagingLoading" />
@@ -127,6 +130,7 @@ export function EnableMessagingScreenContent({
           <ErrorState
             title={enableStatusLabel(state.phase)}
             body={state.message ?? COPY.couldNotStartAuthorization}
+            details={state.details}
             testID="enableMessagingError"
           />
         ) : null}

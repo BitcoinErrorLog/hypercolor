@@ -13,7 +13,6 @@ import {
 import { COPY } from '../../copy/uxCopy';
 import { CustodyLine } from '../../ui/CustodyLine';
 import { ErrorDetails } from '../../ui/ErrorDetails';
-import { shortPubky } from '../../ui/shortPubky';
 import type { SessionUiModel } from '../../ui/sessionUi';
 import { color, space, radius, typeRole, measure } from '../../theme';
 import { ListRow, PageHeader, PubkyChip } from '../../ui/primitives';
@@ -94,7 +93,7 @@ export function SettingsScreenContent({
           <Text style={styles.sectionTitle}>Identity</Text>
           {pubky ? (
             <ListRow
-              title={shortPubky(pubky)}
+              title="Pubky"
               leading={null}
               trailing={<PubkyChip pubky={pubky} onCopy={onCopyPubky} testID="mask-pubky" />}
               showChevron={false}

@@ -1,5 +1,5 @@
 import React from 'react';
-import { AccessibilityInfo, StyleSheet } from 'react-native';
+import { AccessibilityInfo, StyleSheet, Text } from 'react-native';
 import renderer, { act } from 'react-test-renderer';
 import {
   Avatar,
@@ -12,7 +12,7 @@ import {
   PubkyChip,
   StatusBanner,
 } from '../index';
-import { measure } from '../../../theme';
+import { color, radius, measure } from '../../../theme';
 
 jest.spyOn(AccessibilityInfo, 'isReduceMotionEnabled').mockResolvedValue(false);
 jest.spyOn(AccessibilityInfo, 'addEventListener').mockReturnValue({
@@ -92,6 +92,18 @@ describe('ui primitives', () => {
     expect(tree.root.findAllByProps({ name: 'chevron-forward' }).length).toBeGreaterThan(0);
   });
 
+  it('ListRow keeps unread meta on a body-safe brand text token', () => {
+    let tree!: renderer.ReactTestRenderer;
+    act(() => {
+      tree = renderer.create(
+        <ListRow title="Ada" meta="2m" unread onPress={() => {}} testID="row" />,
+      );
+    });
+    const meta = tree.root.findAllByType(Text).find(node => node.props.children === '2m');
+    expect(meta).toBeDefined();
+    expect(StyleSheet.flatten(meta?.props.style)).toMatchObject({ color: color.brandText });
+  });
+
   it('EmptyState and StatusBanner keep actions accessible', () => {
     let tree!: renderer.ReactTestRenderer;
     act(() => {
@@ -137,25 +149,39 @@ describe('ui primitives', () => {
     });
     const json = JSON.stringify(tree.toJSON());
     expect(json).toContain('abcdef…wxyz');
+    expect(tree.root.findAllByType(Text).map(node => node.props.children)).toContain('abcdef…wxyz');
+    expect(tree.root.findAllByType(Text).some(node => node.props.children === pubky)).toBe(false);
     const chip = hostByTestId(tree, 'pubkyChip');
     expect(chip.props.accessibilityLabel).toBe(pubky);
     expect(chip.props.accessibilityValue).toEqual({ text: pubky });
     expect(hostByTestId(tree, 'pubkyChipCopy').props.accessibilityRole).toBe('button');
   });
 
-  it('DetailRow and MessageBubble expose structured details and safe on-brand meta', () => {
+  it('DetailRow and MessageBubble expose structured details and accessible status ticks', () => {
     let tree!: renderer.ReactTestRenderer;
     act(() => {
       tree = renderer.create(
         <>
           <DetailRow label="Amount" value="0.00010000 BTC" testID="detailRow" />
-          <MessageBubble mine time="10:12 PM" status="Sent" testID="bubble">
+          <MessageBubble
+            mine
+            time="10:12 PM"
+            status="Sent"
+            grouped
+            lastInGroup={false}
+            testID="bubble"
+          >
             <></>
           </MessageBubble>
         </>,
       );
     });
     expect(JSON.stringify(tree.toJSON())).toContain('Amount');
-    expect(JSON.stringify(tree.toJSON())).toContain('Sent');
+    expect(tree.root.findByProps({ name: 'checkmark-done' }).props.accessibilityLabel).toBe('Sent');
+    expect(tree.root.findAllByType(Text).some(node => node.props.children === 'Sent')).toBe(false);
+    const bubble = tree.root.findAllByProps({ testID: 'bubble' }).find(node => node.props.style);
+    expect(StyleSheet.flatten(bubble?.props.style).borderBottomRightRadius).not.toBe(
+      radius.bubbleTail,
+    );
   });
 });

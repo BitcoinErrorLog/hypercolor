@@ -24,6 +24,8 @@ export { PageHeader } from './PageHeader';
 export type { PageHeaderProps } from './PageHeader';
 export { PubkyChip } from './PubkyChip';
 export type { PubkyChipProps } from './PubkyChip';
+export { ProductSplash } from './ProductSplash';
+export type { ProductSplashProps } from './ProductSplash';
 export { RecoveryCodeGate } from './RecoveryCodeGate';
 export type { RecoveryCodeGateProps } from './RecoveryCodeGate';
 export { SheetChrome } from './SheetChrome';

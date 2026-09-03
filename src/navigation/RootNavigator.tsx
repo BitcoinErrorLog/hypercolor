@@ -1,13 +1,5 @@
 import React, { Suspense, useEffect, useCallback, useState } from 'react';
-import {
-  View,
-  ActivityIndicator,
-  StyleSheet,
-  Alert,
-  Linking,
-  Text,
-  TouchableOpacity,
-} from 'react-native';
+import { View, StyleSheet, Alert, Linking, Text, TouchableOpacity } from 'react-native';
 import { NavigationContainer, type LinkingOptions } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../types';
@@ -35,6 +27,7 @@ import { notifyConnectAuthFeedback } from '../ui/connectAuthFeedback';
 import { stackTransitionAnimation, useReduceMotion } from '../ui/reduceMotion';
 import { PUBLIC_CHANNELS_ROUTE } from '../ui/exposurePaths';
 import { color, space, typeRole, measure } from '../theme';
+import { ProductSplash } from '../ui/primitives';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
@@ -89,34 +82,29 @@ function LoadingFallback() {
     return () => clearTimeout(timer);
   }, []);
   return (
-    <View style={styles.loading}>
-      <Text
-        testID="navigationLoadingWordmark"
-        accessibilityRole="header"
-        style={styles.loadingWordmark}
-      >
-        Hypercolor
-      </Text>
-      <ActivityIndicator size="large" color={color.brand} />
-      {showExit ? (
-        <TouchableOpacity
-          testID="navigationLoadingContinue"
-          accessibilityRole="button"
-          accessibilityLabel="Continue"
-          onPress={() => {
-            if (!navigationRef.isReady()) return;
-            const authed = useAuthStore.getState().isAuthenticated;
-            navigationRef.reset({
-              index: 0,
-              routes: [{ name: authed ? 'Main' : 'Auth' }],
-            });
-          }}
-          style={styles.loadingContinue}
-        >
-          <Text style={styles.loadingContinueText}>{COPY.stillLoading}</Text>
-        </TouchableOpacity>
-      ) : null}
-    </View>
+    <ProductSplash
+      testID="navigationLoading"
+      footer={
+        showExit ? (
+          <TouchableOpacity
+            testID="navigationLoadingContinue"
+            accessibilityRole="button"
+            accessibilityLabel="Continue"
+            onPress={() => {
+              if (!navigationRef.isReady()) return;
+              const authed = useAuthStore.getState().isAuthenticated;
+              navigationRef.reset({
+                index: 0,
+                routes: [{ name: authed ? 'Main' : 'Auth' }],
+              });
+            }}
+            style={styles.loadingContinue}
+          >
+            <Text style={styles.loadingContinueText}>{COPY.stillLoading}</Text>
+          </TouchableOpacity>
+        ) : null
+      }
+    />
   );
 }
 
@@ -244,19 +232,6 @@ export function RootNavigator() {
 
 const styles = StyleSheet.create({
   root: { flex: 1 },
-  loading: {
-    flex: 1,
-    backgroundColor: color.canvas,
-    justifyContent: 'center',
-    alignItems: 'center',
-    gap: space.xxl,
-  },
-  loadingWordmark: {
-    color: color.brand,
-    fontSize: typeRole.display.fontSize,
-    lineHeight: typeRole.display.lineHeight,
-    fontWeight: typeRole.display.fontWeight,
-  },
   loadingContinue: {
     minHeight: measure.hitTarget,
     minWidth: measure.hitTarget,

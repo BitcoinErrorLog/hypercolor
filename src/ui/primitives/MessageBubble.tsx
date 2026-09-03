@@ -11,9 +11,11 @@ export type MessageBubbleProps = {
   status?: string | null;
   failed?: boolean;
   grouped?: boolean;
+  lastInGroup?: boolean;
   showIncomingAvatar?: boolean;
   senderName?: string | null;
   senderPubky?: string | null;
+  accessibilityLabel?: string;
   testID?: string;
 };
 
@@ -24,9 +26,11 @@ export function MessageBubble({
   status = null,
   failed = false,
   grouped = false,
+  lastInGroup = true,
   showIncomingAvatar = false,
   senderName = null,
   senderPubky = null,
+  accessibilityLabel,
   testID,
 }: MessageBubbleProps) {
   return (
@@ -49,7 +53,14 @@ export function MessageBubble({
       ) : null}
       <View
         {...(testID ? { testID } : {})}
-        style={[styles.bubble, mine ? styles.mine : styles.theirs, grouped ? styles.grouped : null]}
+        {...(accessibilityLabel ? { accessible: true, accessibilityLabel } : {})}
+        style={[
+          styles.bubble,
+          mine ? styles.mine : styles.theirs,
+          lastInGroup && mine ? styles.mineTail : null,
+          lastInGroup && !mine ? styles.theirsTail : null,
+          grouped ? styles.grouped : null,
+        ]}
       >
         {children}
         <View style={styles.meta}>
@@ -60,8 +71,9 @@ export function MessageBubble({
                 name="checkmark-done"
                 size={typeRole.meta.fontSize}
                 tone={failed ? 'danger' : 'onBrand'}
+                accessibilityLabel={status}
               />
-              <Text style={[styles.status, failed ? styles.failed : null]}>{status}</Text>
+              {failed ? <Text style={[styles.status, styles.failed]}>{status}</Text> : null}
             </>
           ) : null}
         </View>
@@ -100,10 +112,14 @@ const styles = StyleSheet.create({
   },
   mine: {
     backgroundColor: color.brand,
+  },
+  mineTail: {
     borderBottomRightRadius: radius.bubbleTail,
   },
   theirs: {
     backgroundColor: color.bubbleIncoming,
+  },
+  theirsTail: {
     borderBottomLeftRadius: radius.bubbleTail,
   },
   meta: {
@@ -129,6 +145,6 @@ const styles = StyleSheet.create({
     color: color.textMuted,
   },
   failed: {
-    color: color.danger,
+    color: color.textPrimary,
   },
 });

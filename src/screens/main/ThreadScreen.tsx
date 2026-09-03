@@ -17,6 +17,7 @@ import {
 } from 'react-native';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { RootStackParamList } from '../../types';
 import { CHAT_ATTACHMENT_KIND, type AttachmentRecord } from '../../types/attachment';
 import type { LinkMessage } from '../../types/link';
@@ -479,6 +480,8 @@ export function ThreadScreenContent({
   const plusRef = useRef<View>(null);
   const menuWasOpen = useRef(false);
   const reduceMotion = useReduceMotion();
+  const insets = useSafeAreaInsets();
+  const bottomInset = Math.max(insets.bottom, 0);
   const items = useMemo(
     () => mergeThreadItems(linkMessages, attachments, payments),
     [linkMessages, attachments, payments],
@@ -501,83 +504,130 @@ export function ThreadScreenContent({
     if (tag != null) AccessibilityInfo.setAccessibilityFocus(tag);
   }, [actionMenuOpen]);
 
+  const identity = peerIdentity(participantPubky, peerContact);
+  const linkLabel = formatLinkStatus(linkStatus);
+
   const renderItem = useCallback(
-    ({ item }: { item: ThreadItem }) => {
+    ({ item, index }: { item: ThreadItem; index: number }) => {
+      const previous = items[index - 1];
+      const next = items[index + 1];
+      const grouped = previous
+        ? sameThreadRun(previous, item, localPubky, participantPubky)
+        : false;
+      const lastInGroup = next ? !sameThreadRun(item, next, localPubky, participantPubky) : true;
+      const daySeparator =
+        !previous || !sameCalendarDay(previous.sentAt, item.sentAt) ? (
+          <TimelineDaySeparator label={formatDaySeparator(item.sentAt)} />
+        ) : null;
       if (item.kind === 'payment') {
         const isMine = item.record.direction === 'sent';
         return (
-          <MessageBubble testID="threadPaymentBubble" mine={isMine} time={formatTime(item.sentAt)}>
-            {localPubky ? (
-              <PaymentRequestBubble
-                record={item.record}
-                localPubky={localPubky}
-                onChanged={onPaymentsChanged}
-                onReview={onReview}
-              />
-            ) : null}
-          </MessageBubble>
+          <>
+            {daySeparator}
+            <MessageBubble
+              testID="threadPaymentBubble"
+              mine={isMine}
+              time={formatTime(item.sentAt)}
+              grouped={grouped}
+              lastInGroup={lastInGroup}
+            >
+              {localPubky ? (
+                <PaymentRequestBubble
+                  record={item.record}
+                  localPubky={localPubky}
+                  onChanged={onPaymentsChanged}
+                  onReview={onReview}
+                />
+              ) : null}
+            </MessageBubble>
+          </>
         );
       }
       if (item.kind === 'attachment') {
         const isMine = item.record.senderPubky === localPubky;
         return (
-          <MessageBubble
-            testID={isMine ? 'threadAttachmentBubbleMine' : 'threadAttachmentBubbleTheirs'}
-            mine={isMine}
-            time={formatTime(item.sentAt)}
-          >
-            <AttachmentBubble
-              record={item.record}
-              isMine={isMine}
-              onRetrySend={
-                retryableEventIds.has(item.record.eventId)
-                  ? () => onRetryFailed(item.record.eventId)
-                  : undefined
-              }
-            />
-          </MessageBubble>
+          <>
+            {daySeparator}
+            <MessageBubble
+              testID={isMine ? 'threadAttachmentBubbleMine' : 'threadAttachmentBubbleTheirs'}
+              mine={isMine}
+              time={formatTime(item.sentAt)}
+              grouped={grouped}
+              lastInGroup={lastInGroup}
+              showIncomingAvatar={!isMine && !grouped}
+              senderName={identity.title}
+              senderPubky={participantPubky}
+            >
+              <AttachmentBubble
+                record={item.record}
+                isMine={isMine}
+                onRetrySend={
+                  retryableEventIds.has(item.record.eventId)
+                    ? () => onRetryFailed(item.record.eventId)
+                    : undefined
+                }
+              />
+            </MessageBubble>
+          </>
         );
       }
       const isMine = item.message.senderPubky === localPubky;
       return (
-        <MessageBubble
-          testID={isMine ? 'threadBubbleMine' : 'threadBubbleTheirs'}
-          mine={isMine}
-          time={formatTime(item.message.sentAt)}
-          status={isMine ? formatDeliveryState(item.message.deliveryState) : null}
-          failed={item.message.deliveryState === 'failed'}
-        >
-          <Text style={[styles.bubbleText, isMine ? styles.mineText : styles.theirsText]}>
-            {item.message.body}
-          </Text>
-          {isMine && item.message.deliveryState === 'failed' && !peerBlocked ? (
-            retryableEventIds.has(item.message.eventId) ? (
-              <TouchableOpacity
-                accessibilityRole="button"
-                accessibilityLabel={COPY.retry}
-                hitSlop={HIT_SLOP_44}
-                onPress={() => onRetryFailed(item.message.eventId)}
-              >
-                <Text style={styles.retry}>{COPY.retry}</Text>
-              </TouchableOpacity>
-            ) : (
-              <Text
-                testID="threadSendTerminal"
-                accessibilityRole="text"
-                style={styles.statusFailed}
-              >
-                {COPY.couldNotSendStartAgain}
-              </Text>
-            )
-          ) : null}
-        </MessageBubble>
+        <>
+          {daySeparator}
+          <MessageBubble
+            testID={isMine ? 'threadBubbleMine' : 'threadBubbleTheirs'}
+            mine={isMine}
+            time={formatTime(item.message.sentAt)}
+            status={isMine ? formatDeliveryState(item.message.deliveryState) : null}
+            failed={item.message.deliveryState === 'failed'}
+            grouped={grouped}
+            lastInGroup={lastInGroup}
+            showIncomingAvatar={!isMine && !grouped}
+            senderName={identity.title}
+            senderPubky={participantPubky}
+            accessibilityLabel={item.message.body}
+          >
+            <Text style={[styles.bubbleText, isMine ? styles.mineText : styles.theirsText]}>
+              {item.message.body}
+            </Text>
+            {isMine && item.message.deliveryState === 'failed' && !peerBlocked ? (
+              retryableEventIds.has(item.message.eventId) ? (
+                <TouchableOpacity
+                  accessibilityRole="button"
+                  accessibilityLabel={COPY.retry}
+                  hitSlop={HIT_SLOP_44}
+                  onPress={() => onRetryFailed(item.message.eventId)}
+                >
+                  <Text style={styles.retry}>{COPY.retry}</Text>
+                </TouchableOpacity>
+              ) : (
+                <Text
+                  testID="threadSendTerminal"
+                  accessibilityRole="text"
+                  style={styles.statusFailed}
+                >
+                  {COPY.couldNotSendStartAgain}
+                </Text>
+              )
+            ) : null}
+          </MessageBubble>
+        </>
       );
     },
-    [localPubky, onPaymentsChanged, onRetryFailed, onReview, peerBlocked, retryableEventIds],
+    [
+      identity.title,
+      items,
+      localPubky,
+      onPaymentsChanged,
+      onRetryFailed,
+      onReview,
+      participantPubky,
+      peerBlocked,
+      retryableEventIds,
+    ],
   );
 
-  const identity = peerIdentity(participantPubky, peerContact);
-  const linkLabel = formatLinkStatus(linkStatus);
   const needsEnable =
     sessionKind === 'needs-enable' || sessionKind === 'revoked' || sessionKind === 'unavailable';
   const composerEnabled = !needsEnable && !peerBlocked;
@@ -675,7 +725,7 @@ export function ThreadScreenContent({
           data={items}
           keyExtractor={item => item.id}
           renderItem={renderItem}
-          contentContainerStyle={styles.messageList}
+          contentContainerStyle={[styles.messageList, { paddingBottom: space.xl + bottomInset }]}
           onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: false })}
         />
       )}
@@ -684,7 +734,7 @@ export function ThreadScreenContent({
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         keyboardVerticalOffset={0}
       >
-        <View style={styles.composerColumn}>
+        <View style={[styles.composerColumn, { paddingBottom: space.lg + bottomInset }]}>
           {composerNotice ? (
             <View testID="composerNotice" accessibilityRole="alert" style={styles.notice}>
               <Text style={styles.noticeText}>{composerNotice.message}</Text>
@@ -750,6 +800,7 @@ export function ThreadScreenContent({
                 onCopyUri={() => {
                   if (reviewView.uri) copyText(reviewView.uri);
                 }}
+                onCopyRecipientPubky={() => copyText(reviewView.recipientPubky)}
                 onSelectDestination={identifier => {
                   if (!review) return;
                   const next =
@@ -896,6 +947,47 @@ function formatTime(ms: number): string {
   return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
+function TimelineDaySeparator({ label }: { label: string }) {
+  return (
+    <View style={styles.daySeparator} accessibilityRole="text">
+      <Text style={styles.daySeparatorText}>{label}</Text>
+    </View>
+  );
+}
+
+function sameThreadRun(
+  current: ThreadItem,
+  next: ThreadItem,
+  localPubky: string | null,
+  participantPubky: string,
+): boolean {
+  return (
+    sameCalendarDay(current.sentAt, next.sentAt) &&
+    threadItemSenderPubky(current, localPubky, participantPubky) ===
+      threadItemSenderPubky(next, localPubky, participantPubky)
+  );
+}
+
+function threadItemSenderPubky(
+  item: ThreadItem,
+  localPubky: string | null,
+  participantPubky: string,
+): string {
+  if (item.kind === 'link') return item.message.senderPubky;
+  if (item.kind === 'attachment') return item.record.senderPubky;
+  return item.record.direction === 'sent'
+    ? (localPubky ?? '')
+    : (item.record.peerPubky ?? participantPubky);
+}
+
+function sameCalendarDay(leftMs: number, rightMs: number): boolean {
+  return new Date(leftMs).toDateString() === new Date(rightMs).toDateString();
+}
+
+function formatDaySeparator(ms: number): string {
+  return new Date(ms).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: color.canvas },
   header: {
@@ -938,30 +1030,16 @@ const styles = StyleSheet.create({
     lineHeight: 20,
   },
   loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  messageList: { padding: space.lg, paddingBottom: space.xxxl + space.xl, gap: space.sm },
-  bubble: {
-    maxWidth: '78%',
-    borderRadius: radius.lg,
-    paddingHorizontal: space.lg,
-    paddingVertical: space.md,
-    marginVertical: 2,
-  },
-  mine: {
-    alignSelf: 'flex-end',
-    backgroundColor: color.brand,
-    borderBottomRightRadius: 4,
-  },
-  theirs: {
-    alignSelf: 'flex-start',
-    backgroundColor: color.bubbleIncoming,
-    borderBottomLeftRadius: 4,
+  messageList: { padding: space.lg, gap: space.sm },
+  daySeparator: { alignItems: 'center', paddingVertical: space.md },
+  daySeparatorText: {
+    color: color.textMuted,
+    fontSize: typeRole.meta.fontSize,
+    lineHeight: typeRole.meta.lineHeight,
   },
   bubbleText: { fontSize: typeRole.callout.fontSize, lineHeight: 20 },
   mineText: { color: color.textOnBrand },
   theirsText: { color: color.textPrimary },
-  meta: { flexDirection: 'row', alignItems: 'center', gap: space.xs, marginTop: space.xs },
-  time: { fontSize: typeRole.meta.fontSize, color: color.textOnBrandUi },
-  status: { fontSize: typeRole.meta.fontSize, color: color.textOnBrandMuted },
   statusFailed: { color: color.danger },
   retry: {
     fontSize: typeRole.meta.fontSize,
@@ -1000,7 +1078,7 @@ const styles = StyleSheet.create({
   },
   sendBtnDisabled: { opacity: 0.4 },
   sendIcon: { color: color.textOnBrand, fontSize: typeRole.numeric.fontSize, fontWeight: '700' },
-  composerColumn: { backgroundColor: color.canvas, paddingBottom: space.lg },
+  composerColumn: { backgroundColor: color.canvas },
   plusBtn: {
     ...minHitStyle,
     width: 44,

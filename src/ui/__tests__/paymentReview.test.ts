@@ -13,7 +13,6 @@ import {
 } from '../../services/payments/__tests__/bolt11Vectors';
 import { formatPaymentDisplayText } from '../../utils/displaySanitize';
 import { PAYMENT_COMPOSE_DEFAULT_AMOUNT, mapPaymentReview } from '../paymentReview';
-import { shortPubky } from '../shortPubky';
 
 const PEER = 'b'.repeat(52);
 
@@ -59,7 +58,7 @@ describe('mapPaymentReview', () => {
       destinations: [dest],
     });
     expect(view.recipientTitle).toBe('Ada');
-    expect(view.recipientShortPubky).toBe(shortPubky(PEER));
+    expect(view.recipientPubky).toBe(PEER);
     expect(view.amountText).toContain(MAINNET_BOLT11_20U_BTC);
     expect(view.invoiceAmountText).toContain(MAINNET_BOLT11_20U_BTC);
     expect(view.referenceText).toBe(formatPaymentDisplayText('invoice-1'));

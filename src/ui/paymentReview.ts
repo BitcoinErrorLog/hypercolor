@@ -19,7 +19,6 @@ import {
   payloadPreview,
 } from '../utils/displaySanitize';
 import { peerIdentity, type PeerContactHint } from './peerIdentity';
-import { shortPubky } from './shortPubky';
 
 export type PaymentReviewKind = 'request' | 'tip';
 
@@ -47,7 +46,6 @@ export type PaymentReviewDestinationOption = {
 export type PaymentReviewView = {
   recipientTitle: string;
   recipientPubky: string;
-  recipientShortPubky: string;
   amountText: string;
   invoiceAmountText: string | null;
   referenceText: string | null;
@@ -247,7 +245,6 @@ export function mapPaymentReview(input: PaymentReviewInput): PaymentReviewView {
   return {
     recipientTitle: identity.title,
     recipientPubky: input.recipientPubky,
-    recipientShortPubky: shortPubky(input.recipientPubky),
     amountText: `${input.requestAmountBtc} ${input.amountAsset.toUpperCase()}`.trim(),
     invoiceAmountText: invoiceAmount ? `${invoiceAmount} BTC` : null,
     referenceText: input.reference ? formatPaymentDisplayText(input.reference) : null,

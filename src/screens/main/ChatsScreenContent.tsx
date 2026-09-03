@@ -109,7 +109,7 @@ export function ChatsScreenContent({
           <Icon name="add" tone={needsEnable ? 'muted' : 'brand'} />
         </TouchableOpacity>
       </View>
-      <Text style={styles.sectionTitle}>{COPY.messageRequests}</Text>
+      <Text style={styles.sectionTitle}>{COPY.inbox}</Text>
       {requestsRow}
       {showEnableCta ? (
         <EnableMessagingCta testID="chatsEnableMessaging" onPress={onEnableMessaging} />

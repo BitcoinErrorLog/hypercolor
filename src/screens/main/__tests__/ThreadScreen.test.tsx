@@ -1,7 +1,7 @@
 import React from 'react';
 import { StyleSheet, Text } from 'react-native';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
-import { color } from '../../../theme';
+import { color, radius } from '../../../theme';
 import { CONTACTS_COPY } from '../../../ui/contacts/contactsCopy';
 import { ThreadScreenContent } from '../ThreadScreen';
 
@@ -189,11 +189,18 @@ describe('ThreadScreenContent blocked send', () => {
       senderPubky: PEER,
       direction: 'received' as const,
       body: 'incoming',
+      sentAt: 2,
       deliveryState: 'sent' as const,
+    };
+    const incoming2 = {
+      ...incoming,
+      eventId: 'evt-3',
+      sentAt: 3,
+      body: 'incoming again',
     };
     const tree = await render(
       <ThreadScreenContent
-        {...contentProps({ linkMessages: [...contentProps().linkMessages, incoming] })}
+        {...contentProps({ linkMessages: [...contentProps().linkMessages, incoming, incoming2] })}
       />,
     );
     const mineBubble = tree.root
@@ -208,6 +215,25 @@ describe('ThreadScreenContent blocked send', () => {
     expect(StyleSheet.flatten(theirsBubble?.props.style)).toMatchObject({
       backgroundColor: color.bubbleIncoming,
     });
+    expect(
+      tree.root
+        .findAllByProps({ testID: 'threadBubbleTheirsAvatar' })
+        .filter(
+          node =>
+            (node as unknown as { type: unknown }).type === 'View' &&
+            node.props.accessibilityRole === 'image',
+        ),
+    ).toHaveLength(1);
+    const theirsStyles = tree.root
+      .findAllByProps({ testID: 'threadBubbleTheirs' })
+      .filter(node => node.props.style)
+      .map(node => StyleSheet.flatten(node.props.style));
+    expect(theirsStyles.some(style => style.borderBottomLeftRadius !== radius.bubbleTail)).toBe(
+      true,
+    );
+    expect(theirsStyles.some(style => style.borderBottomLeftRadius === radius.bubbleTail)).toBe(
+      true,
+    );
     await act(async () => {
       tree.unmount();
     });

@@ -18,6 +18,7 @@ import {
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { Contact, RootStackParamList } from '../../types';
 import type {
   GroupChannel,
@@ -60,7 +61,7 @@ import {
 } from '../../ui/composerActions';
 import { LINK_MESSAGE_MAX_BYTES } from '../../types/link';
 import { color, space, radius, typeRole, measure } from '../../theme';
-import { Icon, MessageBubble } from '../../ui/primitives';
+import { Avatar, Button, Icon, ListRow, MessageBubble } from '../../ui/primitives';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'ChannelScreen'>;
 
@@ -398,6 +399,8 @@ export function ChannelScreenContent({
   const flatListRef = useRef<FlatList<GroupMessage>>(null);
   const plusRef = useRef<View>(null);
   const menuWasOpen = useRef(false);
+  const insets = useSafeAreaInsets();
+  const bottomInset = Math.max(insets.bottom, 0);
   const byAuthorEvent = useMemo(() => {
     const map = new Map<string, GroupMessage>();
     for (const msg of messages) map.set(`${msg.senderPubky}:${msg.eventId}`, msg);
@@ -468,14 +471,25 @@ export function ChannelScreenContent({
   }, [actionMenuOpen]);
 
   const renderMessage = useCallback(
-    ({ item }: { item: GroupMessage }) => {
+    ({ item, index }: { item: GroupMessage; index: number }) => {
+      const previous = visible[index - 1];
+      const next = visible[index + 1];
+      const grouped = previous ? sameChannelRun(previous, item) : false;
+      const lastInGroup = next ? !sameChannelRun(item, next) : true;
+      const daySeparator =
+        !previous || !sameCalendarDay(previous.sentAt, item.sentAt) ? (
+          <TimelineDaySeparator label={formatDaySeparator(item.sentAt)} />
+        ) : null;
       if (item.kind === GROUP_MEMBERSHIP_KIND) {
         return (
-          <View style={styles.systemLine}>
-            <Text style={styles.systemText}>
-              {item.senderPubky.slice(0, 6)}… {item.body}
-            </Text>
-          </View>
+          <>
+            {daySeparator}
+            <View style={styles.systemLine}>
+              <Text style={styles.systemText}>
+                {item.senderPubky.slice(0, 6)}… {item.body}
+              </Text>
+            </View>
+          </>
         );
       }
       const isMine = item.senderPubky === localPubky;
@@ -498,121 +512,127 @@ export function ChannelScreenContent({
         contacts.find(c => c.pubky === item.senderPubky) ?? null,
       ).title;
       return (
-        <MessageBubble
-          testID={isMine ? 'channelBubbleMine' : 'channelBubbleTheirs'}
-          mine={isMine}
-          time={formatTime(item.sentAt)}
-          status={outboundLabel}
-          failed={item.deliveryState === 'failed'}
-          senderName={senderName}
-          senderPubky={item.senderPubky}
-          showIncomingAvatar={!isMine}
-        >
-          {!isMine && (
-            <Text style={styles.sender} numberOfLines={1} ellipsizeMode="middle">
-              {senderName}
-            </Text>
-          )}
-          {parent ? (
-            <Text style={styles.replyPreview} numberOfLines={1}>
-              ↳ {parent.deleted ? 'deleted' : parent.body}
-            </Text>
-          ) : null}
-          {item.kind === CHAT_ATTACHMENT_KIND && attachment && !item.deleted ? (
-            <AttachmentBubble
-              record={attachment}
-              isMine={isMine}
-              onRetrySend={
-                retryableEventIds.has(attachment.eventId)
-                  ? () => onRetryFailed(attachment.eventId)
-                  : undefined
-              }
-            />
-          ) : (
-            <Text style={[styles.bubbleText, isMine ? styles.mineText : styles.theirsText]}>
-              {item.deleted ? 'Message deleted' : item.body}
-            </Text>
-          )}
-          {item.editedAt ? <Text style={styles.time}>edited</Text> : null}
-          {isMine && !isPublic && item.deliveryState === 'failed' ? (
-            retryableEventIds.has(item.eventId) ? (
-              <TouchableOpacity
-                accessibilityRole="button"
-                accessibilityLabel={COPY.retry}
-                hitSlop={HIT_SLOP_44}
-                onPress={() => onRetryFailed(item.eventId)}
-              >
-                <Text style={styles.retry}>{COPY.retry}</Text>
-              </TouchableOpacity>
-            ) : (
-              <Text
-                testID="channelSendTerminal"
-                accessibilityRole="text"
-                style={styles.statusFailed}
-              >
-                {COPY.couldNotSendStartAgain}
+        <>
+          {daySeparator}
+          <MessageBubble
+            testID={isMine ? 'channelBubbleMine' : 'channelBubbleTheirs'}
+            mine={isMine}
+            time={formatTime(item.sentAt)}
+            status={outboundLabel}
+            failed={item.deliveryState === 'failed'}
+            senderName={senderName}
+            senderPubky={item.senderPubky}
+            showIncomingAvatar={!isMine && !grouped}
+            grouped={grouped}
+            lastInGroup={lastInGroup}
+            accessibilityLabel={item.deleted ? 'Message deleted' : item.body}
+          >
+            {!isMine && (
+              <Text style={styles.sender} numberOfLines={1} ellipsizeMode="middle">
+                {senderName}
               </Text>
-            )
-          ) : null}
-          {reactions && reactions.size > 0 ? (
-            <View style={styles.reactionRow}>
-              {[...reactions.entries()].map(([emoji, count]) => (
-                <Text key={emoji} style={styles.reactionChip}>
-                  {emoji} {count}
+            )}
+            {parent ? (
+              <Text style={styles.replyPreview} numberOfLines={1}>
+                ↳ {parent.deleted ? 'deleted' : parent.body}
+              </Text>
+            ) : null}
+            {item.kind === CHAT_ATTACHMENT_KIND && attachment && !item.deleted ? (
+              <AttachmentBubble
+                record={attachment}
+                isMine={isMine}
+                onRetrySend={
+                  retryableEventIds.has(attachment.eventId)
+                    ? () => onRetryFailed(attachment.eventId)
+                    : undefined
+                }
+              />
+            ) : (
+              <Text style={[styles.bubbleText, isMine ? styles.mineText : styles.theirsText]}>
+                {item.deleted ? 'Message deleted' : item.body}
+              </Text>
+            )}
+            {item.editedAt ? <Text style={styles.time}>edited</Text> : null}
+            {isMine && !isPublic && item.deliveryState === 'failed' ? (
+              retryableEventIds.has(item.eventId) ? (
+                <TouchableOpacity
+                  accessibilityRole="button"
+                  accessibilityLabel={COPY.retry}
+                  hitSlop={HIT_SLOP_44}
+                  onPress={() => onRetryFailed(item.eventId)}
+                >
+                  <Text style={styles.retry}>{COPY.retry}</Text>
+                </TouchableOpacity>
+              ) : (
+                <Text
+                  testID="channelSendTerminal"
+                  accessibilityRole="text"
+                  style={styles.statusFailed}
+                >
+                  {COPY.couldNotSendStartAgain}
                 </Text>
-              ))}
-            </View>
-          ) : null}
-          {!item.deleted && selfActive ? (
-            <View style={styles.actionRow}>
-              <TouchableOpacity
-                accessibilityRole="button"
-                accessibilityLabel="Reply"
-                hitSlop={HIT_SLOP_44}
-                onPress={() => onReply(item)}
-                style={minHitStyle}
-              >
-                <Text style={styles.action}>Reply</Text>
-              </TouchableOpacity>
-              {!isPublic
-                ? REACTION_EMOJIS.map(emoji => (
+              )
+            ) : null}
+            {reactions && reactions.size > 0 ? (
+              <View style={styles.reactionRow}>
+                {[...reactions.entries()].map(([emoji, count]) => (
+                  <Text key={emoji} style={styles.reactionChip}>
+                    {emoji} {count}
+                  </Text>
+                ))}
+              </View>
+            ) : null}
+            {!item.deleted && selfActive ? (
+              <View style={styles.actionRow}>
+                <TouchableOpacity
+                  accessibilityRole="button"
+                  accessibilityLabel="Reply"
+                  hitSlop={HIT_SLOP_44}
+                  onPress={() => onReply(item)}
+                  style={minHitStyle}
+                >
+                  <Text style={styles.action}>Reply</Text>
+                </TouchableOpacity>
+                {!isPublic
+                  ? REACTION_EMOJIS.map(emoji => (
+                      <TouchableOpacity
+                        key={emoji}
+                        accessibilityRole="button"
+                        accessibilityLabel={`React with ${emoji}`}
+                        hitSlop={HIT_SLOP_44}
+                        onPress={() => onReact(item.eventId, item.senderPubky, emoji)}
+                        style={minHitStyle}
+                      >
+                        <Text style={styles.action}>{emoji}</Text>
+                      </TouchableOpacity>
+                    ))
+                  : null}
+                {isMine && !isPublic ? (
+                  <>
                     <TouchableOpacity
-                      key={emoji}
                       accessibilityRole="button"
-                      accessibilityLabel={`React with ${emoji}`}
+                      accessibilityLabel="Edit"
                       hitSlop={HIT_SLOP_44}
-                      onPress={() => onReact(item.eventId, item.senderPubky, emoji)}
+                      onPress={() => onEdit(item.eventId)}
                       style={minHitStyle}
                     >
-                      <Text style={styles.action}>{emoji}</Text>
+                      <Text style={styles.action}>Edit</Text>
                     </TouchableOpacity>
-                  ))
-                : null}
-              {isMine && !isPublic ? (
-                <>
-                  <TouchableOpacity
-                    accessibilityRole="button"
-                    accessibilityLabel="Edit"
-                    hitSlop={HIT_SLOP_44}
-                    onPress={() => onEdit(item.eventId)}
-                    style={minHitStyle}
-                  >
-                    <Text style={styles.action}>Edit</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    accessibilityRole="button"
-                    accessibilityLabel="Delete"
-                    hitSlop={HIT_SLOP_44}
-                    onPress={() => onDelete(item.eventId)}
-                    style={minHitStyle}
-                  >
-                    <Text style={styles.action}>Delete</Text>
-                  </TouchableOpacity>
-                </>
-              ) : null}
-            </View>
-          ) : null}
-        </MessageBubble>
+                    <TouchableOpacity
+                      accessibilityRole="button"
+                      accessibilityLabel="Delete"
+                      hitSlop={HIT_SLOP_44}
+                      onPress={() => onDelete(item.eventId)}
+                      style={minHitStyle}
+                    >
+                      <Text style={styles.action}>Delete</Text>
+                    </TouchableOpacity>
+                  </>
+                ) : null}
+              </View>
+            ) : null}
+          </MessageBubble>
+        </>
       );
     },
     [
@@ -632,6 +652,7 @@ export function ChannelScreenContent({
       onDelete,
       onRetryFailed,
       retryableEventIds,
+      visible,
     ],
   );
 
@@ -691,37 +712,41 @@ export function ChannelScreenContent({
           <ActivityIndicator color={color.brand} />
         </View>
       ) : showMembers ? (
-        <ScrollView contentContainerStyle={styles.memberPane}>
+        <ScrollView
+          contentContainerStyle={[styles.memberPane, { paddingBottom: space.xl + bottomInset }]}
+        >
           <Text style={styles.memberHeading}>
             {activeMembers.length}
             {!isPublic ? ` / ${memberCap}` : ''} members
           </Text>
           {members.map(member => (
-            <View key={member.memberPubky} style={styles.memberRow}>
-              <View style={styles.memberBody}>
-                <Text style={styles.memberName} numberOfLines={1} ellipsizeMode="middle">
-                  {contactName(contacts, member.memberPubky)}
-                </Text>
-                <Text style={styles.memberMeta}>
-                  {member.role}
-                  {member.status === 'removed' ? ' · removed' : ''}
-                </Text>
-              </View>
-              {isAdmin &&
-              !isPublic &&
-              member.status === 'active' &&
-              member.memberPubky !== localPubky ? (
-                <TouchableOpacity
-                  accessibilityRole="button"
-                  accessibilityLabel={`Remove ${contactName(contacts, member.memberPubky)}`}
-                  hitSlop={HIT_SLOP_44}
-                  onPress={() => onRemoveMember(member.memberPubky)}
-                  style={minHitStyle}
-                >
-                  <Text style={styles.danger}>Remove</Text>
-                </TouchableOpacity>
-              ) : null}
-            </View>
+            <ListRow
+              key={member.memberPubky}
+              title={contactName(contacts, member.memberPubky)}
+              subtitle={`${member.role}${member.status === 'removed' ? ' · removed' : ''}`}
+              leading={
+                <Avatar
+                  name={contactName(contacts, member.memberPubky)}
+                  pubky={member.memberPubky}
+                  size="md"
+                />
+              }
+              trailing={
+                isAdmin &&
+                !isPublic &&
+                member.status === 'active' &&
+                member.memberPubky !== localPubky ? (
+                  <Button
+                    label="Remove"
+                    variant="destructive"
+                    accessibilityLabel={`Remove ${contactName(contacts, member.memberPubky)}`}
+                    onPress={() => onRemoveMember(member.memberPubky)}
+                  />
+                ) : undefined
+              }
+              showChevron={false}
+              hideDivider={members[members.length - 1] === member}
+            />
           ))}
           {isAdmin && !isPublic ? (
             <View style={styles.addRow}>
@@ -773,7 +798,7 @@ export function ChannelScreenContent({
           data={visible}
           keyExtractor={item => `${item.senderPubky}:${item.eventId}`}
           renderItem={renderMessage}
-          contentContainerStyle={styles.messageList}
+          contentContainerStyle={[styles.messageList, { paddingBottom: space.xl + bottomInset }]}
           onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: false })}
         />
       )}
@@ -815,7 +840,7 @@ export function ChannelScreenContent({
               ) : null}
             </View>
           ) : null}
-          <View style={styles.composer}>
+          <View style={[styles.composer, { paddingBottom: space.lg + bottomInset }]}>
             <ComposerActionMenu
               visible={actionMenuOpen}
               actions={composerActionItems(isPublic ? 'public-topic' : 'private-group', {
@@ -896,6 +921,27 @@ function formatTime(ms: number): string {
   return new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
+function TimelineDaySeparator({ label }: { label: string }) {
+  return (
+    <View style={styles.daySeparator} accessibilityRole="text">
+      <Text style={styles.daySeparatorText}>{label}</Text>
+    </View>
+  );
+}
+
+function sameChannelRun(previous: GroupMessage, next: GroupMessage): boolean {
+  if (previous.kind === GROUP_MEMBERSHIP_KIND || next.kind === GROUP_MEMBERSHIP_KIND) return false;
+  return previous.senderPubky === next.senderPubky && sameCalendarDay(previous.sentAt, next.sentAt);
+}
+
+function sameCalendarDay(leftMs: number, rightMs: number): boolean {
+  return new Date(leftMs).toDateString() === new Date(rightMs).toDateString();
+}
+
+function formatDaySeparator(ms: number): string {
+  return new Date(ms).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: color.canvas },
   header: {
@@ -917,23 +963,12 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  messageList: { padding: space.lg, paddingBottom: space.xxxl + space.xl, gap: space.sm },
-  bubble: {
-    maxWidth: '78%',
-    borderRadius: radius.lg,
-    paddingHorizontal: space.lg,
-    paddingVertical: space.md,
-    marginVertical: 2,
-  },
-  mine: {
-    alignSelf: 'flex-end',
-    backgroundColor: color.brand,
-    borderBottomRightRadius: 4,
-  },
-  theirs: {
-    alignSelf: 'flex-start',
-    backgroundColor: color.bubbleIncoming,
-    borderBottomLeftRadius: 4,
+  messageList: { padding: space.lg, gap: space.sm },
+  daySeparator: { alignItems: 'center', paddingVertical: space.md },
+  daySeparatorText: {
+    color: color.textMuted,
+    fontSize: typeRole.meta.fontSize,
+    lineHeight: typeRole.meta.lineHeight,
   },
   sender: { fontSize: typeRole.meta.fontSize, color: color.brandMuted, marginBottom: 2 },
   replyPreview: {
@@ -970,7 +1005,6 @@ const styles = StyleSheet.create({
     alignItems: 'flex-end',
     gap: space.sm,
     padding: space.md,
-    paddingBottom: space.lg,
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: color.surfaceRaised,
     backgroundColor: color.canvas,
@@ -1042,7 +1076,7 @@ const styles = StyleSheet.create({
     paddingTop: space.sm,
   },
   replyBarText: { color: color.textMuted, flex: 1, marginRight: space.sm },
-  memberPane: { padding: space.xl, paddingBottom: space.xxxl + space.xl, gap: space.md },
+  memberPane: { padding: space.xl, gap: space.md },
   memberHeading: {
     color: color.textPrimary,
     fontSize: typeRole.body.fontSize,

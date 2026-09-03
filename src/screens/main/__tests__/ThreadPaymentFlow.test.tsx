@@ -3,6 +3,10 @@ jest.mock('@react-navigation/native', () => ({
   useFocusEffect: () => undefined,
 }));
 
+jest.mock('react-native-safe-area-context', () => ({
+  useSafeAreaInsets: () => ({ top: 0, bottom: 12, left: 0, right: 0 }),
+}));
+
 jest.mock('../../../stores/authStore', () => ({
   useAuthStore: (sel: (s: { pubky: string | null }) => unknown) => sel({ pubky: 'a'.repeat(52) }),
 }));

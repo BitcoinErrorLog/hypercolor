@@ -20,7 +20,6 @@ import {
   Button,
   EmptyState,
   ListRow,
-  LoadingState,
   PageHeader,
   PubkyChip,
   StatusBanner,
@@ -181,20 +180,26 @@ export function MessageRequestsContent({
           </View>
           <View style={styles.actions}>
             {busy ? (
-              <LoadingState label="Updating request" />
+              <Button
+                label={COPY.updatingRequest}
+                disabled
+                busy
+                onPress={() => undefined}
+                style={styles.actionButton}
+              />
             ) : (
               <>
                 <Button
                   testID="messageRequestAccept"
                   label={COPY.accept}
-                  accessibilityLabel={`Accept message request from ${peerShort}`}
+                  accessibilityLabel={`Accept message request from ${identity.title}`}
                   onPress={() => onAccept(peer)}
                   style={styles.actionButton}
                 />
                 <Button
                   testID="messageRequestDecline"
                   label={COPY.decline}
-                  accessibilityLabel={`Decline message request from ${peerShort}`}
+                  accessibilityLabel={`Decline message request from ${identity.title}`}
                   variant="destructive"
                   onPress={() => onDecline(peer)}
                   style={styles.actionButton}
@@ -234,12 +239,18 @@ export function MessageRequestsContent({
           </View>
           <View style={styles.actions}>
             {busy ? (
-              <LoadingState label="Updating request" />
+              <Button
+                label={COPY.updatingRequest}
+                disabled
+                busy
+                onPress={() => undefined}
+                style={styles.actionButton}
+              />
             ) : (
               <Button
                 testID="messageRequestAcceptDeclined"
                 label={COPY.accept}
-                accessibilityLabel={`Accept declined request from ${peerShort}`}
+                accessibilityLabel={`Accept declined request from ${identity.title}`}
                 onPress={() => onAcceptDeclined(peer)}
                 style={styles.actionButton}
               />

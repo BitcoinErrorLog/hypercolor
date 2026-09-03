@@ -266,6 +266,15 @@ export const textOnSurfacePairs: readonly TextOnSurfacePair[] = freezeDeep([
     bg: color.surfaceBrand,
     usage: 'body',
   },
+  { name: 'brandSoft/surfaceBrand', fg: color.brandSoft, bg: color.surfaceBrand, usage: 'body' },
+  {
+    name: 'warningStrong/surfaceBrand',
+    fg: color.warningStrong,
+    bg: color.surfaceBrand,
+    usage: 'body',
+  },
+  { name: 'danger/surfaceBrand', fg: color.danger, bg: color.surfaceBrand, usage: 'body' },
+  { name: 'success/surfaceBrand', fg: color.success, bg: color.surfaceBrand, usage: 'body' },
   {
     name: 'textSecondary/bubbleIncoming',
     fg: color.textSecondary,
