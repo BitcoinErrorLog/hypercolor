@@ -68,8 +68,16 @@ async function readHostCommand(): Promise<string> {
   return '';
 }
 
+function isVrtBuild(): boolean {
+  return process.env.E2E_VRT === '1' || process.env.EXPO_PUBLIC_E2E_VRT === '1';
+}
+
 async function writeDone(reply: string): Promise<void> {
-  Clipboard.setString(reply);
+  // Android 13+ shows a system clipboard toast on setString — that bubble is
+  // harness chrome and must never appear in VRT captures.
+  if (!isVrtBuild()) {
+    Clipboard.setString(reply);
+  }
   const api = fileSystem();
   const uri = cmdUri();
   if (!api || !uri) return;
@@ -104,11 +112,13 @@ export function startE2eClipboardChannel(): void {
   void (async () => {
     const pending = await readHostCommand();
     // Fast Refresh / remount must not wipe an inbound command or a liveproof reply.
+    // In VRT mode skip the channel-up handshake entirely — file writes only,
+    // no clipboard toast, and do not overwrite a pending HC_E2E command.
     if (!commandUrl(pending)) {
       const raw = pending.trim();
       const keepReply =
         raw.startsWith(E2E_CLIPBOARD_DONE) && !raw.startsWith(`${E2E_CLIPBOARD_DONE}:channel-up`);
-      if (!keepReply) {
+      if (!keepReply && !isVrtBuild()) {
         await writeDone(`${E2E_CLIPBOARD_DONE}:channel-up`);
       }
     }

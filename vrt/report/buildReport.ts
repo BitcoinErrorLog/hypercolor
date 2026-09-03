@@ -108,28 +108,20 @@ export async function writeReport(
 export function maestroFlow(target: CaptureTarget, appId: string): string {
   const scene = target.entry.id;
   const shot = `${scene.replace(/\./g, '_')}_${target.platform}_${target.device}`;
-  if (target.platform === 'android') {
-    return `appId: ${appId}
-name: VRT ${scene} ${target.platform} ${target.device}
----
-# Scene injected by scripts/vrt-capture-android.sh (HC_E2E file channel).
-- launchApp
-- extendedWaitUntil:
-    visible:
-      id: vrtSceneReady
-    timeout: 30000
-- takeScreenshot: ${shot}
-`;
-  }
+  const marker = `vrt-scene:${scene}`;
+  // Neither platform launches here. Capture scripts launch once, inject the
+  // scene (Android HC_E2E file / iOS Documents sidecar), then this flow
+  // asserts the exact catalog-id marker before screenshot.
+  // iOS must NOT use openLink — it surfaces an "Open in hypercolor?" sheet.
   return `appId: ${appId}
 name: VRT ${scene} ${target.platform} ${target.device}
 ---
-- launchApp
-- openLink: hypercolor://e2e/vrt?scene=${scene}
 - extendedWaitUntil:
     visible:
-      id: vrtSceneReady
-    timeout: 30000
+      id: ${marker}
+    timeout: 45000
+- assertVisible:
+    id: ${marker}
 - takeScreenshot: ${shot}
 `;
 }

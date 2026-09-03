@@ -387,7 +387,7 @@ export function PaymentReviewScene(): React.ReactElement {
 export function ContactsContentEmptyScene(): React.ReactElement {
   return (
     <SafeAreaView style={styles.root}>
-      <PageHeader title="Contacts" />
+      <PageHeader title="Contacts" subtitle="Embedded content" />
       <EmptyState
         title="No contacts yet."
         body="Add someone by pubky, or use your public pubky.app follows to recognise people you already know."
@@ -405,7 +405,7 @@ export function ContactsContentPopulatedScene(): React.ReactElement {
   const { aster, bramble } = SYNTHETIC_IDENTITIES;
   return (
     <SafeAreaView style={styles.root} testID="mask-pubky">
-      <PageHeader title="Contacts" />
+      <PageHeader title="Contacts" subtitle="Embedded content" />
       <ListRow
         title={aster.name}
         subtitle={aster.pubky}
@@ -425,7 +425,7 @@ export function ContactsContentPopulatedScene(): React.ReactElement {
 export function ContactsContentOfflineScene(): React.ReactElement {
   return (
     <SafeAreaView style={styles.root}>
-      <PageHeader title="Contacts" />
+      <PageHeader title="Contacts" subtitle="Embedded content" />
       <StatusBanner
         label="You are offline"
         tone="warning"

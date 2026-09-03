@@ -1,8 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { SafeAreaView, StyleSheet, Text, View } from 'react-native';
+import { Linking, SafeAreaView, StatusBar, StyleSheet, Text, View } from 'react-native';
 import { color, space, typeRole } from '../src/theme';
 import { catalogById, VRT_CATALOG } from './catalog';
-import { VRT_SCENE_READY_ID } from './sceneReady';
+import { VRT_SCENE_READY_ID, vrtSceneMarkerId } from './sceneReady';
 
 export function isVrtCatalogEnabled(): boolean {
   if (!__DEV__) return false;
@@ -17,50 +17,117 @@ export function setVrtScene(id: string): void {
   for (const listener of listeners) listener(id);
 }
 
+export function getVrtScene(): string | null {
+  return externalSceneId;
+}
+
+function sceneFromVrtUrl(url: string): string | null {
+  if (!url.toLowerCase().includes('e2e/vrt')) return null;
+  try {
+    const q = url.indexOf('?');
+    const params = new URLSearchParams(q === -1 ? '' : url.slice(q + 1));
+    const scene = (params.get('scene') ?? '').trim();
+    return scene.length > 0 ? scene : null;
+  } catch {
+    return null;
+  }
+}
+
 export function VrtCatalogRoot(): React.ReactElement {
   const initial = externalSceneId ?? VRT_CATALOG[0]?.id ?? 'design-system.token-swatch.default';
   const [sceneId, setSceneId] = useState(initial);
 
   useEffect(() => {
+    StatusBar.setHidden(true, 'none');
     const onChange = (id: string) => setSceneId(id);
     listeners.add(onChange);
+    if (externalSceneId && externalSceneId !== sceneId) {
+      setSceneId(externalSceneId);
+    }
+    const sub = Linking.addEventListener('url', ({ url }) => {
+      const scene = sceneFromVrtUrl(url);
+      if (scene) setVrtScene(scene);
+    });
+    void Linking.getInitialURL().then(url => {
+      if (!url) return;
+      const scene = sceneFromVrtUrl(url);
+      if (scene) setVrtScene(scene);
+    });
     return () => {
       listeners.delete(onChange);
+      sub.remove();
+      StatusBar.setHidden(false, 'none');
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- mount sync only
   }, []);
 
-  const entry = useMemo(() => {
+  const resolved = useMemo(() => {
     try {
-      return catalogById(sceneId);
+      return { ok: true as const, entry: catalogById(sceneId) };
     } catch {
-      return catalogById('design-system.token-swatch.default');
+      return { ok: false as const, requested: sceneId };
     }
   }, [sceneId]);
 
+  if (!resolved.ok) {
+    return (
+      <SafeAreaView style={styles.root} testID={VRT_SCENE_READY_ID}>
+        <Text
+          testID="vrt-scene-missing"
+          accessibilityLabel={`vrt-scene-missing:${resolved.requested}`}
+          style={styles.markerText}
+        >
+          {`vrt-scene-missing:${resolved.requested}`}
+        </Text>
+        <Text style={styles.meta}>Unknown VRT scene: {resolved.requested}</Text>
+      </SafeAreaView>
+    );
+  }
+
+  const { entry } = resolved;
+  const markerId = vrtSceneMarkerId(entry.id);
+
   return (
     <SafeAreaView style={styles.root} testID={VRT_SCENE_READY_ID}>
-      <View style={styles.chrome}>
-        <Text style={styles.meta} accessibilityRole="header">
-          {entry.id}
-        </Text>
+      {/* Tiny on-canvas Text marker — iOS XCUITest needs an accessibility element. */}
+      <Text
+        testID={markerId}
+        accessibilityLabel={markerId}
+        accessibilityHint="vrt-scene-marker"
+        accessible
+        style={styles.markerText}
+      >
+        {markerId}
+      </Text>
+      <View style={styles.body} pointerEvents="box-none">
+        {entry.render()}
       </View>
-      <View style={styles.body}>{entry.render()}</View>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: color.canvas },
-  chrome: {
-    paddingHorizontal: space.lg,
-    paddingVertical: space.sm,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: color.hairline,
+  markerText: {
+    position: 'absolute',
+    zIndex: 9999,
+    left: 0,
+    top: 0,
+    width: 4,
+    height: 4,
+    overflow: 'hidden',
+    fontSize: 4,
+    lineHeight: 4,
+    color: color.canvas,
+    backgroundColor: color.canvas,
+    opacity: 1,
   },
   meta: {
     color: color.textMuted,
     fontSize: typeRole.meta.fontSize,
     lineHeight: typeRole.meta.lineHeight,
+    paddingHorizontal: space.lg,
+    paddingVertical: space.sm,
   },
   body: { flex: 1 },
 });
