@@ -28,3 +28,19 @@ Jest: primary Welcome connect and Button `minHeight`/`minWidth` ≥ 44 with `Pix
 
 - iOS Accessibility Inspector CLI not available in this environment; tree roles/labels are asserted in unit tests.
 - System `Alert.alert` sheets are OS chrome, not dumped.
+
+## Measured product screenshots (Wave 3 r2)
+
+Focused iOS SE captures (2026-09-03) mount production Content via JourneyScenes:
+
+- `stack_thread_populated_ios_iphone-se-3.png` — mine/theirs bubbles, delivery "Sent", composer
+- `tabs_chats_populated_ios_iphone-se-3.png` — avatar initials, relative times, snippets
+- `auth_welcome_idle_ios_iphone-se-3.png` — brand + Connect CTA
+- `tabs_settings_default_ios_iphone-se-3.png` — identity/homeserver/BLE/backup sections
+
+Full-matrix re-capture (`scripts/vrt-capture-ios.sh`) in progress for both iPhone SE and iPhone 16 Pro Max.
+
+### Skips
+
+- **Android Hypercolor_Pixel_* AVDs**: boot to `adb offline` and never reach `sys.boot_completed=1` on this host during Wave 3 r2; Medium_Phone boots but is not an honest Pixel profile. Android baselines deleted pending AVD repair.
+- **stack.composer.sheet / stack.payment.review** on focused pass: Maestro assert failed (overlay timing); included in full-matrix retry.
