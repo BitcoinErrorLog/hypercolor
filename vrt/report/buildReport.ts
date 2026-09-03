@@ -107,18 +107,29 @@ export async function writeReport(
 
 export function maestroFlow(target: CaptureTarget, appId: string): string {
   const scene = target.entry.id;
-  const androidNote =
-    target.platform === 'android'
-      ? `# Android: write HC_E2E:hypercolor://e2e/vrt?scene=${scene} to the clipboard file channel.\n# Do not use openLink VIEW — MainActivity is singleTask and drops it.\n`
-      : `# iOS: launch argument --e2eVrt ${scene} or hypercolor://e2e/vrt?scene=${scene}\n`;
-  return `appId: ${appId}
+  const shot = `${scene.replace(/\./g, '_')}_${target.platform}_${target.device}`;
+  if (target.platform === 'android') {
+    return `appId: ${appId}
 name: VRT ${scene} ${target.platform} ${target.device}
 ---
-${androidNote}- launchApp
+# Scene injected by scripts/vrt-capture-android.sh (HC_E2E file channel).
+- launchApp
 - extendedWaitUntil:
     visible:
       id: vrtSceneReady
-    timeout: 20000
-- takeScreenshot: ${scene.replace(/\./g, '_')}_${target.platform}_${target.device}
+    timeout: 30000
+- takeScreenshot: ${shot}
+`;
+  }
+  return `appId: ${appId}
+name: VRT ${scene} ${target.platform} ${target.device}
+---
+- launchApp
+- openLink: hypercolor://e2e/vrt?scene=${scene}
+- extendedWaitUntil:
+    visible:
+      id: vrtSceneReady
+    timeout: 30000
+- takeScreenshot: ${shot}
 `;
 }
