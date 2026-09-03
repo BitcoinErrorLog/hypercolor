@@ -60,6 +60,18 @@ describe('design tokens', () => {
     expect(contrastRatio(color.brand, color.canvas)).toBeLessThan(WCAG_AA_BODY);
   });
 
+  it('keeps the text ladder ordered and outgoing bubble metadata body-safe', () => {
+    expect(color.textSecondary).toBe('#9CA3AF');
+    expect(color.textMuted).toBe('#808692');
+    expect(contrastRatio(color.textSecondary, color.canvas)).toBeGreaterThan(
+      contrastRatio(color.textMuted, color.canvas),
+    );
+    expect(contrastRatio(color.onBrandMuted, color.brand)).toBeGreaterThanOrEqual(WCAG_AA_BODY);
+    expect(textOnSurfacePairs.find(pair => pair.name === 'onBrandMuted/brand')).toMatchObject({
+      usage: 'body',
+    });
+  });
+
   it('scales type layout with fontScale without mutating the 100% role', () => {
     const base = typeRole.body.fontSize;
     const layout = typeLayoutSize('body', 2);

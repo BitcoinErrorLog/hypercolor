@@ -21,6 +21,15 @@ Module: `src/theme/tokens.ts` (pure TS, frozen, tree-shakeable). Entry:
 Part 2 may not introduce a new raw brand/style value that is not in this
 contract. Unexplained literals fail the token audit.
 
+## Wave 3 Addendum — 2026-09-03
+
+The owner-approved token contract keeps the existing token names but corrects the
+text ladder exposed by production VRT captures:
+
+- `color.textSecondary` now maps to `#9CA3AF`, measured at 7.80:1 on `canvas`.
+- `color.textMuted` now maps to `#808692`, measured at 5.41:1 on `canvas`.
+- `color.onBrandMuted` is added as `#EFE6FD`, measured at 4.72:1 on `brand`, for outgoing-bubble metadata. `rgba(255,255,255,0.7)` over `brand` remains rejected at 3.60:1 for body text.
+
 ---
 
 ## Color
@@ -42,9 +51,10 @@ contract. Unexplained literals fail the token audit.
 | `color.brandText`           | `#8F57F0`                 | Small brand text on canvas                 | a11y replacement so brand-colored body copy hits 4.5:1.                                                                                                 |
 | `color.brandHighlight`      | `#E9D5FF`                 | Rare highlight (was tip bar)               | Existing `#e9d5ff`.                                                                                                                                     |
 | `color.textPrimary`         | `#F9FAFB`                 | Primary copy                               | Existing.                                                                                                                                               |
-| `color.textSecondary`       | `#808692`                 | Secondary copy, inactive tab, placeholder  | Worst-case 4.5:1 on every raised surface in the a11y contract. Replaces `#6b7280` and `#4b5563`.                                                        |
-| `color.textMuted`           | `#9CA3AF`                 | Labels, cancel, timestamps when ≥12 px     | Existing `#9ca3af`; body-safe.                                                                                                                          |
+| `color.textSecondary`       | `#9CA3AF`                 | Secondary copy, labels, inactive tab       | Wave 3 addendum: corrected ladder value; measured 7.80:1 on `canvas`, above muted.                                                                      |
+| `color.textMuted`           | `#808692`                 | Timestamps, footer/meta copy               | Wave 3 addendum: corrected ladder value; measured 5.41:1 on `canvas`, still body-safe.                                                                  |
 | `color.textOnBrand`         | `#FFFFFF`                 | Label on brand fill                        | Existing; 5.70:1.                                                                                                                                       |
+| `color.onBrandMuted`        | `#EFE6FD`                 | Outgoing-bubble metadata on brand          | Wave 3 addendum: measured 4.72:1 on `brand`; replaces opacity-dimmed white for body metadata.                                                           |
 | `color.textOnBrandMuted`    | `rgba(255,255,255,0.843)` | Body metadata on brand                     | 4.50:1. Replaces 70–80% white used as body.                                                                                                             |
 | `color.textOnBrandUi`       | `rgba(255,255,255,0.6)`   | Large/bold chrome on brand                 | 3.01:1 UI/large. Never body.                                                                                                                            |
 | `color.danger`              | `#FCA5A5`                 | Error copy, failed send                    | Existing; pair with an icon, never color-only.                                                                                                          |
@@ -53,6 +63,7 @@ contract. Unexplained literals fail the token audit.
 | `color.warningStrong`       | `#FBBF24`                 | Strong warning on canvas                   | Existing payment warning.                                                                                                                               |
 | `color.success`             | `#86EFAC`                 | Success copy                               | Existing.                                                                                                                                               |
 | `color.overlay`             | `rgba(0,0,0,0.6)`         | Modal backdrop                             | Existing.                                                                                                                                               |
+| `color.overlayDeep`         | `rgba(0,0,0,0.72)`        | Destructive confirmation backdrop          | Wave 3 addendum: deepens sign-out backdrop so underlying content no longer competes.                                                                    |
 | `color.overlaySoft`         | `rgba(0,0,0,0.25)`        | Input wash                                 | Existing.                                                                                                                                               |
 | `color.overlayOnBrand`      | `rgba(255,255,255,0.18)`  | Decorative on-brand border                 | Not text.                                                                                                                                               |
 | `color.overlayOnBrandFaint` | `rgba(255,255,255,0.12)`  | Decorative on-brand fill                   | Not text.                                                                                                                                               |
@@ -231,6 +242,7 @@ Action is **map** or **delete**.
 | Raw value                                                     | Token                       | Action                                                                 |
 | ------------------------------------------------------------- | --------------------------- | ---------------------------------------------------------------------- |
 | `rgba(0,0,0,0.6)`                                             | `color.overlay`             | map                                                                    |
+| `rgba(0,0,0,0.72)`                                            | `color.overlayDeep`         | map — destructive confirmation backdrop                                |
 | `rgba(0,0,0,0.25)`                                            | `color.overlaySoft`         | map                                                                    |
 | `rgba(255,255,255,0.7\|0.8\|0.6\|0.55\|0.5\|0.4\|0.18\|0.12)` | see alphas below            | split — the source wrote this as one scan hit                          |
 | `rgba(255,255,255,0.8)`                                       | `color.textOnBrandMuted`    | delete — 4.22:1 fails body; use 84.3% white                            |

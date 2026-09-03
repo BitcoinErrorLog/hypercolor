@@ -12,7 +12,7 @@ export type BadgeProps = {
 
 const toneStyles: Record<BadgeTone, { bg: string; fg: string }> = {
   neutral: { bg: color.surfaceRaised, fg: color.textSecondary },
-  brand: { bg: color.surfaceBrand, fg: color.brandMuted },
+  brand: { bg: color.brand, fg: color.textPrimary },
   warning: { bg: color.chipWarning, fg: color.warningStrong },
   success: { bg: color.chipSuccess, fg: color.success },
   danger: { bg: color.chipDanger, fg: color.danger },

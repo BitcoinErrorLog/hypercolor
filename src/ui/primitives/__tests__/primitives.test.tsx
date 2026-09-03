@@ -1,7 +1,17 @@
 import React from 'react';
 import { AccessibilityInfo, StyleSheet } from 'react-native';
 import renderer, { act } from 'react-test-renderer';
-import { Avatar, Button, EmptyState, ListRow, PageHeader, StatusBanner } from '../index';
+import {
+  Avatar,
+  Button,
+  DetailRow,
+  EmptyState,
+  ListRow,
+  MessageBubble,
+  PageHeader,
+  PubkyChip,
+  StatusBanner,
+} from '../index';
 import { measure } from '../../../theme';
 
 jest.spyOn(AccessibilityInfo, 'isReduceMotionEnabled').mockResolvedValue(false);
@@ -64,7 +74,14 @@ describe('ui primitives', () => {
       tree = renderer.create(
         <>
           <PageHeader title="Chats" onBack={() => {}} testID="header" />
-          <ListRow title="Ada" subtitle="pk:abcd" onPress={() => {}} testID="row" />
+          <ListRow
+            title="Ada"
+            subtitle="pk:abcd"
+            meta="2m"
+            badge={3}
+            onPress={() => {}}
+            testID="row"
+          />
         </>,
       );
     });
@@ -72,6 +89,7 @@ describe('ui primitives', () => {
     const row = hostByTestId(tree, 'row');
     expect(row.props.accessibilityRole).toBe('button');
     expect(String(row.props.accessibilityLabel)).toContain('Ada');
+    expect(tree.root.findAllByProps({ name: 'chevron-forward' }).length).toBeGreaterThan(0);
   });
 
   it('EmptyState and StatusBanner keep actions accessible', () => {
@@ -109,5 +127,33 @@ describe('ui primitives', () => {
     const avatar = hostByTestId(tree, 'avatar');
     expect(avatar.props.accessibilityRole).toBe('image');
     expect(String(avatar.props.accessibilityLabel)).toMatch(/abcd/i);
+  });
+
+  it('PubkyChip truncates visually while the copy target keeps the full key available', () => {
+    const pubky = 'abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz';
+    let tree!: renderer.ReactTestRenderer;
+    act(() => {
+      tree = renderer.create(<PubkyChip pubky={pubky} onCopy={() => {}} testID="pubkyChip" />);
+    });
+    const json = JSON.stringify(tree.toJSON());
+    expect(json).toContain('abcdef…wxyz');
+    expect(json).not.toContain(pubky);
+    expect(hostByTestId(tree, 'pubkyChipCopy').props.accessibilityRole).toBe('button');
+  });
+
+  it('DetailRow and MessageBubble expose structured details and safe on-brand meta', () => {
+    let tree!: renderer.ReactTestRenderer;
+    act(() => {
+      tree = renderer.create(
+        <>
+          <DetailRow label="Amount" value="0.00010000 BTC" testID="detailRow" />
+          <MessageBubble mine time="10:12 PM" status="Sent" testID="bubble">
+            <></>
+          </MessageBubble>
+        </>,
+      );
+    });
+    expect(JSON.stringify(tree.toJSON())).toContain('Amount');
+    expect(JSON.stringify(tree.toJSON())).toContain('Sent');
   });
 });

@@ -1,3 +1,4 @@
+import type { IconName } from './primitives';
 import { COPY } from '../copy/uxCopy';
 import { buildChatMessageEnvelope, LINK_MESSAGE_MAX_BYTES } from '../types/link';
 import { buildGroupMessageEnvelope, buildPublicChannelMessageDocument } from '../types/group';
@@ -9,7 +10,7 @@ export type ComposerActionId = 'photo' | 'file' | 'request-payment' | 'send-tip'
 export type ComposerActionItem = {
   id: ComposerActionId;
   label: string;
-  icon: string;
+  icon: IconName;
   disabled: boolean;
   reason: string | null;
 };
@@ -32,12 +33,12 @@ const PROBE_EVENT_ID = '00000000-0000-4000-8000-000000000000';
 const PROBE_SENT_AT = 1_700_000_000_000;
 const PROBE_PUBKY = 'y'.repeat(52);
 
-const ACTION_ICONS: Record<ComposerActionId, string> = {
-  photo: '▣',
-  file: '▤',
-  'request-payment': '₿',
-  'send-tip': '↑',
-  'send-tip-list': '≡',
+const ACTION_ICONS: Record<ComposerActionId, IconName> = {
+  photo: 'image-outline',
+  file: 'document-text-outline',
+  'request-payment': 'card-outline',
+  'send-tip': 'arrow-up-circle-outline',
+  'send-tip-list': 'list-outline',
 };
 
 function optionalReplyFields(ctx: DraftEnvelopeContext): {

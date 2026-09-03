@@ -22,6 +22,7 @@ export type ButtonProps = {
   busy?: boolean;
   testID?: string;
   accessibilityLabel?: string;
+  accessibilityHint?: string;
   style?: StyleProp<ViewStyle>;
 };
 
@@ -68,6 +69,7 @@ export function Button({
   busy = false,
   testID,
   accessibilityLabel,
+  accessibilityHint,
   style,
 }: ButtonProps) {
   const blocked = disabled || busy;
@@ -84,7 +86,7 @@ export function Button({
         {...(testID ? { testID } : {})}
         accessibilityRole="button"
         accessibilityLabel={accessibilityLabel ?? label}
-        accessibilityHint={reason}
+        accessibilityHint={accessibilityHint ?? reason}
         accessibilityState={a11yState}
         disabled={blocked}
         onPress={onPress}
@@ -98,7 +100,9 @@ export function Button({
         ]}
       >
         {busy ? (
-          <ActivityIndicator color={blocked ? palette.disabledLabel : palette.label} />
+          <View style={styles.busySlot}>
+            <ActivityIndicator color={blocked ? palette.disabledLabel : palette.label} />
+          </View>
         ) : (
           <Text style={[styles.label, { color: blocked ? palette.disabledLabel : palette.label }]}>
             {label}
@@ -137,8 +141,15 @@ const styles = StyleSheet.create({
   },
   reason: {
     marginTop: space.xs,
-    color: color.textSecondary,
+    color: color.textMuted,
     fontSize: typeRole.caption.fontSize,
     lineHeight: typeRole.caption.lineHeight,
+  },
+  busySlot: {
+    width: measure.hitTarget,
+    height: measure.hitTarget,
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'visible',
   },
 });

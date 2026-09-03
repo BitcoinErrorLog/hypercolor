@@ -21,7 +21,13 @@ describe('composerActionItems', () => {
 
   it('includes a visible icon for every action', () => {
     const items = composerActionItems('dm', OPEN);
-    expect(items.map(item => item.icon)).toEqual(['▣', '▤', '₿', '↑', '≡']);
+    expect(items.map(item => item.icon)).toEqual([
+      'image-outline',
+      'document-text-outline',
+      'card-outline',
+      'arrow-up-circle-outline',
+      'list-outline',
+    ]);
     expect(items.every(item => item.icon.length > 0)).toBe(true);
   });
 

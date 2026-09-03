@@ -1,6 +1,6 @@
 import React from 'react';
 import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
-import { color, space, typeRole } from '../../theme';
+import { color, iconSize, space, typeRole } from '../../theme';
 
 export type LoadingStateProps = {
   label?: string;
@@ -16,7 +16,9 @@ export function LoadingState({ label = 'Loading', testID }: LoadingStateProps) {
       accessibilityLabel={label}
       accessibilityState={{ busy: true }}
     >
-      <ActivityIndicator size="large" color={color.brand} />
+      <View style={styles.indicatorSlot}>
+        <ActivityIndicator size="large" color={color.brand} />
+      </View>
       <Text style={styles.label}>{label}</Text>
     </View>
   );
@@ -30,6 +32,13 @@ const styles = StyleSheet.create({
     gap: space.md,
     padding: space.xl,
     backgroundColor: color.canvas,
+  },
+  indicatorSlot: {
+    width: iconSize.lg,
+    height: iconSize.lg,
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'visible',
   },
   label: {
     color: color.textSecondary,

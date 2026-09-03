@@ -29,7 +29,7 @@ export function SignOutSheet({
   onCancel: () => void;
   onConfirm: () => void;
 }) {
-  const cancelRef = useRef<View>(null);
+  const cancelRef = useRef<TouchableOpacity>(null);
   const reduceMotion = useReduceMotion();
 
   useEffect(() => {
@@ -98,7 +98,7 @@ export function SignOutSheet({
 const styles = StyleSheet.create({
   backdrop: {
     flex: 1,
-    backgroundColor: color.overlay,
+    backgroundColor: color.overlayDeep,
     justifyContent: 'center',
     padding: space.xxl,
   },
@@ -125,13 +125,14 @@ const styles = StyleSheet.create({
   destructive: {
     minHeight: measure.hitTarget,
     borderRadius: radius.md,
-    borderWidth: 1,
+    borderWidth: StyleSheet.hairlineWidth,
     borderColor: color.dangerStrong,
+    backgroundColor: color.dangerStrong,
     alignItems: 'center',
     justifyContent: 'center',
   },
   destructiveText: {
-    color: color.dangerStrong,
+    color: color.textOnBrand,
     fontSize: typeRole.body.fontSize,
     fontWeight: '600',
   },
