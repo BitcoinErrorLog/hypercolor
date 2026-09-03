@@ -618,7 +618,8 @@ function parsePendingRingHandoff(password: string): PendingRingHandoffRecord | n
   } catch {
     // Legacy entries stored the raw hex secret as the password.
   }
-  return { ephemeralSkHex: password, expiresAt: null };
+  // Legacy raw-hex handoffs have no TTL — treat as already expired.
+  return { ephemeralSkHex: password, expiresAt: 0 };
 }
 
 export async function setPendingRingHandoff(

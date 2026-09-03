@@ -52,6 +52,12 @@ jest.mock('../../stores/deferredPublicJoin', () => ({
 
 import { KeyStore } from '../KeyStore';
 import { LinkService } from '../link/LinkService';
+jest.mock('../../stores/authStore', () => ({
+  useAuthStore: {
+    getState: () => ({ clearSession: jest.fn() }),
+  },
+}));
+
 import { PubkyService } from '../PubkyService';
 import { clearDeferredPublicJoin } from '../../stores/deferredPublicJoin';
 import { StorageService } from '../StorageService';

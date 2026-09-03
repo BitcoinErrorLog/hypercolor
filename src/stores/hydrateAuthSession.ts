@@ -38,17 +38,30 @@ export async function consumeInterruptedSignOutAtBoot(): Promise<InterruptedSign
  * report-only boot reconcile, restore `isAuthenticated` from the persisted
  * Welcome identity (delegated AppKey + pubky). Does not create a Paykit
  * homeserver session — that comes from `LinkService.enable()`.
+ *
+ * App owns {@link consumeInterruptedSignOutAtBoot} (once per process,
+ * before reconcile). This hydrate only refuses to paint when a marker
+ * remains — it must not re-consume or double-count boot wipe failures.
  */
 export async function hydratePersistedAuth(): Promise<boolean> {
   if (!KeyStore.isInitialized()) return false;
-  // Safety net: never paint an owner while an interrupted wipe remains.
-  const wipe = await consumeInterruptedSignOutAtBoot();
-  if (wipe !== 'none') return false;
-  resetPaintOverlayForBoot();
+  let interrupted: boolean;
+  try {
+    interrupted = await PubkyService.hasInterruptedSignOut();
+  } catch {
+    console.warn(INTERRUPTED_SIGN_OUT_MARKER_UNREADABLE);
+    paintNeedsSignIn();
+    return false;
+  }
+  if (interrupted) return false;
+  // Only clear the overlay when we are about to paint a live session.
+  // A successful consume leaves needs-sign-in; resetting here would wipe it
+  // (HEAD hydrate returned early on wipe !== 'none' and never reset).
   if (!(await KeyStore.hasPersistedSession())) return false;
   const pubky = KeyStore.getPubky();
   const homeserver = KeyStore.getHomeserver();
   if (!pubky || !homeserver) return false;
+  resetPaintOverlayForBoot();
   useAuthStore.getState().setAuthenticated(pubky, homeserver);
   return true;
 }

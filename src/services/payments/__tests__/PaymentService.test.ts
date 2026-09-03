@@ -387,7 +387,6 @@ describe('PaymentService', () => {
       }),
     );
     await PaymentService.requestPayment(PEER, { value: '0.001' }, 'invoice-2026-0001');
-    expect(mockedStorage.hasDisplayedPaymentHash).toHaveBeenCalledWith(OWNER, 'ab'.repeat(32));
     expect(mockedStorage.persistPaymentCreateWithSendIntent).toHaveBeenCalledWith(
       expect.objectContaining({
         record: expect.objectContaining({
@@ -428,9 +427,11 @@ describe('PaymentService', () => {
       { value: '0.001' },
       'invoice-2026-0001',
     );
+    // PaymentService always seeds invoiceReused=false; StorageService decides
+    // reuse inside the create transaction. The returned row reflects storage.
     expect(mockedStorage.persistPaymentCreateWithSendIntent).toHaveBeenCalledWith(
       expect.objectContaining({
-        record: expect.objectContaining({ invoiceReused: true }),
+        record: expect.objectContaining({ invoiceReused: false }),
       }),
     );
     expect(created.invoiceReused).toBe(true);

@@ -9,18 +9,22 @@ import { LinkService } from './link/LinkService';
 import { clearDeferredPublicJoin } from '../stores/deferredPublicJoin';
 import { StorageService } from './StorageService';
 import {
+  claimWipeInFlight,
   ensureSignOutPaint,
   invalidateSignOutRestore,
   paintNeedsSignIn,
+  pendingWipeInFlight,
   restorePaintedOwner,
-  trackWipeInFlight,
   waitForWipeInFlight,
+  WIPE_WAIT_TIMEOUT_MS,
+  WipeWaitTimeoutError,
 } from './paintedOwner';
 import {
   resetAppDataAfterFailedWipe,
   shouldOfferResetAfterFailedWipe,
 } from './resetAfterFailedWipe';
 import { readInterruptedSignOutAlias, readInterruptedSignOutOwner } from './signOutMarker';
+import { useAuthStore } from '../stores/authStore';
 import type { UserProfile, PubkyKey } from '../types';
 
 /**
@@ -56,8 +60,10 @@ function unwrap<T>(result: { isOk(): boolean; value?: T; error?: Error }): T {
 }
 
 async function finishIdentityClear(owner: PubkyKey): Promise<void> {
+  let identityCleared = false;
   try {
     await KeyStore.clearIfPubky(owner);
+    identityCleared = true;
     if (KeyStore.getSignOutIncompleteOwner() === owner) {
       KeyStore.clearSignOutIncomplete();
     }
@@ -78,6 +84,16 @@ async function finishIdentityClear(owner: PubkyKey): Promise<void> {
     } catch {
       // Boot still has the SQL journal or getPubky().
     }
+    if (identityCleared) {
+      // Identity is gone but marker/counter clear failed — force Welcome so
+      // the user is not stuck authenticated with no owner until next boot.
+      try {
+        useAuthStore.getState().clearSession();
+      } catch {
+        // Store may already be cold.
+      }
+      paintNeedsSignIn();
+    }
     throw err;
   }
 }
@@ -88,13 +104,21 @@ export const PubkyService = {
   // ── Auth ──────────────────────────────────────────────────────────────────
 
   async signOut(): Promise<void> {
-    await waitForWipeInFlight();
-    const previousOwner = KeyStore.getPubky();
-    if (!previousOwner) {
-      throw new Error('sign-out requires an owner');
+    while (pendingWipeInFlight()) {
+      await waitForWipeInFlight();
     }
-    const generation = ensureSignOutPaint();
-    const run = async (): Promise<void> => {
+    const release = claimWipeInFlight();
+    try {
+      let previousOwner = KeyStore.getPubky();
+      if (!previousOwner) {
+        // Mid-failure finishIdentityClear may have cleared identity while
+        // leaving the interrupted marker — fall back to the marker owner.
+        previousOwner = await readInterruptedSignOutOwner();
+      }
+      if (!previousOwner) {
+        throw new Error('sign-out requires an owner');
+      }
+      const generation = ensureSignOutPaint();
       try {
         const sessionSecret = KeyStore.getSessionSecret();
         if (sessionSecret) {
@@ -113,8 +137,10 @@ export const PubkyService = {
         throw err;
       }
       await finishIdentityClear(previousOwner);
-    };
-    await trackWipeInFlight(run());
+      paintNeedsSignIn();
+    } finally {
+      release();
+    }
   },
 
   async hasInterruptedSignOut(): Promise<boolean> {
@@ -127,23 +153,31 @@ export const PubkyService = {
   },
 
   async completeInterruptedSignOut(): Promise<void> {
-    await waitForWipeInFlight();
-    const owner = await readInterruptedSignOutOwner();
-    if (!owner) return;
-    const alias = await readInterruptedSignOutAlias(owner);
-    const run = async (): Promise<void> => {
+    while (pendingWipeInFlight()) {
+      await waitForWipeInFlight();
+    }
+    // Claim before any marker await so concurrent boot + sign-in cannot
+    // both enter and inflate the boot-wipe failure counter.
+    const release = claimWipeInFlight();
+    try {
+      const owner = await readInterruptedSignOutOwner();
+      if (!owner) return;
+      const alias = await readInterruptedSignOutAlias(owner);
       ensureSignOutPaint();
       invalidateSignOutRestore();
       await LinkService.clearSession({ owner, alias, restorable: false });
       await finishIdentityClear(owner);
       paintNeedsSignIn();
-    };
-    await trackWipeInFlight(run());
+    } finally {
+      release();
+    }
   },
 
   /**
    * Sign-in paths wait here so a boot wipe cannot clear a freshly written
    * identity. Shows the existing Welcome loading state while it awaits.
+   * Races completion against {@link WIPE_WAIT_TIMEOUT_MS}; timeout rejects
+   * retryable and does not clear the in-flight gate.
    */
   async awaitSignOutWipe(): Promise<void> {
     await waitForWipeInFlight();
@@ -154,7 +188,19 @@ export const PubkyService = {
       throw new Error(INTERRUPTED_SIGN_OUT_MARKER_UNREADABLE);
     }
     if (!interrupted) return;
-    await PubkyService.completeInterruptedSignOut();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        PubkyService.completeInterruptedSignOut(),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => {
+            reject(new WipeWaitTimeoutError());
+          }, WIPE_WAIT_TIMEOUT_MS);
+        }),
+      ]);
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+    }
   },
 
   shouldOfferResetAfterFailedWipe,

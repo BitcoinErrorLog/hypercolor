@@ -210,6 +210,32 @@ enum PaykitLinkAuthProtocol {
         return .failed
     }
 
+    enum ItemReadOutcome: Equatable {
+        case presentOrOther
+        case absent
+        case unavailable
+    }
+
+    /// Get-path classification: lock/not-available must not fold into absent
+    /// (that would let JS delete a live KeyStore alias). Only not-found is absent.
+    static func classifyItemReadStatus(_ status: Int32) -> ItemReadOutcome {
+        if status == errSecItemNotFound { return .absent }
+        if status == errSecInteractionNotAllowed || status == errSecNotAvailable {
+            return .unavailable
+        }
+        return .presentOrOther
+    }
+
+    /// Session bearer write-back is allowed only while the alias is still live
+    /// (not pending-adopt, not deleted). Mirrors the module's pendingIoLock gate.
+    static func shouldWriteBackRotatedBearer(
+        adopting: Bool,
+        bearerStillPresent: Bool
+    ) -> Bool {
+        !adopting && bearerStillPresent
+    }
+
+
     static func shouldLatchSweep(after outcome: ListOutcome) -> Bool {
         switch outcome {
         case .items, .empty:

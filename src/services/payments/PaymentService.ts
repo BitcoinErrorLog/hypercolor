@@ -50,9 +50,8 @@ export const PaymentService = {
     const paymentRequestId = uuidv4();
     const sentAt = Date.now();
     const displayedPaymentHash = await snapshotOwnInvoiceHash(owner, endpointIds);
-    const invoiceReused =
-      displayedPaymentHash !== null &&
-      (await StorageService.hasDisplayedPaymentHash(owner, displayedPaymentHash));
+    // invoiceReused is decided inside persistPaymentCreateWithSendIntent's
+    // transaction (avoids TOCTOU between the check and the insert).
     const built = buildPaymentRequestEnvelope({
       eventId,
       paymentRequestId,
@@ -80,7 +79,7 @@ export const PaymentService = {
       pendingEventId: eventId,
       displayedPaymentHash,
       proofVerified: null,
-      invoiceReused,
+      invoiceReused: false,
     };
     const queueId = uuidv4();
     const sendIntent = buildPreparedSendIntent({

@@ -293,7 +293,7 @@ export async function handleRingCallback(url: string): Promise<DelegationResult>
 
   const ephemeralSkHex = await resolvePendingEphemeralSk();
   const expiresAt = await pendingHandoffExpiresAt(ephemeralSkHex);
-  if (expiresAt != null && Date.now() >= expiresAt) {
+  if (expiresAt == null || Date.now() >= expiresAt) {
     await clearMatchingHandoff(ephemeralSkHex);
     throw new ExpiredDelegationError();
   }
@@ -347,7 +347,7 @@ export async function handleRingCallback(url: string): Promise<DelegationResult>
     );
   }
   const expiresAtLate = await pendingHandoffExpiresAt(ephemeralSkHex);
-  if (expiresAtLate != null && Date.now() >= expiresAtLate) {
+  if (expiresAtLate == null || Date.now() >= expiresAtLate) {
     await clearMatchingHandoff(ephemeralSkHex);
     throw new ExpiredDelegationError();
   }

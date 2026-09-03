@@ -109,7 +109,7 @@ export default function App() {
           await LinkService.syncInbox();
         }
       } catch (err) {
-        console.warn('[App] link send recovery failed:', err);
+        console.warn('[App] link send recovery failed');
       }
     };
 

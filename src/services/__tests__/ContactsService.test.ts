@@ -1028,3 +1028,23 @@ describe('ContactsService mid-flight consent revocation', () => {
     expect(storage.upsertContact).not.toHaveBeenCalled();
   });
 });
+
+describe('ContactsService.syncRelationships deny list', () => {
+  it('does not re-upsert a denied peer that still appears in the Nexus graph', async () => {
+    const storage = makeStorage();
+    const nexus = makeNexus({
+      following: jest.fn(async () => ok([ALICE])),
+      followers: jest.fn(async () => ok([])),
+      friends: jest.fn(async () => ok([])),
+    });
+    const { service } = baseDeps({
+      storage,
+      nexus,
+      isPeerDenied: (_owner, peer) => peer === ALICE,
+      isFollowsImportEnabled: () => true,
+    });
+    await service.syncRelationships(OWNER);
+    expect(storage.upsertContact).not.toHaveBeenCalled();
+    expect(storage.setContactRelationshipFlags).not.toHaveBeenCalled();
+  });
+});

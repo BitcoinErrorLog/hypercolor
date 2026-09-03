@@ -2712,7 +2712,13 @@ export const StorageService = {
   }): Promise<void> {
     await ownedTransact(input.record.ownerPubky, db => {
       releaseExpiredOwnInvoiceBindings(db, input.record.ownerPubky, now());
-      insertPaymentRequest(db, input.record);
+      // Reuse check must sit inside the create transaction so concurrent
+      // creates sharing one invoice cannot both observe invoiceReused=false.
+      const displayed = input.record.displayedPaymentHash;
+      const invoiceReused =
+        displayed !== null && hasDisplayedPaymentHashSync(db, input.record.ownerPubky, displayed);
+      const record = { ...input.record, invoiceReused };
+      insertPaymentRequest(db, record);
       insertPaymentEvent(db, input.event);
       insertLinkMessage(db, input.sendIntent.message);
       insertQueueItem(
@@ -3666,6 +3672,21 @@ function tipEndpointsUnchanged(
   return true;
 }
 
+function hasDisplayedPaymentHashSync(
+  db: SqlExecutor,
+  ownerPubky: string,
+  paymentHash: string,
+): boolean {
+  const result = db.executeSync(
+    `SELECT 1 FROM payment_requests
+     WHERE owner_pubky = ?
+       AND displayed_payment_hash = ?
+     LIMIT 1`,
+    [ownerPubky, paymentHash],
+  );
+  return (result.rows?.length ?? 0) > 0;
+}
+
 function releaseOwnInvoiceRequestBinding(
   db: SqlExecutor,
   ownerPubky: string,
@@ -3675,8 +3696,15 @@ function releaseOwnInvoiceRequestBinding(
     db.executeSync(
       `UPDATE own_invoice_hashes
           SET payment_request_id = NULL
-        WHERE owner_pubky = ? AND payment_request_id = ?`,
-      [ownerPubky, paymentRequestId],
+        WHERE owner_pubky = ?
+          AND payment_request_id = ?
+          AND EXISTS (
+            SELECT 1 FROM payment_requests AS r
+             WHERE r.owner_pubky = ?
+               AND r.payment_request_id = ?
+               AND r.direction = 'sent'
+          )`,
+      [ownerPubky, paymentRequestId, ownerPubky, paymentRequestId],
     );
   } catch (err) {
     if (!isMissingOwnInvoiceHashesTableError(err)) throw err;
@@ -3699,6 +3727,7 @@ function releaseExpiredOwnInvoiceBindings(
             SELECT 1 FROM payment_requests AS r
              WHERE r.owner_pubky = own_invoice_hashes.owner_pubky
                AND r.payment_request_id = own_invoice_hashes.payment_request_id
+               AND r.direction = 'sent'
                AND r.status = 'pending'
                AND r.expires_at IS NOT NULL
                AND r.expires_at <= ?
@@ -3727,6 +3756,7 @@ function releaseOwnInvoiceBindingIfInactiveRow(
             SELECT 1 FROM payment_requests AS r
              WHERE r.owner_pubky = ?
                AND r.payment_request_id = ?
+               AND r.direction = 'sent'
                AND (
                  r.status IN ('cancelled', 'rejected')
                  OR (

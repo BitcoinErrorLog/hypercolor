@@ -170,7 +170,10 @@ import {
   resetAppDataAfterFailedWipe,
   shouldOfferResetAfterFailedWipe,
 } from '../resetAfterFailedWipe';
-import { hydratePersistedAuth } from '../../stores/hydrateAuthSession';
+import {
+  consumeInterruptedSignOutAtBoot,
+  hydratePersistedAuth,
+} from '../../stores/hydrateAuthSession';
 import {
   EMPTY_PAYMENT_RECORD_EXTRAS,
   ENDPOINT_LIGHTNING_BOLT11,
@@ -279,6 +282,8 @@ function wireSignOutIncomplete(): { isSet: () => boolean; owner: () => string | 
 async function simulateRelaunch(): Promise<void> {
   resetLinkServiceHarnessState();
   resetPaintedOwnerModuleForTests();
+  // Match App boot: consume interrupted sign-out once, then hydrate.
+  await consumeInterruptedSignOutAtBoot();
   await hydratePersistedAuth();
 }
 
@@ -1398,6 +1403,9 @@ describe('owner-conditional persist at commit time', () => {
     await StorageService.persistSignOutWipeFailureCount(OWNER, BOOT_WIPE_FAILURES_BEFORE_RESET);
     ensureSignOutPaint();
     mockedNative.signOutSession.mockClear();
+    mockedNative.clearAllNativeSecrets.mockClear();
+    // KeyStore still names OWNER when reset starts — native wipe must fire.
+    mockedKeyStore.getPubky.mockReturnValue(OWNER);
     await resetAppDataAfterFailedWipe();
     expect(existsSync(path)).toBe(false);
     expect(mockedKeyStore.isSignOutIncomplete()).toBe(false);
@@ -1405,6 +1413,7 @@ describe('owner-conditional persist at commit time', () => {
     expect(activeOwnerAtCommit()).toBeNull();
     expect(isNeedsSignInPaint()).toBe(true);
     expect(mockedNative.signOutSession).toHaveBeenCalledWith(SESSION_ALIAS);
+    expect(mockedNative.clearAllNativeSecrets).toHaveBeenCalled();
   });
 
   it('keeps markers and the failure counter when reset throws midway', async () => {

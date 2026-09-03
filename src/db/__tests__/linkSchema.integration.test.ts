@@ -2550,7 +2550,7 @@ describe('schema v16 — own invoice history and verified-hash unique index', ()
     expect(scans).toHaveLength(0);
   });
 
-  it('adds invoice_reused on an already-v16 payment_requests table without bumping user_version', async () => {
+  it('adds invoice_reused on an already-v16 payment_requests table and advances user_version to CURRENT_SCHEMA_VERSION', async () => {
     const db = openMemoryDb();
     applyThroughV15(db);
     // W2b-shaped v16 fixture: CREATE only. The following ALTER is for

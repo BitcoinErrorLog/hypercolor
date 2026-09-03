@@ -483,8 +483,11 @@ export function createContactsService(deps: ContactsServiceDeps) {
           ...existingRows.map(row => row.pubky),
         ]);
 
+        const seen = new Set<string>();
         await mapPool([...everyone], PROFILE_HYDRATE_CONCURRENCY, async peer => {
           if (!writeStillValid(ownerPubky, generation)) return;
+          if (skipFollowee(deps, ownerPubky, peer, seen)) return;
+          seen.add(peer);
           const existing = await deps.storage.getContact(peer, ownerPubky);
           if (!writeStillValid(ownerPubky, generation)) return;
           const isFollowing = followingAuthoritative

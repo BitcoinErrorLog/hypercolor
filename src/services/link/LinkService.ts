@@ -516,8 +516,7 @@ export const LinkService = {
         if (err instanceof LinkSendError && err.code === 'owner-changed') return 'error';
         if (isLinkNativeError(err) && err.code === 'unavailable') return 'native-missing';
         console.warn(
-          `[LinkService] ensureLinkWith failed peer=${opaquePeerId(expectedOwner, peerPubky)}:`,
-          errorMessage(err),
+          `[LinkService] ensureLinkWith failed peer=${opaquePeerId(expectedOwner, peerPubky)}`,
         );
         return 'error';
       }
@@ -1175,7 +1174,7 @@ async function restoreFromKeyStore(): Promise<SessionLookup> {
     return session;
   } catch (err) {
     if (isLinkNativeError(err) && err.code === 'auth') {
-      KeyStore.deleteLinkSession();
+      KeyStore.deleteLinkSessionIfAlias(stored);
       return null;
     }
     if (isLinkNativeError(err) && err.code === 'unavailable') {

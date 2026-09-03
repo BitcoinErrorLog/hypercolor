@@ -214,13 +214,13 @@ describe('KeyStore session and Ring pending', () => {
     await expect(getPendingRingHandoffExpiresAt()).resolves.toBeNull();
   });
 
-  it('reads a legacy raw-hex pending Ring handoff without an expiry', async () => {
+  it('treats a legacy raw-hex pending Ring handoff as already expired (expiresAt=0)', async () => {
     const { initKeyStore, getPendingRingHandoff, getPendingRingHandoffExpiresAt } =
       await freshKeyStore();
     await initKeyStore();
     mockKeychainStore.set('hypercolor-ring-pending', 'deadbeef');
     await expect(getPendingRingHandoff()).resolves.toBe('deadbeef');
-    await expect(getPendingRingHandoffExpiresAt()).resolves.toBeNull();
+    await expect(getPendingRingHandoffExpiresAt()).resolves.toBe(0);
   });
 
   it('treats a JSON handoff with an unreadable expiresAt as already expired', async () => {

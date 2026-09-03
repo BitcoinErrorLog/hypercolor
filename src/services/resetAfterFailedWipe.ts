@@ -90,16 +90,19 @@ export async function resetAppDataAfterFailedWipe(): Promise<void> {
   if (foreignLiveOwner(owner)) throw new ResetAppDataError();
 
   const alias = await readInterruptedSignOutAlias(owner);
+  // Capture before clearIfPubky removes PUBKY_KEY — otherwise the native
+  // wipe gate can never fire on a successful identity clear.
+  const namedOwner = KeyStore.getPubky() === owner;
 
   try {
     closeAndDeleteSqliteDatabase();
-    await KeyStore.clearIfPubky(owner);
     if (alias) {
       await PaykitLinkNative.signOutSession(alias);
     }
-    if (KeyStore.getPubky() === owner) {
+    if (namedOwner) {
       await PaykitLinkNative.clearAllNativeSecrets();
     }
+    await KeyStore.clearIfPubky(owner);
   } catch {
     throw new ResetAppDataError();
   }

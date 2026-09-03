@@ -1,5 +1,6 @@
 import type { PubkyKey } from '../../types';
 import { CONTACTS_COPY } from '../../ui/contacts/contactsCopy';
+import { stripSensitive } from '../../ui/sanitizedError';
 
 export const BLOCK_CLEANUP_PENDING_MESSAGE = CONTACTS_COPY.blockedCleanupPending;
 
@@ -44,7 +45,7 @@ export async function blockPeer(input: {
       blocked: true,
       cleanup: 'pending',
       message: BLOCK_CLEANUP_PENDING_MESSAGE,
-      details: err instanceof Error ? err.message : String(err),
+      details: stripSensitive(err instanceof Error ? err.message : String(err)),
     };
   }
 }

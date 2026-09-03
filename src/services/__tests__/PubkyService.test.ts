@@ -49,6 +49,12 @@ jest.mock('@synonymdev/react-native-pubky', () => ({
   getHomeserver: jest.fn(),
 }));
 
+jest.mock('../../stores/authStore', () => ({
+  useAuthStore: {
+    getState: () => ({ clearSession: jest.fn() }),
+  },
+}));
+
 import { PubkyService } from '../PubkyService';
 
 describe('PubkyService owner writes', () => {

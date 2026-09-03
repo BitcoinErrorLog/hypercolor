@@ -120,7 +120,16 @@ describe('hydratePersistedAuth', () => {
     mockGetHomeserver.mockReturnValue('homeserver-pk');
 
     await expect(hydratePersistedAuth()).resolves.toBe(false);
-    expect(mockCompleteInterrupted).toHaveBeenCalled();
+    // App owns consumeInterruptedSignOutAtBoot — hydrate must not re-consume.
+    expect(mockCompleteInterrupted).not.toHaveBeenCalled();
+    expect(mockRecordBootWipeFailure).not.toHaveBeenCalled();
     expect(mockSetAuthenticated).not.toHaveBeenCalled();
+  });
+
+  it('records exactly one boot wipe failure when consume runs once', async () => {
+    mockHasInterrupted.mockResolvedValue(true);
+    mockCompleteInterrupted.mockRejectedValue(new Error('sql locked'));
+    await expect(consumeInterruptedSignOutAtBoot()).resolves.toBe('wipe-failed');
+    expect(mockRecordBootWipeFailure).toHaveBeenCalledTimes(1);
   });
 });

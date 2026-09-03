@@ -1412,7 +1412,9 @@ class PaykitLinkModule: NSObject, RCTInvalidating {
         case .refuseDurablePending, .restore, .notFound:
             break
         }
-        let durablePending = (try? PaykitLinkStore.getString(account: PaykitLinkStore.pendingAccount(alias))) != nil
+        // Do not swallow keychain errors here — unavailable must surface so
+        // JS keeps the alias rather than treating a locked device as absent.
+        let durablePending = try PaykitLinkStore.getString(account: PaykitLinkStore.pendingAccount(alias)) != nil
         let bearer = try PaykitLinkStore.getString(account: PaykitLinkStore.sessionAccount(alias))
         let hasBearer = bearer.map { !$0.isEmpty } ?? false
         switch PaykitLinkAuthProtocol.sessionStep(
@@ -1431,7 +1433,19 @@ class PaykitLinkModule: NSObject, RCTInvalidating {
             }
             let restored = try await chatClient().restoreSession(exportedSession: bearer)
             let rotated = restored.exportSession()
-            try PaykitLinkStore.put(rotated, account: PaykitLinkStore.sessionAccount(alias))
+            // Re-check liveness under pendingIoLock before write-back so a
+            // concurrent signOut / clearAllNativeSecrets cannot resurrect a
+            // deleted alias via the rotated export.
+            try pendingIoLock.withLock {
+                if self.adoptingAliases.contains(alias) {
+                    throw PaykitLinkBridgeError(code: "unavailable", message: Self.staticMessage("unavailable"))
+                }
+                let stillPresent = try PaykitLinkStore.getString(account: PaykitLinkStore.sessionAccount(alias))
+                guard let stillPresent, !stillPresent.isEmpty else {
+                    throw PaykitLinkBridgeError(code: "auth", message: "session alias not found")
+                }
+                try PaykitLinkStore.put(rotated, account: PaykitLinkStore.sessionAccount(alias))
+            }
             lock.withLock { sessions[alias] = restored }
             return restored
         case .notFound:
@@ -1777,11 +1791,16 @@ enum PaykitLinkStore {
     /// Simulator unsigned / entitlement-mismatch reads return -34018
     /// (`errSecMissingEntitlement`) instead of not-found. Treat as absent so
     /// persistSession can add a new item instead of failing signup.
+    /// True only when the item is definitively not present. Lock-state and
+    /// keychain-unavailable must NOT fold into absent — callers treat those
+    /// as non-destructive `unavailable` so JS does not delete a live alias.
     private static func isAbsent(_ status: OSStatus) -> Bool {
         status == errSecItemNotFound
-            || status == errSecInteractionNotAllowed
-            || status == errSecNotAvailable
             || status == errSecMissingEntitlement
+    }
+
+    private static func isKeychainUnavailable(_ status: OSStatus) -> Bool {
+        status == errSecInteractionNotAllowed || status == errSecNotAvailable
     }
 
     static func receiverAccount(_ alias: String) -> String { "receiver.\(alias)" }
@@ -1834,6 +1853,11 @@ enum PaykitLinkStore {
             )
         }
         var add = identity
+        // Accessibility: AfterFirstUnlockThisDeviceOnly (not WhenUnlocked).
+        // PaykitLink background keepalive / session restore must read the
+        // bearer while the device is locked after first unlock (FGS /
+        // BGProcessing). WhenUnlockedThisDeviceOnly would break those
+        // paths. Still ThisDeviceOnly — no backup/escrow.
         add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
         add[kSecValueData as String] = value
         let status = SecItemAdd(add as CFDictionary, nil)
@@ -1886,6 +1910,12 @@ enum PaykitLinkStore {
         if isAbsent(status) {
             return nil
         }
+        if isKeychainUnavailable(status) {
+            throw PaykitLinkBridgeError(
+                code: "unavailable",
+                message: "keychain unavailable (\(status))",
+            )
+        }
         if status != errSecSuccess {
             throw PaykitLinkBridgeError(code: "protocol", message: "keychain read failed (\(status))")
         }
@@ -1918,9 +1948,30 @@ enum PaykitLinkStore {
     static func deleteAll() throws {
         try deleteAllAccounts(forService: service)
         try deleteServices(prefix: attachmentServicePrefix)
+        unlinkLegacyMmkvBestEffort()
         #if DEBUG
         try wipeFallback()
         #endif
+    }
+
+    /// Best-effort unlink of legacy MMKV id files under the app Library.
+    /// Confined to known filenames under the app container.
+    private static func unlinkLegacyMmkvBestEffort() {
+        let fm = FileManager.default
+        guard let base = fm.urls(for: .libraryDirectory, in: .userDomainMask).first else { return }
+        let mmkv = base.appendingPathComponent("mmkv", isDirectory: true)
+        let allowed: Set<String> = [
+            "hypercolor-keystore",
+            "hypercolor-keystore.crc",
+            "hypercolor-keystore.default",
+            "hypercolor-keystore.default.crc",
+            "paykit-link-legacy",
+            "paykit-link-legacy.crc",
+        ]
+        guard let files = try? fm.contentsOfDirectory(atPath: mmkv.path) else { return }
+        for name in files where allowed.contains(name) {
+            try? fm.removeItem(at: mmkv.appendingPathComponent(name))
+        }
     }
 
     private static func listAccounts(forService target: String) throws -> [String] {

@@ -151,16 +151,29 @@ export function resetPaintedOwnerModuleForTests(): void {
   wipeInFlight = null;
 }
 
-export function trackWipeInFlight<T>(work: Promise<T>): Promise<T> {
-  const gate: Promise<void> = work.then(
-    () => undefined,
-    () => undefined,
-  );
-  wipeInFlight = gate;
-  void gate.finally(() => {
-    if (wipeInFlight === gate) wipeInFlight = null;
+/**
+ * Claim the wipe gate synchronously before the first await so concurrent
+ * callers cannot both pass {@link waitForWipeInFlight} and double-wipe.
+ * Returns a release function; always call it in `finally`.
+ */
+export function claimWipeInFlight(): () => void {
+  let settle!: () => void;
+  const gate = new Promise<void>(resolve => {
+    settle = () => resolve();
   });
-  return work;
+  wipeInFlight = gate;
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    settle();
+    if (wipeInFlight === gate) wipeInFlight = null;
+  };
+}
+
+export function trackWipeInFlight<T>(work: Promise<T>): Promise<T> {
+  const release = claimWipeInFlight();
+  return work.finally(release);
 }
 
 export async function waitForWipeInFlight(): Promise<void> {
