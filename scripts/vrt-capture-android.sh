@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
-# Capture every Android VRT scene.
-# Distinct viewports: apply genuine wm size/density for pixel-4a vs pixel-8-pro
-# on a booted emulator (AVD configs Hypercolor_Pixel_* exist; live wm matches matrix).
+# Capture every Android VRT scene on distinct Hypercolor Pixel AVDs
+# (Hypercolor_Pixel_4a_API_36 and Hypercolor_Pixel_8_Pro_API_36).
 # Scene switch: launch once per viewport, inject HC_E2E AFTER launch, Maestro asserts
 # exact `vrt-scene:<id>` BEFORE takeScreenshot.
 set -euo pipefail
@@ -10,7 +9,59 @@ APP="${APP_ID:-com.hypercolor}"
 ANDROID_HOME="${ANDROID_HOME:-$HOME/Library/Android/sdk}"
 ADB="${ANDROID_HOME}/platform-tools/adb"
 EMU="${ANDROID_HOME}/emulator/emulator"
-BASE_AVD="${VRT_ANDROID_BASE_AVD:-Medium_Phone_API_36.1}"
+BASE_AVD="${VRT_ANDROID_BASE_AVD:-}"
+
+avd_for_device() {
+  case "$1" in
+    pixel-4a) echo "Hypercolor_Pixel_4a_API_36" ;;
+    pixel-8-pro) echo "Hypercolor_Pixel_8_Pro_API_36" ;;
+    *) echo "" ;;
+  esac
+}
+
+serial_for_avd() {
+  local want="$1" s name
+  for s in $($ADB devices | awk '/emulator/{print $1}'); do
+    name="$($ADB -s "$s" emu avd name 2>/dev/null | tr -d '\r' | head -1 || true)"
+    if [ "$name" = "$want" ]; then
+      echo "$s"
+      return 0
+    fi
+  done
+  return 1
+}
+
+ensure_emulator() {
+  local avd="$1" s boot
+  SERIAL="$(serial_for_avd "$avd" || true)"
+  if [ -n "${SERIAL:-}" ]; then
+    echo "reuse_emulator $SERIAL avd=$avd"
+    return 0
+  fi
+  nohup "$EMU" -avd "$avd" -no-snapshot-load -no-boot-anim -gpu swiftshader_indirect \
+    >/tmp/hc-vrt-emu-"$avd".log 2>&1 &
+  echo "starting_avd $avd pid=$!"
+  for _ in $(seq 1 90); do
+    SERIAL="$(serial_for_avd "$avd" || true)"
+    if [ -n "${SERIAL:-}" ]; then
+      boot="$($ADB -s "$SERIAL" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' || true)"
+      if [ "$boot" = "1" ]; then
+        echo "booted SERIAL=$SERIAL avd=$avd"
+        return 0
+      fi
+    fi
+    sleep 2
+  done
+  echo "failed to boot $avd" >&2
+  return 1
+}
+
+apply_viewport() {
+  local device="$1"
+  PROFILE_AVD="$(avd_for_device "$device")"
+  BASE_AVD="$PROFILE_AVD"
+  ensure_emulator "$PROFILE_AVD"
+}
 VIEWPORT_FILTER="${VRT_ANDROID_VIEWPORT:-}"
 GEN="$ROOT/.maestro/vrt/generated"
 OUT="$ROOT/vrt/baselines/android"
@@ -22,51 +73,6 @@ export PATH="$HOME/.maestro/bin:$PATH"
 ok=0
 fail=0
 SERIAL=""
-
-ensure_emulator() {
-  local s boot
-  for s in $($ADB devices | awk '/emulator/{print $1}'); do
-    if $ADB -s "$s" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' | grep -q 1; then
-      SERIAL="$s"
-      echo "reuse_emulator $SERIAL"
-      return 0
-    fi
-  done
-  nohup "$EMU" -avd "$BASE_AVD" -no-snapshot-load -no-boot-anim -gpu swiftshader_indirect \
-    >/tmp/hc-vrt-emu-base.log 2>&1 &
-  echo "starting_avd $BASE_AVD pid=$!"
-  for _ in $(seq 1 90); do
-    for s in $($ADB devices | awk '/emulator/{print $1}'); do
-      boot="$($ADB -s "$s" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' || true)"
-      if [ "$boot" = "1" ]; then
-        SERIAL="$s"
-        echo "booted SERIAL=$SERIAL avd=$BASE_AVD"
-        return 0
-      fi
-    done
-    sleep 2
-  done
-  echo "failed to boot $BASE_AVD" >&2
-  return 1
-}
-
-apply_viewport() {
-  local device="$1"
-  case "$device" in
-    pixel-4a)
-      "$ADB" -s "$SERIAL" shell wm size 1080x2340
-      "$ADB" -s "$SERIAL" shell wm density 440
-      PROFILE_AVD="Hypercolor_Pixel_4a_API_36"
-      ;;
-    pixel-8-pro)
-      "$ADB" -s "$SERIAL" shell wm size 1344x2992
-      "$ADB" -s "$SERIAL" shell wm density 480
-      PROFILE_AVD="Hypercolor_Pixel_8_Pro_API_36"
-      ;;
-    *) echo "unknown device $device" >&2; return 1 ;;
-  esac
-  sleep 2
-}
 
 hide_chrome() {
   "$ADB" -s "$SERIAL" shell settings put global policy_control 'immersive.status=*' || true
@@ -102,7 +108,7 @@ data[viewport] = {
   "serial": serial,
   "wmSize": size,
   "wmDensity": density,
-  "note": "Live wm size/density match Hypercolor_* AVD lcd specs on shared base AVD",
+  "note": "Distinct Hypercolor_* AVD (not wm override on Medium Phone)",
 }
 p.write_text(json.dumps(data, indent=2) + "\n")
 print("profile", viewport, data[viewport])
@@ -111,7 +117,6 @@ PY
 
 echo '{}' > "$PROFILES"
 : > /tmp/hc-vrt-android-asserted.txt
-ensure_emulator
 
 DEVICES="pixel-4a pixel-8-pro"
 if [ -n "$VIEWPORT_FILTER" ]; then
@@ -140,9 +145,7 @@ for device in $DEVICES; do
   done
 done
 
-# Reset display
-"$ADB" -s "$SERIAL" shell wm size reset || true
-"$ADB" -s "$SERIAL" shell wm density reset || true
+# Do not reset wm on the dedicated Pixel AVDs.
 
 python3 - <<'PY'
 from pathlib import Path

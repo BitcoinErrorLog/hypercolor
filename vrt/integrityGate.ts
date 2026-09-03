@@ -41,7 +41,7 @@ function parseCaptureName(file: string): {
 } | null {
   // auth_welcome_idle_android_pixel-4a.png
   const m = file.match(
-    /^(.+)_(android|ios)_(pixel-4a|pixel-8-pro|iphone-se-3|iphone-15-pro-max)\.png$/,
+    /^(.+)_(android|ios)_(pixel-4a|pixel-8-pro|iphone-se-3|iphone-16-pro-max)\.png$/,
   );
   if (!m) return null;
   return { sceneKey: m[1]!, platform: m[2]!, viewport: m[3]! };

@@ -198,8 +198,10 @@ npx tsx vrt/integrityGate.ts vrt/baselines/ios vrt/output/report/marker-ledger-i
 
 Android viewports use **distinct AVDs** (not one Medium Phone renamed twice):
 
-- `pixel-4a` → `Hypercolor_Pixel_4a_API_36` (1080×2340 @ 440dpi)
-- `pixel-8-pro` → `Hypercolor_Pixel_8_Pro_API_36` (1344×2992 @ 480dpi)
+- `pixel-4a` → `Hypercolor_Pixel_4a_API_36` (1080×2340 @ 440dpi) **booted AVD**
+- `pixel-8-pro` → `Hypercolor_Pixel_8_Pro_API_36` (1344×2992 @ 480dpi) **booted AVD**
+
+iOS large device: **iPhone 16 Pro Max** (`iphone-16-pro-max`). There is no 15 Pro Max runtime on this machine.
 
 Profiles are written to `vrt/output/report/device-profiles-android.json` and
 `device-profiles-ios.json`. Status bar is hidden (Android immersive /

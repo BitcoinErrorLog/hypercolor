@@ -31,19 +31,25 @@ export function PaymentComposeSheet({
   visible,
   busy,
   intent = 'request',
+  initialAmount,
+  initialReference,
+  seedError = null,
   onClose,
   onSubmit,
 }: {
   visible: boolean;
   busy: boolean;
   intent?: 'request' | 'tip';
+  initialAmount?: string;
+  initialReference?: string;
+  seedError?: string | null;
   onClose: () => void;
   onSubmit: (amountBtc: string, reference: string) => void;
 }) {
   const reduceMotion = useReduceMotion();
-  const [amount, setAmount] = useState(PAYMENT_COMPOSE_DEFAULT_AMOUNT);
-  const [reference, setReference] = useState('');
-  const [error, setError] = useState<string | null>(null);
+  const [amount, setAmount] = useState(initialAmount ?? PAYMENT_COMPOSE_DEFAULT_AMOUNT);
+  const [reference, setReference] = useState(initialReference ?? '');
+  const [error, setError] = useState<string | null>(seedError ?? null);
 
   function handleAmountChange(value: string) {
     setAmount(value);

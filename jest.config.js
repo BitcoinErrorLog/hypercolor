@@ -8,7 +8,7 @@ module.exports = {
   clearMocks: true,
   // jest-expo default allow-list plus uuid@13 (pure ESM).
   transformIgnorePatterns: [
-    '/node_modules/(?!(.pnpm|react-native|@react-native|@react-native-community|expo|@expo|@expo-google-fonts|react-navigation|@react-navigation|@sentry/react-native|native-base|uuid))',
+    '/node_modules/(?!(.pnpm|react-native|@react-native|@react-native-community|expo|@expo|@expo-google-fonts|react-navigation|@react-navigation|@sentry/react-native|native-base|uuid|immer|zustand))',
     '/node_modules/react-native-reanimated/plugin/',
   ],
 };

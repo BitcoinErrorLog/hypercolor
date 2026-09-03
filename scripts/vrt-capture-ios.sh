@@ -19,7 +19,7 @@ pick_udid() {
   local needle
   case "$device" in
     iphone-se-3) needle='iPhone SE (3rd generation)' ;;
-    iphone-15-pro-max) needle='iPhone 16 Pro Max' ;;
+    iphone-16-pro-max) needle='iPhone 16 Pro Max' ;;
     *) echo "" ; return 0 ;;
   esac
   # UUID is always in parentheses as a standalone hex token — not nested name parens.
@@ -29,7 +29,7 @@ pick_udid() {
 sim_name() {
   case "$1" in
     iphone-se-3) echo "iPhone SE (3rd generation)" ;;
-    iphone-15-pro-max) echo "iPhone 16 Pro Max" ;;
+    iphone-16-pro-max) echo "iPhone 16 Pro Max" ;;
     *) echo "$1" ;;
   esac
 }
@@ -64,7 +64,7 @@ echo '{}' > "$PROFILES"
 # Capture start time so we only promote PNGs from this run
 CAPTURE_START=$(date +%s)
 
-DEVICES="iphone-se-3 iphone-15-pro-max"
+DEVICES="iphone-se-3 iphone-16-pro-max"
 if [ -n "$VIEWPORT_FILTER" ]; then
   DEVICES="$VIEWPORT_FILTER"
 fi

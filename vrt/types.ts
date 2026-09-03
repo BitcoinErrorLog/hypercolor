@@ -43,10 +43,10 @@ export type VrtCatalogEntry = {
 export type VrtSceneRef = Omit<VrtCatalogEntry, 'render'>;
 
 export const VRT_VIEWPORTS = Object.freeze({
-  'android-small': { platform: 'android', device: 'pixel-4a', width: 360, height: 800 },
+  'android-small': { platform: 'android', device: 'pixel-4a', width: 393, height: 851 },
   'android-large': { platform: 'android', device: 'pixel-8-pro', width: 448, height: 998 },
   'ios-small': { platform: 'ios', device: 'iphone-se-3', width: 375, height: 667 },
-  'ios-large': { platform: 'ios', device: 'iphone-15-pro-max', width: 430, height: 932 },
+  'ios-large': { platform: 'ios', device: 'iphone-16-pro-max', width: 440, height: 956 },
   headless: { platform: 'headless', device: 'catalog', width: 390, height: 844 },
 } as const);
 
