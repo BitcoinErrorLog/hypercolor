@@ -4,7 +4,7 @@
   <defs>
     <polygon id="icon-silhouette" points="512,244 712,378 712,646 512,780 312,646 312,378"/>
   </defs>
-  
+
   <g id="icon-rot" transform="rotate(-8 512 512)">
     <g id="icon-mark">
       <polygon points="512,244 312,378 312,646 512,780" fill="#7C3AED"/>

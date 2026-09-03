@@ -34,6 +34,7 @@ import { notifyEnableMessagingResume } from '../ui/enableMessagingResume';
 import { notifyConnectAuthFeedback } from '../ui/connectAuthFeedback';
 import { stackTransitionAnimation, useReduceMotion } from '../ui/reduceMotion';
 import { PUBLIC_CHANNELS_ROUTE } from '../ui/exposurePaths';
+import { color, space, typeRole, measure } from '../theme';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
@@ -89,7 +90,7 @@ function LoadingFallback() {
   }, []);
   return (
     <View style={styles.loading}>
-      <ActivityIndicator size="large" color="#7c3aed" />
+      <ActivityIndicator size="large" color={color.brand} />
       {showExit ? (
         <TouchableOpacity
           testID="navigationLoadingContinue"
@@ -238,16 +239,20 @@ const styles = StyleSheet.create({
   root: { flex: 1 },
   loading: {
     flex: 1,
-    backgroundColor: '#0a0a0a',
+    backgroundColor: color.canvas,
     justifyContent: 'center',
     alignItems: 'center',
-    gap: 24,
+    gap: space.xxl,
   },
   loadingContinue: {
-    minHeight: 44,
-    minWidth: 44,
-    paddingHorizontal: 24,
+    minHeight: measure.hitTarget,
+    minWidth: measure.hitTarget,
+    paddingHorizontal: space.xxl,
     justifyContent: 'center',
   },
-  loadingContinueText: { color: '#8f57f0', fontSize: 16, fontWeight: '600' },
+  loadingContinueText: {
+    color: color.brandText,
+    fontSize: typeRole.body.fontSize,
+    fontWeight: '600',
+  },
 });

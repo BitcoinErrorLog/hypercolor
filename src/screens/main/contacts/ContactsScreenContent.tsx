@@ -493,7 +493,11 @@ const styles = StyleSheet.create({
   suggestionsTitle: { color: CONTACTS_BODY, fontSize: typeRole.body.fontSize, fontWeight: '700' },
   suggestionsSub: { color: CONTACTS_MUTED, fontSize: typeRole.secondary.fontSize, lineHeight: 20 },
   suggestionRow: { gap: space.xs, paddingBottom: space.sm },
-  addSuggestion: { minHeight: MIN_TARGET, justifyContent: 'center', paddingLeft: 62 },
+  addSuggestion: {
+    minHeight: MIN_TARGET,
+    justifyContent: 'center',
+    paddingLeft: space.xxxl + space.xxxl - space.xs,
+  },
   addSuggestionLabel: {
     color: color.brandText,
     fontSize: typeRole.callout.fontSize,

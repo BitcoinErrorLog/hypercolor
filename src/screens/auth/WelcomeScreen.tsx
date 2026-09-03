@@ -195,7 +195,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     paddingHorizontal: space.xxxl,
-    paddingTop: 48,
+    paddingTop: space.xxxl + space.lg,
     gap: space.lg,
   },
   logo: {
@@ -217,7 +217,7 @@ const styles = StyleSheet.create({
   },
   actions: {
     paddingHorizontal: space.xxxl,
-    paddingBottom: 48,
+    paddingBottom: space.xxxl + space.lg,
     gap: space.xl,
   },
   errorBox: {

@@ -1,6 +1,11 @@
 import React, { useEffect, useState } from 'react';
 import { Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
-import { applyE2eSignupContinue, getE2eSignupHud, subscribeE2eSignupHud } from './e2eSignupResult';
+import {
+  applyE2eSignupContinue,
+  getE2eSignupHud,
+  subscribeE2eSignupHud,
+} from './e2eSignupResult';
+import { color, space, radius, typeRole } from '../theme';
 
 /** DEV-only Maestro hooks after a deep-link / file-channel debug signup. */
 export function E2eSignupHud() {
@@ -77,24 +82,43 @@ const styles = StyleSheet.create({
     elevation: Platform.OS === 'android' ? 24 : 0,
   },
   card: {
-    margin: 16,
-    padding: 16,
-    borderRadius: 12,
-    backgroundColor: '#111111',
+    margin: space.lg,
+    padding: space.lg,
+    borderRadius: radius.md,
+    backgroundColor: color.surface,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#374151',
-    gap: 8,
+    borderColor: color.hairlineStrong,
+    gap: space.sm,
     elevation: Platform.OS === 'android' ? 24 : 0,
   },
-  status: { color: '#86efac', fontSize: 14, fontWeight: '600' },
-  mono: { color: '#c4b5fd', fontSize: 12, fontFamily: 'monospace' },
+  status: {
+    color: color.success,
+    fontSize: typeRole.secondary.fontSize,
+    fontWeight: '600',
+  },
+  mono: {
+    color: color.brandMuted,
+    fontSize: typeRole.mono.fontSize,
+    fontFamily: 'monospace',
+  },
   button: {
-    backgroundColor: '#7c3aed',
-    borderRadius: 10,
-    paddingVertical: 12,
+    backgroundColor: color.brand,
+    borderRadius: radius.sm,
+    paddingVertical: space.md,
     alignItems: 'center',
   },
-  buttonText: { color: '#fff', fontSize: 15, fontWeight: '600' },
-  errorTitle: { color: '#fca5a5', fontSize: 14, fontWeight: '600' },
-  errorBody: { color: '#fca5a5', fontSize: 12 },
+  buttonText: {
+    color: color.textOnBrand,
+    fontSize: typeRole.callout.fontSize,
+    fontWeight: '600',
+  },
+  errorTitle: {
+    color: color.danger,
+    fontSize: typeRole.secondary.fontSize,
+    fontWeight: '600',
+  },
+  errorBody: {
+    color: color.danger,
+    fontSize: typeRole.mono.fontSize,
+  },
 });

@@ -341,7 +341,7 @@ const styles = StyleSheet.create({
   headerTitle: { color: CONTACTS_BODY, fontSize: typeRole.titleStack.fontSize, fontWeight: '600' },
   centered: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   muted: { color: CONTACTS_MUTED, fontSize: typeRole.callout.fontSize },
-  body: { padding: space.xl, gap: space.md, paddingBottom: 40 },
+  body: { padding: space.xl, gap: space.md, paddingBottom: space.xxl + space.lg },
   avatar: {
     width: 64,
     height: 64,

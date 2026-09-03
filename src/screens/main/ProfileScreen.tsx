@@ -317,7 +317,11 @@ const styles = StyleSheet.create({
     fontSize: typeRole.callout.fontSize,
     fontWeight: '700',
   },
-  actions: { paddingHorizontal: space.xl, paddingBottom: 48, gap: space.md },
+  actions: {
+    paddingHorizontal: space.xl,
+    paddingBottom: space.xxxl + space.lg,
+    gap: space.md,
+  },
   navRow: {
     minHeight: measure.hitTarget,
     flexDirection: 'row',
