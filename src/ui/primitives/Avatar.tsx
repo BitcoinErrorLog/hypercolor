@@ -1,12 +1,21 @@
 import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
-import { color, radius, typeRole } from '../../theme';
+import { color, typeRole } from '../../theme';
+
+export type AvatarSize = 'sm' | 'md' | 'lg' | 'xl';
 
 export type AvatarProps = {
   name?: string | null;
   pubky?: string | null;
-  size?: number;
+  size?: AvatarSize | number;
   testID?: string;
+};
+
+const avatarSize: Record<AvatarSize, number> = {
+  sm: 32,
+  md: 44,
+  lg: 76,
+  xl: 96,
 };
 
 function shortPubky(pubky: string): string {
@@ -31,7 +40,22 @@ function initialsFrom(name: string | null | undefined, pubky: string | null | un
   return '?';
 }
 
-export function Avatar({ name, pubky, size = 40, testID }: AvatarProps) {
+function resolveSize(size: AvatarProps['size']): number {
+  if (typeof size === 'number') return size;
+  return avatarSize[size ?? 'md'];
+}
+
+function brandFamilyFill(pubky: string | null | undefined): string {
+  if (!pubky) return color.surfaceBrand;
+  let hash = 0;
+  for (let i = 0; i < pubky.length; i += 1) {
+    hash = (hash + pubky.charCodeAt(i) * (i + 1)) % 3;
+  }
+  return [color.surfaceBrand, color.brandDeep, color.brand][hash] ?? color.surfaceBrand;
+}
+
+export function Avatar({ name, pubky, size = 'md', testID }: AvatarProps) {
+  const resolvedSize = resolveSize(size);
   const initials = initialsFrom(name, pubky);
   const a11y = name?.trim() || (pubky ? shortPubky(pubky) : 'Unknown contact');
   return (
@@ -42,13 +66,16 @@ export function Avatar({ name, pubky, size = 40, testID }: AvatarProps) {
       style={[
         styles.avatar,
         {
-          width: size,
-          height: size,
-          borderRadius: Math.min(size / 2, radius.xxl),
+          width: resolvedSize,
+          height: resolvedSize,
+          borderRadius: resolvedSize / 2,
+          backgroundColor: brandFamilyFill(pubky),
         },
       ]}
     >
-      <Text style={[styles.initials, size < 36 ? styles.initialsSm : null]}>{initials}</Text>
+      <Text style={[styles.initials, resolvedSize < avatarSize.md ? styles.initialsSm : null]}>
+        {initials}
+      </Text>
     </View>
   );
 }
@@ -62,12 +89,11 @@ export function avatarFallbackLabel(
 
 const styles = StyleSheet.create({
   avatar: {
-    backgroundColor: color.well,
     alignItems: 'center',
     justifyContent: 'center',
   },
   initials: {
-    color: color.brandMuted,
+    color: color.textPrimary,
     fontSize: typeRole.heading.fontSize,
     lineHeight: typeRole.heading.lineHeight,
     fontWeight: typeRole.heading.fontWeight,

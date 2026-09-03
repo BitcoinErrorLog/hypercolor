@@ -1,5 +1,5 @@
 import React, { useEffect, useRef } from 'react';
-import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { WelcomeScreenContent } from '../../src/screens/auth/WelcomeScreenContent';
 import { AwaitingRingAuthScreenContent } from '../../src/screens/auth/AwaitingRingAuthScreenContent';
 import { EnableMessagingScreenContent } from '../../src/screens/main/EnableMessagingScreenContent';
@@ -23,6 +23,7 @@ import { MainTabBarIcon } from '../../src/navigation/tabBarIcons';
 import { TokenSwatchScreen } from './TokenSwatchScreen';
 import { composerActionItems } from '../../src/ui/composerActions';
 import { sessionUiModel } from '../../src/ui/sessionUi';
+import { ProductSplash } from '../../src/ui/primitives';
 import { COPY } from '../../src/copy/uxCopy';
 import { INITIAL_ENABLE_MESSAGING_STATE } from '../../src/screens/main/enableMessagingController';
 import { color, radius, space, typeRole } from '../../src/theme';
@@ -248,6 +249,7 @@ function SettingsVrtBase({
       onChangeRestoreCode={n}
       onRestore={n}
       onEnableMessaging={n}
+      onCopyPubky={n}
       {...patch}
     />
   );
@@ -366,11 +368,7 @@ function tip(expired: boolean): TipEndpointRecord {
 }
 
 function splash() {
-  return (
-    <View style={styles.splash} testID="appSplash">
-      <ActivityIndicator size="large" color={color.brand} />
-    </View>
-  );
+  return <ProductSplash />;
 }
 
 function hud(error: boolean) {

@@ -7,7 +7,8 @@ import { StatusBanner } from '../../ui/StatusBanner';
 import { COPY } from '../../copy/uxCopy';
 import { HIT_SLOP_44 } from '../../ui/hitTarget';
 import { peerIdentity } from '../../ui/peerIdentity';
-import { color, space, radius, typeRole, measure } from '../../theme';
+import { color, space, typeRole, measure } from '../../theme';
+import { Avatar, Badge, Button, EmptyState, Icon, ListRow } from '../../ui/primitives';
 
 export type ChatsScreenContentProps = {
   conversations: LinkConversationSummary[];
@@ -47,67 +48,48 @@ export function ChatsScreenContent({
   const renderThread = useCallback(
     ({ item }: { item: LinkConversationSummary }) => {
       const identity = peerIdentity(item.participantPubky, contacts[item.participantPubky] ?? null);
+      const unread = item.unreadCount > 0;
       return (
-        <TouchableOpacity
+        <ListRow
           testID="chatRow"
-          accessibilityRole="button"
           accessibilityLabel={identity.title}
-          style={styles.threadRow}
+          title={identity.title}
+          subtitle={
+            identity.subtitle
+              ? `${identity.subtitle} · ${item.lastMessage || COPY.noMessagesYet}`
+              : item.lastMessage || COPY.noMessagesYet
+          }
+          meta={item.lastMessageAt ? formatRelativeTime(item.lastMessageAt, nowMs) : undefined}
+          badge={item.unreadCount}
+          unread={unread}
+          leading={<Avatar name={identity.title} pubky={item.participantPubky} size="md" />}
+          hideDivider={false}
           onPress={() => onOpenThread(item)}
-        >
-          <View style={styles.avatar}>
-            <Text style={styles.avatarLetter}>{identity.title.charAt(0).toUpperCase()}</Text>
-          </View>
-          <View style={styles.threadBody}>
-            <View style={styles.threadHeader}>
-              <Text style={styles.peerName} numberOfLines={1} ellipsizeMode="middle">
-                {identity.title}
-              </Text>
-              {item.lastMessageAt ? (
-                <Text style={styles.time}>{formatRelativeTime(item.lastMessageAt, nowMs)}</Text>
-              ) : null}
-            </View>
-            {identity.subtitle ? (
-              <Text style={styles.claimed} numberOfLines={1}>
-                {identity.subtitle}
-              </Text>
-            ) : null}
-            <View style={styles.threadPreview}>
-              <Text style={styles.lastMessage} numberOfLines={1}>
-                {item.lastMessage || COPY.noMessagesYet}
-              </Text>
-              {item.unreadCount > 0 ? (
-                <View style={styles.badge}>
-                  <Text style={styles.badgeText}>
-                    {item.unreadCount > 99 ? '99+' : item.unreadCount}
-                  </Text>
-                </View>
-              ) : null}
-            </View>
-          </View>
-        </TouchableOpacity>
+        />
       );
     },
     [contacts, nowMs, onOpenThread],
   );
 
   const requestsRow = (
-    <TouchableOpacity
+    <ListRow
       testID="chatsMessageRequests"
-      accessibilityRole="button"
       accessibilityLabel={
         pendingRequests > 0 ? `${COPY.messageRequests}, ${pendingRequests}` : COPY.messageRequests
       }
-      style={styles.requestsRow}
+      title={COPY.messageRequests}
+      leading={<Icon name="mail-unread-outline" tone="secondary" />}
+      trailing={
+        pendingRequests > 0 ? (
+          <Badge
+            testID="chatsRequestsBadge"
+            label={pendingRequests > 99 ? '99+' : String(pendingRequests)}
+            tone="brand"
+          />
+        ) : null
+      }
       onPress={onOpenRequests}
-    >
-      <Text style={styles.requestsLabel}>{COPY.messageRequests}</Text>
-      {pendingRequests > 0 ? (
-        <View testID="chatsRequestsBadge" style={styles.badge}>
-          <Text style={styles.badgeText}>{pendingRequests > 99 ? '99+' : pendingRequests}</Text>
-        </View>
-      ) : null}
-    </TouchableOpacity>
+    />
   );
 
   return (
@@ -124,9 +106,10 @@ export function ChatsScreenContent({
           onPress={onNewChat}
           style={[styles.newChatHit, needsEnable && styles.newChatDisabled]}
         >
-          <Text style={styles.newChat}>+</Text>
+          <Icon name="add" tone={needsEnable ? 'muted' : 'brand'} />
         </TouchableOpacity>
       </View>
+      <Text style={styles.sectionTitle}>{COPY.inbox}</Text>
       {requestsRow}
       {showEnableCta ? (
         <EnableMessagingCta testID="chatsEnableMessaging" onPress={onEnableMessaging} />
@@ -141,40 +124,32 @@ export function ChatsScreenContent({
       ) : null}
       {conversations.length === 0 ? (
         <View style={styles.empty}>
-          <Text style={styles.emptyText}>{COPY.noChatsYet}</Text>
-          <Text style={styles.emptyHint}>{COPY.chatsEmptyBody}</Text>
+          <EmptyState title={COPY.noChatsYet} body={COPY.chatsEmptyBody} testID="chatsEmptyState" />
           {!needsEnable ? (
-            <TouchableOpacity
+            <Button
               testID="chatsEmptyAddContact"
-              accessibilityRole="button"
-              accessibilityLabel={COPY.addAContact}
-              style={styles.primaryButton}
+              label={COPY.addAContact}
               onPress={onNewChat}
-            >
-              <Text style={styles.primaryButtonText}>{COPY.addAContact}</Text>
-            </TouchableOpacity>
+              style={styles.emptyButton}
+            />
           ) : null}
           {ownerPubky ? (
-            <TouchableOpacity
+            <Button
               testID="chatsCopyMyPubky"
-              accessibilityRole="button"
-              accessibilityLabel={COPY.copyMyPubky}
-              style={styles.secondaryButton}
+              label={COPY.copyMyPubky}
+              variant="secondary"
               onPress={onCopyMyPubky}
-            >
-              <Text style={styles.secondaryButtonText}>{COPY.copyMyPubky}</Text>
-            </TouchableOpacity>
+              style={styles.emptyButton}
+            />
           ) : null}
           {ownerPubky ? (
-            <TouchableOpacity
+            <Button
               testID="chatsShareMyPubky"
-              accessibilityRole="button"
-              accessibilityLabel={COPY.share}
-              style={styles.textButton}
+              label={COPY.share}
+              variant="secondary"
               onPress={onShareMyPubky}
-            >
-              <Text style={styles.textButtonText}>{COPY.share}</Text>
-            </TouchableOpacity>
+              style={styles.emptyButton}
+            />
           ) : null}
         </View>
       ) : (
@@ -220,74 +195,18 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  newChat: { fontSize: typeRole.display.fontSize, color: color.brand, fontWeight: '600' },
   newChatDisabled: { opacity: 0.4 },
-  requestsRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    minHeight: measure.hitTarget,
-    paddingHorizontal: space.xl,
-    paddingVertical: space.md,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: color.surfaceRaised,
-    backgroundColor: color.surface,
-  },
-  requestsLabel: { fontSize: typeRole.body.fontSize, color: color.textPrimary, fontWeight: '600' },
-  list: { paddingVertical: space.xs },
-  threadRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: space.xl,
-    paddingVertical: space.lg,
-    minHeight: measure.hitTarget,
-    gap: space.lg,
-  },
-  avatar: {
-    width: 48,
-    height: 48,
-    borderRadius: radius.xxl,
-    backgroundColor: color.well,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  avatarLetter: { fontSize: typeRole.heading.fontSize, fontWeight: '600', color: color.brand },
-  threadBody: { flex: 1, gap: space.xs },
-  threadHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  peerName: {
-    flex: 1,
-    fontSize: typeRole.callout.fontSize,
-    fontWeight: '600',
-    color: color.textPrimary,
-    marginRight: space.sm,
-  },
-  claimed: { fontSize: typeRole.meta.fontSize, color: color.textSecondary },
-  time: { fontSize: typeRole.meta.fontSize, color: color.textSecondary },
-  threadPreview: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  lastMessage: {
-    flex: 1,
-    fontSize: typeRole.secondary.fontSize,
+  sectionTitle: {
     color: color.textSecondary,
-    marginRight: space.sm,
+    fontSize: typeRole.caption.fontSize,
+    lineHeight: typeRole.caption.lineHeight,
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
+    paddingHorizontal: space.xl,
+    paddingTop: space.md,
+    paddingBottom: space.xs,
   },
-  badge: {
-    backgroundColor: color.brand,
-    borderRadius: radius.md,
-    minWidth: 20,
-    height: 20,
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingHorizontal: space.sm,
-  },
-  badgeText: { color: color.textOnBrand, fontSize: typeRole.meta.fontSize, fontWeight: '700' },
+  list: { paddingVertical: space.xs },
   empty: {
     flex: 1,
     justifyContent: 'center',
@@ -295,40 +214,5 @@ const styles = StyleSheet.create({
     gap: space.md,
     paddingHorizontal: space.xxl,
   },
-  emptyText: { color: color.textPrimary, fontSize: typeRole.numeric.fontSize, fontWeight: '600' },
-  emptyHint: {
-    color: color.textSecondary,
-    fontSize: typeRole.secondary.fontSize,
-    textAlign: 'center',
-    lineHeight: 20,
-  },
-  primaryButton: {
-    backgroundColor: color.brand,
-    borderRadius: radius.md,
-    paddingVertical: space.lg,
-    paddingHorizontal: space.xxl,
-    minHeight: measure.hitTarget,
-    alignItems: 'center',
-  },
-  primaryButtonText: {
-    color: color.textOnBrand,
-    fontSize: typeRole.body.fontSize,
-    fontWeight: '600',
-  },
-  secondaryButton: {
-    borderWidth: 1,
-    borderColor: color.hairlineStrong,
-    borderRadius: radius.md,
-    paddingVertical: space.lg,
-    paddingHorizontal: space.xxl,
-    minHeight: measure.hitTarget,
-    alignItems: 'center',
-  },
-  secondaryButtonText: { color: color.textMuted, fontSize: typeRole.body.fontSize },
-  textButton: { minHeight: measure.hitTarget, alignItems: 'center', justifyContent: 'center' },
-  textButtonText: {
-    color: color.brandText,
-    fontSize: typeRole.callout.fontSize,
-    fontWeight: '600',
-  },
+  emptyButton: { alignSelf: 'stretch' },
 });

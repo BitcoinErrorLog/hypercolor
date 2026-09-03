@@ -4,6 +4,10 @@ import { ProfileScreenContent } from '../ProfileScreenContent';
 import { sessionUiModel } from '../../../ui/sessionUi';
 import { COPY } from '../../../copy/uxCopy';
 
+jest.mock('react-native-safe-area-context', () => ({
+  useSafeAreaInsets: () => ({ top: 0, bottom: 12, left: 0, right: 0 }),
+}));
+
 describe('ProfileScreenContent wiring', () => {
   it('forwards settings and sign-out handlers', () => {
     const onOpenSettings = jest.fn();

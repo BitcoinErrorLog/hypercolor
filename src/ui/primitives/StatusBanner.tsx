@@ -13,7 +13,7 @@ export type StatusBannerProps = {
 };
 
 const toneColor: Record<StatusBannerTone, string> = {
-  info: color.brandText,
+  info: color.brandSoft,
   warning: color.warningStrong,
   danger: color.danger,
   success: color.success,

@@ -1,4 +1,4 @@
-import { COPY } from '../../copy/uxCopy';
+import { messageByteCountLabel } from '../../copy/uxCopy';
 import { focusSettingsSection, scrollSettingsToSection } from '../settingsSectionFocus';
 
 describe('scrollSettingsToSection', () => {
@@ -32,10 +32,8 @@ describe('focusSettingsSection', () => {
   });
 });
 
-describe('COPY.messageByteCap', () => {
-  it('names the envelope, not just the body', () => {
-    expect(COPY.messageByteCap).toBe(
-      'Messages are capped at 1000 bytes including envelope overhead.',
-    );
+describe('messageByteCountLabel', () => {
+  it('keeps the live threshold counter concise', () => {
+    expect(messageByteCountLabel(820, 1000)).toBe('820 / 1000 bytes');
   });
 });

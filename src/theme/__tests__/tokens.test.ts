@@ -60,6 +60,82 @@ describe('design tokens', () => {
     expect(contrastRatio(color.brand, color.canvas)).toBeLessThan(WCAG_AA_BODY);
   });
 
+  it('keeps primitive body and meta text colors on body-safe pairings', () => {
+    const primitiveBodyPairs = [
+      { component: 'ListRow', role: 'body', fg: color.textPrimary, bg: color.canvas },
+      { component: 'ListRow', role: 'secondary', fg: color.textSecondary, bg: color.canvas },
+      { component: 'ListRow', role: 'unreadSubtitle', fg: color.textPrimary, bg: color.canvas },
+      { component: 'ListRow', role: 'meta', fg: color.textMuted, bg: color.canvas },
+      { component: 'ListRow', role: 'unreadMeta', fg: color.brandText, bg: color.canvas },
+      { component: 'MessageBubble', role: 'mineText', fg: color.textOnBrand, bg: color.brand },
+      { component: 'MessageBubble', role: 'mineMeta', fg: color.onBrandMuted, bg: color.brand },
+      {
+        component: 'MessageBubble',
+        role: 'theirsText',
+        fg: color.textPrimary,
+        bg: color.bubbleIncoming,
+      },
+      {
+        component: 'MessageBubble',
+        role: 'theirsMeta',
+        fg: color.textMuted,
+        bg: color.bubbleIncoming,
+      },
+      { component: 'PubkyChip', role: 'mono', fg: color.textSecondary, bg: color.surfaceRaised },
+      { component: 'DetailRow', role: 'label', fg: color.textSecondary, bg: color.canvas },
+      { component: 'DetailRow', role: 'value', fg: color.textPrimary, bg: color.canvas },
+      { component: 'StatusBanner', role: 'label', fg: color.textPrimary, bg: color.surfaceBrand },
+      {
+        component: 'StatusBanner',
+        role: 'infoAction',
+        fg: color.brandSoft,
+        bg: color.surfaceBrand,
+      },
+      {
+        component: 'StatusBanner',
+        role: 'warningAction',
+        fg: color.warningStrong,
+        bg: color.surfaceBrand,
+      },
+      {
+        component: 'StatusBanner',
+        role: 'successAction',
+        fg: color.success,
+        bg: color.surfaceBrand,
+      },
+    ];
+
+    for (const { fg, bg } of primitiveBodyPairs) {
+      const pair = textOnSurfacePairs.find(entry => entry.fg === fg && entry.bg === bg);
+      expect(pair).toMatchObject({ usage: 'body' });
+    }
+  });
+
+  it('keeps the text ladder ordered and outgoing bubble metadata body-safe', () => {
+    expect(color.textSecondary).toBe('#9CA3AF');
+    expect(color.textMuted).toBe('#808692');
+    expect(contrastRatio(color.textSecondary, color.canvas)).toBeGreaterThan(
+      contrastRatio(color.textMuted, color.canvas),
+    );
+    expect(contrastRatio(color.onBrandMuted, color.brand)).toBeGreaterThanOrEqual(WCAG_AA_BODY);
+    expect(textOnSurfacePairs.find(pair => pair.name === 'onBrandMuted/brand')).toMatchObject({
+      usage: 'body',
+    });
+  });
+
+  it('keeps filled destructive labels body-safe in default and pressed states', () => {
+    expect(contrastRatio(color.onDanger, color.dangerSurface)).toBeGreaterThanOrEqual(WCAG_AA_BODY);
+    expect(contrastRatio(color.onDanger, color.dangerSurfacePressed)).toBeGreaterThanOrEqual(
+      WCAG_AA_BODY,
+    );
+    expect(textOnSurfacePairs.find(pair => pair.name === 'onDanger/dangerSurface')).toMatchObject({
+      usage: 'body',
+    });
+    expect(
+      textOnSurfacePairs.find(pair => pair.name === 'onDanger/dangerSurfacePressed'),
+    ).toMatchObject({ usage: 'body' });
+  });
+
   it('scales type layout with fontScale without mutating the 100% role', () => {
     const base = typeRole.body.fontSize;
     const layout = typeLayoutSize('body', 2);

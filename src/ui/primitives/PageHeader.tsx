@@ -1,12 +1,15 @@
 import React from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { color, measure, space, typeRole } from '../../theme';
+import { Icon } from './Icon';
 
 export type PageHeaderProps = {
   title: string;
   subtitle?: string;
   onBack?: () => void;
   backLabel?: string;
+  backAccessibilityLabel?: string;
+  backTestID?: string;
   trailing?: React.ReactNode;
   testID?: string;
 };
@@ -16,6 +19,8 @@ export function PageHeader({
   subtitle,
   onBack,
   backLabel = 'Back',
+  backAccessibilityLabel,
+  backTestID,
   trailing,
   testID,
 }: PageHeaderProps) {
@@ -24,12 +29,13 @@ export function PageHeader({
       <View style={styles.row}>
         {onBack ? (
           <Pressable
-            {...(testID ? { testID: `${testID}Back` } : {})}
+            {...(backTestID || testID ? { testID: backTestID ?? `${testID}Back` } : {})}
             accessibilityRole="button"
-            accessibilityLabel={backLabel}
+            accessibilityLabel={backAccessibilityLabel ?? backLabel}
             onPress={onBack}
             style={styles.back}
           >
+            <Icon name="chevron-back" tone="brand" />
             <Text style={styles.backText}>{backLabel}</Text>
           </Pressable>
         ) : (
@@ -68,6 +74,9 @@ const styles = StyleSheet.create({
   back: {
     minWidth: measure.hitTarget,
     minHeight: measure.hitTarget,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.xs,
     justifyContent: 'center',
   },
   backSpacer: {

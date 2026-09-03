@@ -58,4 +58,29 @@ describe('EnableMessagingScreenContent wiring', () => {
     });
     expect(onPrimary).toHaveBeenCalledTimes(1);
   });
+
+  it('renders failure copy once through ErrorState', () => {
+    let tree!: ReturnType<typeof create>;
+    act(() => {
+      tree = create(
+        <EnableMessagingScreenContent
+          state={{
+            ...INITIAL_ENABLE_MESSAGING_STATE,
+            phase: 'denied',
+            message: COPY.authorizationDeclinedBody,
+          }}
+          onBack={noop}
+          onPrimary={noop}
+          onSecondary={noop}
+          onCopyAuth={noop}
+        />,
+      );
+    });
+
+    expect(tree.root.findByProps({ testID: 'enableMessagingError' })).toBeTruthy();
+    expect(tree.root.findAllByProps({ testID: 'enableMessagingStatus' })).toHaveLength(0);
+    expect(
+      JSON.stringify(tree.toJSON()).match(new RegExp(COPY.authorizationDeclined, 'g')),
+    ).toHaveLength(1);
+  });
 });

@@ -5,6 +5,9 @@ module.exports = {
   // exFAT volumes grow macOS AppleDouble (._*) junk files; never treat them as code
   testPathIgnorePatterns: ['/node_modules/', '/\\._', '/vrt/output/'],
   modulePathIgnorePatterns: ['/\\._'],
+  moduleNameMapper: {
+    '^@expo/vector-icons/Ionicons$': '<rootDir>/test/mocks/Ionicons.js',
+  },
   clearMocks: true,
   // jest-expo default allow-list plus uuid@13 (pure ESM).
   transformIgnorePatterns: [

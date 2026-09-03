@@ -34,6 +34,7 @@ describe('SettingsScreenContent wiring', () => {
           onChangeRestoreCode={jest.fn()}
           onRestore={jest.fn()}
           onEnableMessaging={onEnableMessaging}
+          onCopyPubky={jest.fn()}
         />,
       );
     });

@@ -1,7 +1,8 @@
 import React from 'react';
-import { Text } from 'react-native';
+import { StyleSheet, Text } from 'react-native';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import { COPY } from '../../../copy/uxCopy';
+import { color, radius } from '../../../theme';
 import { PRIVATE_GROUP_MEMBER_CAP } from '../../../flags/config';
 import { GROUP_MESSAGE_KIND, type GroupChannel, type GroupMessage } from '../../../types/group';
 import { sendingNofM, sentToNofM } from '../../../ui/groupFanoutStatus';
@@ -210,11 +211,63 @@ describe('ChannelScreenContent fan-out labels', () => {
     const json = JSON.stringify(tree.toJSON());
     expect(json).toContain(COPY.sending);
     expect(json).not.toContain('Sent to 0 of');
+    expect(tree.root.findByProps({ accessibilityLabel: COPY.sending }).props.name).toBe(
+      'checkmark-done',
+    );
+    const mineBubble = tree.root
+      .findAllByProps({ testID: 'channelBubbleMine' })
+      .find(node => node.props.style);
+    expect(StyleSheet.flatten(mineBubble?.props.style)).toMatchObject({
+      backgroundColor: color.brand,
+    });
+    expect(tree.root.findAllByProps({ testID: 'channelByteCap' })).toHaveLength(0);
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('uses MessageBubble alignment for incoming channel messages', async () => {
+    const incoming = {
+      ...message,
+      eventId: 'evt-incoming',
+      senderPubky: ALICE,
+      body: 'from Alice',
+      sentAt: message.sentAt + 1,
+    };
+    const incoming2 = {
+      ...incoming,
+      eventId: 'evt-incoming-2',
+      sentAt: message.sentAt + 2,
+      body: 'from Alice again',
+    };
+    const tree = await render(
+      <ChannelScreenContent {...contentProps({ messages: [message, incoming, incoming2] })} />,
+    );
+    const theirsBubble = tree.root
+      .findAllByProps({ testID: 'channelBubbleTheirs' })
+      .find(node => node.props.style);
+    expect(StyleSheet.flatten(theirsBubble?.props.style)).toMatchObject({
+      backgroundColor: color.bubbleIncoming,
+    });
     expect(
       tree.root
-        .findAllByType(Text)
-        .some(node => String(node.props.children).includes(COPY.sending)),
-    ).toBe(true);
+        .findAllByProps({ testID: 'channelBubbleTheirsAvatar' })
+        .filter(
+          node =>
+            (node as unknown as { type: unknown }).type === 'View' &&
+            node.props.accessibilityRole === 'image',
+        ),
+    ).toHaveLength(1);
+    const theirsStyles = tree.root
+      .findAllByProps({ testID: 'channelBubbleTheirs' })
+      .filter(node => node.props.style)
+      .map(node => StyleSheet.flatten(node.props.style));
+    expect(theirsStyles.some(style => style.borderBottomLeftRadius !== radius.bubbleTail)).toBe(
+      true,
+    );
+    expect(theirsStyles.some(style => style.borderBottomLeftRadius === radius.bubbleTail)).toBe(
+      true,
+    );
     await act(async () => {
       tree.unmount();
     });
@@ -228,7 +281,9 @@ describe('ChannelScreenContent fan-out labels', () => {
         })}
       />,
     );
-    expect(JSON.stringify(tree.toJSON())).toContain(sendingNofM(1, 2));
+    expect(tree.root.findByProps({ accessibilityLabel: sendingNofM(1, 2) }).props.name).toBe(
+      'checkmark-done',
+    );
     await act(async () => {
       tree.unmount();
     });
@@ -243,11 +298,50 @@ describe('ChannelScreenContent fan-out labels', () => {
         })}
       />,
     );
-    const labels = tree.root.findAllByType(Text).map(node => String(node.props.children));
-    expect(labels.some(text => text.includes(COPY.sent))).toBe(true);
+    expect(tree.root.findByProps({ accessibilityLabel: COPY.sent }).props.name).toBe(
+      'checkmark-done',
+    );
+    expect(tree.root.findAllByType(Text).some(node => node.props.children === COPY.sent)).toBe(
+      false,
+    );
     expect(JSON.stringify(tree.toJSON())).not.toContain('Sent to');
     await act(async () => {
       tree.unmount();
+    });
+  });
+
+  it('keeps partial group delivery text visible', async () => {
+    const partialTree = await render(
+      <ChannelScreenContent
+        {...contentProps({
+          fanoutOutcomes: [outcome(ALICE, 'sent'), outcome(BOB, 'failed')],
+          messages: [{ ...message, deliveryState: 'sent' }],
+        })}
+      />,
+    );
+    expect(
+      partialTree.root.findAllByType(Text).some(node => node.props.children === sentToNofM(1, 2)),
+    ).toBe(true);
+    await act(async () => {
+      partialTree.unmount();
+    });
+
+    const deliveredTree = await render(
+      <ChannelScreenContent
+        {...contentProps({
+          fanoutOutcomes: [outcome(ALICE, 'sent'), outcome(BOB, 'sent')],
+          messages: [{ ...message, deliveryState: 'sent' }],
+        })}
+      />,
+    );
+    expect(
+      deliveredTree.root.findAllByType(Text).some(node => node.props.children === COPY.sent),
+    ).toBe(false);
+    expect(
+      deliveredTree.root.findAllByType(Text).some(node => node.props.children === sentToNofM(1, 2)),
+    ).toBe(false);
+    await act(async () => {
+      deliveredTree.unmount();
     });
   });
 
@@ -275,7 +369,12 @@ describe('ChannelScreenContent fan-out labels', () => {
         })}
       />,
     );
-    expect(JSON.stringify(tree.toJSON())).toContain(sentToNofM(1, 2));
+    expect(tree.root.findByProps({ accessibilityLabel: sentToNofM(1, 2) }).props.name).toBe(
+      'checkmark-done',
+    );
+    expect(
+      tree.root.findAllByType(Text).some(node => node.props.children === sentToNofM(1, 2)),
+    ).toBe(true);
     await act(async () => {
       tree.unmount();
     });

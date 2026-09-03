@@ -33,9 +33,9 @@ describe('ComposerActionMenu', () => {
     const pay = tree.root.findByProps({ testID: 'composerAction-request-payment' });
     expect(pay.props.accessibilityState.disabled).toBe(true);
     expect(pay.props.accessibilityLabel).toContain(COPY.paymentsDmOnly);
-    expect(JSON.stringify(tree.toJSON())).toContain('₿');
+    expect(tree.root.findByProps({ name: 'card-outline' })).toBeTruthy();
     await act(async () => {
-      tree.root.findByProps({ testID: 'composerActionCancel' }).props.onPress();
+      tree.root.findByProps({ testID: 'composerActionClose' }).props.onPress();
     });
     expect(onClose).toHaveBeenCalledTimes(1);
     expect(onSelect).not.toHaveBeenCalled();

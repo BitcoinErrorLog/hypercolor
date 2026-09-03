@@ -261,6 +261,9 @@ export default function SettingsScreen() {
           .finally(() => setBackupBusy(false));
       }}
       onEnableMessaging={() => nav.navigate('EnableMessaging')}
+      onCopyPubky={() => {
+        if (pubky) copyText(pubky);
+      }}
       onBackupLayout={y => {
         backupY.current = y;
         consumeSectionFocus('backup', y, backupRef.current);

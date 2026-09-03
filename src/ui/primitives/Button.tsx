@@ -22,6 +22,8 @@ export type ButtonProps = {
   busy?: boolean;
   testID?: string;
   accessibilityLabel?: string;
+  accessibilityHint?: string;
+  accessibilityState?: AccessibilityState;
   style?: StyleProp<ViewStyle>;
 };
 
@@ -44,9 +46,9 @@ const variantStyles: Record<
     disabledLabel: color.textMuted,
   },
   destructive: {
-    bg: color.dangerStrong,
-    border: color.dangerStrong,
-    label: color.textOnBrand,
+    bg: color.dangerSurface,
+    border: color.dangerSurface,
+    label: color.onDanger,
     disabledBg: color.surfaceRaised,
     disabledLabel: color.textMuted,
   },
@@ -68,12 +70,14 @@ export function Button({
   busy = false,
   testID,
   accessibilityLabel,
+  accessibilityHint,
+  accessibilityState,
   style,
 }: ButtonProps) {
   const blocked = disabled || busy;
   const palette = variantStyles[variant];
   const reason = disabled && disabledReason ? disabledReason : undefined;
-  const a11yState: AccessibilityState = {
+  const a11yState: AccessibilityState = accessibilityState ?? {
     disabled: blocked,
     busy: busy || undefined,
   };
@@ -84,21 +88,33 @@ export function Button({
         {...(testID ? { testID } : {})}
         accessibilityRole="button"
         accessibilityLabel={accessibilityLabel ?? label}
-        accessibilityHint={reason}
+        accessibilityHint={accessibilityHint ?? reason}
         accessibilityState={a11yState}
         disabled={blocked}
         onPress={onPress}
         style={({ pressed }) => [
           styles.base,
           {
-            backgroundColor: blocked ? palette.disabledBg : palette.bg,
-            borderColor: blocked ? color.hairlineStrong : palette.border,
-            opacity: pressed && !blocked ? 0.88 : 1,
+            backgroundColor:
+              pressed && !blocked && variant === 'destructive'
+                ? color.dangerSurfacePressed
+                : blocked
+                  ? palette.disabledBg
+                  : palette.bg,
+            borderColor:
+              pressed && !blocked && variant === 'destructive'
+                ? color.dangerSurfacePressed
+                : blocked
+                  ? color.hairlineStrong
+                  : palette.border,
+            opacity: pressed && !blocked && variant !== 'destructive' ? 0.88 : 1,
           },
         ]}
       >
         {busy ? (
-          <ActivityIndicator color={blocked ? palette.disabledLabel : palette.label} />
+          <View style={styles.busySlot}>
+            <ActivityIndicator color={blocked ? palette.disabledLabel : palette.label} />
+          </View>
         ) : (
           <Text style={[styles.label, { color: blocked ? palette.disabledLabel : palette.label }]}>
             {label}
@@ -137,8 +153,15 @@ const styles = StyleSheet.create({
   },
   reason: {
     marginTop: space.xs,
-    color: color.textSecondary,
+    color: color.textMuted,
     fontSize: typeRole.caption.fontSize,
     lineHeight: typeRole.caption.lineHeight,
+  },
+  busySlot: {
+    width: measure.hitTarget,
+    height: measure.hitTarget,
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'visible',
   },
 });

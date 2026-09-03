@@ -26,7 +26,7 @@ function walk(entryPath: string, out: string[] = []): string[] {
     return out;
   }
   for (const entry of fs.readdirSync(entryPath, { withFileTypes: true })) {
-    if (entry.name === '__tests__' || entry.name === 'primitives') continue;
+    if (entry.name === '__tests__') continue;
     const full = path.join(entryPath, entry.name);
     if (entry.isDirectory()) walk(full, out);
     else if (/\.(ts|tsx)$/.test(entry.name) && !/\.test\.(ts|tsx)$/.test(entry.name)) {

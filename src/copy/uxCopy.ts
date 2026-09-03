@@ -64,6 +64,7 @@ export const COPY = {
   connectExplanation: 'Adopt your identity on this device. Pubky Ring approves the connection.',
 
   messageRequests: 'Message requests',
+  inbox: 'Inbox',
   newChat: 'New chat',
   noChatsYet: 'No chats yet.',
   chatsEmptyBody:
@@ -170,7 +171,7 @@ export const COPY = {
   noTipDestinations: 'No tip destinations from this peer yet.',
   photoPermissionNotice: 'Photo library access is required to send images.',
   openSettings: 'Open settings',
-  messageByteCap: 'Messages are capped at 1000 bytes including envelope overhead.',
+  updatingRequest: 'Updating request',
   reviewBeforePaying: 'Review before paying',
   openWallet: 'Open wallet',
   copyPaymentUri: 'Copy payment URI',

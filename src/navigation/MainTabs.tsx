@@ -15,7 +15,7 @@ import { sessionUiModel } from '../ui/sessionUi';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../types';
-import { color } from '../theme';
+import { color, typeRole } from '../theme';
 
 const Tab = createBottomTabNavigator<MainTabParamList>();
 
@@ -67,8 +67,12 @@ export function MainTabs() {
         screenOptions={({ route }) => ({
           headerShown: false,
           tabBarStyle: {
-            backgroundColor: color.canvas,
+            backgroundColor: color.surface,
             borderTopColor: color.hairline,
+          },
+          tabBarLabelStyle: {
+            fontSize: typeRole.caption.fontSize,
+            lineHeight: typeRole.caption.lineHeight,
           },
           tabBarActiveTintColor: color.brand,
           tabBarInactiveTintColor: color.textSecondary,

@@ -1,18 +1,11 @@
 import React from 'react';
-import {
-  ActivityIndicator,
-  SafeAreaView,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TouchableOpacity,
-  View,
-} from 'react-native';
+import { SafeAreaView, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AuthQr } from '../../components/AuthQr';
 import { COPY } from '../../copy/uxCopy';
 import { CustodyLine } from '../../ui/CustodyLine';
-import { HIT_SLOP_44 } from '../../ui/hitTarget';
-import { color, space, radius, typeRole, measure } from '../../theme';
+import { color, space, typeRole } from '../../theme';
+import { Button, ErrorState, LoadingState, PageHeader } from '../../ui/primitives';
 
 export type AwaitPhase = 'waiting' | 'expired' | 'denied' | 'offline';
 
@@ -39,6 +32,7 @@ export function AwaitingRingAuthScreenContent({
   onGenerateNew,
   onTryAgain,
 }: AwaitingRingAuthScreenContentProps): React.ReactElement {
+  const insets = useSafeAreaInsets();
   const title =
     phase === 'expired'
       ? COPY.authorizationExpired
@@ -58,96 +52,82 @@ export function AwaitingRingAuthScreenContent({
 
   return (
     <SafeAreaView style={styles.container} testID="awaitingRingAuthScreen">
-      <ScrollView contentContainerStyle={styles.scroll}>
-        <View style={styles.header}>
-          <TouchableOpacity
-            testID="awaitingRingAuthCancel"
-            accessibilityRole="button"
-            accessibilityLabel="Cancel Pubky Ring connection"
-            hitSlop={HIT_SLOP_44}
-            onPress={onCancel}
-            style={styles.backHit}
-          >
-            <Text style={styles.backText}>← Back</Text>
-          </TouchableOpacity>
-        </View>
+      <ScrollView
+        contentContainerStyle={[styles.scroll, { paddingBottom: space.xl + insets.bottom }]}
+      >
+        <PageHeader
+          title={COPY.connectWithPubkyRing}
+          onBack={onCancel}
+          backLabel={COPY.back}
+          backAccessibilityLabel="Cancel Pubky Ring connection"
+          backTestID="awaitingRingAuthCancel"
+          testID="awaitingRingAuth"
+        />
         <View style={styles.content}>
           {phase === 'waiting' ? (
-            <ActivityIndicator size="large" color={color.brand} style={styles.spinner} />
+            <LoadingState label={COPY.waitingForRing} testID="awaitingRingAuthWaiting" />
+          ) : (
+            <ErrorState title={title} body={body} testID="awaitingRingAuthError" />
+          )}
+          {phase === 'waiting' ? (
+            <Text testID="awaitingRingAuthScanHint" style={styles.description}>
+              {body}
+            </Text>
           ) : null}
-          <Text style={styles.title}>{title}</Text>
-          <Text style={styles.description}>{body}</Text>
           {phase === 'waiting' && ringAuthUrl ? (
             <View style={styles.urlBlock}>
               <Text style={styles.sectionTitle}>Paykit-connect link</Text>
-              <Text testID="awaitingRingAuthScanHint" style={styles.hint}>
-                {COPY.waitingForRingBody}
-              </Text>
               <AuthQr value={ringAuthUrl} />
-              <Text selectable style={styles.hint} testID="mask-auth-url">
+              <Text
+                selectable
+                style={styles.hint}
+                testID="mask-auth-url"
+                accessibilityLabel={COPY.waitingForRingBody}
+              >
                 {ringAuthUrl}
               </Text>
-              <TouchableOpacity
+              <Button
                 testID="awaitingRingAuthOpenRing"
-                accessibilityRole="button"
-                accessibilityLabel={COPY.openPubkyRing}
-                style={styles.primaryButton}
+                label={COPY.openPubkyRing}
                 onPress={onOpenRing}
-              >
-                <Text style={styles.primaryButtonText}>{COPY.openPubkyRing}</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
+              />
+              <Button
                 testID="awaitingRingAuthCopy"
-                accessibilityRole="button"
-                accessibilityLabel={COPY.copyPaykitConnectUrl}
-                style={styles.secondaryButton}
+                label={copied ? COPY.copied : COPY.copyPaykitConnectUrl}
+                variant="secondary"
                 onPress={onCopy}
-              >
-                <Text style={styles.secondaryButtonText}>
-                  {copied ? COPY.copied : COPY.copyPaykitConnectUrl}
-                </Text>
-              </TouchableOpacity>
+              />
             </View>
           ) : null}
           {phase === 'expired' ? (
-            <TouchableOpacity
+            <Button
               testID="awaitingRingAuthGenerateNew"
-              accessibilityRole="button"
               accessibilityLabel={COPY.generateNewLink}
               accessibilityState={{ busy: delegationBusy, disabled: delegationBusy }}
               disabled={delegationBusy}
-              style={[styles.primaryButton, delegationBusy && styles.buttonDisabled]}
+              busy={delegationBusy}
+              label={COPY.generateNewLink}
               onPress={onGenerateNew}
-            >
-              <Text style={styles.primaryButtonText}>{COPY.generateNewLink}</Text>
-            </TouchableOpacity>
+            />
           ) : null}
           {phase === 'denied' || phase === 'offline' ? (
             <>
-              <TouchableOpacity
+              <Button
                 testID="awaitingRingAuthTryAgain"
-                accessibilityRole="button"
                 accessibilityLabel={COPY.tryAgain}
                 accessibilityState={{ busy: delegationBusy, disabled: delegationBusy }}
                 disabled={delegationBusy}
-                style={[styles.primaryButton, delegationBusy && styles.buttonDisabled]}
+                busy={delegationBusy}
+                label={COPY.tryAgain}
                 onPress={onTryAgain}
-              >
-                {delegationBusy ? (
-                  <ActivityIndicator color={color.textOnBrand} />
-                ) : (
-                  <Text style={styles.primaryButtonText}>{COPY.tryAgain}</Text>
-                )}
-              </TouchableOpacity>
-              <TouchableOpacity
+              />
+              <Button
                 testID="awaitingRingAuthSecondaryCancel"
-                accessibilityRole="button"
                 accessibilityLabel={COPY.cancel}
-                style={styles.secondaryButton}
+                label={COPY.cancel}
+                variant="secondary"
                 onPress={onCancel}
-              >
-                <Text style={styles.secondaryButtonText}>{COPY.cancel}</Text>
-              </TouchableOpacity>
+              />
             </>
           ) : null}
           <CustodyLine />
@@ -159,10 +139,7 @@ export function AwaitingRingAuthScreenContent({
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: color.canvas },
-  scroll: { flexGrow: 1, paddingBottom: space.xxl },
-  header: { paddingHorizontal: space.lg, paddingTop: space.sm },
-  backHit: { minWidth: measure.hitTarget, minHeight: measure.hitTarget, justifyContent: 'center' },
-  backText: { color: color.brandText, fontSize: typeRole.body.fontSize, fontWeight: '600' },
+  scroll: { flexGrow: 1 },
   content: {
     flexGrow: 1,
     justifyContent: 'center',
@@ -193,28 +170,4 @@ const styles = StyleSheet.create({
     letterSpacing: 0.8,
   },
   hint: { fontSize: typeRole.caption.fontSize, color: color.textMuted, lineHeight: 20 },
-  primaryButton: {
-    backgroundColor: color.brand,
-    borderRadius: radius.md,
-    paddingVertical: space.lg,
-    minHeight: measure.hitTarget,
-    alignItems: 'center',
-    alignSelf: 'stretch',
-  },
-  primaryButtonText: {
-    color: color.textOnBrand,
-    fontSize: typeRole.body.fontSize,
-    fontWeight: '600',
-  },
-  buttonDisabled: { opacity: 0.6 },
-  secondaryButton: {
-    borderWidth: 1,
-    borderColor: color.hairlineStrong,
-    borderRadius: radius.md,
-    paddingVertical: space.lg,
-    minHeight: measure.hitTarget,
-    alignItems: 'center',
-    alignSelf: 'stretch',
-  },
-  secondaryButtonText: { color: color.textMuted, fontSize: typeRole.body.fontSize },
 });

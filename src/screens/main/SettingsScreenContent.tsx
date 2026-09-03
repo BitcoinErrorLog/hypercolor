@@ -13,10 +13,9 @@ import {
 import { COPY } from '../../copy/uxCopy';
 import { CustodyLine } from '../../ui/CustodyLine';
 import { ErrorDetails } from '../../ui/ErrorDetails';
-import { HIT_SLOP_44 } from '../../ui/hitTarget';
-import { shortPubky } from '../../ui/shortPubky';
 import type { SessionUiModel } from '../../ui/sessionUi';
 import { color, space, radius, typeRole, measure } from '../../theme';
+import { ListRow, PageHeader, PubkyChip } from '../../ui/primitives';
 
 export type SettingsScreenContentProps = {
   pubky: string | null;
@@ -47,6 +46,7 @@ export type SettingsScreenContentProps = {
   onChangeRestoreCode: (value: string) => void;
   onRestore: () => void;
   onEnableMessaging: () => void;
+  onCopyPubky: () => void;
   onBackupLayout?: (y: number) => void;
   onPaymentsLayout?: (y: number) => void;
 };
@@ -80,40 +80,28 @@ export function SettingsScreenContent({
   onChangeRestoreCode,
   onRestore,
   onEnableMessaging,
+  onCopyPubky,
   onBackupLayout,
   onPaymentsLayout,
 }: SettingsScreenContentProps): React.ReactElement {
   return (
     <SafeAreaView style={styles.container} testID="settingsScreen">
-      <View style={styles.header}>
-        <TouchableOpacity
-          testID="settingsBack"
-          accessibilityRole="button"
-          accessibilityLabel="Back"
-          hitSlop={HIT_SLOP_44}
-          onPress={onBack}
-          style={styles.backHit}
-        >
-          <Text style={styles.back}>← Back</Text>
-        </TouchableOpacity>
-        <Text style={styles.title}>Settings</Text>
-        <View style={styles.backHit} />
-      </View>
+      <PageHeader title="Settings" onBack={onBack} testID="settings" />
 
       <ScrollView ref={scrollRef} testID="settingsScroll" contentContainerStyle={styles.content}>
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Identity</Text>
-          <View style={styles.row}>
-            <Text style={styles.rowLabel}>{pubky ? shortPubky(pubky) : COPY.notConnected}</Text>
-          </View>
           {pubky ? (
-            <View style={styles.row}>
-              <Text style={styles.rowValue} selectable testID="mask-pubky">
-                {pubky}
-              </Text>
-            </View>
-          ) : null}
-          <View style={styles.row}>
+            <ListRow
+              title="Pubky"
+              leading={null}
+              trailing={<PubkyChip pubky={pubky} onCopy={onCopyPubky} testID="mask-pubky" />}
+              showChevron={false}
+            />
+          ) : (
+            <ListRow title={COPY.notConnected} leading={null} showChevron={false} />
+          )}
+          <View style={styles.sectionFooter}>
             <CustodyLine />
           </View>
         </View>
@@ -133,19 +121,20 @@ export function SettingsScreenContent({
           <View style={styles.row}>
             <View style={styles.rowCopy}>
               <Text style={styles.rowLabel}>BLE Mesh (quarantined)</Text>
-              <Text style={styles.rowHint}>
-                Research-era path. Off for v1. Re-integration over Encrypted Links is future work.
-              </Text>
             </View>
             <Switch
               value={meshEnabled}
               onValueChange={onToggleMesh}
-              trackColor={{ true: color.brand }}
+              trackColor={{ false: color.surfaceRaised, true: color.brand }}
+              thumbColor={color.textPrimary}
               accessibilityRole="switch"
               accessibilityLabel="BLE Mesh (quarantined)"
               accessibilityState={{ checked: meshEnabled }}
             />
           </View>
+          <Text style={styles.sectionFooterText}>
+            Research-era path. Off for v1. Re-integration over Encrypted Links is future work.
+          </Text>
         </View>
 
         <View
@@ -259,7 +248,8 @@ export function SettingsScreenContent({
             <Switch
               value={telemetryEnabled}
               onValueChange={onToggleTelemetry}
-              trackColor={{ true: color.brand }}
+              trackColor={{ false: color.surfaceRaised, true: color.brand }}
+              thumbColor={color.textPrimary}
               accessibilityRole="switch"
               accessibilityLabel="Telemetry"
               accessibilityState={{ checked: telemetryEnabled }}
@@ -301,19 +291,7 @@ export function SettingsScreenContent({
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: color.canvas },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: space.xl,
-    paddingVertical: space.lg,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: color.surfaceRaised,
-  },
-  backHit: { minWidth: measure.hitTarget, minHeight: measure.hitTarget, justifyContent: 'center' },
-  back: { color: color.brandText, fontSize: typeRole.body.fontSize },
-  title: { fontSize: typeRole.titleStack.fontSize, fontWeight: '600', color: color.textPrimary },
-  content: { paddingVertical: space.xxl },
+  content: { paddingTop: space.xxl, paddingBottom: space.xxxl + space.xl },
   section: { marginBottom: space.xxxl },
   sectionTitle: {
     fontSize: typeRole.meta.fontSize,
@@ -323,6 +301,17 @@ const styles = StyleSheet.create({
     letterSpacing: 0.8,
     paddingHorizontal: space.xl,
     marginBottom: space.sm,
+  },
+  sectionFooter: {
+    paddingHorizontal: space.xl,
+    paddingTop: space.sm,
+  },
+  sectionFooterText: {
+    color: color.textMuted,
+    fontSize: typeRole.caption.fontSize,
+    lineHeight: typeRole.caption.lineHeight,
+    paddingHorizontal: space.xl,
+    paddingTop: space.sm,
   },
   row: {
     flexDirection: 'row',

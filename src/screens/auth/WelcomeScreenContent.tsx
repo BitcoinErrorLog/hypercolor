@@ -49,6 +49,13 @@ export function WelcomeScreenContent({
       {__DEV__ ? <View testID="e2eClipboardChannel" /> : null}
       <ScrollView contentContainerStyle={styles.scroll}>
         <View style={styles.content}>
+          <View
+            style={styles.brandMark}
+            accessibilityRole="image"
+            accessibilityLabel="Hypercolor mark"
+          >
+            <View style={styles.brandMarkCore} />
+          </View>
           <Text style={styles.logo}>hypercolor</Text>
           <Text style={styles.tagline}>Private. Decentralized. Yours.</Text>
           <CustodyLine />
@@ -125,9 +132,26 @@ const styles = StyleSheet.create({
     color: color.brand,
     letterSpacing: -1,
   },
+  brandMark: {
+    width: space.xxxl,
+    height: space.xxxl,
+    borderRadius: radius.full,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: color.brand,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  brandMarkCore: {
+    width: space.xl,
+    height: space.xl,
+    borderRadius: radius.full,
+    backgroundColor: color.brand,
+  },
   tagline: {
-    fontSize: typeRole.body.fontSize,
-    color: color.textSecondary,
+    fontSize: typeRole.title.fontSize,
+    lineHeight: typeRole.title.lineHeight,
+    fontWeight: typeRole.title.fontWeight,
+    color: color.textPrimary,
     textAlign: 'center',
   },
   hint: {

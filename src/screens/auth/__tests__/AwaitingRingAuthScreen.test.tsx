@@ -19,6 +19,10 @@ const mockSetParams = jest.fn();
 const mockUseRoute = jest.fn();
 const mockSetString = jest.fn();
 
+jest.mock('react-native-safe-area-context', () => ({
+  useSafeAreaInsets: () => ({ top: 0, bottom: 12, left: 0, right: 0 }),
+}));
+
 jest.mock('@react-navigation/native', () => ({
   useNavigation: () => ({ goBack: mockGoBack, setParams: mockSetParams }),
   useRoute: () => mockUseRoute(),

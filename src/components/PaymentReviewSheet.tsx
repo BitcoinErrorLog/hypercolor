@@ -10,11 +10,13 @@ import {
   AccessibilityInfo,
   findNodeHandle,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { COPY } from '../copy/uxCopy';
 import { HIT_SLOP_44 } from '../ui/hitTarget';
 import type { PaymentReviewView } from '../ui/paymentReview';
 import { modalAnimationType, useReduceMotion } from '../ui/reduceMotion';
 import { color, space, radius, typeRole, measure } from '../theme';
+import { Avatar, Button, DetailRow, PubkyChip } from '../ui/primitives';
 
 export function PaymentReviewSheet({
   visible,
@@ -23,6 +25,7 @@ export function PaymentReviewSheet({
   onClose,
   onContinue,
   onCopyUri,
+  onCopyRecipientPubky,
   onSelectDestination,
 }: {
   visible: boolean;
@@ -31,9 +34,11 @@ export function PaymentReviewSheet({
   onClose: () => void;
   onContinue: () => void;
   onCopyUri: () => void;
+  onCopyRecipientPubky?: () => void;
   onSelectDestination?: (identifier: string) => void;
 }) {
   const reduceMotion = useReduceMotion();
+  const insets = useSafeAreaInsets();
   const titleRef = useRef<Text>(null);
   const primaryDisabled = busy || !review.primaryEnabled;
 
@@ -66,20 +71,16 @@ export function PaymentReviewSheet({
       accessibilityViewIsModal
     >
       <View style={styles.backdrop}>
-        <View testID="paymentReviewSheet" style={styles.sheet}>
+        <View
+          testID="paymentReviewSheet"
+          style={[styles.sheet, { paddingBottom: space.lg + insets.bottom }]}
+        >
           <ScrollView>
             <Text ref={titleRef} accessibilityRole="header" style={styles.title}>
               {COPY.reviewBeforePaying}
             </Text>
-            <Text style={styles.label}>Recipient</Text>
-            <Text testID="paymentReviewRecipient" style={styles.value}>
-              {review.recipientTitle}
-            </Text>
-            <Text testID="paymentReviewShortPubky" style={styles.mono}>
-              {review.recipientShortPubky}
-            </Text>
             <Text style={styles.label}>Amount</Text>
-            <Text testID="paymentReviewAmount" style={styles.value}>
+            <Text testID="paymentReviewAmount" style={styles.amount}>
               {review.amountText}
             </Text>
             {review.invoiceAmountText ? (
@@ -87,13 +88,25 @@ export function PaymentReviewSheet({
                 Invoice {review.invoiceAmountText}
               </Text>
             ) : null}
-            {review.referenceText ? (
-              <>
-                <Text style={styles.label}>Reference</Text>
-                <Text testID="paymentReviewReference" style={styles.value}>
-                  {review.referenceText}
+            <View style={styles.recipientRow}>
+              <Avatar name={review.recipientTitle} pubky={review.recipientPubky} size="md" />
+              <View style={styles.recipientCopy}>
+                <Text testID="paymentReviewRecipient" style={styles.value}>
+                  {review.recipientTitle}
                 </Text>
-              </>
+                <PubkyChip
+                  pubky={review.recipientPubky}
+                  {...(onCopyRecipientPubky ? { onCopy: onCopyRecipientPubky } : {})}
+                  testID="paymentReviewShortPubky"
+                />
+              </View>
+            </View>
+            {review.referenceText ? (
+              <DetailRow
+                label="Reference"
+                value={review.referenceText}
+                testID="paymentReviewReference"
+              />
             ) : null}
             {review.destinations.length > 1 ? (
               <>
@@ -118,10 +131,14 @@ export function PaymentReviewSheet({
               </>
             ) : review.destinationText ? (
               <>
-                <Text style={styles.label}>Destination</Text>
-                <Text testID="paymentReviewDestination" style={styles.mono}>
-                  {review.destinationText}
-                </Text>
+                <DetailRow
+                  label="Destination"
+                  value={
+                    <Text testID="paymentReviewDestination" style={styles.mono}>
+                      {review.destinationText}
+                    </Text>
+                  }
+                />
               </>
             ) : null}
             {review.payloadText ? (
@@ -157,51 +174,38 @@ export function PaymentReviewSheet({
               </View>
             ) : null}
           </ScrollView>
-          <TouchableOpacity
+          <Button
             testID="paymentReviewContinue"
-            accessibilityRole="button"
             accessibilityLabel={review.primaryLabel}
             accessibilityHint={
               review.primaryAction === 'copy'
                 ? 'Copies the payment URI'
                 : 'Opens the wallet to complete this payment'
             }
-            accessibilityState={{ disabled: primaryDisabled, busy }}
-            hitSlop={HIT_SLOP_44}
+            label={review.primaryLabel}
+            variant={review.primaryOutline ? 'secondary' : 'primary'}
             disabled={primaryDisabled}
+            busy={busy}
             onPress={handlePrimary}
-            style={[
-              styles.primary,
-              review.primaryOutline && styles.primaryOutline,
-              primaryDisabled && styles.disabled,
-            ]}
-          >
-            <Text style={[styles.primaryText, review.primaryOutline && styles.primaryOutlineText]}>
-              {review.primaryLabel}
-            </Text>
-          </TouchableOpacity>
+            style={styles.actionButton}
+          />
           {review.secondaryLabel ? (
-            <TouchableOpacity
+            <Button
               testID="paymentReviewCopy"
-              accessibilityRole="button"
               accessibilityLabel={review.secondaryLabel}
-              hitSlop={HIT_SLOP_44}
+              label={review.secondaryLabel}
+              variant="secondary"
               onPress={handleSecondary}
-              style={styles.secondary}
-            >
-              <Text style={styles.secondaryText}>{review.secondaryLabel}</Text>
-            </TouchableOpacity>
+              style={styles.actionButton}
+            />
           ) : null}
-          <TouchableOpacity
+          <Button
             testID="paymentReviewCancel"
-            accessibilityRole="button"
-            accessibilityLabel={COPY.cancel}
-            hitSlop={HIT_SLOP_44}
+            label={COPY.cancel}
+            variant="secondary"
             onPress={onClose}
-            style={styles.cancel}
-          >
-            <Text style={styles.cancelText}>{COPY.cancel}</Text>
-          </TouchableOpacity>
+            style={styles.actionButton}
+          />
         </View>
         <Pressable
           testID="paymentReviewBackdrop"
@@ -246,6 +250,20 @@ const styles = StyleSheet.create({
     marginTop: space.sm,
   },
   value: { color: color.textPrimary, fontSize: typeRole.body.fontSize, fontWeight: '600' },
+  amount: {
+    color: color.textPrimary,
+    fontSize: typeRole.display.fontSize,
+    lineHeight: typeRole.display.lineHeight,
+    fontWeight: typeRole.display.fontWeight,
+    marginBottom: space.lg,
+  },
+  recipientRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.md,
+    marginBottom: space.lg,
+  },
+  recipientCopy: { flex: 1, gap: space.xs },
   mono: { color: color.brandMuted, fontSize: typeRole.caption.fontSize, fontFamily: 'monospace' },
   meta: { color: color.textSecondary, fontSize: typeRole.caption.fontSize, marginTop: space.xs },
   choice: {
@@ -273,28 +291,5 @@ const styles = StyleSheet.create({
     lineHeight: 18,
   },
   error: { flex: 1, color: color.danger, fontSize: typeRole.caption.fontSize, lineHeight: 18 },
-  primary: {
-    minHeight: measure.hitTarget,
-    backgroundColor: color.brand,
-    borderRadius: radius.md,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: space.sm,
-  },
-  primaryOutline: {
-    backgroundColor: 'transparent',
-    borderWidth: 1,
-    borderColor: color.brand,
-  },
-  primaryText: { color: color.textOnBrand, fontSize: typeRole.body.fontSize, fontWeight: '700' },
-  primaryOutlineText: { color: color.brandMuted },
-  disabled: { opacity: 0.4 },
-  secondary: { minHeight: measure.hitTarget, alignItems: 'center', justifyContent: 'center' },
-  secondaryText: { color: color.brandText, fontSize: typeRole.callout.fontSize, fontWeight: '600' },
-  cancel: { minHeight: measure.hitTarget, alignItems: 'center', justifyContent: 'center' },
-  cancelText: {
-    color: color.textSecondary,
-    fontSize: typeRole.callout.fontSize,
-    fontWeight: '600',
-  },
+  actionButton: { marginTop: space.sm },
 });
