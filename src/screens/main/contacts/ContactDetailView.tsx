@@ -352,7 +352,12 @@ const styles = StyleSheet.create({
     alignSelf: 'center',
   },
   avatarLetter: { fontSize: typeRole.title.fontSize, fontWeight: '600', color: CONTACTS_BRAND },
-  name: { color: CONTACTS_BODY, fontSize: typeRole.heading.fontSize, fontWeight: '700', textAlign: 'center' },
+  name: {
+    color: CONTACTS_BODY,
+    fontSize: typeRole.heading.fontSize,
+    fontWeight: '700',
+    textAlign: 'center',
+  },
   secondary: { color: CONTACTS_MUTED, fontSize: typeRole.callout.fontSize, textAlign: 'center' },
   blockedBanner: {
     color: CONTACTS_ERROR,
@@ -366,7 +371,12 @@ const styles = StyleSheet.create({
     fontFamily: 'monospace',
     textAlign: 'center',
   },
-  sectionLabel: { color: CONTACTS_MUTED, fontSize: typeRole.caption.fontSize, marginTop: space.sm, fontWeight: '600' },
+  sectionLabel: {
+    color: CONTACTS_MUTED,
+    fontSize: typeRole.caption.fontSize,
+    marginTop: space.sm,
+    fontWeight: '600',
+  },
   sectionValue: { color: CONTACTS_BODY, fontSize: typeRole.callout.fontSize },
   trustLine: { color: CONTACTS_BODY, fontSize: typeRole.callout.fontSize },
   primaryBtn: {

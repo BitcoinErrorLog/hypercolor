@@ -52,7 +52,11 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: color.surfaceRaised,
   },
-  blockedBannerText: { color: CONTACTS_ERROR, fontSize: typeRole.callout.fontSize, fontWeight: '600' },
+  blockedBannerText: {
+    color: CONTACTS_ERROR,
+    fontSize: typeRole.callout.fontSize,
+    fontWeight: '600',
+  },
   unblockBtn: { minHeight: MIN_TARGET, justifyContent: 'center' },
   unblockLabel: { color: color.brandText, fontSize: typeRole.body.fontSize, fontWeight: '600' },
 });

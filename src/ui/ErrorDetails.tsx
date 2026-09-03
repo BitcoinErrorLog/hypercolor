@@ -29,5 +29,11 @@ export function ErrorDetails({ details, testID }: { details: string | null; test
 const styles = StyleSheet.create({
   toggle: { minHeight: measure.hitTarget, justifyContent: 'center' },
   toggleText: { color: color.brandText, fontSize: typeRole.secondary.fontSize, fontWeight: '600' },
-  body: { color: color.textSecondary, fontSize: typeRole.caption.fontSize, lineHeight: 18, marginTop: space.xs, fontFamily: 'monospace' },
+  body: {
+    color: color.textSecondary,
+    fontSize: typeRole.caption.fontSize,
+    lineHeight: 18,
+    marginTop: space.xs,
+    fontFamily: 'monospace',
+  },
 });

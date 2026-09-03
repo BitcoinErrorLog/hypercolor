@@ -34,5 +34,10 @@ const styles = StyleSheet.create({
   },
   title: { fontSize: typeRole.callout.fontSize, fontWeight: '600', color: color.textPrimary },
   hint: { fontSize: typeRole.caption.fontSize, color: color.brandMuted },
-  action: { fontSize: typeRole.callout.fontSize, fontWeight: '700', color: color.textOnBrand, marginTop: space.sm },
+  action: {
+    fontSize: typeRole.callout.fontSize,
+    fontWeight: '700',
+    color: color.textOnBrand,
+    marginTop: space.sm,
+  },
 });

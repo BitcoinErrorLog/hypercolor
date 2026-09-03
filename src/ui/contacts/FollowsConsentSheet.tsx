@@ -185,7 +185,13 @@ const styles = StyleSheet.create({
   },
   boxOn: { backgroundColor: CONTACTS_BRAND },
   tick: { color: color.textOnBrand, fontSize: typeRole.secondary.fontSize, fontWeight: '700' },
-  checkLabel: { color: CONTACTS_BODY, fontSize: typeRole.callout.fontSize, flex: 1, flexShrink: 1, lineHeight: 22 },
+  checkLabel: {
+    color: CONTACTS_BODY,
+    fontSize: typeRole.callout.fontSize,
+    flex: 1,
+    flexShrink: 1,
+    lineHeight: 22,
+  },
   actions: { gap: space.sm },
   primary: {
     minHeight: MIN_TARGET,
@@ -202,5 +208,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  secondaryLabel: { color: CONTACTS_BRAND_TEXT, fontSize: typeRole.body.fontSize, fontWeight: '600' },
+  secondaryLabel: {
+    color: CONTACTS_BRAND_TEXT,
+    fontSize: typeRole.body.fontSize,
+    fontWeight: '600',
+  },
 });

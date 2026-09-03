@@ -312,11 +312,21 @@ const styles = StyleSheet.create({
   },
   backHit: { minWidth: measure.hitTarget, minHeight: measure.hitTarget, justifyContent: 'center' },
   back: { color: color.brandText, fontSize: typeRole.body.fontSize },
-  title: { flex: 1, fontSize: typeRole.titleStack.fontSize, fontWeight: '600', color: color.textPrimary, textAlign: 'center' },
+  title: {
+    flex: 1,
+    fontSize: typeRole.titleStack.fontSize,
+    fontWeight: '600',
+    color: color.textPrimary,
+    textAlign: 'center',
+  },
   content: { paddingHorizontal: space.xl, paddingVertical: space.xxl, gap: space.lg, flexGrow: 1 },
   heading: { fontSize: typeRole.heading.fontSize, fontWeight: '700', color: color.textPrimary },
   explanation: { fontSize: typeRole.callout.fontSize, color: color.textSecondary, lineHeight: 22 },
-  scopeDetail: { fontSize: typeRole.caption.fontSize, color: color.textSecondary, fontFamily: 'monospace' },
+  scopeDetail: {
+    fontSize: typeRole.caption.fontSize,
+    color: color.textSecondary,
+    fontFamily: 'monospace',
+  },
   statusCard: {
     backgroundColor: color.surface,
     borderRadius: radius.md,
@@ -348,9 +358,23 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  successGlyphMark: { color: color.success, fontSize: typeRole.display.fontSize, fontWeight: '700' },
-  successTitle: { fontSize: typeRole.heading.fontSize, fontWeight: '700', color: color.textPrimary, textAlign: 'center' },
-  successBody: { fontSize: typeRole.callout.fontSize, color: color.textSecondary, lineHeight: 22, textAlign: 'center' },
+  successGlyphMark: {
+    color: color.success,
+    fontSize: typeRole.display.fontSize,
+    fontWeight: '700',
+  },
+  successTitle: {
+    fontSize: typeRole.heading.fontSize,
+    fontWeight: '700',
+    color: color.textPrimary,
+    textAlign: 'center',
+  },
+  successBody: {
+    fontSize: typeRole.callout.fontSize,
+    color: color.textSecondary,
+    lineHeight: 22,
+    textAlign: 'center',
+  },
   primaryButton: {
     backgroundColor: color.brand,
     borderRadius: radius.md,
@@ -360,7 +384,11 @@ const styles = StyleSheet.create({
     alignSelf: 'stretch',
   },
   buttonDisabled: { opacity: 0.6 },
-  primaryButtonText: { color: color.textOnBrand, fontSize: typeRole.body.fontSize, fontWeight: '600' },
+  primaryButtonText: {
+    color: color.textOnBrand,
+    fontSize: typeRole.body.fontSize,
+    fontWeight: '600',
+  },
   secondaryButton: {
     borderWidth: 1,
     borderColor: color.hairlineStrong,

@@ -139,5 +139,9 @@ const styles = StyleSheet.create({
   destructive: { backgroundColor: color.dangerStrong },
   primaryLabel: { color: color.textOnBrand, fontSize: typeRole.body.fontSize, fontWeight: '600' },
   secondary: { minHeight: MIN_TARGET, alignItems: 'center', justifyContent: 'center' },
-  secondaryLabel: { color: CONTACTS_BRAND_TEXT, fontSize: typeRole.body.fontSize, fontWeight: '600' },
+  secondaryLabel: {
+    color: CONTACTS_BRAND_TEXT,
+    fontSize: typeRole.body.fontSize,
+    fontWeight: '600',
+  },
 });

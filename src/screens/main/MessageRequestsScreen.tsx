@@ -380,9 +380,19 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   declineText: { color: color.textMuted, fontWeight: '600' },
-  empty: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: space.sm, paddingHorizontal: space.xxxl },
+  empty: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: space.sm,
+    paddingHorizontal: space.xxxl,
+  },
   emptyText: { color: color.textPrimary, fontSize: typeRole.body.fontSize, fontWeight: '600' },
-  emptyHint: { color: color.textSecondary, fontSize: typeRole.secondary.fontSize, textAlign: 'center' },
+  emptyHint: {
+    color: color.textSecondary,
+    fontSize: typeRole.secondary.fontSize,
+    textAlign: 'center',
+  },
   invite: { paddingHorizontal: space.xl, paddingVertical: space.lg, gap: space.md },
   inviteBody: { color: color.textSecondary, fontSize: typeRole.secondary.fontSize, lineHeight: 20 },
   inviteActions: { flexDirection: 'row', gap: space.md, flexWrap: 'wrap' },
@@ -395,5 +405,9 @@ const styles = StyleSheet.create({
     minHeight: measure.hitTarget,
     justifyContent: 'center',
   },
-  secondaryButtonText: { color: color.textMuted, fontSize: typeRole.callout.fontSize, fontWeight: '600' },
+  secondaryButtonText: {
+    color: color.textMuted,
+    fontSize: typeRole.callout.fontSize,
+    fontWeight: '600',
+  },
 });

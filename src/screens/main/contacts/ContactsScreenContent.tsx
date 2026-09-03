@@ -380,7 +380,12 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     gap: space.sm,
   },
-  title: { fontSize: typeRole.title.fontSize, fontWeight: '700', color: CONTACTS_BODY, flexShrink: 1 },
+  title: {
+    fontSize: typeRole.title.fontSize,
+    fontWeight: '700',
+    color: CONTACTS_BODY,
+    flexShrink: 1,
+  },
   addBtn: {
     minWidth: MIN_TARGET,
     minHeight: MIN_TARGET,
@@ -435,8 +440,18 @@ const styles = StyleSheet.create({
     gap: space.md,
     paddingHorizontal: space.xxxl,
   },
-  emptyText: { color: CONTACTS_BODY, fontSize: typeRole.numeric.fontSize, fontWeight: '600', textAlign: 'center' },
-  emptyHint: { color: CONTACTS_MUTED, fontSize: typeRole.callout.fontSize, textAlign: 'center', lineHeight: 22 },
+  emptyText: {
+    color: CONTACTS_BODY,
+    fontSize: typeRole.numeric.fontSize,
+    fontWeight: '600',
+    textAlign: 'center',
+  },
+  emptyHint: {
+    color: CONTACTS_MUTED,
+    fontSize: typeRole.callout.fontSize,
+    textAlign: 'center',
+    lineHeight: 22,
+  },
   primaryBtn: {
     minHeight: MIN_TARGET,
     minWidth: 220,
@@ -479,5 +494,9 @@ const styles = StyleSheet.create({
   suggestionsSub: { color: CONTACTS_MUTED, fontSize: typeRole.secondary.fontSize, lineHeight: 20 },
   suggestionRow: { gap: space.xs, paddingBottom: space.sm },
   addSuggestion: { minHeight: MIN_TARGET, justifyContent: 'center', paddingLeft: 62 },
-  addSuggestionLabel: { color: color.brandText, fontSize: typeRole.callout.fontSize, fontWeight: '600' },
+  addSuggestionLabel: {
+    color: color.brandText,
+    fontSize: typeRole.callout.fontSize,
+    fontWeight: '600',
+  },
 });

@@ -271,7 +271,12 @@ const styles = StyleSheet.create({
     borderBottomColor: color.surfaceRaised,
   },
   title: { fontSize: typeRole.title.fontSize, fontWeight: '700', color: color.textPrimary },
-  newChatHit: { minWidth: measure.hitTarget, minHeight: measure.hitTarget, alignItems: 'center', justifyContent: 'center' },
+  newChatHit: {
+    minWidth: measure.hitTarget,
+    minHeight: measure.hitTarget,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   newChat: { fontSize: typeRole.display.fontSize, color: color.brand, fontWeight: '600' },
   newChatDisabled: { opacity: 0.4 },
   requestsRow: {
@@ -324,7 +329,12 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
   },
-  lastMessage: { flex: 1, fontSize: typeRole.secondary.fontSize, color: color.textSecondary, marginRight: space.sm },
+  lastMessage: {
+    flex: 1,
+    fontSize: typeRole.secondary.fontSize,
+    color: color.textSecondary,
+    marginRight: space.sm,
+  },
   badge: {
     backgroundColor: color.brand,
     borderRadius: radius.md,
@@ -343,7 +353,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: space.xxl,
   },
   emptyText: { color: color.textPrimary, fontSize: typeRole.numeric.fontSize, fontWeight: '600' },
-  emptyHint: { color: color.textSecondary, fontSize: typeRole.secondary.fontSize, textAlign: 'center', lineHeight: 20 },
+  emptyHint: {
+    color: color.textSecondary,
+    fontSize: typeRole.secondary.fontSize,
+    textAlign: 'center',
+    lineHeight: 20,
+  },
   primaryButton: {
     backgroundColor: color.brand,
     borderRadius: radius.md,
@@ -352,7 +367,11 @@ const styles = StyleSheet.create({
     minHeight: measure.hitTarget,
     alignItems: 'center',
   },
-  primaryButtonText: { color: color.textOnBrand, fontSize: typeRole.body.fontSize, fontWeight: '600' },
+  primaryButtonText: {
+    color: color.textOnBrand,
+    fontSize: typeRole.body.fontSize,
+    fontWeight: '600',
+  },
   secondaryButton: {
     borderWidth: 1,
     borderColor: color.hairlineStrong,
@@ -364,5 +383,9 @@ const styles = StyleSheet.create({
   },
   secondaryButtonText: { color: color.textMuted, fontSize: typeRole.body.fontSize },
   textButton: { minHeight: measure.hitTarget, alignItems: 'center', justifyContent: 'center' },
-  textButtonText: { color: color.brandText, fontSize: typeRole.callout.fontSize, fontWeight: '600' },
+  textButtonText: {
+    color: color.brandText,
+    fontSize: typeRole.callout.fontSize,
+    fontWeight: '600',
+  },
 });

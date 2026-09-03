@@ -130,5 +130,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  destructiveText: { color: color.dangerStrong, fontSize: typeRole.body.fontSize, fontWeight: '600' },
+  destructiveText: {
+    color: color.dangerStrong,
+    fontSize: typeRole.body.fontSize,
+    fontWeight: '600',
+  },
 });

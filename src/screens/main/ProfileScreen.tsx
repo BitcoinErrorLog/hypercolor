@@ -306,9 +306,17 @@ const styles = StyleSheet.create({
     gap: space.sm,
   },
   sessionLabel: { color: color.textPrimary, fontSize: typeRole.body.fontSize, fontWeight: '600' },
-  sessionBody: { color: color.textSecondary, fontSize: typeRole.secondary.fontSize, lineHeight: 20 },
+  sessionBody: {
+    color: color.textSecondary,
+    fontSize: typeRole.secondary.fontSize,
+    lineHeight: 20,
+  },
   sessionAction: { minHeight: measure.hitTarget, justifyContent: 'center' },
-  sessionActionText: { color: color.brandText, fontSize: typeRole.callout.fontSize, fontWeight: '700' },
+  sessionActionText: {
+    color: color.brandText,
+    fontSize: typeRole.callout.fontSize,
+    fontWeight: '700',
+  },
   actions: { paddingHorizontal: space.xl, paddingBottom: 48, gap: space.md },
   navRow: {
     minHeight: measure.hitTarget,
@@ -329,7 +337,11 @@ const styles = StyleSheet.create({
     minHeight: measure.hitTarget,
     alignItems: 'center',
   },
-  e2eSwitchText: { color: color.brandMuted, fontSize: typeRole.secondary.fontSize, fontWeight: '600' },
+  e2eSwitchText: {
+    color: color.brandMuted,
+    fontSize: typeRole.secondary.fontSize,
+    fontWeight: '600',
+  },
   dangerButton: {
     borderWidth: 1,
     borderColor: color.dangerStrong,
@@ -338,5 +350,9 @@ const styles = StyleSheet.create({
     minHeight: measure.hitTarget,
     alignItems: 'center',
   },
-  dangerButtonText: { color: color.dangerStrong, fontSize: typeRole.body.fontSize, fontWeight: '600' },
+  dangerButtonText: {
+    color: color.dangerStrong,
+    fontSize: typeRole.body.fontSize,
+    fontWeight: '600',
+  },
 });

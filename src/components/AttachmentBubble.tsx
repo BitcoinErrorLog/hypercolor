@@ -257,9 +257,20 @@ const styles = StyleSheet.create({
   meta: { fontSize: typeRole.meta.fontSize, opacity: 0.7 },
   action: { fontSize: typeRole.caption.fontSize, fontWeight: '700', marginTop: space.xs },
   error: { color: color.danger, fontSize: typeRole.meta.fontSize, flex: 1 },
-  errorRow: { flexDirection: 'row', alignItems: 'center', gap: space.sm, marginTop: space.xs, flexWrap: 'wrap' },
+  errorRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.sm,
+    marginTop: space.xs,
+    flexWrap: 'wrap',
+  },
   errorIcon: { color: color.danger, fontSize: typeRole.meta.fontSize, fontWeight: '700' },
   retry: { minHeight: measure.hitTarget, justifyContent: 'center', paddingHorizontal: space.xs },
-  retryText: { color: color.brandMuted, fontSize: typeRole.meta.fontSize, fontWeight: '700', textDecorationLine: 'underline' },
+  retryText: {
+    color: color.brandMuted,
+    fontSize: typeRole.meta.fontSize,
+    fontWeight: '700',
+    textDecorationLine: 'underline',
+  },
   spinner: { marginTop: space.sm },
 });

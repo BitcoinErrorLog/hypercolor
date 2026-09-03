@@ -124,7 +124,12 @@ const styles = StyleSheet.create({
     gap: space.xs,
     zIndex: 1,
   },
-  title: { color: color.textPrimary, fontSize: typeRole.numeric.fontSize, fontWeight: '700', marginBottom: space.sm },
+  title: {
+    color: color.textPrimary,
+    fontSize: typeRole.numeric.fontSize,
+    fontWeight: '700',
+    marginBottom: space.sm,
+  },
   row: {
     minHeight: measure.hitTarget,
     paddingVertical: space.md,
@@ -136,7 +141,12 @@ const styles = StyleSheet.create({
   },
   rowDisabled: { opacity: 0.55 },
   rowCopy: { flex: 1, gap: space.xs },
-  icon: { color: color.brandMuted, fontSize: typeRole.numeric.fontSize, width: 24, textAlign: 'center' },
+  icon: {
+    color: color.brandMuted,
+    fontSize: typeRole.numeric.fontSize,
+    width: 24,
+    textAlign: 'center',
+  },
   label: { color: color.textPrimary, fontSize: typeRole.body.fontSize, fontWeight: '600' },
   labelDisabled: { color: color.textSecondary },
   reason: { color: color.textSecondary, fontSize: typeRole.caption.fontSize },

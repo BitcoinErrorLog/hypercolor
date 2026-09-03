@@ -52,7 +52,17 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: color.brand,
   },
-  label: { flex: 1, color: color.textPrimary, fontSize: typeRole.secondary.fontSize, lineHeight: 20 },
-  action: { minHeight: measure.hitTarget, minWidth: measure.hitTarget, justifyContent: 'center', paddingHorizontal: space.sm },
+  label: {
+    flex: 1,
+    color: color.textPrimary,
+    fontSize: typeRole.secondary.fontSize,
+    lineHeight: 20,
+  },
+  action: {
+    minHeight: measure.hitTarget,
+    minWidth: measure.hitTarget,
+    justifyContent: 'center',
+    paddingHorizontal: space.sm,
+  },
   actionText: { color: color.brandText, fontSize: typeRole.callout.fontSize, fontWeight: '700' },
 });

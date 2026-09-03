@@ -67,7 +67,11 @@ const styles = StyleSheet.create({
   },
   message: { color: CONTACTS_ERROR, fontSize: typeRole.secondary.fontSize, flex: 1, flexShrink: 1 },
   detailsToggle: { minHeight: MIN_TARGET, justifyContent: 'center' },
-  detailsLabel: { color: CONTACTS_MUTED, fontSize: typeRole.secondary.fontSize, textDecorationLine: 'underline' },
+  detailsLabel: {
+    color: CONTACTS_MUTED,
+    fontSize: typeRole.secondary.fontSize,
+    textDecorationLine: 'underline',
+  },
   details: { color: CONTACTS_MUTED, fontSize: typeRole.caption.fontSize, fontFamily: 'monospace' },
   retry: { minHeight: MIN_TARGET, justifyContent: 'center' },
   retryLabel: { color: color.brandText, fontSize: typeRole.body.fontSize, fontWeight: '600' },

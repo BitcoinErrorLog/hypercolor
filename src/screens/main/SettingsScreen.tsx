@@ -493,7 +493,12 @@ const styles = StyleSheet.create({
   },
   rowLabel: { fontSize: typeRole.body.fontSize, color: color.textPrimary },
   rowValue: { fontSize: typeRole.caption.fontSize, color: color.textSecondary, maxWidth: 200 },
-  rowHint: { fontSize: typeRole.meta.fontSize, color: color.textSecondary, marginTop: 2, flexShrink: 1 },
+  rowHint: {
+    fontSize: typeRole.meta.fontSize,
+    color: color.textSecondary,
+    marginTop: 2,
+    flexShrink: 1,
+  },
   chevron: { fontSize: typeRole.heading.fontSize, color: color.textSecondary },
   recoveryCode: {
     fontSize: typeRole.caption.fontSize,
@@ -529,7 +534,11 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginTop: space.sm,
   },
-  gateButtonText: { color: color.brandText, fontSize: typeRole.callout.fontSize, fontWeight: '600' },
+  gateButtonText: {
+    color: color.brandText,
+    fontSize: typeRole.callout.fontSize,
+    fontWeight: '600',
+  },
   checkRow: {
     minHeight: measure.hitTarget,
     flexDirection: 'row',

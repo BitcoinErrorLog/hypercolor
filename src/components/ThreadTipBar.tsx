@@ -65,7 +65,11 @@ export function ThreadTipBarContent({
 
 const styles = StyleSheet.create({
   wrap: { paddingHorizontal: space.md, paddingBottom: space.sm, gap: space.sm },
-  empty: { color: color.textSecondary, fontSize: typeRole.caption.fontSize, paddingHorizontal: space.xs },
+  empty: {
+    color: color.textSecondary,
+    fontSize: typeRole.caption.fontSize,
+    paddingHorizontal: space.xs,
+  },
   endpoint: {
     backgroundColor: color.surface,
     borderRadius: radius.md,
@@ -77,7 +81,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   endpointCopy: { flex: 1, gap: 2, paddingRight: space.sm },
-  endpointId: { color: color.textPrimary, fontSize: typeRole.meta.fontSize, fontFamily: 'monospace' },
+  endpointId: {
+    color: color.textPrimary,
+    fontSize: typeRole.meta.fontSize,
+    fontFamily: 'monospace',
+  },
   endpointHint: { color: color.brandSoft, fontSize: typeRole.meta.fontSize, fontWeight: '600' },
   meta: { color: color.textMuted, fontSize: typeRole.meta.fontSize },
   expired: { color: color.danger, fontSize: typeRole.meta.fontSize, fontWeight: '600' },

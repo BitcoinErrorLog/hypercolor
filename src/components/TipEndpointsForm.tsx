@@ -74,7 +74,12 @@ export function TipEndpointsForm({
 }
 
 const styles = StyleSheet.create({
-  hint: { fontSize: typeRole.meta.fontSize, color: color.textSecondary, paddingHorizontal: space.xl, marginBottom: space.md },
+  hint: {
+    fontSize: typeRole.meta.fontSize,
+    color: color.textSecondary,
+    paddingHorizontal: space.xl,
+    marginBottom: space.md,
+  },
   label: {
     fontSize: typeRole.meta.fontSize,
     color: color.textMuted,

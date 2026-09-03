@@ -219,6 +219,16 @@ const styles = StyleSheet.create({
     fontSize: typeRole.meta.fontSize,
     fontFamily: 'monospace',
   },
-  sendingRow: { flexDirection: 'row', alignItems: 'center', gap: space.sm, marginTop: space.xs, minHeight: measure.hitTarget },
-  sendingText: { color: color.textOnBrandMuted, fontSize: typeRole.caption.fontSize, fontWeight: '600' },
+  sendingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.sm,
+    marginTop: space.xs,
+    minHeight: measure.hitTarget,
+  },
+  sendingText: {
+    color: color.textOnBrandMuted,
+    fontSize: typeRole.caption.fontSize,
+    fontWeight: '600',
+  },
 });

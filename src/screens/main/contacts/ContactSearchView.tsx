@@ -152,7 +152,12 @@ const styles = StyleSheet.create({
   inputInvalid: { borderColor: CONTACTS_ERROR },
   validationRow: { flexDirection: 'row', alignItems: 'flex-start', gap: space.sm },
   validationMark: { color: CONTACTS_ERROR, fontWeight: '700', fontSize: typeRole.body.fontSize },
-  validation: { color: CONTACTS_ERROR, fontSize: typeRole.secondary.fontSize, flex: 1, flexShrink: 1 },
+  validation: {
+    color: CONTACTS_ERROR,
+    fontSize: typeRole.secondary.fontSize,
+    flex: 1,
+    flexShrink: 1,
+  },
   button: {
     minHeight: MIN_TARGET,
     backgroundColor: CONTACTS_BRAND,

@@ -325,8 +325,18 @@ const styles = StyleSheet.create({
     gap: space.lg,
   },
   spinner: { marginBottom: space.sm },
-  title: { fontSize: typeRole.heading.fontSize, fontWeight: '700', color: color.textPrimary, textAlign: 'center' },
-  description: { fontSize: typeRole.callout.fontSize, color: color.textSecondary, lineHeight: 22, textAlign: 'center' },
+  title: {
+    fontSize: typeRole.heading.fontSize,
+    fontWeight: '700',
+    color: color.textPrimary,
+    textAlign: 'center',
+  },
+  description: {
+    fontSize: typeRole.callout.fontSize,
+    color: color.textSecondary,
+    lineHeight: 22,
+    textAlign: 'center',
+  },
   urlBlock: { width: '100%', gap: space.md, marginTop: space.sm },
   sectionTitle: {
     fontSize: typeRole.meta.fontSize,
@@ -344,7 +354,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     alignSelf: 'stretch',
   },
-  primaryButtonText: { color: color.textOnBrand, fontSize: typeRole.body.fontSize, fontWeight: '600' },
+  primaryButtonText: {
+    color: color.textOnBrand,
+    fontSize: typeRole.body.fontSize,
+    fontWeight: '600',
+  },
   buttonDisabled: { opacity: 0.6 },
   secondaryButton: {
     borderWidth: 1,
