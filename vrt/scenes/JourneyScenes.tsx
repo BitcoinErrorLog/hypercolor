@@ -205,7 +205,6 @@ export function ChannelsEmptyScene(): React.ReactElement {
   );
 }
 
-
 export function WelcomeLoadingScene(): React.ReactElement {
   return (
     <SafeAreaView style={styles.root}>
@@ -250,8 +249,18 @@ export function ChatsPopulatedScene(): React.ReactElement {
   return (
     <SafeAreaView style={styles.root}>
       <PageHeader title="Chats" />
-      <ListRow title={aster.name} subtitle="Hello from the fixture clock." onPress={() => {}} testID="vrtChatAster" />
-      <ListRow title={bramble.name} subtitle="Payment request · synthetic" onPress={() => {}} testID="vrtChatBramble" />
+      <ListRow
+        title={aster.name}
+        subtitle="Hello from the fixture clock."
+        onPress={() => {}}
+        testID="vrtChatAster"
+      />
+      <ListRow
+        title={bramble.name}
+        subtitle="Payment request · synthetic"
+        onPress={() => {}}
+        testID="vrtChatBramble"
+      />
     </SafeAreaView>
   );
 }
@@ -293,7 +302,13 @@ export function SettingsRecoveryGateScene(): React.ReactElement {
         testID="vrtRecoveryHint"
       />
       <View style={styles.body}>
-        <Button label="Continue" onPress={() => {}} disabled disabledReason="Recovery code required" testID="vrtRecoveryContinue" />
+        <Button
+          label="Continue"
+          onPress={() => {}}
+          disabled
+          disabledReason="Recovery code required"
+          testID="vrtRecoveryContinue"
+        />
       </View>
     </SafeAreaView>
   );
@@ -322,8 +337,18 @@ export function ChannelsPopulatedScene(): React.ReactElement {
   return (
     <SafeAreaView style={styles.root}>
       <PageHeader title="Channels" />
-      <ListRow title="Fixture private group" subtitle="Private · 3 members" onPress={() => {}} testID="vrtChannelPrivate" />
-      <ListRow title="Fixture public topic" subtitle="Public · plaintext" onPress={() => {}} testID="vrtChannelPublic" />
+      <ListRow
+        title="Fixture private group"
+        subtitle="Private · 3 members"
+        onPress={() => {}}
+        testID="vrtChannelPrivate"
+      />
+      <ListRow
+        title="Fixture public topic"
+        subtitle="Public · plaintext"
+        onPress={() => {}}
+        testID="vrtChannelPublic"
+      />
     </SafeAreaView>
   );
 }
@@ -344,7 +369,11 @@ export function PaymentReviewScene(): React.ReactElement {
   return (
     <SafeAreaView style={styles.root}>
       <PageHeader title="Review payment" onBack={() => {}} />
-      <StatusBanner label="Check amount and destination before sending." tone="info" testID="vrtPayReviewHint" />
+      <StatusBanner
+        label="Check amount and destination before sending."
+        tone="info"
+        testID="vrtPayReviewHint"
+      />
       <ListRow title="Amount" subtitle="1,000 sats" testID="vrtPayAmount" />
       <ListRow title="To" subtitle={SYNTHETIC_IDENTITIES.aster.name} testID="vrtPayTo" />
       <View style={styles.body}>
@@ -354,7 +383,6 @@ export function PaymentReviewScene(): React.ReactElement {
     </SafeAreaView>
   );
 }
-
 
 export function ContactsContentEmptyScene(): React.ReactElement {
   return (
@@ -378,8 +406,18 @@ export function ContactsContentPopulatedScene(): React.ReactElement {
   return (
     <SafeAreaView style={styles.root} testID="mask-pubky">
       <PageHeader title="Contacts" />
-      <ListRow title={aster.name} subtitle={aster.pubky} onPress={() => {}} testID="vrtContactsContentAster" />
-      <ListRow title={bramble.name} subtitle={bramble.pubky} onPress={() => {}} testID="vrtContactsContentBramble" />
+      <ListRow
+        title={aster.name}
+        subtitle={aster.pubky}
+        onPress={() => {}}
+        testID="vrtContactsContentAster"
+      />
+      <ListRow
+        title={bramble.name}
+        subtitle={bramble.pubky}
+        onPress={() => {}}
+        testID="vrtContactsContentBramble"
+      />
     </SafeAreaView>
   );
 }
