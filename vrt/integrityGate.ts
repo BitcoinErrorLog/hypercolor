@@ -55,10 +55,7 @@ function isCanvasPixel(data: Buffer, i: number): boolean {
   );
 }
 
-function compareScenes(
-  a: PNG,
-  b: PNG,
-): { fullIdentical: number; contentIdentical: number } | null {
+function compareScenes(a: PNG, b: PNG): { fullIdentical: number; contentIdentical: number } | null {
   if (a.width !== b.width || a.height !== b.height) return null;
   const diff = new PNG({ width: a.width, height: a.height });
   const mismatched = pixelmatch(a.data, b.data, diff.data, a.width, a.height, {
@@ -96,9 +93,7 @@ export async function runIntegrityGate(opts: {
   readonly markerLedgerPath?: string;
   readonly reportPath?: string;
 }): Promise<IntegrityResult> {
-  const files = (await readdir(opts.baselineDir))
-    .filter(f => f.endsWith('.png'))
-    .sort();
+  const files = (await readdir(opts.baselineDir)).filter(f => f.endsWith('.png')).sort();
   const byBucket = new Map<string, { file: string; png: PNG; sceneKey: string }[]>();
 
   for (const file of files) {
@@ -199,7 +194,9 @@ async function main(): Promise<void> {
     }
     process.exit(1);
   }
-  console.log(`integrity_ok files=${r.fileCount} pairs=${r.comparedPairs} failures=0 marker_gaps=0`);
+  console.log(
+    `integrity_ok files=${r.fileCount} pairs=${r.comparedPairs} failures=0 marker_gaps=0`,
+  );
 }
 
 const invokedDirectly =
