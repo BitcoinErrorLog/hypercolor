@@ -12,8 +12,10 @@ jest.mock('react-native-safe-area-context', () => ({
 }));
 
 jest.mock('../../../components/AuthQr', () => {
+  /* eslint-disable @typescript-eslint/no-require-imports -- jest mock factory */
   const React = require('react') as typeof import('react');
   const { Text } = require('react-native') as typeof import('react-native');
+  /* eslint-enable @typescript-eslint/no-require-imports */
   return {
     AuthQr: ({ value }: { value: string }) =>
       React.createElement(Text, { testID: 'authQrStub' }, value),

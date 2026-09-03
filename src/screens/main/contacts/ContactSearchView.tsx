@@ -31,6 +31,7 @@ export function ContactSearchView({
   onCancel,
   onAdd,
   onInputChange,
+  initialValue = '',
 }: {
   loading: boolean;
   error: string | null;
@@ -38,8 +39,9 @@ export function ContactSearchView({
   onCancel: () => void;
   onAdd: (pubky: string) => void;
   onInputChange?: () => void;
+  initialValue?: string;
 }) {
-  const [pubkyKey, setPubkyKey] = useState('');
+  const [pubkyKey, setPubkyKey] = useState(initialValue);
   const parsed = parsePubky(pubkyKey);
   const valid = parsed !== null;
   const showValidation = pubkyKey.trim().length > 0 && !valid;

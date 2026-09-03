@@ -15,10 +15,7 @@ import { CustodyLine } from '../../ui/CustodyLine';
 import { ErrorDetails } from '../../ui/ErrorDetails';
 import { HIT_SLOP_44 } from '../../ui/hitTarget';
 import { color, space, radius, typeRole, measure } from '../../theme';
-import {
-  type EnableMessagingPhase,
-  type EnableMessagingState,
-} from './enableMessagingController';
+import { type EnableMessagingPhase, type EnableMessagingState } from './enableMessagingController';
 
 export function enableStatusLabel(phase: EnableMessagingPhase): string {
   switch (phase) {
@@ -95,8 +92,7 @@ export function EnableMessagingScreenContent({
             ? COPY.done
             : null;
 
-  const countdown =
-    state.phase === 'authorizing' && remainingLabel ? remainingLabel : null;
+  const countdown = state.phase === 'authorizing' && remainingLabel ? remainingLabel : null;
 
   return (
     <SafeAreaView style={styles.container} testID="enableMessagingScreen">

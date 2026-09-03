@@ -74,7 +74,9 @@ export const VRT_CATALOG_META: readonly VrtCatalogMeta[] = Object.freeze([
   meta('stack.channel-members.admin-add', 'stack', 'channel-members', 'admin-add', [pubkyMask]),
   meta('stack.channel-members.leave', 'stack', 'channel-members', 'leave', [pubkyMask]),
   meta('stack.channel-members.left', 'stack', 'channel-members', 'left', [pubkyMask]),
-  meta('stack.channel-members.public-refresh', 'stack', 'channel-members', 'public-refresh', [pubkyMask]),
+  meta('stack.channel-members.public-refresh', 'stack', 'channel-members', 'public-refresh', [
+    pubkyMask,
+  ]),
   meta('tabs.contacts.empty', 'tabs', 'contacts', 'empty', [pubkyMask]),
   meta('tabs.contacts.populated', 'tabs', 'contacts', 'populated', [pubkyMask]),
   meta('tabs.contacts.syncing', 'tabs', 'contacts', 'syncing', [pubkyMask]),
@@ -126,7 +128,10 @@ export const VRT_CATALOG_META: readonly VrtCatalogMeta[] = Object.freeze([
   meta('tabs.settings.mesh-on', 'tabs', 'settings', 'mesh-on'),
   meta('tabs.settings.telemetry-on', 'tabs', 'settings', 'telemetry-on'),
   meta('tabs.settings.backup-busy', 'tabs', 'settings', 'backup-busy'),
-  meta('tabs.settings.recovery-shown', 'tabs', 'settings', 'recovery-shown', [authUrlMask, recoveryMask]),
+  meta('tabs.settings.recovery-shown', 'tabs', 'settings', 'recovery-shown', [
+    authUrlMask,
+    recoveryMask,
+  ]),
   meta('tabs.settings.restore-ok', 'tabs', 'settings', 'restore-ok'),
   meta('tabs.settings.restore-err', 'tabs', 'settings', 'restore-err'),
   meta('tabs.settings.enable-row', 'tabs', 'settings', 'enable-row'),
@@ -148,7 +153,10 @@ export const VRT_CATALOG_META: readonly VrtCatalogMeta[] = Object.freeze([
   meta('tabs.contacts.content-offline', 'tabs', 'contacts', 'content-offline', [pubkyMask]),
   meta('tabs.message-requests.empty', 'tabs', 'message-requests', 'empty', [pubkyMask]),
   meta('tabs.message-requests.populated', 'tabs', 'message-requests', 'populated', [pubkyMask]),
-  meta('tabs.settings.recovery-gate', 'tabs', 'settings', 'recovery-gate', [authUrlMask, recoveryMask]),
+  meta('tabs.settings.recovery-gate', 'tabs', 'settings', 'recovery-gate', [
+    authUrlMask,
+    recoveryMask,
+  ]),
 ]);
 
 export function catalogMetaById(id: string): VrtCatalogMeta {
@@ -158,4 +166,3 @@ export function catalogMetaById(id: string): VrtCatalogMeta {
   }
   return entry;
 }
-

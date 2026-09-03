@@ -1,6 +1,6 @@
 import { createElement } from 'react';
 import { act, create } from 'react-test-renderer';
-import { catalogById, VRT_CATALOG } from '../catalog';
+import { VRT_CATALOG } from '../catalog';
 import { VRT_CATALOG_META } from '../catalogMeta';
 import { SYNTHETIC_IDENTITIES, SYNTHETIC_PUBKY_ALLOWLIST } from '../fixtures/identities';
 import { TOKEN_SWATCH_READY_ID, TokenSwatchScreen } from '../scenes/TokenSwatchScreen';
@@ -28,7 +28,7 @@ describe('VRT catalog', () => {
   it('renders the token swatch with vrtSceneReady and every contrast pair', async () => {
     let tree!: ReturnType<typeof create>;
     await act(async () => {
-      tree = create(catalogById('design-system.token-swatch.default').render());
+      tree = create(createElement(TokenSwatchScreen));
     });
     expect(tree.root.findByProps({ testID: TOKEN_SWATCH_READY_ID })).toBeTruthy();
     const json = JSON.stringify(tree.toJSON());

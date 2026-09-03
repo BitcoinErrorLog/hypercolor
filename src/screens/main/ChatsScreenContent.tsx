@@ -1,13 +1,5 @@
 import React, { useCallback } from 'react';
-import {
-  View,
-  Text,
-  FlatList,
-  TouchableOpacity,
-  StyleSheet,
-  SafeAreaView,
-  Share,
-} from 'react-native';
+import { View, Text, FlatList, TouchableOpacity, StyleSheet, SafeAreaView } from 'react-native';
 import type { Contact } from '../../types';
 import type { LinkConversationSummary } from '../../types/link';
 import { EnableMessagingCta } from '../../components/EnableMessagingCta';

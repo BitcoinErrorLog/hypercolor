@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-require-imports -- lazy catalog graph */
 import { createElement } from 'react';
 import { catalogMetaById, VRT_CATALOG_META } from './catalogMeta';
 import { assertCatalogAllowed } from './catalogGuard';
@@ -6,7 +7,8 @@ import type { VrtCatalogEntry } from './types';
 export { assertCatalogAllowed } from './catalogGuard';
 
 function sceneRenderer(id: string) {
-  const { SCENE_RENDERERS } = require('./scenes/JourneyScenes') as typeof import('./scenes/JourneyScenes');
+  const { SCENE_RENDERERS } =
+    require('./scenes/JourneyScenes') as typeof import('./scenes/JourneyScenes');
   const scene = SCENE_RENDERERS[id];
   if (!scene) {
     throw new Error(`Catalog meta ${id} has no renderer`);

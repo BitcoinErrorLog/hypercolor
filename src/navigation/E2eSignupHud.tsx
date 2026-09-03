@@ -1,10 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
-import {
-  applyE2eSignupContinue,
-  getE2eSignupHud,
-  subscribeE2eSignupHud,
-} from './e2eSignupResult';
+import { applyE2eSignupContinue, getE2eSignupHud, subscribeE2eSignupHud } from './e2eSignupResult';
 import { color, space, radius, typeRole } from '../theme';
 
 /** DEV-only Maestro hooks after a deep-link / file-channel debug signup. */

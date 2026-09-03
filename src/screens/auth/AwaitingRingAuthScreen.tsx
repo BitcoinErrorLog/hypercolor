@@ -10,10 +10,7 @@ import {
   type PendingDelegationSnapshot,
 } from '../../services/PubkyRingAuthService';
 import { subscribeConnectAuthFeedback } from '../../ui/connectAuthFeedback';
-import {
-  AwaitingRingAuthScreenContent,
-  type AwaitPhase,
-} from './AwaitingRingAuthScreenContent';
+import { AwaitingRingAuthScreenContent, type AwaitPhase } from './AwaitingRingAuthScreenContent';
 import {
   finishConnectDelegation,
   tryBeginConnectDelegation,
@@ -21,7 +18,6 @@ import {
 
 type Nav = NativeStackNavigationProp<AuthStackParamList, 'AwaitingRingAuth'>;
 type Route = RouteProp<AuthStackParamList, 'AwaitingRingAuth'>;
-
 
 function resolveHandoff(params: Route['params'] | undefined): PendingDelegationSnapshot | null {
   const pending = PubkyRingAuthService.getPendingDelegationSnapshot();

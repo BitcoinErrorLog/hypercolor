@@ -1,1 +1,30 @@
-# Accessibility proof (Wave 3 Part 2)\n\nDate: 2026-09-03\nBranch: `ux/w3-design-system`\nBuild: debug with `EXPO_PUBLIC_E2E_VRT=1` (catalog mount)\n\n## Method\n\n- Contrast: token pairs in `src/theme/tokens.ts` (`textOnSurfacePairs`), enforced by Jest; live Token Swatch VRT scene renders measured ratios.\n- Touch targets: primitives enforce `measure.hitTarget` (44×44).\n- Dynamic type: primitive unit tests at fontScale 1.0 and 2.0.\n- Android: Accessibility node dump on VRT catalog (`vrtSceneReady`); critical journeys exercised via catalog scenes.\n- iOS: Maestro + Simulator Accessibility tree on the same catalog scenes.\n\n## Measured contrast (from Token Swatch VRT / token tests)\n\n| Pair | Ratio | Usage | Result |\n|---|---:|---|---|\n| textPrimary / canvas | 18.95:1 | body | pass |\n| textPrimary / surface | 18.07:1 | body | pass |\n| textSecondary / surfaceRaised | 4.76:1 | body | pass |\n| textSecondary / surfaceBrand | 4.58:1 | body | pass |\n| textMuted / canvas | 7.80:1 | body | pass |\n| textMuted / surface | 7.44:1 | body | pass |\n| textOnBrand / brand | (token suite) | body | pass |\n| brandText / canvas | (token suite, large UI) | ui-large | pass |\n\nAll `textOnSurfacePairs` meet WCAG 2.2 AA for their declared usage.\n\n## Journey results\n\n| Journey | Android | iOS | Disposition |\n|---|---|---|---|\n| Welcome → Connect / Awaiting Ring | VRT scenes pass | VRT scenes pass | Fixed via primitives |\n| Enable messaging | VRT scenes pass | VRT scenes pass | Countdown remains as text under reduce-motion |\n| Chats → Thread / composer | VRT scenes pass | VRT scenes pass | Pass |\n| Contacts / requests | VRT scenes pass | VRT scenes pass | Pass |\n| Channels | VRT scenes pass | VRT scenes pass | Pass |\n| Settings / recovery / sign-out | VRT scenes pass | VRT scenes pass | RecoveryCodeGate chrome |\n\n## Issues found and disposition\n\n| Issue | Disposition |\n|---|---|\n| Sub-44 targets | Migrated to primitives / `measure.hitTarget` |\n| Missing a11y role/label | Added on all interactive primitives |\n| Secondary text AA failures | Mapped to contract tokens |\n| Reduce-motion countdown | Remaining-time text kept visible |\n\n## Waivers\n\nNone for Hypercolor Wave 3 Part 2.
+# Accessibility proof (measured)
+
+Date: 2026-09-03
+Tree: `ux/w3-design-system`
+
+## Method
+
+- **Android:** `adb shell uiautomator dump` on VRT catalog scenes after `hypercolor://e2e/vrt?scene=`. Script: `scripts/a11y-android-dump.sh` checks interactive nodes for `content-desc` and bounds ≥ 44dp (`width*px / density`, `height*px / density`).
+- **iOS:** `xcodebuild test` Accessibility audit is not wired as a dedicated XCTest in this wave; Inspector-equivalent is the catalog `accessibilityRole` / `accessibilityLabel` tree asserted in Jest plus VoiceOver-sized hit targets (`measure.hitTarget = 44`). Waiver: no Accessibility Inspector CLI on this runner.
+- **Contrast:** sampled from captured PNGs via `scripts/a11y-contrast-from-png.ts` (average luminance of text vs nearby canvas pixels) for critical journeys.
+- **Dynamic type:** `PixelRatio.getFontScale` mocked to `2` in `WelcomeScreenContent` and `Button` tests; primary CTA `minHeight` stays ≥ 44.
+
+## Android dump results
+
+Run `bash scripts/a11y-android-dump.sh` against a booted emulator with the VRT catalog. Summary written to `vrt/output/report/a11y-android.json`.
+
+Critical journeys checked: Welcome idle, Enable authorizing, Chats populated, Thread populated, Settings default.
+
+## Contrast (captured PNGs)
+
+Token pairs in `textOnSurfacePairs` remain the source of truth for brand/canvas. Tab inactive tint uses `color.textSecondary` (`#727986` replacement already bound in `MainTabs`). Measured PNG sampling is recorded in `vrt/output/report/a11y-contrast.json` after recapture.
+
+## Font scale 2.0
+
+Jest: primary Welcome connect and Button `minHeight`/`minWidth` ≥ 44 with `PixelRatio.getFontScale() === 2`. VRT scene `a11y.font-scale.two` mounts Welcome for visual layout.
+
+## Waivers
+
+- iOS Accessibility Inspector CLI not available in this environment; tree roles/labels are asserted in unit tests.
+- System `Alert.alert` sheets are OS chrome, not dumped.

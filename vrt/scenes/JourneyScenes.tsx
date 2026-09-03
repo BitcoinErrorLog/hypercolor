@@ -498,8 +498,7 @@ export const SCENE_RENDERERS: Record<string, () => React.ReactElement> = {
     channels({ createOpen: true, createPublicDefault: true, publicOptIn: true }),
   'tabs.channels.join-empty': () => channels({ joinOpen: true }),
   'tabs.channels.join-invalid': () => channels({ joinOpen: true }),
-  'tabs.channels.join-busy': () =>
-    channels({ joinOpen: true, busy: true }),
+  'tabs.channels.join-busy': () => channels({ joinOpen: true, busy: true }),
   'stack.channel.loading': () => channel({ loading: true, messages: [] }),
   'stack.channel.empty': () => channel({ messages: [] }),
   'stack.channel.populated': () => channel(),
