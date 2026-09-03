@@ -139,7 +139,14 @@ export function generateAuthQrDataUri(value: string): string {
  * Generated in JS via `qrcode` + PNG data URI — no native QR module.
  */
 export function AuthQr({ value, testID = 'authQr' }: AuthQrProps) {
-  const dataUri = useMemo(() => (value ? generateAuthQrDataUri(value) : null), [value]);
+  const dataUri = useMemo(() => {
+    if (!value) return null;
+    try {
+      return generateAuthQrDataUri(value);
+    } catch {
+      return null;
+    }
+  }, [value]);
 
   if (!value || !dataUri) {
     return null;
