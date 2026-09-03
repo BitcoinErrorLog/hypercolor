@@ -494,6 +494,8 @@ export function ChannelScreenContent({
       }
       const isMine = item.senderPubky === localPubky;
       const fanout = fanoutByEvent.get(item.eventId);
+      const statusTextVisible =
+        isMine && !isPublic && fanout ? fanout.some(outcome => outcome.status !== 'sent') : false;
       const outboundLabel =
         isMine && !isPublic
           ? fanout && fanout.length > 0
@@ -519,6 +521,7 @@ export function ChannelScreenContent({
             mine={isMine}
             time={formatTime(item.sentAt)}
             status={outboundLabel}
+            statusTextVisible={statusTextVisible}
             failed={item.deliveryState === 'failed'}
             senderName={senderName}
             senderPubky={item.senderPubky}

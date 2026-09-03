@@ -1,5 +1,5 @@
 import React from 'react';
-import { StyleSheet } from 'react-native';
+import { StyleSheet, Text } from 'react-native';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import { COPY } from '../../../copy/uxCopy';
 import { color, radius } from '../../../theme';
@@ -301,9 +301,47 @@ describe('ChannelScreenContent fan-out labels', () => {
     expect(tree.root.findByProps({ accessibilityLabel: COPY.sent }).props.name).toBe(
       'checkmark-done',
     );
+    expect(tree.root.findAllByType(Text).some(node => node.props.children === COPY.sent)).toBe(
+      false,
+    );
     expect(JSON.stringify(tree.toJSON())).not.toContain('Sent to');
     await act(async () => {
       tree.unmount();
+    });
+  });
+
+  it('keeps partial group delivery text visible', async () => {
+    const partialTree = await render(
+      <ChannelScreenContent
+        {...contentProps({
+          fanoutOutcomes: [outcome(ALICE, 'sent'), outcome(BOB, 'failed')],
+          messages: [{ ...message, deliveryState: 'sent' }],
+        })}
+      />,
+    );
+    expect(
+      partialTree.root.findAllByType(Text).some(node => node.props.children === sentToNofM(1, 2)),
+    ).toBe(true);
+    await act(async () => {
+      partialTree.unmount();
+    });
+
+    const deliveredTree = await render(
+      <ChannelScreenContent
+        {...contentProps({
+          fanoutOutcomes: [outcome(ALICE, 'sent'), outcome(BOB, 'sent')],
+          messages: [{ ...message, deliveryState: 'sent' }],
+        })}
+      />,
+    );
+    expect(
+      deliveredTree.root.findAllByType(Text).some(node => node.props.children === COPY.sent),
+    ).toBe(false);
+    expect(
+      deliveredTree.root.findAllByType(Text).some(node => node.props.children === sentToNofM(1, 2)),
+    ).toBe(false);
+    await act(async () => {
+      deliveredTree.unmount();
     });
   });
 
@@ -334,6 +372,9 @@ describe('ChannelScreenContent fan-out labels', () => {
     expect(tree.root.findByProps({ accessibilityLabel: sentToNofM(1, 2) }).props.name).toBe(
       'checkmark-done',
     );
+    expect(
+      tree.root.findAllByType(Text).some(node => node.props.children === sentToNofM(1, 2)),
+    ).toBe(true);
     await act(async () => {
       tree.unmount();
     });

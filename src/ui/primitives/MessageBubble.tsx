@@ -9,6 +9,7 @@ export type MessageBubbleProps = {
   mine: boolean;
   time: string;
   status?: string | null;
+  statusTextVisible?: boolean;
   failed?: boolean;
   grouped?: boolean;
   lastInGroup?: boolean;
@@ -24,6 +25,7 @@ export function MessageBubble({
   mine,
   time,
   status = null,
+  statusTextVisible = false,
   failed = false,
   grouped = false,
   lastInGroup = true,
@@ -73,7 +75,9 @@ export function MessageBubble({
                 tone={failed ? 'danger' : 'onBrand'}
                 accessibilityLabel={status}
               />
-              {failed ? <Text style={[styles.status, styles.failed]}>{status}</Text> : null}
+              {failed || statusTextVisible ? (
+                <Text style={[styles.status, failed ? styles.failed : null]}>{status}</Text>
+              ) : null}
             </>
           ) : null}
         </View>
