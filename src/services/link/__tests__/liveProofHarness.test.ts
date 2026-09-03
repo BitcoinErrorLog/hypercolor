@@ -5,6 +5,7 @@ import { ATTACHMENT_MAX_BYTES } from '../../../flags/config';
 import { CHAT_MESSAGE_KIND, LINK_RECEIVER_PATH } from '../../../types/link';
 import { buildGroupMembershipEnvelope, decodeGroupEnvelope } from '../../../types/group';
 import { StorageService } from '../../StorageService';
+import { paintOwner } from '../../paintedOwner';
 import { applyGroupInbound } from '../../group/applyGroupInbound';
 import { classifyInboundPeer, wotInputFromContact } from '../wotGate';
 import {
@@ -73,6 +74,10 @@ jest.mock('../../KeyStore', () => ({
     deleteLinkSessionIfAlias: jest.fn(),
     isInitialized: jest.fn(() => true),
     readLinkSession: jest.fn(() => ({ ok: true, alias: null })),
+    markSignOutIncomplete: jest.fn(),
+    isSignOutIncomplete: jest.fn(() => false),
+    getSignOutIncompleteOwner: jest.fn(() => null),
+    clearSignOutIncomplete: jest.fn(),
     isAppCertValid: jest.fn(),
     getAttachmentSecret: jest.fn(),
     setAttachmentSecret: jest.fn(),
@@ -226,6 +231,7 @@ function createProductLink(): LiveProofLinkApi & {
     adoptHarnessSession: async (_alias, pubky) => {
       owner = pubky;
       mockedKeyStore.getPubky.mockReturnValue(pubky);
+      paintOwner(pubky);
     },
     provisionHarnessReceiver: async () => ({
       pubky: owner,
@@ -575,6 +581,7 @@ describe('product live-proof step machines', () => {
               : PUBKY_A;
         if (body === 'liveproof-group-body') {
           for (const owner of [PUBKY_A, PUBKY_B, PUBKY_C]) {
+            paintOwner(owner);
             await StorageService.upsertGroupChannel({
               ownerPubky: owner,
               channelId: id,
@@ -608,6 +615,7 @@ describe('product live-proof step machines', () => {
         }
         if (body === 'liveproof-group-body-b') {
           for (const owner of [PUBKY_A, PUBKY_B]) {
+            paintOwner(owner);
             await StorageService.saveGroupMessage({
               ownerPubky: owner,
               channelId: id,
@@ -649,6 +657,7 @@ describe('product live-proof step machines', () => {
       }),
       removeMember: jest.fn(async (id: string, member: string) => {
         for (const owner of [PUBKY_A, PUBKY_B]) {
+          paintOwner(owner);
           await StorageService.upsertGroupMember({
             ownerPubky: owner,
             channelId: id,
@@ -692,6 +701,7 @@ describe('product live-proof step machines', () => {
       sendAttachment: jest.fn(async () => {
         const eventId = '00000000-0000-4000-8000-00000000a001';
         const location = `pubky://${PUBKY_A}/pub/hypercolor.app/v1/attachments/${eventId}`;
+        paintOwner(PUBKY_B);
         await StorageService.saveAttachment({
           ownerPubky: PUBKY_B,
           eventId,
@@ -733,6 +743,7 @@ describe('product live-proof step machines', () => {
         if (eventId.endsWith('ffff')) {
           throw new Error('Attachment declares 8388609 bytes; v1 limit is 8388608 bytes (8 MiB)');
         }
+        paintOwner(PUBKY_B);
         await StorageService.saveAttachment({
           ownerPubky: PUBKY_B,
           eventId,
@@ -829,6 +840,7 @@ describe('product live-proof step machines', () => {
         pendingEventId: null,
         displayedPaymentHash: null,
         proofVerified: null,
+        invoiceReused: false,
       })),
     };
     const closed = await runPaymentHandoffLiveProof(TWO, {
@@ -957,7 +969,9 @@ describe('product live-proof step machines', () => {
       sendTipList: jest.fn(async (peer: string) => {
         const owner = mockedKeyStore.getPubky() ?? PUBKY_A;
         const mine = await StorageService.listTipEndpoints(owner, owner);
+        paintOwner(peer);
         await StorageService.replaceTipEndpoints(peer, owner, mine, Date.now());
+        paintOwner(owner);
       }),
       getPeerTipEndpoints: jest.fn(async (peer: string) => {
         const owner = mockedKeyStore.getPubky() ?? PUBKY_B;

@@ -42,7 +42,7 @@ jest.mock('../../services/attachments/fileIo', () => ({
 }));
 
 import { setDbForTests } from '../index';
-import { runMigrations } from '../migrations';
+import { runMigrations, CURRENT_SCHEMA_VERSION } from '../migrations';
 import {
   SCHEMA_V1_STATEMENTS,
   SCHEMA_V2_STATEMENTS,
@@ -57,21 +57,88 @@ import {
   SCHEMA_V11_STATEMENTS,
   SCHEMA_V12_STATEMENTS,
   SCHEMA_V13_STATEMENTS,
+  SCHEMA_V14_STATEMENTS,
+  SCHEMA_V15_STATEMENTS,
+  SCHEMA_V16_STATEMENTS,
+  SCHEMA_V17_STATEMENTS,
 } from '../schema';
 import { StorageService } from '../../services/StorageService';
 import { KeyStore } from '../../services/KeyStore';
+import { paintOwner } from '../../services/paintedOwner';
 import { CHAT_MESSAGE_KIND, type HandshakeBudgetInput } from '../../types/link';
-import { GROUP_MEMBERSHIP_KIND } from '../../types/group';
+import { GROUP_MEMBERSHIP_KIND, GROUP_MESSAGE_KIND } from '../../types/group';
 import { EMPTY_PAYMENT_RECORD_EXTRAS } from '../../types/payment';
-import { openFileDb, openMemoryDb } from './betterSqliteAdapter';
+import {
+  openFileDb as openFileDbRaw,
+  openMemoryDb as openMemoryDbRaw,
+} from './betterSqliteAdapter';
+import {
+  INVOICE_AMOUNT_UNKNOWN,
+  INVOICE_AMOUNTLESS,
+} from '../../services/payments/invoiceAmountBind';
+import {
+  MAINNET_BOLT11_20U,
+  MAINNET_BOLT11_20U_HASH,
+  MAINNET_BOLT11_20U_MSAT,
+  MAINNET_BOLT11_AMOUNTLESS,
+  REGTEST_BOLT11,
+  REGTEST_BOLT11_HASH,
+  TESTNET_BOLT11,
+  TESTNET_BOLT11_HASH,
+} from '../../services/payments/__tests__/bolt11Vectors';
+import { OWNER_BACKUP_VERSION } from '../../services/backup/snapshot';
+import {
+  OWN_INVOICE_HASH_BACKFILL_META_KEY,
+  OWN_INVOICE_HASH_BACKFILL_SCAN_FROM,
+  OWN_INVOICE_HASH_REPAIR_RETRY_META_KEY,
+} from '../ownInvoiceHashes';
 import { mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { dirname, join } from 'path';
+
+const liveDbs: Array<{ close: () => void }> = [];
+
+function openMemoryDb(): ReturnType<typeof openMemoryDbRaw> {
+  const db = openMemoryDbRaw();
+  liveDbs.push(db);
+  return db;
+}
+
+function openFileDb(path: string): ReturnType<typeof openFileDbRaw> {
+  const db = openFileDbRaw(path);
+  liveDbs.push(db);
+  return db;
+}
+
+afterEach(() => {
+  for (const db of liveDbs) {
+    try {
+      db.close();
+    } catch {
+      // Already closed by the test.
+    }
+  }
+  liveDbs.length = 0;
+  setDbForTests(null);
+});
+
+beforeEach(() => {
+  paintOwner(OWNER);
+});
 
 const OWNER = 'a'.repeat(52);
 const PEER = 'z'.repeat(52);
 const OTHER = 'b'.repeat(52);
 const EVENT = '00000000-0000-4000-8000-000000000001';
+
+async function asOwner<T>(owner: string, fn: () => Promise<T>): Promise<T> {
+  paintOwner(owner);
+  try {
+    return await fn();
+  } finally {
+    paintOwner(OWNER);
+  }
+}
 
 function applyV3(db: ReturnType<typeof openMemoryDb>): void {
   for (const statement of [
@@ -129,7 +196,9 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
 
     await runMigrations(db);
 
-    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(15);
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(
+      CURRENT_SCHEMA_VERSION,
+    );
     expect(db.executeSync('SELECT * FROM link_receivers').rows).toEqual([]);
     expect(
       db.executeSync(
@@ -273,7 +342,7 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
         id: 'q-1',
         messageId: '00000000-0000-4000-8000-000000000002',
         recipientPubky: PEER,
-        payload: '{"type":"link.chat.message","rawJson":"{\\"exact\\":true}"}',
+        payload: `{"type":"link.chat.message","ownerPubky":"${OWNER}","rawJson":"{\\"exact\\":true}"}`,
         attempts: 0,
         nextRetryAt: 20,
         createdAt: 20,
@@ -364,7 +433,9 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
     setDbForTests(db);
     await runMigrations(db);
 
-    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(15);
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(
+      CURRENT_SCHEMA_VERSION,
+    );
     const cols = db.executeSync('PRAGMA table_info(contacts)').rows ?? [];
     const names = cols.map(row => row.name);
     expect(names).toEqual(
@@ -410,6 +481,40 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
     expect(pkCols).toEqual(['owner_pubky', 'pubky']);
   });
 
+  it('deletes a declined message request so a later upsert can become pending', async () => {
+    const db = openMemoryDb();
+    setDbForTests(db);
+    await runMigrations(db);
+
+    await StorageService.upsertMessageRequest({
+      ownerPubky: OWNER,
+      peerPubky: PEER,
+      createdAt: 1,
+      updatedAt: 1,
+      status: 'declined',
+    });
+    await StorageService.upsertMessageRequest({
+      ownerPubky: OWNER,
+      peerPubky: PEER,
+      createdAt: 2,
+      updatedAt: 2,
+      status: 'pending',
+    });
+    expect((await StorageService.getMessageRequest(OWNER, PEER))?.status).toBe('declined');
+
+    await StorageService.deleteMessageRequest(OWNER, PEER);
+    expect(await StorageService.getMessageRequest(OWNER, PEER)).toBeNull();
+
+    await StorageService.upsertMessageRequest({
+      ownerPubky: OWNER,
+      peerPubky: PEER,
+      createdAt: 3,
+      updatedAt: 3,
+      status: 'pending',
+    });
+    expect((await StorageService.getMessageRequest(OWNER, PEER))?.status).toBe('pending');
+  });
+
   it('keeps independent contact rows per account and does not delete A on B sign-out', async () => {
     const db = openMemoryDb();
     setDbForTests(db);
@@ -425,16 +530,18 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
       addedManually: true,
       firstSeenAt: 10,
     });
-    await StorageService.upsertContact({
-      pubky: PEER,
-      ownerPubky: OTHER,
-      trustScore: 0.9,
-      isFollowing: false,
-      isFollower: true,
-      isMutual: false,
-      addedManually: false,
-      firstSeenAt: 11,
-    });
+    await asOwner(OTHER, () =>
+      StorageService.upsertContact({
+        pubky: PEER,
+        ownerPubky: OTHER,
+        trustScore: 0.9,
+        isFollowing: false,
+        isFollower: true,
+        isMutual: false,
+        addedManually: false,
+        firstSeenAt: 11,
+      }),
+    );
 
     const forA = await StorageService.getContact(PEER, OWNER);
     const forB = await StorageService.getContact(PEER, OTHER);
@@ -455,7 +562,7 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
       }),
     );
 
-    await StorageService.updateTrustScore(PEER, 0.1, OTHER);
+    await asOwner(OTHER, () => StorageService.updateTrustScore(PEER, 0.1, OTHER));
     expect((await StorageService.getContact(PEER, OWNER))?.trustScore).toBe(0.2);
     expect((await StorageService.getContact(PEER, OTHER))?.trustScore).toBeCloseTo(1.0);
 
@@ -825,7 +932,9 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
 
     await runMigrations(db);
 
-    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(15);
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(
+      CURRENT_SCHEMA_VERSION,
+    );
     for (const name of ['threads', 'messages', 'channels', 'channel_members', 'cursor_state']) {
       expect(
         db.executeSync("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", [name])
@@ -852,7 +961,9 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
     setDbForTests(db);
     await runMigrations(db);
 
-    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(15);
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(
+      CURRENT_SCHEMA_VERSION,
+    );
     for (const name of [
       'group_channels',
       'group_members',
@@ -883,17 +994,19 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
       lastMessageAt: 10,
       membershipEpoch: 0,
     });
-    await StorageService.upsertGroupChannel({
-      ownerPubky: OTHER,
-      channelId,
-      name: 'Other crew',
-      createdAt: 1,
-      updatedAt: 1,
-      createdBy: OTHER,
-      isPublic: false,
-      lastMessageAt: 11,
-      membershipEpoch: 2,
-    });
+    await asOwner(OTHER, () =>
+      StorageService.upsertGroupChannel({
+        ownerPubky: OTHER,
+        channelId,
+        name: 'Other crew',
+        createdAt: 1,
+        updatedAt: 1,
+        createdBy: OTHER,
+        isPublic: false,
+        lastMessageAt: 11,
+        membershipEpoch: 2,
+      }),
+    );
     await StorageService.upsertGroupMember({
       ownerPubky: OWNER,
       channelId,
@@ -921,24 +1034,26 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
       editedAt: null,
       deleted: false,
     });
-    await StorageService.saveGroupMessage({
-      ownerPubky: OTHER,
-      channelId,
-      eventId,
-      senderPubky: OTHER,
-      kind: CHAT_MESSAGE_KIND,
-      body: 'other',
-      rawJson: '{}',
-      sentAt: 11,
-      receivedAt: null,
-      deliveryState: 'sent',
-      replyToEventId: null,
-      replyToAuthorPubky: null,
-      targetEventId: null,
-      targetAuthorPubky: null,
-      editedAt: null,
-      deleted: false,
-    });
+    await asOwner(OTHER, () =>
+      StorageService.saveGroupMessage({
+        ownerPubky: OTHER,
+        channelId,
+        eventId,
+        senderPubky: OTHER,
+        kind: CHAT_MESSAGE_KIND,
+        body: 'other',
+        rawJson: '{}',
+        sentAt: 11,
+        receivedAt: null,
+        deliveryState: 'sent',
+        replyToEventId: null,
+        replyToAuthorPubky: null,
+        targetEventId: null,
+        targetAuthorPubky: null,
+        editedAt: null,
+        deleted: false,
+      }),
+    );
     await StorageService.markGroupEventSeen(OWNER, channelId, PEER, eventId, 10);
     await StorageService.saveGroupDeferred({
       ownerPubky: OWNER,
@@ -953,20 +1068,24 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
       targetEventId: eventId,
       targetAuthorPubky: OWNER,
     });
-    await StorageService.markGroupEventSeen(OTHER, channelId, PEER, eventId, 11);
-    await StorageService.saveGroupDeferred({
-      ownerPubky: OTHER,
-      channelId,
-      senderPubky: PEER,
-      eventId: '00000000-0000-4000-8000-0000000000cc',
-      kind: 'chat.group.edit.v0',
-      body: 'other-later',
-      rawJson: '{}',
-      sentAt: 13,
-      receivedAt: 13,
-      targetEventId: eventId,
-      targetAuthorPubky: OTHER,
-    });
+    await asOwner(OTHER, () =>
+      StorageService.markGroupEventSeen(OTHER, channelId, PEER, eventId, 11),
+    );
+    await asOwner(OTHER, () =>
+      StorageService.saveGroupDeferred({
+        ownerPubky: OTHER,
+        channelId,
+        senderPubky: PEER,
+        eventId: '00000000-0000-4000-8000-0000000000cc',
+        kind: 'chat.group.edit.v0',
+        body: 'other-later',
+        rawJson: '{}',
+        sentAt: 13,
+        receivedAt: 13,
+        targetEventId: eventId,
+        targetAuthorPubky: OTHER,
+      }),
+    );
 
     expect(await StorageService.getGroupChannel(OWNER, channelId)).toEqual(
       expect.objectContaining({ name: 'Crew', membershipEpoch: 0 }),
@@ -1005,7 +1124,9 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
 
     await runMigrations(db);
 
-    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(15);
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(
+      CURRENT_SCHEMA_VERSION,
+    );
     const row = db.executeSync('SELECT * FROM group_messages').rows?.[0];
     expect(row).toEqual(
       expect.objectContaining({
@@ -1031,7 +1152,9 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
     setDbForTests(db);
     await runMigrations(db);
 
-    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(15);
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(
+      CURRENT_SCHEMA_VERSION,
+    );
     expect(
       db.executeSync("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'attachments'")
         .rows,
@@ -1082,24 +1205,26 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
       deliveryState: 'sent',
       resolveState: 'ready',
     });
-    await StorageService.saveAttachment({
-      ownerPubky: OTHER,
-      eventId: eventB,
-      conversationId: `dm:${PEER}`,
-      channelId: null,
-      senderPubky: OTHER,
-      direction: 'sent',
-      location: `pubky://${OTHER}/pub/hypercolor.app/v1/attachments/${eventB}`,
-      keyRef: `att:${OTHER}:${OTHER}:${eventB}`,
-      contentType: 'application/pdf',
-      size: 20,
-      thumbnailLocation: null,
-      localCachePath: 'file:///cache/b',
-      createdAt: 11,
-      updatedAt: 11,
-      deliveryState: 'sent',
-      resolveState: 'ready',
-    });
+    await asOwner(OTHER, () =>
+      StorageService.saveAttachment({
+        ownerPubky: OTHER,
+        eventId: eventB,
+        conversationId: `dm:${PEER}`,
+        channelId: null,
+        senderPubky: OTHER,
+        direction: 'sent',
+        location: `pubky://${OTHER}/pub/hypercolor.app/v1/attachments/${eventB}`,
+        keyRef: `att:${OTHER}:${OTHER}:${eventB}`,
+        contentType: 'application/pdf',
+        size: 20,
+        thumbnailLocation: null,
+        localCachePath: 'file:///cache/b',
+        createdAt: 11,
+        updatedAt: 11,
+        deliveryState: 'sent',
+        resolveState: 'ready',
+      }),
+    );
 
     expect(await StorageService.getAttachment(OWNER, OWNER, eventA)).toEqual(
       expect.objectContaining({ eventId: eventA, keyRef: `att:${OWNER}:${OWNER}:${eventA}` }),
@@ -1173,12 +1298,19 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
     setDbForTests(db);
     await runMigrations(db);
 
-    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(15);
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(
+      CURRENT_SCHEMA_VERSION,
+    );
     const paymentCols = (db.executeSync('PRAGMA table_info(payment_requests)').rows ?? []).map(
       col => col.name,
     );
     expect(paymentCols).toEqual(
-      expect.arrayContaining(['pending_event_id', 'displayed_payment_hash', 'proof_verified']),
+      expect.arrayContaining([
+        'pending_event_id',
+        'displayed_payment_hash',
+        'proof_verified',
+        'invoice_reused',
+      ]),
     );
     expect(
       db.executeSync(
@@ -1239,24 +1371,26 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
       [{ identifier: 'btc-lightning-bolt11', payload: 'lnbc1validinvoiceabc' }],
       10,
     );
-    await StorageService.savePaymentRequest({
-      ownerPubky: OTHER,
-      peerPubky: PEER,
-      direction: 'received',
-      paymentRequestId: requestId,
-      eventId,
-      amountValue: '0.002',
-      amountAsset: 'btc',
-      paymentReference: 'other-invoice',
-      endpointIds: ['btc-lightning-bolt11'],
-      expiresAt: null,
-      status: 'pending',
-      createdAt: 11,
-      updatedAt: 11,
-      proofJson: null,
-      reason: null,
-      ...EMPTY_PAYMENT_RECORD_EXTRAS,
-    });
+    await asOwner(OTHER, () =>
+      StorageService.savePaymentRequest({
+        ownerPubky: OTHER,
+        peerPubky: PEER,
+        direction: 'received',
+        paymentRequestId: requestId,
+        eventId,
+        amountValue: '0.002',
+        amountAsset: 'btc',
+        paymentReference: 'other-invoice',
+        endpointIds: ['btc-lightning-bolt11'],
+        expiresAt: null,
+        status: 'pending',
+        createdAt: 11,
+        updatedAt: 11,
+        proofJson: null,
+        reason: null,
+        ...EMPTY_PAYMENT_RECORD_EXTRAS,
+      }),
+    );
 
     expect(await StorageService.getPaymentRequest(OWNER, PEER, requestId)).toEqual(
       expect.objectContaining({ amountValue: '0.001', paymentReference: 'invoice-2026-0001' }),
@@ -1327,7 +1461,9 @@ describe('link schema v15 — durable handshake abuse budget (real SQL)', () => 
 
     await runMigrations(db);
 
-    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(15);
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(
+      CURRENT_SCHEMA_VERSION,
+    );
     const row = db.executeSync('SELECT * FROM links').rows?.[0] ?? {};
     expect(row).toEqual(expect.objectContaining({ owner_pubky: OWNER, peer_pubky: PEER }));
     expect(Object.keys(row)).not.toContain('pending_advances');
@@ -1355,17 +1491,19 @@ describe('link schema v15 — durable handshake abuse budget (real SQL)', () => 
       await seedLink(peer);
     }
     // Another owner's handshake must never appear in this account's batch.
-    await StorageService.upsertLink({
-      ownerPubky: OTHER,
-      peerPubky: PEER,
-      role: 'responder',
-      status: 'handshaking',
-      snapshot: 'hs',
-      remoteNoisePublicKey: 'noise',
-      localReceiverPath: 'hypercolor/wallet',
-      remoteReceiverPath: 'hypercolor/wallet',
-      consecutiveFailures: 0,
-    });
+    await asOwner(OTHER, () =>
+      StorageService.upsertLink({
+        ownerPubky: OTHER,
+        peerPubky: PEER,
+        role: 'responder',
+        status: 'handshaking',
+        snapshot: 'hs',
+        remoteNoisePublicKey: 'noise',
+        localReceiverPath: 'hypercolor/wallet',
+        remoteReceiverPath: 'hypercolor/wallet',
+        consecutiveFailures: 0,
+      }),
+    );
 
     await seedBudget(soon, { nextAdvanceAt: 1 });
     await seedBudget(later, { nextAdvanceAt: 2 });
@@ -1428,13 +1566,15 @@ describe('link schema v15 — durable handshake abuse budget (real SQL)', () => 
     setDbForTests(db);
     await runMigrations(db);
     await seedBudget(PEER, { pendingAdvances: 7, exhaustedAt: 1 });
-    await StorageService.upsertHandshakeBudget({
-      ownerPubky: OTHER,
-      peerPubky: PEER,
-      pendingAdvances: 3,
-      nextAdvanceAt: 0,
-      exhaustedAt: null,
-    });
+    await asOwner(OTHER, () =>
+      StorageService.upsertHandshakeBudget({
+        ownerPubky: OTHER,
+        peerPubky: PEER,
+        pendingAdvances: 3,
+        nextAdvanceAt: 0,
+        exhaustedAt: null,
+      }),
+    );
 
     await StorageService.clearAccountData(OWNER);
 
@@ -1442,6 +1582,88 @@ describe('link schema v15 — durable handshake abuse budget (real SQL)', () => 
     expect(await StorageService.getHandshakeBudget(OTHER, PEER)).toEqual(
       expect.objectContaining({ pendingAdvances: 3 }),
     );
+  });
+
+  it('wipes only the signed-out account queue rows and leaves the other owner', async () => {
+    const db = openMemoryDb();
+    setDbForTests(db);
+    await runMigrations(db);
+    await StorageService.enqueue({
+      id: 'q-mine',
+      messageId: EVENT,
+      recipientPubky: PEER,
+      payload: JSON.stringify({
+        type: 'link.chat.message',
+        ownerPubky: OWNER,
+        peerPubky: PEER,
+        senderPubky: OWNER,
+        kind: CHAT_MESSAGE_KIND,
+        eventId: EVENT,
+        rawJson: '{}',
+      }),
+      attempts: 0,
+      nextRetryAt: 1,
+      createdAt: 1,
+    });
+    await asOwner(OTHER, () =>
+      StorageService.enqueue({
+        id: 'q-other',
+        messageId: EVENT,
+        recipientPubky: PEER,
+        payload: JSON.stringify({
+          type: 'link.chat.message',
+          ownerPubky: OTHER,
+          peerPubky: PEER,
+          senderPubky: OTHER,
+          kind: CHAT_MESSAGE_KIND,
+          eventId: EVENT,
+          rawJson: '{}',
+        }),
+        attempts: 0,
+        nextRetryAt: 1,
+        createdAt: 1,
+      }),
+    );
+
+    await StorageService.clearAccountData(OWNER);
+
+    expect(await StorageService.hasQueueItem('q-mine')).toBe(false);
+    expect(await StorageService.hasQueueItem('q-other')).toBe(true);
+  });
+
+  it('deletes owner-less queue rows on clearAccountData', async () => {
+    const db = openMemoryDb();
+    setDbForTests(db);
+    await runMigrations(db);
+    db.executeSync(
+      `INSERT INTO delivery_queue (id, message_id, recipient_pubky, payload, attempts, next_retry_at, created_at)
+       VALUES ('q-legacy', ?, ?, ?, 0, 1, 1)`,
+      [EVENT, PEER, JSON.stringify({ type: 'link.chat.message', rawJson: 'secret' })],
+    );
+    await asOwner(OTHER, () =>
+      StorageService.enqueue({
+        id: 'q-other',
+        messageId: EVENT,
+        recipientPubky: PEER,
+        payload: JSON.stringify({
+          type: 'link.chat.message',
+          ownerPubky: OTHER,
+          peerPubky: PEER,
+          senderPubky: OTHER,
+          kind: CHAT_MESSAGE_KIND,
+          eventId: EVENT,
+          rawJson: '{}',
+        }),
+        attempts: 0,
+        nextRetryAt: 1,
+        createdAt: 1,
+      }),
+    );
+
+    await StorageService.clearAccountData(OWNER);
+
+    expect(await StorageService.hasQueueItem('q-legacy')).toBe(false);
+    expect(await StorageService.hasQueueItem('q-other')).toBe(true);
   });
 
   it('forgets the budget on an explicit clear', async () => {
@@ -1467,7 +1689,15 @@ describe('link schema v15 — durable handshake abuse budget (real SQL)', () => 
       id: 'q-race',
       messageId: EVENT,
       recipientPubky: PEER,
-      payload: '{"type":"link.chat.message"}',
+      payload: JSON.stringify({
+        type: 'link.chat.message',
+        ownerPubky: OWNER,
+        peerPubky: PEER,
+        senderPubky: OWNER,
+        kind: CHAT_MESSAGE_KIND,
+        eventId: EVENT,
+        rawJson: '{}',
+      }),
       attempts: 0,
       nextRetryAt: 1,
       createdAt: 1,
@@ -1476,6 +1706,909 @@ describe('link schema v15 — durable handshake abuse budget (real SQL)', () => 
     expect(await StorageService.hasQueueItem('q-race')).toBe(true);
     await StorageService.removeFromQueue('q-race');
     expect(await StorageService.hasQueueItem('q-race')).toBe(false);
+  });
+
+  it('no-ops incrementAttempt when the queue row is absent and throws when payload is not a string', async () => {
+    const db = openMemoryDb();
+    setDbForTests(db);
+    await runMigrations(db);
+    await expect(StorageService.incrementAttempt('missing', 2)).resolves.toBe(false);
+    db.executeSync(
+      `INSERT INTO delivery_queue (id, message_id, recipient_pubky, payload, attempts, next_retry_at, created_at)
+       VALUES ('q-bad-payload', ?, ?, 1, 0, 1, 1)`,
+      [EVENT, PEER],
+    );
+    await expect(StorageService.incrementAttempt('q-bad-payload', 2)).rejects.toEqual(
+      expect.objectContaining({ name: 'LinkSendError', code: 'owner-changed' }),
+    );
+    await StorageService.enqueue({
+      id: 'q-ok',
+      messageId: EVENT,
+      recipientPubky: PEER,
+      payload: JSON.stringify({
+        type: 'link.chat.message',
+        ownerPubky: OWNER,
+        peerPubky: PEER,
+        senderPubky: OWNER,
+        kind: CHAT_MESSAGE_KIND,
+        eventId: EVENT,
+        rawJson: '{}',
+      }),
+      attempts: 0,
+      nextRetryAt: 1,
+      createdAt: 1,
+    });
+    await expect(StorageService.incrementAttempt('q-ok', 2)).resolves.toBe(true);
+  });
+
+  it('clears malformed JSON queue rows during clearAccountData', async () => {
+    const db = openMemoryDb();
+    setDbForTests(db);
+    await runMigrations(db);
+    db.executeSync(
+      `INSERT INTO delivery_queue (id, message_id, recipient_pubky, payload, attempts, next_retry_at, created_at)
+       VALUES ('q-malformed', ?, ?, 'not-json', 0, 1, 1)`,
+      [EVENT, PEER],
+    );
+    await asOwner(OTHER, () =>
+      StorageService.enqueue({
+        id: 'q-other',
+        messageId: EVENT,
+        recipientPubky: PEER,
+        payload: JSON.stringify({
+          type: 'link.chat.message',
+          ownerPubky: OTHER,
+          peerPubky: PEER,
+          senderPubky: OTHER,
+          kind: CHAT_MESSAGE_KIND,
+          eventId: EVENT,
+          rawJson: '{}',
+        }),
+        attempts: 0,
+        nextRetryAt: 1,
+        createdAt: 1,
+      }),
+    );
+    await StorageService.clearAccountData(OWNER);
+    expect(await StorageService.hasQueueItem('q-malformed')).toBe(false);
+    expect(await StorageService.hasQueueItem('q-other')).toBe(true);
+  });
+});
+
+describe('link schema v16 — per-recipient group fan-out outcomes (real SQL)', () => {
+  let openDbs: Array<{ close: () => void }> = [];
+
+  afterEach(() => {
+    for (const db of openDbs) {
+      try {
+        db.close();
+      } catch {
+        // Already closed by the test.
+      }
+    }
+    openDbs = [];
+    setDbForTests(null);
+  });
+
+  it('creates group_fanout_outcomes, persists mixed status, and wipes on clearAccountData', async () => {
+    const db = openMemoryDb();
+    openDbs.push(db);
+    setDbForTests(db);
+    await runMigrations(db);
+
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(
+      CURRENT_SCHEMA_VERSION,
+    );
+    expect(
+      db.executeSync(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'group_fanout_outcomes'",
+      ).rows,
+    ).toHaveLength(1);
+
+    const channelId = `${OWNER}:00000000-0000-4000-8000-00000000bbbb`;
+    const eventId = '00000000-0000-4000-8000-00000000eeee';
+    await StorageService.upsertGroupFanoutOutcome({
+      ownerPubky: OWNER,
+      channelId,
+      eventId,
+      senderPubky: OWNER,
+      recipientPubky: PEER,
+      status: 'failed',
+      reason: 'blocked',
+      updatedAt: 1,
+    });
+    await StorageService.upsertGroupFanoutOutcome({
+      ownerPubky: OWNER,
+      channelId,
+      eventId,
+      senderPubky: OWNER,
+      recipientPubky: OTHER,
+      status: 'sent',
+      reason: null,
+      updatedAt: 2,
+    });
+    await asOwner(OTHER, () =>
+      StorageService.upsertGroupFanoutOutcome({
+        ownerPubky: OTHER,
+        channelId,
+        eventId,
+        senderPubky: OTHER,
+        recipientPubky: PEER,
+        status: 'sent',
+        reason: null,
+        updatedAt: 3,
+      }),
+    );
+
+    const ownerRows = await StorageService.listGroupFanoutOutcomes(
+      OWNER,
+      channelId,
+      OWNER,
+      eventId,
+    );
+    expect(ownerRows).toHaveLength(2);
+    expect(ownerRows.map(row => row.status).sort()).toEqual(['failed', 'sent']);
+
+    await StorageService.insertBlockedPeer(OWNER, PEER);
+    expect(await StorageService.listBlockedPeers(OWNER)).toEqual([PEER]);
+
+    await StorageService.clearAccountData(OWNER);
+    expect(await StorageService.listGroupFanoutOutcomes(OWNER, channelId, OWNER, eventId)).toEqual(
+      [],
+    );
+    expect(await StorageService.listBlockedPeers(OWNER)).toEqual([]);
+    expect(
+      await StorageService.listGroupFanoutOutcomes(OTHER, channelId, OTHER, eventId),
+    ).toHaveLength(1);
+  });
+
+  it('creates blocked_peers and survives a file-backed relaunch', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'hc-deny-'));
+    const path = join(dir, 'hypercolor.db');
+    try {
+      const first = openFileDb(path);
+      setDbForTests(first);
+      await runMigrations(first);
+      expect(
+        first.executeSync(
+          "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'blocked_peers'",
+        ).rows,
+      ).toHaveLength(1);
+      await StorageService.insertBlockedPeer(OWNER, PEER);
+      first.close();
+      setDbForTests(null);
+
+      const second = openFileDb(path);
+      setDbForTests(second);
+      await runMigrations(second);
+      expect(await StorageService.listBlockedPeers(OWNER)).toEqual([PEER]);
+      expect(await StorageService.hasBlockedPeer(OWNER, PEER)).toBe(true);
+      expect(await StorageService.listBlockedPeerCleanupPending(OWNER)).toEqual([PEER]);
+      second.close();
+      setDbForTests(null);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('adds cleanup_pending to a pre-column v16 blocked_peers table', async () => {
+    const db = openMemoryDb();
+    openDbs.push(db);
+    setDbForTests(db);
+    db.executeSync(
+      `CREATE TABLE blocked_peers (
+        owner_pubky TEXT NOT NULL,
+        peer_pubky TEXT NOT NULL,
+        blocked_at INTEGER NOT NULL,
+        PRIMARY KEY (owner_pubky, peer_pubky)
+      )`,
+    );
+    db.executeSync('PRAGMA user_version = 16');
+    await runMigrations(db);
+    const info = db.executeSync('PRAGMA table_info(blocked_peers)');
+    const names = (info.rows ?? []).map(row => String(row.name));
+    expect(names).toContain('cleanup_pending');
+    await runMigrations(db);
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(
+      CURRENT_SCHEMA_VERSION,
+    );
+    expect(SCHEMA_V16_STATEMENTS.some(s => /cleanup_pending/.test(s))).toBe(true);
+  });
+
+  it('upgrades a bare v16 stamp to the union schema and is idempotent on re-run', async () => {
+    const db = openMemoryDb();
+    openDbs.push(db);
+    setDbForTests(db);
+    db.executeSync('PRAGMA user_version = 16');
+    await runMigrations(db);
+    const tables = db.executeSync(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('group_fanout_outcomes', 'blocked_peers') ORDER BY name",
+    );
+    expect((tables.rows ?? []).map(row => String(row.name))).toEqual([
+      'blocked_peers',
+      'group_fanout_outcomes',
+    ]);
+    const indexes = db.executeSync(
+      "SELECT name FROM sqlite_master WHERE type = 'index' AND name IN ('idx_group_fanout_outcomes_event', 'idx_blocked_peers_owner') ORDER BY name",
+    );
+    expect((indexes.rows ?? []).map(row => String(row.name))).toEqual([
+      'idx_blocked_peers_owner',
+      'idx_group_fanout_outcomes_event',
+    ]);
+    const info = db.executeSync('PRAGMA table_info(blocked_peers)');
+    expect((info.rows ?? []).map(row => String(row.name))).toContain('cleanup_pending');
+    await runMigrations(db);
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(
+      CURRENT_SCHEMA_VERSION,
+    );
+    expect(
+      db.executeSync(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('group_fanout_outcomes', 'blocked_peers')",
+      ).rows,
+    ).toHaveLength(2);
+  });
+
+  it('seeds pending outcomes with persistGroupSendIntent and rolls back a failed complete', async () => {
+    const db = openMemoryDb();
+    openDbs.push(db);
+    setDbForTests(db);
+    await runMigrations(db);
+    const channelId = `${OWNER}:00000000-0000-4000-8000-00000000bbbb`;
+    const eventId = '00000000-0000-4000-8000-00000000eeee';
+    await StorageService.persistGroupSendIntent({
+      message: {
+        ownerPubky: OWNER,
+        channelId,
+        eventId,
+        senderPubky: OWNER,
+        kind: GROUP_MESSAGE_KIND,
+        body: 'hi',
+        rawJson: '{}',
+        sentAt: 1,
+        receivedAt: null,
+        deliveryState: 'sending',
+        replyToEventId: null,
+        replyToAuthorPubky: null,
+        targetEventId: null,
+        targetAuthorPubky: null,
+        editedAt: null,
+        deleted: false,
+      },
+      queueItems: [
+        {
+          id: 'q-fan-1',
+          messageId: eventId,
+          recipientPubky: PEER,
+          payload: JSON.stringify({ ownerPubky: OWNER }),
+          attempts: 0,
+          nextRetryAt: 1,
+          createdAt: 1,
+        },
+        {
+          id: 'q-fan-2',
+          messageId: eventId,
+          recipientPubky: OTHER,
+          payload: JSON.stringify({ ownerPubky: OWNER }),
+          attempts: 0,
+          nextRetryAt: 1,
+          createdAt: 1,
+        },
+      ],
+    });
+    const seeded = await StorageService.getGroupFanoutAggregate(OWNER, channelId, OWNER, eventId);
+    expect(seeded).toHaveLength(2);
+    expect(seeded.every(row => row.status === 'pending')).toBe(true);
+
+    const orig = db.executeSync.bind(db);
+    db.executeSync = ((query: string, params?: unknown) => {
+      if (/^DELETE FROM delivery_queue WHERE id = \?/i.test(query.trim())) {
+        throw new Error('injected delete failure');
+      }
+      return orig(query, params as never);
+    }) as typeof db.executeSync;
+
+    await expect(
+      StorageService.completeGroupFanoutRecipient({
+        ownerPubky: OWNER,
+        channelId,
+        eventId,
+        senderPubky: OWNER,
+        recipientPubky: PEER,
+        status: 'failed',
+        reason: 'blocked',
+        queueId: 'q-fan-1',
+        kind: GROUP_MESSAGE_KIND,
+      }),
+    ).rejects.toThrow('injected delete failure');
+
+    db.executeSync = orig;
+    const after = await StorageService.getGroupFanoutAggregate(OWNER, channelId, OWNER, eventId);
+    expect(after.every(row => row.status === 'pending')).toBe(true);
+    expect(await StorageService.hasQueueItem('q-fan-1')).toBe(true);
+    expect(await StorageService.hasQueueItem('q-fan-2')).toBe(true);
+    db.close();
+  });
+
+  it('does not duplicate outcomes or reset terminal rows when re-persisting the same event', async () => {
+    const db = openMemoryDb();
+    openDbs.push(db);
+    setDbForTests(db);
+    await runMigrations(db);
+    const channelId = `${OWNER}:00000000-0000-4000-8000-00000000bbbb`;
+    const eventId = '00000000-0000-4000-8000-00000000eeee';
+    const message = {
+      ownerPubky: OWNER,
+      channelId,
+      eventId,
+      senderPubky: OWNER,
+      kind: GROUP_MESSAGE_KIND,
+      body: 'hi',
+      rawJson: '{}',
+      sentAt: 1,
+      receivedAt: null,
+      deliveryState: 'sending' as const,
+      replyToEventId: null,
+      replyToAuthorPubky: null,
+      targetEventId: null,
+      targetAuthorPubky: null,
+      editedAt: null,
+      deleted: false,
+    };
+    await StorageService.persistGroupSendIntent({
+      message,
+      queueItems: [
+        {
+          id: 'q-fan-1',
+          messageId: eventId,
+          recipientPubky: PEER,
+          payload: JSON.stringify({ ownerPubky: OWNER }),
+          attempts: 0,
+          nextRetryAt: 1,
+          createdAt: 1,
+        },
+        {
+          id: 'q-fan-2',
+          messageId: eventId,
+          recipientPubky: OTHER,
+          payload: JSON.stringify({ ownerPubky: OWNER }),
+          attempts: 0,
+          nextRetryAt: 1,
+          createdAt: 1,
+        },
+      ],
+    });
+    await StorageService.completeGroupFanoutRecipient({
+      ownerPubky: OWNER,
+      channelId,
+      eventId,
+      senderPubky: OWNER,
+      recipientPubky: PEER,
+      status: 'failed',
+      reason: 'blocked',
+      queueId: 'q-fan-1',
+      kind: GROUP_MESSAGE_KIND,
+    });
+    await StorageService.persistGroupSendIntent({
+      message,
+      queueItems: [
+        {
+          id: 'q-fan-3',
+          messageId: eventId,
+          recipientPubky: PEER,
+          payload: JSON.stringify({ ownerPubky: OWNER }),
+          attempts: 0,
+          nextRetryAt: 2,
+          createdAt: 2,
+        },
+        {
+          id: 'q-fan-4',
+          messageId: eventId,
+          recipientPubky: OTHER,
+          payload: JSON.stringify({ ownerPubky: OWNER }),
+          attempts: 0,
+          nextRetryAt: 2,
+          createdAt: 2,
+        },
+      ],
+    });
+    const outcomes = await StorageService.getGroupFanoutAggregate(OWNER, channelId, OWNER, eventId);
+    expect(outcomes).toHaveLength(2);
+    expect(outcomes.find(row => row.recipientPubky === PEER)).toEqual(
+      expect.objectContaining({ status: 'failed', reason: 'blocked' }),
+    );
+    expect(outcomes.find(row => row.recipientPubky === OTHER)).toEqual(
+      expect.objectContaining({ status: 'pending' }),
+    );
+    expect(await StorageService.hasQueueItem('q-fan-1')).toBe(false);
+    expect(await StorageService.hasQueueItem('q-fan-2')).toBe(true);
+    expect(await StorageService.hasQueueItem('q-fan-3')).toBe(false);
+    expect(await StorageService.hasQueueItem('q-fan-4')).toBe(false);
+    db.close();
+  });
+});
+
+describe('link schema v16 — legacy queue owner backfill', () => {
+  it('backfills ownerPubky from a matching link message on in-version reconcile', async () => {
+    const db = openMemoryDb();
+    setDbForTests(db);
+    await runMigrations(db);
+    await StorageService.saveLinkMessage({
+      ownerPubky: OWNER,
+      eventId: EVENT,
+      conversationId: `dm:${PEER}`,
+      peerPubky: PEER,
+      senderPubky: OWNER,
+      direction: 'sent',
+      kind: CHAT_MESSAGE_KIND,
+      rawJson: '{}',
+      body: 'out',
+      sentAt: 1,
+      receivedAt: null,
+      deliveryState: 'sending',
+    });
+    db.executeSync(
+      `INSERT INTO delivery_queue (id, message_id, recipient_pubky, payload, attempts, next_retry_at, created_at)
+       VALUES ('q-legacy-owned', ?, ?, ?, 0, 1, 1)`,
+      [
+        EVENT,
+        PEER,
+        JSON.stringify({
+          type: 'link.chat.message',
+          peerPubky: PEER,
+          senderPubky: OWNER,
+          kind: CHAT_MESSAGE_KIND,
+          eventId: EVENT,
+          rawJson: 'plaintext-retry',
+        }),
+      ],
+    );
+    await runMigrations(db);
+    const queued = await StorageService.listDeliveryQueue();
+    const row = queued.find(item => item.id === 'q-legacy-owned');
+    expect(row).toBeDefined();
+    expect(JSON.parse(row!.payload).ownerPubky).toBe(OWNER);
+    expect(JSON.parse(row!.payload).rawJson).toBe('plaintext-retry');
+  });
+
+  it('deletes a legacy queue row whose owner cannot be derived', async () => {
+    const db = openMemoryDb();
+    setDbForTests(db);
+    await runMigrations(db);
+    db.executeSync(
+      `INSERT INTO delivery_queue (id, message_id, recipient_pubky, payload, attempts, next_retry_at, created_at)
+       VALUES ('q-legacy-orphan', 'missing-event', ?, ?, 0, 1, 1)`,
+      [PEER, 'not-json'],
+    );
+    await runMigrations(db);
+    expect(await StorageService.hasQueueItem('q-legacy-orphan')).toBe(false);
+  });
+});
+
+describe('schema v16 — own invoice history and verified-hash unique index', () => {
+  afterEach(() => {
+    setDbForTests(null);
+  });
+
+  it('seeds own tip hashes, keeps the earliest verified duplicate, and wipes with the account', async () => {
+    const db = openMemoryDb();
+    applyThroughV15(db);
+    db.executeSync(
+      `INSERT INTO tip_endpoints
+        (owner_pubky, peer_pubky, identifier, payload, updated_at,
+         validation_status, invoice_amount, invoice_expires_at, payment_hash)
+       VALUES (?, ?, 'btc-lightning-bolt11', 'lnbc1seed', 10, 'valid', NULL, NULL, ?)`,
+      [OWNER, OWNER, 'aa'.repeat(32)],
+    );
+    db.executeSync(
+      `INSERT INTO tip_endpoints
+        (owner_pubky, peer_pubky, identifier, payload, updated_at,
+         validation_status, invoice_amount, invoice_expires_at, payment_hash)
+       VALUES (?, ?, 'btc-lightning-extra', 'lnbc1amountful', 11, 'valid', '0.00002', 99, ?)`,
+      [OWNER, OWNER, 'dd'.repeat(32)],
+    );
+    db.executeSync(
+      `INSERT INTO payment_requests
+        (owner_pubky, peer_pubky, direction, payment_request_id, event_id,
+         amount_value, amount_asset, payment_reference, endpoint_ids, expires_at,
+         status, created_at, updated_at, proof_json, reason,
+         pending_event_id, displayed_payment_hash, proof_verified)
+       VALUES (?, ?, 'sent', ?, ?, '0.001', 'btc', 'ref', '[]', NULL,
+               'proof_received', 10, 10, NULL, NULL, NULL, ?, 1)`,
+      [OWNER, PEER, 'b7f9c2a1-6d43-4b0e-a8d4-0fe2c712ab33', EVENT, 'bb'.repeat(32)],
+    );
+    db.executeSync(
+      `INSERT INTO payment_requests
+        (owner_pubky, peer_pubky, direction, payment_request_id, event_id,
+         amount_value, amount_asset, payment_reference, endpoint_ids, expires_at,
+         status, created_at, updated_at, proof_json, reason,
+         pending_event_id, displayed_payment_hash, proof_verified)
+       VALUES (?, ?, 'sent', ?, ?, '0.001', 'btc', 'ref', '[]', NULL,
+               'proof_received', 20, 20, NULL, NULL, NULL, ?, 1)`,
+      [
+        OWNER,
+        OTHER,
+        'c7f9c2a1-6d43-4b0e-a8d4-0fe2c712ab44',
+        '00000000-0000-4000-8000-000000000002',
+        'bb'.repeat(32),
+      ],
+    );
+    setDbForTests(db);
+    await runMigrations(db);
+
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(
+      CURRENT_SCHEMA_VERSION,
+    );
+    expect(
+      db.executeSync(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'own_invoice_hashes'",
+      ).rows,
+    ).toHaveLength(1);
+    expect(
+      db.executeSync(
+        "SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_payment_requests_owner_verified_hash'",
+      ).rows,
+    ).toHaveLength(1);
+    expect(
+      await StorageService.hasOwnInvoiceHash(OWNER, 'btc-lightning-bolt11', 'aa'.repeat(32)),
+    ).toBe(true);
+    const amountless = await StorageService.getOwnInvoiceHash(
+      OWNER,
+      'btc-lightning-bolt11',
+      'aa'.repeat(32),
+    );
+    expect(amountless?.invoiceAmountMsat).toBe(INVOICE_AMOUNT_UNKNOWN);
+    const amountful = await StorageService.getOwnInvoiceHash(
+      OWNER,
+      'btc-lightning-extra',
+      'dd'.repeat(32),
+    );
+    expect(amountful?.invoiceAmountMsat).toBe('2000000');
+    expect(amountful?.invoiceExpiresAt).toBe(99);
+
+    const first = await StorageService.getPaymentRequest(
+      OWNER,
+      PEER,
+      'b7f9c2a1-6d43-4b0e-a8d4-0fe2c712ab33',
+    );
+    const second = await StorageService.getPaymentRequest(
+      OWNER,
+      OTHER,
+      'c7f9c2a1-6d43-4b0e-a8d4-0fe2c712ab44',
+    );
+    expect(first?.proofVerified).toBe(true);
+    expect(second?.proofVerified).toBeNull();
+
+    await StorageService.replaceTipEndpoints(
+      OWNER,
+      OWNER,
+      [
+        {
+          identifier: 'btc-lightning-bolt11',
+          payload: 'lnbc1rotated',
+          paymentHash: 'cc'.repeat(32),
+        },
+      ],
+      30,
+    );
+    expect(
+      await StorageService.hasOwnInvoiceHash(OWNER, 'btc-lightning-bolt11', 'cc'.repeat(32)),
+    ).toBe(true);
+    expect(
+      await StorageService.hasOwnInvoiceHash(OWNER, 'btc-lightning-bolt11', 'aa'.repeat(32)),
+    ).toBe(true);
+
+    await StorageService.clearAccountData(OWNER);
+    expect(
+      await StorageService.hasOwnInvoiceHash(OWNER, 'btc-lightning-bolt11', 'aa'.repeat(32)),
+    ).toBe(false);
+  });
+
+  it('backfills a v15 amount-bearing bolt11 whose denormalized amount is NULL', async () => {
+    const db = openMemoryDb();
+    applyThroughV15(db);
+    db.executeSync(
+      `INSERT INTO tip_endpoints
+        (owner_pubky, peer_pubky, identifier, payload, updated_at,
+         validation_status, invoice_amount, invoice_expires_at, payment_hash)
+       VALUES (?, ?, 'btc-lightning-bolt11', ?, 10, 'valid', NULL, NULL, ?)`,
+      [OWNER, OWNER, MAINNET_BOLT11_20U, MAINNET_BOLT11_20U_HASH],
+    );
+    setDbForTests(db);
+    await runMigrations(db);
+    const row = await StorageService.getOwnInvoiceHash(
+      OWNER,
+      'btc-lightning-bolt11',
+      MAINNET_BOLT11_20U_HASH,
+    );
+    expect(row?.invoiceAmountMsat).toBe(MAINNET_BOLT11_20U_MSAT);
+  });
+
+  it('replaces a sticky amountless sentinel with a verified mainnet amount', async () => {
+    const db = openMemoryDb();
+    applyThroughV15(db);
+    db.executeSync(
+      `INSERT INTO tip_endpoints
+        (owner_pubky, peer_pubky, identifier, payload, updated_at,
+         validation_status, invoice_amount, invoice_expires_at, payment_hash)
+       VALUES (?, ?, 'btc-lightning-bolt11', ?, 10, 'valid', NULL, NULL, ?)`,
+      [OWNER, OWNER, MAINNET_BOLT11_20U, MAINNET_BOLT11_20U_HASH],
+    );
+    setDbForTests(db);
+    await runMigrations(db);
+    db.executeSync(`UPDATE own_invoice_hashes SET invoice_amount_msat = 'amountless'`);
+    db.executeSync('DELETE FROM schema_meta');
+    await runMigrations(db);
+    const repaired = await StorageService.getOwnInvoiceHash(
+      OWNER,
+      'btc-lightning-bolt11',
+      MAINNET_BOLT11_20U_HASH,
+    );
+    expect(repaired?.invoiceAmountMsat).toBe(MAINNET_BOLT11_20U_MSAT);
+  });
+
+  it('derives amountless only from a decoded amountless mainnet bolt11', async () => {
+    const db = openMemoryDb();
+    applyThroughV15(db);
+    db.executeSync(
+      `INSERT INTO tip_endpoints
+        (owner_pubky, peer_pubky, identifier, payload, updated_at,
+         validation_status, invoice_amount, invoice_expires_at, payment_hash)
+       VALUES (?, ?, 'btc-lightning-bolt11', ?, 10, 'valid', NULL, NULL, ?)`,
+      [
+        OWNER,
+        OWNER,
+        MAINNET_BOLT11_AMOUNTLESS,
+        '0001020304050607080900010203040506070809000102030405060708090102',
+      ],
+    );
+    setDbForTests(db);
+    await runMigrations(db);
+    const row = await StorageService.getOwnInvoiceHash(
+      OWNER,
+      'btc-lightning-bolt11',
+      '0001020304050607080900010203040506070809000102030405060708090102',
+    );
+    expect(row?.invoiceAmountMsat).toBe(INVOICE_AMOUNTLESS);
+  });
+
+  it('leaves testnet invoice metadata unknown after v15→v16 backfill', async () => {
+    const db = openMemoryDb();
+    applyThroughV15(db);
+    db.executeSync(
+      `INSERT INTO tip_endpoints
+        (owner_pubky, peer_pubky, identifier, payload, updated_at,
+         validation_status, invoice_amount, invoice_expires_at, payment_hash)
+       VALUES (?, ?, 'btc-lightning-bolt11', ?, 10, 'valid', '0.2', 99, ?),
+              (?, ?, 'btc-lightning-extra', ?, 11, 'valid', '24', 99, ?)`,
+      [
+        OWNER,
+        OWNER,
+        TESTNET_BOLT11,
+        TESTNET_BOLT11_HASH,
+        OWNER,
+        OWNER,
+        REGTEST_BOLT11,
+        REGTEST_BOLT11_HASH,
+      ],
+    );
+    setDbForTests(db);
+    await runMigrations(db);
+    const backfilled = await StorageService.getOwnInvoiceHash(
+      OWNER,
+      'btc-lightning-bolt11',
+      TESTNET_BOLT11_HASH,
+    );
+    expect(backfilled?.invoiceAmountMsat).toBe(INVOICE_AMOUNT_UNKNOWN);
+    expect(backfilled?.invoiceExpiresAt).toBeNull();
+    const backfilledRegtest = await StorageService.getOwnInvoiceHash(
+      OWNER,
+      'btc-lightning-extra',
+      REGTEST_BOLT11_HASH,
+    );
+    expect(backfilledRegtest?.invoiceAmountMsat).toBe(INVOICE_AMOUNT_UNKNOWN);
+    expect(backfilledRegtest?.invoiceExpiresAt).toBeNull();
+  });
+
+  it('does not store amount or expiry when history write is a non-mainnet invoice', async () => {
+    const db = openMemoryDb();
+    setDbForTests(db);
+    await runMigrations(db);
+    await StorageService.replaceTipEndpoints(
+      OWNER,
+      OWNER,
+      [
+        {
+          identifier: 'btc-lightning-bolt11',
+          payload: REGTEST_BOLT11,
+          paymentHash: REGTEST_BOLT11_HASH,
+          invoiceAmount: '24',
+          invoiceExpiresAt: 99,
+          validationStatus: 'valid',
+        },
+      ],
+      40,
+    );
+    const written = await StorageService.getOwnInvoiceHash(
+      OWNER,
+      'btc-lightning-bolt11',
+      REGTEST_BOLT11_HASH,
+    );
+    expect(written?.invoiceAmountMsat).toBeNull();
+    expect(written?.invoiceExpiresAt).toBeNull();
+  });
+
+  it('does not restore non-mainnet invoice amount metadata', async () => {
+    const restoreDb = openMemoryDb();
+    setDbForTests(restoreDb);
+    await runMigrations(restoreDb);
+    await StorageService.importOwnerBackup(OWNER, {
+      version: OWNER_BACKUP_VERSION,
+      ownerPubky: OWNER,
+      exportedAt: 1,
+      contacts: [],
+      messageRequests: [],
+      linkMessages: [],
+      readCursors: [],
+      groupChannels: [],
+      groupMembers: [],
+      groupMessages: [],
+      paymentRequests: [],
+      tipEndpoints: [
+        {
+          ownerPubky: OWNER,
+          peerPubky: OWNER,
+          identifier: 'btc-lightning-bolt11',
+          payload: TESTNET_BOLT11,
+          updatedAt: 10,
+          validationStatus: 'valid',
+          invoiceAmount: '0.2',
+          invoiceExpiresAt: 99,
+          paymentHash: TESTNET_BOLT11_HASH,
+        },
+      ],
+      ownInvoiceHashes: [
+        {
+          ownerPubky: OWNER,
+          endpointIdentifier: 'btc-lightning-bolt11',
+          paymentHash: TESTNET_BOLT11_HASH,
+          firstSeenAt: 10,
+          invoiceAmountMsat: '2000000000',
+          invoiceExpiresAt: 99,
+          displayContext: null,
+          paymentRequestId: null,
+        },
+      ],
+      attachments: [],
+    });
+    const restored = await StorageService.getOwnInvoiceHash(
+      OWNER,
+      'btc-lightning-bolt11',
+      TESTNET_BOLT11_HASH,
+    );
+    expect(restored?.invoiceAmountMsat).toBeNull();
+    expect(restored?.invoiceExpiresAt).toBeNull();
+  });
+
+  it('creates own_invoice_hashes when upgrading a W2b-shaped or bare v16 stamp', async () => {
+    const db = openMemoryDb();
+    db.executeSync('PRAGMA user_version = 16');
+    setDbForTests(db);
+    await expect(runMigrations(db)).resolves.toBeUndefined();
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(
+      CURRENT_SCHEMA_VERSION,
+    );
+    expect(
+      db.executeSync(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'own_invoice_hashes'",
+      ).rows,
+    ).toHaveLength(1);
+  });
+
+  it('does not fail startup when own_invoice_hashes backfill throws', async () => {
+    const db = openMemoryDb();
+    setDbForTests(db);
+    await runMigrations(db);
+    db.executeSync('DELETE FROM schema_meta WHERE key = ?', [OWN_INVOICE_HASH_BACKFILL_META_KEY]);
+    const original = db.executeSync.bind(db);
+    db.executeSync = (query, params) => {
+      const sql = String(query);
+      if (sql.includes(OWN_INVOICE_HASH_BACKFILL_SCAN_FROM)) {
+        throw new Error('scan boom');
+      }
+      return original(query, params);
+    };
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    await expect(runMigrations(db)).resolves.toBeUndefined();
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(
+      CURRENT_SCHEMA_VERSION,
+    );
+    expect(warn).toHaveBeenCalledWith(
+      '[db] own_invoice_hashes repair failed; will retry next launch',
+      'scan boom',
+    );
+    const retry =
+      db.executeSync(`SELECT value FROM schema_meta WHERE key = ?`, [
+        OWN_INVOICE_HASH_REPAIR_RETRY_META_KEY,
+      ]).rows ?? [];
+    expect(retry.length).toBe(1);
+    warn.mockRestore();
+  });
+
+  it('does not rescan own_invoice_hashes after the repair marker is set', async () => {
+    const db = openMemoryDb();
+    setDbForTests(db);
+    await runMigrations(db);
+
+    const original = db.executeSync.bind(db);
+    const scans: string[] = [];
+    db.executeSync = (query, params) => {
+      const sql = String(query);
+      if (sql.includes(OWN_INVOICE_HASH_BACKFILL_SCAN_FROM)) scans.push(sql);
+      return original(query, params);
+    };
+    await runMigrations(db);
+    expect(scans).toHaveLength(0);
+  });
+
+  it('adds invoice_reused on an already-v16 payment_requests table and advances user_version to CURRENT_SCHEMA_VERSION', async () => {
+    const db = openMemoryDb();
+    applyThroughV15(db);
+    // W2b-shaped v16 fixture: CREATE only. The following ALTER is for
+    // pre-column tables and is PRAGMA-guarded in applyStatement — raw
+    // executeSync would throw duplicate-column on the CREATE that already
+    // includes cleanup_pending.
+    for (const statement of SCHEMA_V16_STATEMENTS) {
+      if (/ALTER TABLE/i.test(statement)) continue;
+      db.executeSync(statement);
+    }
+    db.executeSync('PRAGMA user_version = 16');
+    const before = (db.executeSync('PRAGMA table_info(payment_requests)').rows ?? []).map(col =>
+      String(col.name),
+    );
+    expect(before).not.toContain('invoice_reused');
+    setDbForTests(db);
+    await runMigrations(db);
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(
+      CURRENT_SCHEMA_VERSION,
+    );
+    const after = (db.executeSync('PRAGMA table_info(payment_requests)').rows ?? []).map(col =>
+      String(col.name),
+    );
+    expect(after).toContain('invoice_reused');
+  });
+
+  it('keeps invoice_reused when a later repair statement throws', async () => {
+    const db = openMemoryDb();
+    applyThroughV15(db);
+    for (const statement of SCHEMA_V16_STATEMENTS) {
+      if (/ALTER TABLE/i.test(statement)) continue;
+      db.executeSync(statement);
+    }
+    db.executeSync('PRAGMA user_version = 16');
+    const original = db.executeSync.bind(db);
+    db.executeSync = (query, params) => {
+      const sql = String(query);
+      if (
+        sql.includes('CREATE UNIQUE INDEX IF NOT EXISTS idx_payment_requests_owner_verified_hash')
+      ) {
+        throw new Error('index boom');
+      }
+      return original(query, params);
+    };
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    setDbForTests(db);
+    await expect(runMigrations(db)).resolves.toBeUndefined();
+    db.executeSync = original;
+    expect(
+      (db.executeSync('PRAGMA table_info(payment_requests)').rows ?? []).map(col =>
+        String(col.name),
+      ),
+    ).toContain('invoice_reused');
+    expect(warn).toHaveBeenCalledWith(
+      '[db] own_invoice_hashes repair failed; will retry next launch',
+      'index boom',
+    );
+    warn.mockRestore();
   });
 });
 
@@ -1521,3 +2654,106 @@ function applyThroughV13(db: ReturnType<typeof openMemoryDb>): void {
   }
   db.executeSync('PRAGMA user_version = 13');
 }
+
+function applyThroughV15(db: ReturnType<typeof openMemoryDb>): void {
+  applyThroughV13(db);
+  for (const statement of [...SCHEMA_V14_STATEMENTS, ...SCHEMA_V15_STATEMENTS]) {
+    db.executeSync(statement);
+  }
+  db.executeSync('PRAGMA user_version = 15');
+}
+
+describe('schema upgrade union (v15 / dual-v16)', () => {
+  let openDbs: Array<ReturnType<typeof openMemoryDb>> = [];
+
+  afterEach(() => {
+    for (const db of openDbs) {
+      try {
+        db.close();
+      } catch {
+        // already closed
+      }
+    }
+    openDbs = [];
+    setDbForTests(null);
+  });
+
+  function expectUnionSchema(db: ReturnType<typeof openMemoryDb>): void {
+    const tables = db.executeSync(
+      `SELECT name FROM sqlite_master
+        WHERE type = 'table'
+          AND name IN (
+            'group_fanout_outcomes',
+            'blocked_peers',
+            'own_invoice_hashes'
+          )
+        ORDER BY name`,
+    );
+    expect((tables.rows ?? []).map(row => String(row.name))).toEqual([
+      'blocked_peers',
+      'group_fanout_outcomes',
+      'own_invoice_hashes',
+    ]);
+    const blockedCols = (db.executeSync('PRAGMA table_info(blocked_peers)').rows ?? []).map(row =>
+      String(row.name),
+    );
+    expect(blockedCols).toContain('cleanup_pending');
+    const invoiceCols = (db.executeSync('PRAGMA table_info(own_invoice_hashes)').rows ?? []).map(
+      row => String(row.name),
+    );
+    for (const col of [
+      'invoice_amount_msat',
+      'invoice_expires_at',
+      'display_context',
+      'payment_request_id',
+    ]) {
+      expect(invoiceCols).toContain(col);
+    }
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(
+      CURRENT_SCHEMA_VERSION,
+    );
+  }
+
+  it('upgrades from v15 to the full union', async () => {
+    const db = openMemoryDb();
+    openDbs.push(db);
+    setDbForTests(db);
+    db.executeSync('PRAGMA user_version = 15');
+    await runMigrations(db);
+    expectUnionSchema(db);
+    await runMigrations(db);
+    expectUnionSchema(db);
+  });
+
+  it('upgrades from W2b-shaped v16 (fanout + blocked) to the full union', async () => {
+    const db = openMemoryDb();
+    openDbs.push(db);
+    setDbForTests(db);
+    for (const statement of SCHEMA_V16_STATEMENTS) {
+      if (/ALTER TABLE/i.test(statement)) continue;
+      db.executeSync(statement);
+    }
+    db.executeSync('PRAGMA user_version = 16');
+    await runMigrations(db);
+    expectUnionSchema(db);
+    await runMigrations(db);
+    expectUnionSchema(db);
+  });
+
+  it('upgrades from W2c-shaped v16 (own_invoice_hashes) to the full union', async () => {
+    const db = openMemoryDb();
+    openDbs.push(db);
+    setDbForTests(db);
+    for (const statement of SCHEMA_V17_STATEMENTS) {
+      // Apply only W2c own-invoice statements (skip re-injected W2b creates)
+      if (/group_fanout_outcomes|blocked_peers/.test(statement)) continue;
+      if (/ALTER TABLE/i.test(statement)) continue;
+      db.executeSync(statement);
+    }
+    db.executeSync('PRAGMA user_version = 16');
+    await runMigrations(db);
+    expectUnionSchema(db);
+    await runMigrations(db);
+    expectUnionSchema(db);
+  });
+});

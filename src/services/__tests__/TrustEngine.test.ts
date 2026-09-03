@@ -21,6 +21,7 @@ import { setDbForTests } from '../../db';
 import { runMigrations } from '../../db/migrations';
 import { openMemoryDb } from '../../db/__tests__/betterSqliteAdapter';
 import { StorageService } from '../StorageService';
+import { paintOwner } from '../paintedOwner';
 import { TrustEngine } from '../TrustEngine';
 import { classifyInboundPeer, wotInputFromContact } from '../link/wotGate';
 
@@ -32,6 +33,7 @@ describe('TrustEngine social-graph scoring', () => {
     const db = openMemoryDb();
     setDbForTests(db);
     await runMigrations(db);
+    paintOwner(OWNER);
     jest.spyOn(Date, 'now').mockReturnValue(1_700_000_000_000);
   });
 

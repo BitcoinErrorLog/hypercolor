@@ -17,6 +17,7 @@ import {
   buildPrivateChannelId,
   buildPublicChannelId,
   buildPublicChannelInvite,
+  buildPublicChannelMessageDocument,
   decodePublicChannelMessage,
   decodePublicChannelMeta,
   packMembershipCreate,
@@ -28,7 +29,6 @@ import {
   type GroupChannel,
   type GroupMember,
   type GroupMessage,
-  type PublicChannelMessageDocument,
   type PublicChannelMeta,
 } from '../../types/group';
 import { KeyStore } from '../KeyStore';
@@ -37,20 +37,41 @@ import { PubkyService } from '../PubkyService';
 import { LINK_GROUP_FANOUT_PAYLOAD_TYPE } from '../../types/group';
 import { LinkService } from '../link/LinkService';
 import { notifyGroupEvent } from './groupEvents';
+import {
+  bindDeferredPublicJoinToOwner,
+  consumeDeferredPublicJoinRedirect,
+  dismissDeferredPublicJoin,
+  peekDeferredPublicInvite,
+  setDeferredPublicJoin,
+  takeDeferredPublicJoin,
+} from '../../stores/deferredPublicJoin';
+import { groupDeliveryFromOutcomes } from '../../ui/groupFanoutStatus';
 
 export { subscribeGroupEvents } from './groupEvents';
 export { PRIVATE_GROUP_MEMBER_CAP };
 
-let pendingPublicJoin: string | null = null;
-
-export function setPendingPublicJoin(ref: string): void {
-  pendingPublicJoin = ref;
+export function setPendingPublicJoin(ref: string, ownerPubky?: string | null): void {
+  setDeferredPublicJoin(ref, ownerPubky);
 }
 
-export function takePendingPublicJoin(): string | null {
-  const value = pendingPublicJoin;
-  pendingPublicJoin = null;
-  return value;
+export function peekPendingPublicInvite(ownerPubky: string): string | null {
+  return peekDeferredPublicInvite(ownerPubky);
+}
+
+export function bindPendingPublicJoin(ownerPubky: string): void {
+  bindDeferredPublicJoinToOwner(ownerPubky);
+}
+
+export function consumePendingPublicJoinRedirect(ownerPubky: string): boolean {
+  return consumeDeferredPublicJoinRedirect(ownerPubky);
+}
+
+export function dismissPendingPublicJoin(ownerPubky: string): void {
+  dismissDeferredPublicJoin(ownerPubky);
+}
+
+export function takePendingPublicJoin(ownerPubky?: string | null): string | null {
+  return takeDeferredPublicJoin(ownerPubky);
 }
 
 export const GroupService = {
@@ -530,23 +551,17 @@ export const GroupService = {
     }
     const eventId = uuidv4();
     const sentAt = Date.now();
-    const doc: PublicChannelMessageDocument = {
-      version: 1,
-      kind: PUBLIC_CHANNEL_MESSAGE_KIND,
-      channel_id: channelId,
-      event_id: eventId,
-      sent_at: sentAt,
+    const built = buildPublicChannelMessageDocument({
+      channelId,
+      eventId,
+      sentAt,
       body: text,
       author: owner,
-    };
-    if (replyTo !== undefined) {
-      doc.reply_to = replyTo.eventId;
-      doc.reply_to_author = replyTo.authorPubky;
-    }
-    const json = JSON.stringify(doc);
+      ...(replyTo ? { replyTo: replyTo.eventId, replyToAuthor: replyTo.authorPubky } : {}),
+    });
     await PubkyService.put(
       publicChannelMessageUrl(owner, parsed.hostPubky, parsed.localId, sentAt, eventId),
-      json,
+      built.json,
     );
     const message: GroupMessage = {
       ownerPubky: owner,
@@ -555,7 +570,7 @@ export const GroupService = {
       senderPubky: owner,
       kind: PUBLIC_CHANNEL_MESSAGE_KIND,
       body: text,
-      rawJson: json,
+      rawJson: built.json,
       sentAt,
       receivedAt: null,
       deliveryState: 'sent',
@@ -776,12 +791,13 @@ async function fanOutEnvelope(input: {
   }));
   await StorageService.persistGroupSendIntent({ message, queueItems });
 
-  let anySent = recipients.length === 0;
   for (let i = 0; i < recipients.length; i += 1) {
     const peerPubky = recipients[i]!;
     const queueItem = queueItems[i]!;
     try {
-      const result = await LinkService.sendPersistedLinkJson({
+      await LinkService.sendPersistedLinkJson({
+        ownerPubky: input.ownerPubky,
+        senderPubky: input.senderPubky,
         peerPubky,
         queueId: queueItem.id,
         kind: input.kind,
@@ -789,16 +805,21 @@ async function fanOutEnvelope(input: {
         rawJson: input.rawJson,
         channelId: input.channelId,
       });
-      if (result === 'sent') anySent = true;
     } catch {
       // Queue item stays; other members are still sent.
     }
   }
 
   const remaining = await StorageService.countDeliveryQueueForMessage(input.eventId);
-  const nextState =
-    remaining === 0 ? (anySent || recipients.length === 0 ? 'sent' : 'failed') : 'sending';
-  if (nextState !== 'sending') {
+  let nextState: GroupMessage['deliveryState'] = 'sending';
+  if (remaining === 0) {
+    const outcomes = await StorageService.getGroupFanoutAggregate(
+      input.ownerPubky,
+      input.channelId,
+      input.senderPubky,
+      input.eventId,
+    );
+    nextState = groupDeliveryFromOutcomes(outcomes);
     await StorageService.updateGroupMessageDeliveryState(
       input.ownerPubky,
       input.channelId,

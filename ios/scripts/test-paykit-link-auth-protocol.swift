@@ -47,7 +47,9 @@ enum PaykitLinkAuthProtocolTests {
         testQuarantineTwoSighting()
         testQuarantineInFlightAndOwnedClear()
         testProcessTokenGatesSecondSighting()
-        fputs("PaykitLinkAuthProtocol: 8 checks passed\n", stdout)
+        testItemReadAbsentVsUnavailable()
+        testRotatedBearerWriteBackGate()
+        fputs("PaykitLinkAuthProtocol: 10 checks passed\n", stdout)
     }
 
     static func testKeyNamespacing() {
@@ -456,6 +458,53 @@ enum PaykitLinkAuthProtocolTests {
             PaykitLinkAuthProtocol.subsequentSightingLogLine(alias: "orphan", boot: 2)
                 == "PaykitLinkReconcile subsequent-sighting alias=orphan boot=2",
             "subsequent sighting log names only the opaque alias"
+        )
+    }
+
+    static func testItemReadAbsentVsUnavailable() {
+        expect(
+            PaykitLinkAuthProtocol.classifyItemReadStatus(PaykitLinkAuthProtocol.errSecItemNotFound)
+                == .absent,
+            "not-found is absent"
+        )
+        expect(
+            PaykitLinkAuthProtocol.classifyItemReadStatus(PaykitLinkAuthProtocol.errSecInteractionNotAllowed)
+                == .unavailable,
+            "interaction-not-allowed is unavailable"
+        )
+        expect(
+            PaykitLinkAuthProtocol.classifyItemReadStatus(PaykitLinkAuthProtocol.errSecNotAvailable)
+                == .unavailable,
+            "not-available is unavailable"
+        )
+        expect(
+            PaykitLinkAuthProtocol.classifyItemReadStatus(PaykitLinkAuthProtocol.errSecSuccess)
+                == .presentOrOther,
+            "success is presentOrOther"
+        )
+    }
+
+    static func testRotatedBearerWriteBackGate() {
+        expect(
+            PaykitLinkAuthProtocol.shouldWriteBackRotatedBearer(
+                adopting: false,
+                bearerStillPresent: true
+            ),
+            "live alias accepts rotated bearer write-back"
+        )
+        expect(
+            !PaykitLinkAuthProtocol.shouldWriteBackRotatedBearer(
+                adopting: true,
+                bearerStillPresent: true
+            ),
+            "adopting alias refuses write-back"
+        )
+        expect(
+            !PaykitLinkAuthProtocol.shouldWriteBackRotatedBearer(
+                adopting: false,
+                bearerStillPresent: false
+            ),
+            "deleted alias refuses write-back"
         )
     }
 

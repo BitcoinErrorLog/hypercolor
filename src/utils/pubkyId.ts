@@ -24,7 +24,7 @@ const PUBKY_URI_PREFIX = 'pubky://';
 
 /**
  * Strips a `pubky://` prefix and any path, returning the raw z-base-32
- * key candidate (not yet validated).
+ * key candidate (not yet validated). Does not accept `pk:`.
  */
 export function normalizePubkyInput(raw: string): string {
   let value = raw.trim();
@@ -38,22 +38,34 @@ export function normalizePubkyInput(raw: string): string {
   return value.toLowerCase();
 }
 
+function decodeCanonicalZ32(key: string): PubkyKey | null {
+  if (key.length !== PUBKY_ID_LENGTH) return null;
+  for (const ch of key) {
+    if (!Z_BASE32_CHAR.has(ch)) return null;
+  }
+  try {
+    const bytes = pubkyZ32.decode(key);
+    if (bytes.length !== 32) return null;
+    const canonical = pubkyZ32.encode(bytes);
+    if (canonical !== key) return null;
+    return key;
+  } catch {
+    return null;
+  }
+}
+
 /**
- * True when `value` is a 52-character z-base-32 pubky (after normalizing
- * a pasted `pubky://` URI).
+ * True when `value` is a canonical 52-character z-base-32 pubky (after
+ * normalizing a pasted `pubky://` URI): alphabet, 32-byte decode, and
+ * round-trip encode must all match.
  */
 export function isValidPubky(value: string): value is PubkyKey {
-  const key = normalizePubkyInput(value);
-  if (key.length !== PUBKY_ID_LENGTH) return false;
-  for (const ch of key) {
-    if (!Z_BASE32_CHAR.has(ch)) return false;
-  }
-  return true;
+  return parsePubky(value) !== null;
 }
 
 export function parsePubky(value: string): PubkyKey | null {
   const key = normalizePubkyInput(value);
-  return isValidPubky(key) ? key : null;
+  return decodeCanonicalZ32(key);
 }
 
 /**

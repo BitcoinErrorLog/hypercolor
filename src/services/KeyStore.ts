@@ -2,6 +2,7 @@ import { hkdf } from '@noble/hashes/hkdf';
 import { sha256 } from '@noble/hashes/sha2';
 import * as Keychain from 'react-native-keychain';
 import { createMMKV, type MMKV } from 'react-native-mmkv';
+import { isValidPubky } from '../utils/pubkyId';
 
 /**
  * KeyStore — two-tier storage for delegated identity data.
@@ -48,7 +49,7 @@ const KEYCHAIN_USERNAME = 'identity';
 /**
  * Legacy keychain service that once held the receiver Noise secret in JS.
  * Native now owns that secret; this name is only used to wipe leftover v3
- * entries on `KeyStore.clear()`. Do not read or write secrets here.
+ * entries on `KeyStore.clear()` / `KeyStore.clearIfPubky()`. Do not read or write secrets here.
  */
 const LEGACY_LINK_RECEIVER_SECRET_SERVICE = 'hypercolor-link-receiver-secret';
 const RING_PENDING_SERVICE = 'hypercolor-ring-pending';
@@ -60,6 +61,9 @@ const PUBKY_KEY = 'pubky';
 const HOMESERVER_KEY = 'homeserver';
 const SESSION_SECRET_KEY = 'session_secret';
 const LINK_SESSION_KEY = 'link_session';
+const SIGN_OUT_INCOMPLETE_KEY = 'sign_out_incomplete_owner';
+const SIGN_OUT_INCOMPLETE_ALIAS_KEY = 'sign_out_incomplete_alias';
+const SIGN_OUT_WIPE_FAILURES_KEY = 'sign_out_wipe_failures';
 const MMKV_CANARY_KEY = 'keystore.canary';
 const MMKV_CANARY_VALUE = 'hypercolor-keystore-ready-v1';
 const MMKV_HKDF_INFO = 'hypercolor-keystore-mmkv-v1';
@@ -614,7 +618,8 @@ function parsePendingRingHandoff(password: string): PendingRingHandoffRecord | n
   } catch {
     // Legacy entries stored the raw hex secret as the password.
   }
-  return { ephemeralSkHex: password, expiresAt: null };
+  // Legacy raw-hex handoffs have no TTL — treat as already expired.
+  return { ephemeralSkHex: password, expiresAt: 0 };
 }
 
 export async function setPendingRingHandoff(
@@ -854,6 +859,100 @@ export async function isAppCertValid(): Promise<boolean> {
 
 // ─── Clear all ────────────────────────────────────────────────────────────────
 
+// ─── Sign-out incomplete markers (survive clearIfPubky) ───────────────────────
+
+/**
+ * Survives `clearIfPubky()` so boot can complete the wipe before painting
+ * any owner. Cleared only after a zero-error wipe. Marker reads/writes go
+ * through `requireStore` so they throw `KeyStoreNotReady` before init.
+ */
+export function markSignOutIncomplete(ownerPubky: string): void {
+  if (!isValidPubky(ownerPubky)) {
+    throw new Error('KeyStore.markSignOutIncomplete: owner is required');
+  }
+  requireStore('markSignOutIncomplete').set(SIGN_OUT_INCOMPLETE_KEY, ownerPubky);
+}
+
+export function isSignOutIncomplete(): boolean {
+  return getSignOutIncompleteOwner() !== null;
+}
+
+export function getSignOutIncompleteOwner(): string | null {
+  const value = requireStore('getSignOutIncompleteOwner').getString(SIGN_OUT_INCOMPLETE_KEY);
+  if (typeof value !== 'string' || value.length === 0) return null;
+  return isValidPubky(value) ? value : null;
+}
+
+export function markSignOutIncompleteAlias(alias: string): void {
+  if (!alias || alias.length === 0) {
+    throw new Error('KeyStore.markSignOutIncompleteAlias: alias is required');
+  }
+  requireStore('markSignOutIncompleteAlias').set(SIGN_OUT_INCOMPLETE_ALIAS_KEY, alias);
+}
+
+export function getSignOutIncompleteAlias(): string | null {
+  const value = requireStore('getSignOutIncompleteAlias').getString(SIGN_OUT_INCOMPLETE_ALIAS_KEY);
+  return typeof value === 'string' && value.length > 0 ? value : null;
+}
+
+export function clearSignOutIncomplete(): void {
+  const store = requireStore('clearSignOutIncomplete');
+  store.remove(SIGN_OUT_INCOMPLETE_KEY);
+  store.remove(SIGN_OUT_INCOMPLETE_ALIAS_KEY);
+}
+
+export function setSignOutWipeFailureCount(ownerPubky: string, count: number): void {
+  if (!isValidPubky(ownerPubky) || !Number.isInteger(count) || count < 0) {
+    throw new Error('KeyStore.setSignOutWipeFailureCount: owner and count required');
+  }
+  requireStore('setSignOutWipeFailureCount').set(
+    SIGN_OUT_WIPE_FAILURES_KEY,
+    `${ownerPubky}:${count}`,
+  );
+}
+
+export function getSignOutWipeFailureCount(ownerPubky: string): number {
+  const raw = requireStore('getSignOutWipeFailureCount').getString(SIGN_OUT_WIPE_FAILURES_KEY);
+  if (typeof raw !== 'string' || !raw.startsWith(`${ownerPubky}:`)) return 0;
+  const n = Number(raw.slice(ownerPubky.length + 1));
+  return Number.isInteger(n) && n >= 0 ? n : 0;
+}
+
+export function clearSignOutWipeFailures(ownerPubky: string): void {
+  const store = requireStore('clearSignOutWipeFailures');
+  const raw = store.getString(SIGN_OUT_WIPE_FAILURES_KEY);
+  if (typeof raw === 'string' && raw.startsWith(`${ownerPubky}:`)) {
+    store.remove(SIGN_OUT_WIPE_FAILURES_KEY);
+  }
+}
+
+/**
+ * Compare-and-clear: wipe identity material only while KeyStore still names
+ * `expectedPubky`. Returns false without touching another owner's secrets.
+ * The sign-out-incomplete marker is not removed.
+ */
+export async function clearIfPubky(expectedPubky: string): Promise<boolean> {
+  if (getPubky() !== expectedPubky) return false;
+  await clearAttachmentSecretsForOwner(expectedPubky);
+  if (getPubky() !== expectedPubky) return false;
+  const mmkv = requireStore('clearIfPubky');
+  await Promise.all([
+    deleteAppKeypair(),
+    Keychain.resetGenericPassword({ service: INBOX_KEY_SERVICE }),
+    Keychain.resetGenericPassword({ service: TRANSPORT_KEY_SERVICE }),
+    Keychain.resetGenericPassword({ service: APP_CERT_SERVICE }),
+    Keychain.resetGenericPassword({ service: LEGACY_LINK_RECEIVER_SECRET_SERVICE }),
+    Keychain.resetGenericPassword({ service: RING_PENDING_SERVICE }),
+  ]);
+  if (getPubky() !== expectedPubky) return false;
+  mmkv.remove(attachmentIndexKey(expectedPubky));
+  mmkv.remove(PUBKY_KEY);
+  mmkv.remove(HOMESERVER_KEY);
+  mmkv.remove(SESSION_SECRET_KEY);
+  mmkv.remove(LINK_SESSION_KEY);
+  return true;
+}
+
 export async function clear(): Promise<void> {
   const mmkv = requireStore('clear');
   let owner: string | null = null;
@@ -926,7 +1025,18 @@ export const KeyStore = {
   getHomeserver,
   setSessionSecret,
   getSessionSecret,
+  // Sign-out incomplete markers
+  markSignOutIncomplete,
+  isSignOutIncomplete,
+  getSignOutIncompleteOwner,
+  markSignOutIncompleteAlias,
+  getSignOutIncompleteAlias,
+  clearSignOutIncomplete,
+  setSignOutWipeFailureCount,
+  getSignOutWipeFailureCount,
+  clearSignOutWipeFailures,
   // Session
   hasPersistedSession,
   clear,
+  clearIfPubky,
 };

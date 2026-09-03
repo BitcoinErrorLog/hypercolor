@@ -1,13 +1,22 @@
 import React, { useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, Modal } from 'react-native';
-import { isPositiveBtcAmount, isValidPaymentReference } from '../types/payment';
+import { isPositiveBtcAmount, isValidPaymentReference, btcDecimalToSats } from '../types/payment';
+import { COPY, amountSatsApprox } from '../copy/uxCopy';
+import { HIT_SLOP_44 } from '../ui/hitTarget';
+import { PAYMENT_COMPOSE_DEFAULT_AMOUNT } from '../ui/paymentReview';
+import { modalAnimationType, useReduceMotion } from '../ui/reduceMotion';
 
-export function paymentComposeError(amount: string, reference: string): string | null {
+export function paymentComposeError(
+  amount: string,
+  reference: string,
+  intent: 'request' | 'tip' = 'request',
+): string | null {
   const amountValue = amount.trim();
   const referenceValue = reference.trim();
   if (!isPositiveBtcAmount(amountValue)) {
     return 'Enter a valid BTC amount';
   }
+  if (intent === 'tip') return null;
   if (referenceValue.length === 0) {
     return 'Enter a payment reference';
   }
@@ -20,15 +29,18 @@ export function paymentComposeError(amount: string, reference: string): string |
 export function PaymentComposeSheet({
   visible,
   busy,
+  intent = 'request',
   onClose,
   onSubmit,
 }: {
   visible: boolean;
   busy: boolean;
+  intent?: 'request' | 'tip';
   onClose: () => void;
   onSubmit: (amountBtc: string, reference: string) => void;
 }) {
-  const [amount, setAmount] = useState('0.001');
+  const reduceMotion = useReduceMotion();
+  const [amount, setAmount] = useState(PAYMENT_COMPOSE_DEFAULT_AMOUNT);
   const [reference, setReference] = useState('');
   const [error, setError] = useState<string | null>(null);
 
@@ -42,10 +54,13 @@ export function PaymentComposeSheet({
     setError(null);
   }
 
+  const canSubmit = paymentComposeError(amount, reference, intent) === null;
+  const sats = btcDecimalToSats(amount);
+
   function handleSubmit() {
     const amountValue = amount.trim();
     const referenceValue = reference.trim();
-    const message = paymentComposeError(amountValue, referenceValue);
+    const message = paymentComposeError(amountValue, referenceValue, intent);
     if (message) {
       setError(message);
       return;
@@ -54,10 +69,17 @@ export function PaymentComposeSheet({
   }
 
   return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+    <Modal
+      visible={visible}
+      transparent
+      animationType={modalAnimationType(reduceMotion, 'fade')}
+      onRequestClose={onClose}
+    >
       <View style={styles.backdrop}>
         <View testID="paymentComposeSheet" style={styles.sheet}>
-          <Text style={styles.title}>Request payment</Text>
+          <Text style={styles.title}>
+            {intent === 'tip' ? COPY.tipAmountTitle : 'Request payment'}
+          </Text>
           <Text style={styles.label}>Amount (BTC)</Text>
           <TextInput
             testID="paymentComposeAmount"
@@ -66,44 +88,66 @@ export function PaymentComposeSheet({
             value={amount}
             onChangeText={handleAmountChange}
             keyboardType="decimal-pad"
-            placeholder="0.001"
+            placeholder="Amount"
             placeholderTextColor="#4b5563"
             autoCapitalize="none"
           />
-          <Text style={styles.label}>Reference</Text>
-          <TextInput
-            testID="paymentComposeReference"
-            accessibilityLabel="Payment reference"
-            style={styles.input}
-            value={reference}
-            onChangeText={handleReferenceChange}
-            placeholder="invoice-2026-0001"
-            placeholderTextColor="#4b5563"
-            autoCapitalize="none"
-          />
-          {error ? (
-            <Text testID="paymentComposeError" style={styles.validation}>
-              {error}
+          {sats !== null ? (
+            <Text testID="paymentComposeSats" style={styles.satsHint}>
+              {amountSatsApprox(sats)}
             </Text>
+          ) : null}
+          {intent === 'request' ? (
+            <>
+              <Text style={styles.label}>Reference</Text>
+              <TextInput
+                testID="paymentComposeReference"
+                accessibilityLabel="Payment reference"
+                style={styles.input}
+                value={reference}
+                onChangeText={handleReferenceChange}
+                placeholder="invoice-2026-0001"
+                placeholderTextColor="#4b5563"
+                autoCapitalize="none"
+              />
+            </>
+          ) : null}
+          {error ? (
+            <View
+              testID="paymentComposeError"
+              accessibilityRole="alert"
+              accessibilityLabel={error}
+              style={styles.errorRow}
+            >
+              <Text style={styles.errorIcon}>!</Text>
+              <Text style={styles.validation}>{error}</Text>
+            </View>
           ) : null}
           <View style={styles.actions}>
             <TouchableOpacity
               testID="paymentComposeCancel"
-              accessibilityLabel="Cancel payment request"
+              accessibilityRole="button"
+              accessibilityLabel={COPY.cancel}
               style={styles.secondary}
+              hitSlop={HIT_SLOP_44}
               onPress={onClose}
               disabled={busy}
             >
-              <Text style={styles.secondaryText}>Cancel</Text>
+              <Text style={styles.secondaryText}>{COPY.cancel}</Text>
             </TouchableOpacity>
             <TouchableOpacity
               testID="paymentComposeSubmit"
-              accessibilityLabel="Send request"
-              style={[styles.primary, busy && styles.disabled]}
+              accessibilityRole="button"
+              accessibilityLabel={intent === 'tip' ? COPY.continueToReview : 'Send request'}
+              accessibilityState={{ disabled: busy || !canSubmit, busy }}
+              style={[styles.primary, (busy || !canSubmit) && styles.disabled]}
+              hitSlop={HIT_SLOP_44}
               onPress={handleSubmit}
-              disabled={busy}
+              disabled={busy || !canSubmit}
             >
-              <Text style={styles.primaryText}>Send request</Text>
+              <Text style={styles.primaryText}>
+                {intent === 'tip' ? COPY.continueToReview : 'Send request'}
+              </Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -122,7 +166,10 @@ const styles = StyleSheet.create({
   sheet: { backgroundColor: '#111', borderRadius: 16, padding: 20, gap: 10 },
   title: { color: '#f9fafb', fontSize: 17, fontWeight: '700', marginBottom: 4 },
   label: { color: '#9ca3af', fontSize: 12, fontWeight: '600' },
-  validation: { color: '#f59e0b', fontSize: 13 },
+  satsHint: { color: '#808692', fontSize: 13 },
+  validation: { color: '#f59e0b', fontSize: 13, flex: 1 },
+  errorRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
+  errorIcon: { color: '#f59e0b', fontSize: 14, fontWeight: '700' },
   input: {
     backgroundColor: '#1a1a1a',
     borderRadius: 10,
@@ -132,13 +179,20 @@ const styles = StyleSheet.create({
     fontSize: 15,
   },
   actions: { flexDirection: 'row', justifyContent: 'flex-end', gap: 10, marginTop: 8 },
-  secondary: { paddingHorizontal: 12, paddingVertical: 10 },
+  secondary: {
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    minHeight: 44,
+    justifyContent: 'center',
+  },
   secondaryText: { color: '#9ca3af', fontSize: 15 },
   primary: {
     backgroundColor: '#7c3aed',
     borderRadius: 10,
     paddingHorizontal: 14,
     paddingVertical: 10,
+    minHeight: 44,
+    justifyContent: 'center',
   },
   primaryText: { color: '#fff', fontSize: 15, fontWeight: '600' },
   disabled: { opacity: 0.4 },

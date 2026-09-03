@@ -530,13 +530,14 @@ describe('handleRingCallback z32 owner pubky', () => {
     expect(result).toEqual({ pubky: RING_PUBKY_Z32, homeserver: RING_HOMESERVER_Z32 });
   });
 
-  it('still completes a legacy raw-hex handoff with no persisted TTL', async () => {
+  it('rejects a legacy raw-hex handoff with no persisted TTL as expired', async () => {
     const sk = await resolvePendingEphemeralSk();
     await cancelPendingDelegation();
     mockPersistedHandoffSk = sk;
     mockPersistedHandoffExpiresAt = null;
-    const result = await handleRingCallback(ringCallbackUrl(RING_PUBKY_Z32));
-    expect(result).toEqual({ pubky: RING_PUBKY_Z32, homeserver: RING_HOMESERVER_Z32 });
+    await expect(handleRingCallback(ringCallbackUrl(RING_PUBKY_Z32))).rejects.toBeInstanceOf(
+      ExpiredDelegationError,
+    );
   });
 
   it('fails closed when a Keychain read error hides the handoff TTL', async () => {

@@ -10,6 +10,7 @@ import { DebugSignupPanel } from '../auth/DebugSignupPanel';
 import { getE2eIdentity } from '../../navigation/e2eSignupResult';
 import { switchE2eSavedSlotFromUi } from '../../navigation/e2eDeepLinks';
 import { COPY } from '../../copy/uxCopy';
+import { ensureSignOutPaint } from '../../services/paintedOwner';
 import { CustodyLine } from '../../ui/CustodyLine';
 import { SignOutSheet } from '../../ui/SignOutSheet';
 import { HIT_SLOP_44 } from '../../ui/hitTarget';
@@ -17,6 +18,7 @@ import { shortPubky } from '../../ui/shortPubky';
 import { sessionUiModel } from '../../ui/sessionUi';
 import { sanitizeError } from '../../ui/sanitizedError';
 import { copyText } from '../../utils/copyText';
+import { PROFILE_BACKUP_ROUTE, PROFILE_TIP_ENDPOINTS_ROUTE } from '../../ui/exposurePaths';
 import {
   clearLastBackupAt,
   formatRelativeBackupTime,
@@ -56,14 +58,23 @@ export default function ProfileScreen() {
   async function confirmSignOut() {
     setSignOutBusy(true);
     setSignOutError(null);
+    ensureSignOutPaint();
     try {
-      await PubkyService.signOut();
-      clearLastBackupAt();
-      clearSession();
-      setSignOutOpen(false);
-    } catch (err) {
-      const sanitized = sanitizeError(err, COPY.couldNotSignOut);
-      setSignOutError({ message: sanitized.message, details: sanitized.details });
+      try {
+        await PubkyService.signOut();
+      } catch (err) {
+        const sanitized = sanitizeError(err, COPY.couldNotSignOut);
+        setSignOutError({ message: sanitized.message, details: sanitized.details });
+        return;
+      }
+      try {
+        clearLastBackupAt();
+        clearSession();
+        setSignOutOpen(false);
+      } catch (err) {
+        const sanitized = sanitizeError(err, COPY.couldNotSignOut);
+        setSignOutError({ message: sanitized.message, details: sanitized.details });
+      }
     } finally {
       setSignOutBusy(false);
     }
@@ -146,6 +157,28 @@ export default function ProfileScreen() {
             onPress={() => nav.navigate('MessageRequests')}
           >
             <Text style={styles.navRowText}>{COPY.messageRequestsNav}</Text>
+            <Text style={styles.chevron}>›</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            testID="profileEncryptedBackup"
+            accessibilityRole="button"
+            accessibilityLabel={COPY.encryptedBackup}
+            style={styles.navRow}
+            onPress={() => nav.navigate(PROFILE_BACKUP_ROUTE.name, PROFILE_BACKUP_ROUTE.params)}
+          >
+            <Text style={styles.navRowText}>{COPY.encryptedBackup}</Text>
+            <Text style={styles.chevron}>›</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            testID="profileTipEndpoints"
+            accessibilityRole="button"
+            accessibilityLabel={COPY.myTipEndpoints}
+            style={styles.navRow}
+            onPress={() =>
+              nav.navigate(PROFILE_TIP_ENDPOINTS_ROUTE.name, PROFILE_TIP_ENDPOINTS_ROUTE.params)
+            }
+          >
+            <Text style={styles.navRowText}>{COPY.myTipEndpoints}</Text>
             <Text style={styles.chevron}>›</Text>
           </TouchableOpacity>
           <TouchableOpacity

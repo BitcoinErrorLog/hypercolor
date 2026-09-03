@@ -11,7 +11,9 @@ import { parsePubky } from '../utils/pubkyId';
  *   GET /v0/user/{id}/followers  → JSON array of pubky strings
  *   GET /v0/user/{id}/following  → JSON array of pubky strings
  *   GET /v0/user/{id}/friends    → JSON array of pubky strings
- *   GET /v0/user/{id}            → UserView object
+ *
+ * Product code must not ask Nexus who follows the user. Follows import may
+ * fall back to `following` only, then re-check each id against the homeserver.
  *
  * Empty friends (and an unindexed user) return HTTP 404 from Nexus.
  * Callers that want "no one" should treat 404 as an empty list.
@@ -34,21 +36,10 @@ export type NexusListQuery = {
   limit?: number;
 };
 
-export type NexusUserView = {
-  details?: {
-    id?: string;
-    name?: string;
-    image?: string;
-    bio?: string;
-    status?: string;
-  };
-};
-
 export interface NexusClientApi {
   followers(pubky: PubkyKey, query?: NexusListQuery): Promise<NexusResult<PubkyKey[]>>;
   following(pubky: PubkyKey, query?: NexusListQuery): Promise<NexusResult<PubkyKey[]>>;
   friends(pubky: PubkyKey, query?: NexusListQuery): Promise<NexusResult<PubkyKey[]>>;
-  user(pubky: PubkyKey): Promise<NexusResult<NexusUserView>>;
 }
 
 export type NexusClientOptions = {
@@ -161,9 +152,6 @@ export function createNexusClient(options: NexusClientOptions = {}): NexusClient
     friends(pubky, query) {
       return getJson(listPath('friends', pubky, query), parsePubkyList);
     },
-    user(pubky) {
-      return getJson(`/v0/user/${encodeURIComponent(pubky)}`, parseUserView);
-    },
   };
 }
 
@@ -177,11 +165,6 @@ function parsePubkyList(body: unknown): PubkyKey[] | null {
     out.push(pubky);
   }
   return out;
-}
-
-function parseUserView(body: unknown): NexusUserView | null {
-  if (typeof body !== 'object' || body === null) return null;
-  return body as NexusUserView;
 }
 
 /** Default client against configured Nexus. Inject {@link createNexusClient} in tests. */

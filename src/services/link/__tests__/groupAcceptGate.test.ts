@@ -3,6 +3,8 @@ import { PaykitLinkNative } from '../PaykitLinkNative';
 import { StorageService } from '../../StorageService';
 import { KeyStore } from '../../KeyStore';
 import { RetryQueue } from '../../RetryQueue';
+import { FollowsImportSettings } from '../../contacts/followsImportSettings';
+import { wireSignOutMarkerMocks } from '../../__tests__/wireSignOutMarkerMocks';
 import { subscribeGroupEvents } from '../../group/groupEvents';
 import {
   CHAT_MESSAGE_KIND,
@@ -106,6 +108,8 @@ jest.mock('../../StorageService', () => ({
     updateLinkMessageDeliveryState: jest.fn(),
     updateAttachmentDelivery: jest.fn(),
     countDeliveryQueueForMessage: jest.fn(),
+    upsertGroupFanoutOutcome: jest.fn(),
+    listGroupFanoutOutcomes: jest.fn(),
     saveLinkStreamItems: jest.fn(),
     getUnprocessedLinkStreamItems: jest.fn(),
     markLinkStreamItemProcessed: jest.fn(),
@@ -116,6 +120,10 @@ jest.mock('../../StorageService', () => ({
     getLinkReadCursor: jest.fn(),
     setLinkReadCursor: jest.fn(),
     clearAccountData: jest.fn(),
+    persistSignOutIncompleteJournal: jest.fn().mockResolvedValue(undefined),
+    hasSignOutIncompleteJournal: jest.fn().mockResolvedValue(false),
+    getSignOutIncompleteJournalOwner: jest.fn().mockResolvedValue(null),
+    clearSignOutIncompleteJournal: jest.fn().mockResolvedValue(undefined),
     retryPendingCleanup: jest.fn(),
     listDeliveryQueue: jest.fn(),
     removeFromQueue: jest.fn(),
@@ -124,6 +132,8 @@ jest.mock('../../StorageService', () => ({
     setContactRelationshipFlags: jest.fn(),
     getMessageRequest: jest.fn(),
     upsertMessageRequest: jest.fn(),
+    acceptDeclinedMessageRequest: jest.fn(),
+    deleteMessageRequest: jest.fn(),
     listMessageRequests: jest.fn(),
     countPendingMessageRequests: jest.fn(),
     hasGroupEvent: jest.fn(),
@@ -138,6 +148,7 @@ jest.mock('../../StorageService', () => ({
     saveGroupMessage: jest.fn(),
     hasGroupMessage: jest.fn(),
     getGroupMessage: jest.fn(),
+    updateGroupMessageDeliveryState: jest.fn(),
     findGroupMessageByAuthorEvent: jest.fn(),
     saveGroupDeferred: jest.fn(),
     listGroupDeferredForTarget: jest.fn(),
@@ -150,6 +161,11 @@ jest.mock('../../StorageService', () => ({
     upsertHandshakeBudget: jest.fn(),
     clearHandshakeBudget: jest.fn(),
     hasQueueItem: jest.fn(),
+    listBlockedPeers: jest.fn(),
+    listBlockedPeerCleanupPending: jest.fn(),
+    setBlockedPeerCleanupPending: jest.fn(),
+    insertBlockedPeer: jest.fn(),
+    deleteBlockedPeer: jest.fn(),
   },
 }));
 
@@ -171,6 +187,10 @@ jest.mock('../../KeyStore', () => ({
     deleteLinkSessionIfAlias: jest.fn(),
     isInitialized: jest.fn(() => true),
     readLinkSession: jest.fn(() => ({ ok: true, alias: null })),
+    markSignOutIncomplete: jest.fn(),
+    isSignOutIncomplete: jest.fn(() => false),
+    getSignOutIncompleteOwner: jest.fn(() => null),
+    clearSignOutIncomplete: jest.fn(),
     setAttachmentSecret: jest.fn(),
     deleteAttachmentSecrets: jest.fn(),
   },
@@ -178,7 +198,6 @@ jest.mock('../../KeyStore', () => ({
 
 jest.mock('../../RetryQueue', () => ({
   RetryQueue: {
-    enqueue: jest.fn(),
     getDue: jest.fn(),
     recordFailure: jest.fn(),
     recordSuccess: jest.fn(),
@@ -289,6 +308,8 @@ function wireInMemoryStorage(): void {
   mockedStorage.upsertHandshakeBudget.mockResolvedValue(undefined);
   mockedStorage.clearHandshakeBudget.mockResolvedValue(undefined);
   mockedStorage.hasQueueItem.mockResolvedValue(false);
+  mockedStorage.listBlockedPeers.mockResolvedValue([]);
+  mockedStorage.listBlockedPeerCleanupPending.mockResolvedValue([]);
 
   mockedStorage.upsertLink.mockImplementation(async record => {
     db.links.set(record.peerPubky, { ...record, updatedAt: NOW });
@@ -475,6 +496,7 @@ describe('group accept gate', () => {
   beforeEach(async () => {
     jest.resetAllMocks();
     jest.spyOn(Date, 'now').mockReturnValue(NOW);
+    FollowsImportSettings.resetForTests();
     streamItemSeq = 0;
     db = {
       links: new Map(),
@@ -525,10 +547,13 @@ describe('group accept gate', () => {
       mockedKeyStore.deleteLinkSession();
       return true;
     });
+    wireSignOutMarkerMocks(mockedKeyStore, mockedStorage);
     mockedRetryQueue.getDue.mockResolvedValue([]);
     wireInMemoryStorage();
 
     await LinkService.clearSession();
+    mockedKeyStore.clearSignOutIncomplete();
+    await mockedStorage.clearSignOutIncompleteJournal();
     await LinkService.signinWithSecret('signin-secret-hex');
   });
 
@@ -760,7 +785,7 @@ describe('group accept gate', () => {
         args =>
           typeof args[0] === 'string' &&
           args[0].includes('excess held stream item') &&
-          args[0].includes(PEER),
+          !args[0].includes(PEER),
       ),
     ).toBe(true);
 

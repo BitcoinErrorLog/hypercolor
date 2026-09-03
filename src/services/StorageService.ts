@@ -6,7 +6,9 @@ import type {
   MessageRequestStatus,
   PubkyKey,
 } from '../types';
-import type { SqlExecutor } from '../db/sql';
+import type { SqlExecutor, SqlValue } from '../db/sql';
+import { LinkSendError } from './link/LinkSendError';
+import { activeOwnerAtCommit } from './paintedOwner';
 import type {
   HandshakeBudget,
   HandshakeBudgetInput,
@@ -26,6 +28,7 @@ import type {
 import type {
   GroupChannel,
   GroupDeferredEvent,
+  GroupFanoutOutcome,
   GroupMember,
   GroupMemberStatus,
   GroupMessage,
@@ -34,6 +37,7 @@ import {
   GROUP_MEMBERSHIP_KIND,
   GROUP_MESSAGE_KIND,
   PUBLIC_CHANNEL_MESSAGE_KIND,
+  groupReadCursorId,
   isGroupWireKind,
   peekEnvelopeKind,
 } from '../types/group';
@@ -55,8 +59,18 @@ import type {
   PaymentRequestRecord,
   PaymentStatus,
   TipEndpointRecord,
+  OwnInvoiceHashRecord,
+  OwnInvoiceDisplayContext,
 } from '../types/payment';
 import { isPaykitPaymentKind } from '../types/payment';
+import { bindingFromEndpoint, preferVerifiedInvoiceAmount } from './payments/invoiceAmountBind';
+import { isVerifiedHashUniqueError } from './payments/verifiedHashUniqueError';
+import {
+  isMissingOwnInvoiceHashesTableError,
+  isMissingPaymentRequestInvoiceReusedColumnError,
+  logMissingOwnInvoiceHashTableRuntime,
+  logMissingPaymentRequestInvoiceReusedColumn,
+} from '../db/ownInvoiceHashes';
 import { KeyStore } from './KeyStore';
 import { cachePathsForAttachment, deleteCacheFiles } from './attachments/fileIo';
 import { OWNER_BACKUP_VERSION, type OwnerBackupSnapshot } from './backup/snapshot';
@@ -69,6 +83,56 @@ import { OWNER_BACKUP_VERSION, type OwnerBackupSnapshot } from './backup/snapsho
  */
 
 const now = () => Date.now();
+
+const SIGN_OUT_INCOMPLETE_KIND = 'sign-out-incomplete';
+const SIGN_OUT_INCOMPLETE_TARGET = 'identity';
+const SIGN_OUT_INCOMPLETE_ALIAS_PREFIX = 'alias:';
+const SIGN_OUT_WIPE_FAILURES_KIND = 'sign-out-wipe-failures';
+
+function journalTargetForAlias(alias: string | null | undefined): string {
+  if (typeof alias === 'string' && alias.length > 0) {
+    return `${SIGN_OUT_INCOMPLETE_ALIAS_PREFIX}${alias}`;
+  }
+  return SIGN_OUT_INCOMPLETE_TARGET;
+}
+
+function aliasFromJournalTarget(target: string): string | null {
+  if (target.startsWith(SIGN_OUT_INCOMPLETE_ALIAS_PREFIX)) {
+    const alias = target.slice(SIGN_OUT_INCOMPLETE_ALIAS_PREFIX.length);
+    return alias.length > 0 ? alias : null;
+  }
+  return null;
+}
+
+/**
+ * Owner-conditional commit: one synchronous check against the painted
+ * identity immediately before BEGIN / executeSync, in the same tick as
+ * the write so no `await` can interleave. Throws typed `owner-changed`
+ * instead of persisting.
+ */
+function assertOwnerAtCommit(expectedOwner: PubkyKey): void {
+  const current = activeOwnerAtCommit();
+  if (current !== expectedOwner) {
+    throw new LinkSendError('owner-changed', 'StorageService: owner changed during persist');
+  }
+}
+
+async function ownedWrite<T>(expectedOwner: PubkyKey, fn: (db: SqlExecutor) => T): Promise<T> {
+  const db = await getDb();
+  assertOwnerAtCommit(expectedOwner);
+  return fn(db);
+}
+
+async function ownedTransact(
+  expectedOwner: PubkyKey,
+  fn: (db: SqlExecutor) => void,
+): Promise<void> {
+  const db = await getDb();
+  assertOwnerAtCommit(expectedOwner);
+  transact(db, () => fn(db));
+}
+/** Hostile peers can grow unapplied `payment_events` rows; keep the newest N per sender. */
+const PAYMENT_EVENTS_UNAPPLIED_KEEP_PER_SENDER = 100;
 
 function transact(db: SqlExecutor, fn: () => void): void {
   db.executeSync('BEGIN IMMEDIATE');
@@ -91,10 +155,10 @@ export const StorageService = {
   // ── Contacts ──────────────────────────────────────────────────────────────
 
   async upsertContact(contact: Contact): Promise<void> {
-    const db = await getDb();
-    const ts = now();
-    db.executeSync(
-      `INSERT INTO contacts
+    await ownedWrite(contact.ownerPubky, db => {
+      const ts = now();
+      db.executeSync(
+        `INSERT INTO contacts
         (owner_pubky, pubky, display_name, avatar_hash, homeserver, trust_score,
          is_following, is_follower, is_mutual, added_manually,
          first_seen_at, last_interaction_at, created_at, updated_at)
@@ -110,23 +174,24 @@ export const StorageService = {
          added_manually       = MAX(added_manually, excluded.added_manually),
          last_interaction_at  = COALESCE(excluded.last_interaction_at, last_interaction_at),
          updated_at           = excluded.updated_at`,
-      [
-        contact.ownerPubky,
-        contact.pubky,
-        contact.displayName ?? null,
-        contact.avatarHash ?? null,
-        contact.homeserver ?? null,
-        contact.trustScore,
-        contact.isFollowing ? 1 : 0,
-        contact.isFollower ? 1 : 0,
-        contact.isMutual ? 1 : 0,
-        contact.addedManually ? 1 : 0,
-        contact.firstSeenAt,
-        contact.lastInteractionAt ?? null,
-        contact.firstSeenAt,
-        ts,
-      ],
-    );
+        [
+          contact.ownerPubky,
+          contact.pubky,
+          contact.displayName ?? null,
+          contact.avatarHash ?? null,
+          contact.homeserver ?? null,
+          contact.trustScore,
+          contact.isFollowing ? 1 : 0,
+          contact.isFollower ? 1 : 0,
+          contact.isMutual ? 1 : 0,
+          contact.addedManually ? 1 : 0,
+          contact.firstSeenAt,
+          contact.lastInteractionAt ?? null,
+          contact.firstSeenAt,
+          ts,
+        ],
+      );
+    });
   },
 
   /**
@@ -178,64 +243,96 @@ export const StorageService = {
     pubky: PubkyKey,
     flags: { isFollowing: boolean; isFollower: boolean; isMutual: boolean },
   ): Promise<void> {
-    const db = await getDb();
-    db.executeSync(
-      `UPDATE contacts
+    await ownedWrite(ownerPubky, db => {
+      db.executeSync(
+        `UPDATE contacts
        SET is_following = ?, is_follower = ?, is_mutual = ?, updated_at = ?
        WHERE owner_pubky = ? AND pubky = ?`,
-      [
-        flags.isFollowing ? 1 : 0,
-        flags.isFollower ? 1 : 0,
-        flags.isMutual ? 1 : 0,
-        now(),
+        [
+          flags.isFollowing ? 1 : 0,
+          flags.isFollower ? 1 : 0,
+          flags.isMutual ? 1 : 0,
+          now(),
+          ownerPubky,
+          pubky,
+        ],
+      );
+    });
+  },
+
+  async deleteContact(ownerPubky: PubkyKey, pubky: PubkyKey): Promise<void> {
+    await ownedWrite(ownerPubky, db => {
+      db.executeSync('DELETE FROM contacts WHERE owner_pubky = ? AND pubky = ?', [
         ownerPubky,
         pubky,
-      ],
-    );
+      ]);
+    });
+  },
+
+  /** Drops imported follow suggestions. Manually added contacts are kept. */
+  async deleteFollowSuggestions(ownerPubky: PubkyKey): Promise<void> {
+    await ownedWrite(ownerPubky, db => {
+      db.executeSync('DELETE FROM contacts WHERE owner_pubky = ? AND added_manually = 0', [
+        ownerPubky,
+      ]);
+    });
+  },
+
+  /**
+   * A complete homeserver follows listing is authoritative for follow-derived
+   * rows. Deletes suggestions no longer in the listing and clears
+   * `is_following` / `is_mutual` on retained manual contacts. Does not create
+   * rows — callers upsert current followees separately.
+   */
+  async reconcileFollowSuggestions(ownerPubky: PubkyKey, followees: PubkyKey[]): Promise<void> {
+    const keep = new Set(followees);
+    await ownedTransact(ownerPubky, db => {
+      const result = db.executeSync('SELECT * FROM contacts WHERE owner_pubky = ?', [ownerPubky]);
+      const ts = now();
+      for (const raw of result.rows ?? []) {
+        const row = rowToContact(raw);
+        if (keep.has(row.pubky)) continue;
+        if (!row.addedManually) {
+          db.executeSync('DELETE FROM contacts WHERE owner_pubky = ? AND pubky = ?', [
+            ownerPubky,
+            row.pubky,
+          ]);
+          continue;
+        }
+        db.executeSync(
+          `UPDATE contacts
+           SET is_following = 0, is_mutual = 0, updated_at = ?
+           WHERE owner_pubky = ? AND pubky = ?`,
+          [ts, ownerPubky, row.pubky],
+        );
+      }
+    });
   },
 
   async updateTrustScore(pubky: PubkyKey, delta: number, ownerPubky?: PubkyKey): Promise<void> {
-    const db = await getDb();
-    const ts = now();
-    if (ownerPubky !== undefined && ownerPubky !== '') {
+    if (ownerPubky === undefined || ownerPubky === '') return;
+    await ownedWrite(ownerPubky, db => {
       db.executeSync(
         `UPDATE contacts
          SET trust_score = MAX(0.0, MIN(1.0, trust_score + ?)),
              updated_at = ?
          WHERE owner_pubky = ? AND pubky = ?`,
-        [delta, ts, ownerPubky, pubky],
+        [delta, now(), ownerPubky, pubky],
       );
-      return;
-    }
-    db.executeSync(
-      `UPDATE contacts
-       SET trust_score = MAX(0.0, MIN(1.0, trust_score + ?)),
-           updated_at = ?
-       WHERE pubky = ?
-         AND (SELECT COUNT(*) FROM contacts WHERE pubky = ?) = 1`,
-      [delta, ts, pubky, pubky],
-    );
+    });
   },
 
   async touchContactInteraction(pubky: PubkyKey, ownerPubky?: PubkyKey): Promise<void> {
-    const db = await getDb();
-    const ts = now();
-    if (ownerPubky !== undefined && ownerPubky !== '') {
+    if (ownerPubky === undefined || ownerPubky === '') return;
+    await ownedWrite(ownerPubky, db => {
+      const ts = now();
       db.executeSync(
         `UPDATE contacts
          SET last_interaction_at = ?, updated_at = ?
          WHERE owner_pubky = ? AND pubky = ?`,
         [ts, ts, ownerPubky, pubky],
       );
-      return;
-    }
-    db.executeSync(
-      `UPDATE contacts
-       SET last_interaction_at = ?, updated_at = ?
-       WHERE pubky = ?
-         AND (SELECT COUNT(*) FROM contacts WHERE pubky = ?) = 1`,
-      [ts, ts, pubky, pubky],
-    );
+    });
   },
 
   async countLinkMessagesForPeer(ownerPubky: PubkyKey, peerPubky: PubkyKey): Promise<number> {
@@ -251,22 +348,54 @@ export const StorageService = {
   // ── Message requests (WoT inbound gate) ───────────────────────────────────
 
   async upsertMessageRequest(request: MessageRequest): Promise<void> {
-    const db = await getDb();
-    db.executeSync(
-      `INSERT INTO message_requests
-        (owner_pubky, peer_pubky, created_at, updated_at, status)
-       VALUES (?, ?, ?, ?, ?)
-       ON CONFLICT(owner_pubky, peer_pubky) DO UPDATE SET
-         status     = CASE
-           WHEN message_requests.status = 'declined' THEN message_requests.status
-           ELSE excluded.status
-         END,
-         updated_at = CASE
-           WHEN message_requests.status = 'declined' THEN message_requests.updated_at
-           ELSE excluded.updated_at
-         END`,
-      [request.ownerPubky, request.peerPubky, request.createdAt, request.updatedAt, request.status],
-    );
+    await ownedWrite(request.ownerPubky, db => {
+      db.executeSync(
+        `INSERT INTO message_requests
+          (owner_pubky, peer_pubky, created_at, updated_at, status)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(owner_pubky, peer_pubky) DO UPDATE SET
+           status     = CASE
+             WHEN message_requests.status = 'declined' THEN message_requests.status
+             ELSE excluded.status
+           END,
+           updated_at = CASE
+             WHEN message_requests.status = 'declined' THEN message_requests.updated_at
+             ELSE excluded.updated_at
+           END`,
+        [
+          request.ownerPubky,
+          request.peerPubky,
+          request.createdAt,
+          request.updatedAt,
+          request.status,
+        ],
+      );
+    });
+  },
+
+  /**
+   * User-initiated declined → accepted. The sticky upsert cannot do this.
+   * Returns whether a declined row was updated.
+   */
+  async acceptDeclinedMessageRequest(ownerPubky: PubkyKey, peerPubky: PubkyKey): Promise<boolean> {
+    return ownedWrite(ownerPubky, db => {
+      db.executeSync(
+        `UPDATE message_requests
+         SET status = 'accepted', updated_at = ?
+         WHERE owner_pubky = ? AND peer_pubky = ? AND status = 'declined'`,
+        [now(), ownerPubky, peerPubky],
+      );
+      return sqliteChanges(db) > 0;
+    });
+  },
+
+  async deleteMessageRequest(ownerPubky: PubkyKey, peerPubky: PubkyKey): Promise<void> {
+    await ownedWrite(ownerPubky, db => {
+      db.executeSync('DELETE FROM message_requests WHERE owner_pubky = ? AND peer_pubky = ?', [
+        ownerPubky,
+        peerPubky,
+      ]);
+    });
   },
 
   async getMessageRequest(
@@ -339,38 +468,33 @@ export const StorageService = {
         // Decline still drops the stream rows.
       }
     }
-    db.executeSync('DELETE FROM link_stream_items WHERE owner_pubky = ? AND peer_pubky = ?', [
-      ownerPubky,
-      peerPubky,
-    ]);
+    await ownedWrite(ownerPubky, writeDb => {
+      writeDb.executeSync(
+        'DELETE FROM link_stream_items WHERE owner_pubky = ? AND peer_pubky = ?',
+        [ownerPubky, peerPubky],
+      );
+    });
   },
 
   async deleteLinkMessagesForPeer(ownerPubky: PubkyKey, peerPubky: PubkyKey): Promise<void> {
-    const db = await getDb();
-    db.executeSync('DELETE FROM link_messages WHERE owner_pubky = ? AND peer_pubky = ?', [
-      ownerPubky,
-      peerPubky,
-    ]);
+    await ownedWrite(ownerPubky, db => {
+      db.executeSync('DELETE FROM link_messages WHERE owner_pubky = ? AND peer_pubky = ?', [
+        ownerPubky,
+        peerPubky,
+      ]);
+    });
   },
 
   // ── Delivery Queue ────────────────────────────────────────────────────────
 
   async enqueue(item: DeliveryQueueItem): Promise<void> {
-    const db = await getDb();
-    db.executeSync(
-      `INSERT OR REPLACE INTO delivery_queue
-        (id, message_id, recipient_pubky, payload, attempts, next_retry_at, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      [
-        item.id,
-        item.messageId,
-        item.recipientPubky,
-        persistQueuePayload(item.payload),
-        item.attempts,
-        item.nextRetryAt,
-        item.createdAt,
-      ],
-    );
+    const owner = queueOwnerFromPayload(item.payload);
+    if (!owner) {
+      throw new LinkSendError('owner-changed', 'StorageService: queue payload missing owner');
+    }
+    await ownedWrite(owner, db => {
+      insertQueueItem(db, item, owner);
+    });
   },
 
   async dequeue(limit = 10): Promise<DeliveryQueueItem[]> {
@@ -382,17 +506,24 @@ export const StorageService = {
     return (result.rows ?? []).map(rowToQueueItem);
   },
 
-  async incrementAttempt(id: string, nextRetryAt: number): Promise<void> {
-    const db = await getDb();
-    db.executeSync(
-      'UPDATE delivery_queue SET attempts = attempts + 1, next_retry_at = ? WHERE id = ?',
-      [nextRetryAt, id],
-    );
+  async incrementAttempt(id: string, nextRetryAt: number): Promise<boolean> {
+    return mutateOwnedQueueRow(id, (db, owner) => {
+      db.executeSync(
+        `UPDATE delivery_queue SET attempts = attempts + 1, next_retry_at = ?
+         WHERE id = ? AND json_extract(payload, '$.ownerPubky') = ?`,
+        [nextRetryAt, id, owner],
+      );
+    });
   },
 
-  async deferQueueItem(id: string, nextRetryAt: number): Promise<void> {
-    const db = await getDb();
-    db.executeSync('UPDATE delivery_queue SET next_retry_at = ? WHERE id = ?', [nextRetryAt, id]);
+  async deferQueueItem(id: string, nextRetryAt: number): Promise<boolean> {
+    return mutateOwnedQueueRow(id, (db, owner) => {
+      db.executeSync(
+        `UPDATE delivery_queue SET next_retry_at = ?
+         WHERE id = ? AND json_extract(payload, '$.ownerPubky') = ?`,
+        [nextRetryAt, id, owner],
+      );
+    });
   },
 
   async listDeliveryQueue(): Promise<DeliveryQueueItem[]> {
@@ -412,17 +543,21 @@ export const StorageService = {
     return (result.rows?.length ?? 0) > 0;
   },
 
-  async removeFromQueue(id: string): Promise<void> {
-    const db = await getDb();
-    db.executeSync('DELETE FROM delivery_queue WHERE id = ?', [id]);
+  async removeFromQueue(id: string): Promise<boolean> {
+    return mutateOwnedQueueRow(id, (db, owner) => {
+      db.executeSync(
+        `DELETE FROM delivery_queue WHERE id = ? AND json_extract(payload, '$.ownerPubky') = ?`,
+        [id, owner],
+      );
+    });
   },
 
   // ── Link receivers (Paykit Encrypted Links) ───────────────────────────────
 
   async upsertLinkReceiver(receiver: LinkReceiverInput): Promise<void> {
-    const db = await getDb();
-    db.executeSync(
-      `INSERT INTO link_receivers
+    await ownedWrite(receiver.ownerPubky, db => {
+      db.executeSync(
+        `INSERT INTO link_receivers
         (owner_pubky, receiver_alias, receiver_path, marker_published, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?)
        ON CONFLICT(owner_pubky) DO UPDATE SET
@@ -430,15 +565,16 @@ export const StorageService = {
          receiver_path    = excluded.receiver_path,
          marker_published = excluded.marker_published,
          updated_at       = excluded.updated_at`,
-      [
-        receiver.ownerPubky,
-        receiver.receiverAlias,
-        receiver.receiverPath,
-        receiver.markerPublished ? 1 : 0,
-        now(),
-        now(),
-      ],
-    );
+        [
+          receiver.ownerPubky,
+          receiver.receiverAlias,
+          receiver.receiverPath,
+          receiver.markerPublished ? 1 : 0,
+          now(),
+          now(),
+        ],
+      );
+    });
   },
 
   async getLinkReceiver(ownerPubky: PubkyKey): Promise<LinkReceiver | null> {
@@ -452,43 +588,45 @@ export const StorageService = {
   },
 
   async deleteLinkReceiver(ownerPubky: PubkyKey): Promise<void> {
-    const db = await getDb();
-    db.executeSync('DELETE FROM link_receivers WHERE owner_pubky = ?', [ownerPubky]);
+    await ownedWrite(ownerPubky, db => {
+      db.executeSync('DELETE FROM link_receivers WHERE owner_pubky = ?', [ownerPubky]);
+    });
   },
 
   // ── Links (Paykit Encrypted Links) ────────────────────────────────────────
 
   async upsertLink(link: LinkRecordInput): Promise<void> {
-    const db = await getDb();
-    db.executeSync(
-      `INSERT INTO links
-        (owner_pubky, peer_pubky, role, status, snapshot,
-         remote_noise_public_key, local_receiver_path, remote_receiver_path,
-         consecutive_failures, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT(owner_pubky, peer_pubky) DO UPDATE SET
-         role                    = excluded.role,
-         status                  = excluded.status,
-         snapshot                = excluded.snapshot,
-         remote_noise_public_key = excluded.remote_noise_public_key,
-         local_receiver_path     = excluded.local_receiver_path,
-         remote_receiver_path    = excluded.remote_receiver_path,
-         consecutive_failures    = excluded.consecutive_failures,
-         updated_at              = excluded.updated_at`,
-      [
-        link.ownerPubky,
-        link.peerPubky,
-        link.role,
-        link.status,
-        link.snapshot,
-        link.remoteNoisePublicKey,
-        link.localReceiverPath,
-        link.remoteReceiverPath,
-        link.consecutiveFailures,
-        now(),
-        now(),
-      ],
-    );
+    await ownedWrite(link.ownerPubky, db => {
+      db.executeSync(
+        `INSERT INTO links
+          (owner_pubky, peer_pubky, role, status, snapshot,
+           remote_noise_public_key, local_receiver_path, remote_receiver_path,
+           consecutive_failures, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(owner_pubky, peer_pubky) DO UPDATE SET
+           role                    = excluded.role,
+           status                  = excluded.status,
+           snapshot                = excluded.snapshot,
+           remote_noise_public_key = excluded.remote_noise_public_key,
+           local_receiver_path     = excluded.local_receiver_path,
+           remote_receiver_path    = excluded.remote_receiver_path,
+           consecutive_failures    = excluded.consecutive_failures,
+           updated_at              = excluded.updated_at`,
+        [
+          link.ownerPubky,
+          link.peerPubky,
+          link.role,
+          link.status,
+          link.snapshot,
+          link.remoteNoisePublicKey,
+          link.localReceiverPath,
+          link.remoteReceiverPath,
+          link.consecutiveFailures,
+          now(),
+          now(),
+        ],
+      );
+    });
   },
 
   async getLink(ownerPubky: PubkyKey, peerPubky: PubkyKey): Promise<LinkRecord | null> {
@@ -546,13 +684,14 @@ export const StorageService = {
     snapshot: string,
     status: StoredLinkStatus,
   ): Promise<void> {
-    const db = await getDb();
-    db.executeSync(
-      `UPDATE links
-       SET snapshot = ?, status = ?, consecutive_failures = 0, updated_at = ?
-       WHERE owner_pubky = ? AND peer_pubky = ?`,
-      [snapshot, status, now(), ownerPubky, peerPubky],
-    );
+    await ownedWrite(ownerPubky, db => {
+      db.executeSync(
+        `UPDATE links
+         SET snapshot = ?, status = ?, consecutive_failures = 0, updated_at = ?
+         WHERE owner_pubky = ? AND peer_pubky = ?`,
+        [snapshot, status, now(), ownerPubky, peerPubky],
+      );
+    });
   },
 
   // ── Handshake abuse budget (survives link wipe) ────────────────────────────
@@ -579,25 +718,26 @@ export const StorageService = {
   },
 
   async upsertHandshakeBudget(budget: HandshakeBudgetInput): Promise<void> {
-    const db = await getDb();
-    db.executeSync(
-      `INSERT INTO link_handshake_budgets
-        (owner_pubky, peer_pubky, pending_advances, next_advance_at, exhausted_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?)
-       ON CONFLICT(owner_pubky, peer_pubky) DO UPDATE SET
-         pending_advances = excluded.pending_advances,
-         next_advance_at  = excluded.next_advance_at,
-         exhausted_at     = excluded.exhausted_at,
-         updated_at       = excluded.updated_at`,
-      [
-        budget.ownerPubky,
-        budget.peerPubky,
-        budget.pendingAdvances,
-        budget.nextAdvanceAt,
-        budget.exhaustedAt,
-        now(),
-      ],
-    );
+    await ownedWrite(budget.ownerPubky, db => {
+      db.executeSync(
+        `INSERT INTO link_handshake_budgets
+          (owner_pubky, peer_pubky, pending_advances, next_advance_at, exhausted_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(owner_pubky, peer_pubky) DO UPDATE SET
+           pending_advances = excluded.pending_advances,
+           next_advance_at  = excluded.next_advance_at,
+           exhausted_at     = excluded.exhausted_at,
+           updated_at       = excluded.updated_at`,
+        [
+          budget.ownerPubky,
+          budget.peerPubky,
+          budget.pendingAdvances,
+          budget.nextAdvanceAt,
+          budget.exhaustedAt,
+          now(),
+        ],
+      );
+    });
   },
 
   /**
@@ -606,55 +746,60 @@ export const StorageService = {
    * `LinkService.ensureLinkLocked`.
    */
   async clearHandshakeBudget(ownerPubky: PubkyKey, peerPubky: PubkyKey): Promise<void> {
-    const db = await getDb();
-    db.executeSync('DELETE FROM link_handshake_budgets WHERE owner_pubky = ? AND peer_pubky = ?', [
-      ownerPubky,
-      peerPubky,
-    ]);
+    await ownedWrite(ownerPubky, db => {
+      db.executeSync(
+        'DELETE FROM link_handshake_budgets WHERE owner_pubky = ? AND peer_pubky = ?',
+        [ownerPubky, peerPubky],
+      );
+    });
   },
 
   async resetLinkConsecutiveFailures(ownerPubky: PubkyKey, peerPubky: PubkyKey): Promise<void> {
-    const db = await getDb();
-    db.executeSync(
-      `UPDATE links
-       SET consecutive_failures = 0, updated_at = ?
-       WHERE owner_pubky = ? AND peer_pubky = ?`,
-      [now(), ownerPubky, peerPubky],
-    );
+    await ownedWrite(ownerPubky, db => {
+      db.executeSync(
+        `UPDATE links
+         SET consecutive_failures = 0, updated_at = ?
+         WHERE owner_pubky = ? AND peer_pubky = ?`,
+        [now(), ownerPubky, peerPubky],
+      );
+    });
   },
 
   async incrementLinkConsecutiveFailures(
     ownerPubky: PubkyKey,
     peerPubky: PubkyKey,
   ): Promise<number> {
-    const db = await getDb();
-    const ts = now();
-    db.executeSync(
-      `UPDATE links
-       SET consecutive_failures = consecutive_failures + 1, updated_at = ?
-       WHERE owner_pubky = ? AND peer_pubky = ?`,
-      [ts, ownerPubky, peerPubky],
-    );
-    const result = db.executeSync(
-      'SELECT consecutive_failures FROM links WHERE owner_pubky = ? AND peer_pubky = ?',
-      [ownerPubky, peerPubky],
-    );
-    return (result.rows?.[0]?.consecutive_failures as number) ?? 0;
+    return ownedWrite(ownerPubky, db => {
+      const ts = now();
+      db.executeSync(
+        `UPDATE links
+         SET consecutive_failures = consecutive_failures + 1, updated_at = ?
+         WHERE owner_pubky = ? AND peer_pubky = ?`,
+        [ts, ownerPubky, peerPubky],
+      );
+      const result = db.executeSync(
+        'SELECT consecutive_failures FROM links WHERE owner_pubky = ? AND peer_pubky = ?',
+        [ownerPubky, peerPubky],
+      );
+      return (result.rows?.[0]?.consecutive_failures as number) ?? 0;
+    });
   },
 
   async deleteLink(ownerPubky: PubkyKey, peerPubky: PubkyKey): Promise<void> {
-    const db = await getDb();
-    db.executeSync('DELETE FROM links WHERE owner_pubky = ? AND peer_pubky = ?', [
-      ownerPubky,
-      peerPubky,
-    ]);
+    await ownedWrite(ownerPubky, db => {
+      db.executeSync('DELETE FROM links WHERE owner_pubky = ? AND peer_pubky = ?', [
+        ownerPubky,
+        peerPubky,
+      ]);
+    });
   },
 
   // ── Link messages (Paykit Encrypted Links) ────────────────────────────────
 
   async saveLinkMessage(message: LinkMessage): Promise<void> {
-    const db = await getDb();
-    insertLinkMessage(db, message);
+    await ownedWrite(message.ownerPubky, db => {
+      insertLinkMessage(db, message);
+    });
   },
 
   /**
@@ -666,10 +811,10 @@ export const StorageService = {
     message: LinkMessage;
     queueItem: DeliveryQueueItem;
   }): Promise<void> {
-    const db = await getDb();
-    transact(db, () => {
+    await ownedTransact(input.message.ownerPubky, db => {
+      const item = bindQueueItemToOwner(input.queueItem, input.message.ownerPubky);
       insertLinkMessage(db, input.message);
-      insertQueueItem(db, input.queueItem);
+      insertQueueItem(db, item, input.message.ownerPubky);
     });
   },
 
@@ -687,9 +832,8 @@ export const StorageService = {
     snapshot: string;
     queueId: string;
   }): Promise<void> {
-    const db = await getDb();
-    const ts = now();
-    transact(db, () => {
+    await ownedTransact(input.ownerPubky, db => {
+      const ts = now();
       db.executeSync(
         `UPDATE link_messages
          SET delivery_state = 'sent', updated_at = ?
@@ -835,21 +979,61 @@ export const StorageService = {
     eventId: string,
     state: LinkDeliveryState,
   ): Promise<void> {
-    const db = await getDb();
-    db.executeSync(
-      `UPDATE link_messages
+    await ownedWrite(ownerPubky, db => {
+      db.executeSync(
+        `UPDATE link_messages
        SET delivery_state = ?, updated_at = ?
        WHERE owner_pubky = ? AND sender_pubky = ? AND kind = ? AND event_id = ?`,
-      [state, now(), ownerPubky, senderPubky, kind, eventId],
-    );
+        [state, now(), ownerPubky, senderPubky, kind, eventId],
+      );
+    });
+  },
+
+  /**
+   * Terminal failed delivery + dequeue in one owner-conditional transaction.
+   * The owned message write gates the queue delete so a paint change cannot
+   * dequeue another owner's row.
+   */
+  async failLinkMessageAndDequeue(input: {
+    ownerPubky: PubkyKey;
+    senderPubky: PubkyKey;
+    kind: string;
+    eventId: string;
+    queueId: string;
+  }): Promise<void> {
+    await ownedTransact(input.ownerPubky, db => {
+      const ts = now();
+      db.executeSync(
+        `UPDATE link_messages
+         SET delivery_state = 'failed', updated_at = ?
+         WHERE owner_pubky = ? AND sender_pubky = ? AND kind = ? AND event_id = ?`,
+        [ts, input.ownerPubky, input.senderPubky, input.kind, input.eventId],
+      );
+      if (input.kind === CHAT_ATTACHMENT_KIND) {
+        db.executeSync(
+          `UPDATE attachments
+           SET delivery_state = 'failed', updated_at = ?
+           WHERE owner_pubky = ? AND sender_pubky = ? AND event_id = ?`,
+          [ts, input.ownerPubky, input.senderPubky, input.eventId],
+        );
+      }
+      db.executeSync(
+        `DELETE FROM delivery_queue
+         WHERE id = ? AND json_extract(payload, '$.ownerPubky') = ?`,
+        [input.queueId, input.ownerPubky],
+      );
+    });
   },
 
   // ── Link stream items (inbound raw, before snapshot) ──────────────────────
 
   async saveLinkStreamItems(items: LinkStreamItemInput[]): Promise<void> {
     if (items.length === 0) return;
-    const db = await getDb();
-    transact(db, () => {
+    const ownerPubky = items[0]!.ownerPubky;
+    if (items.some(item => item.ownerPubky !== ownerPubky)) {
+      throw new LinkSendError('owner-changed', 'StorageService: mixed owners in stream persist');
+    }
+    await ownedTransact(ownerPubky, db => {
       for (const item of items) {
         db.executeSync(
           `INSERT OR IGNORE INTO link_stream_items
@@ -885,7 +1069,12 @@ export const StorageService = {
 
   async markLinkStreamItemProcessed(id: string): Promise<void> {
     const db = await getDb();
-    db.executeSync('UPDATE link_stream_items SET processed = 1 WHERE id = ?', [id]);
+    const owner = db.executeSync('SELECT owner_pubky FROM link_stream_items WHERE id = ?', [id])
+      .rows?.[0]?.owner_pubky;
+    if (typeof owner !== 'string' || owner.length === 0) return;
+    await ownedWrite(owner, writeDb => {
+      writeDb.executeSync('UPDATE link_stream_items SET processed = 1 WHERE id = ?', [id]);
+    });
   },
 
   /**
@@ -904,30 +1093,29 @@ export const StorageService = {
     keepOldestGroup = LINK_HELD_UNPROCESSED_CAP_PER_PEER,
     keepOldestOther = LINK_HELD_NON_GROUP_CAP_PER_PEER,
   ): Promise<number> {
-    const db = await getDb();
-    const result = db.executeSync(
-      `SELECT id, kind, raw_json FROM link_stream_items
+    return ownedWrite(ownerPubky, db => {
+      const result = db.executeSync(
+        `SELECT id, kind, raw_json FROM link_stream_items
        WHERE owner_pubky = ? AND peer_pubky = ? AND processed = 0
        ORDER BY received_at ASC, rowid ASC`,
-      [ownerPubky, peerPubky],
-    );
-    const groupIds: string[] = [];
-    const otherIds: string[] = [];
-    for (const row of result.rows ?? []) {
-      const id = String(row.id);
-      const storedKind = typeof row.kind === 'string' ? row.kind : null;
-      const rawJson = typeof row.raw_json === 'string' ? row.raw_json : '';
-      if (heldStreamItemIsGroup(storedKind, rawJson)) groupIds.push(id);
-      else otherIds.push(id);
-    }
-    const excess = [...groupIds.slice(keepOldestGroup), ...otherIds.slice(keepOldestOther)];
-    if (excess.length === 0) return 0;
-    transact(db, () => {
+        [ownerPubky, peerPubky],
+      );
+      const groupIds: string[] = [];
+      const otherIds: string[] = [];
+      for (const row of result.rows ?? []) {
+        const id = String(row.id);
+        const storedKind = typeof row.kind === 'string' ? row.kind : null;
+        const rawJson = typeof row.raw_json === 'string' ? row.raw_json : '';
+        if (heldStreamItemIsGroup(storedKind, rawJson)) groupIds.push(id);
+        else otherIds.push(id);
+      }
+      const excess = [...groupIds.slice(keepOldestGroup), ...otherIds.slice(keepOldestOther)];
+      if (excess.length === 0) return 0;
       for (const id of excess) {
         db.executeSync('UPDATE link_stream_items SET processed = 1 WHERE id = ?', [id]);
       }
+      return excess.length;
     });
-    return excess.length;
   },
 
   // ── Link read cursors (Paykit Encrypted Links) ────────────────────────────
@@ -947,15 +1135,16 @@ export const StorageService = {
     conversationId: string,
     lastReadAt: number,
   ): Promise<void> {
-    const db = await getDb();
-    db.executeSync(
-      `INSERT INTO link_read_cursors (owner_pubky, conversation_id, last_read_at, updated_at)
+    await ownedWrite(ownerPubky, db => {
+      db.executeSync(
+        `INSERT INTO link_read_cursors (owner_pubky, conversation_id, last_read_at, updated_at)
        VALUES (?, ?, ?, ?)
        ON CONFLICT(owner_pubky, conversation_id) DO UPDATE SET
          last_read_at = MAX(last_read_at, excluded.last_read_at),
          updated_at   = excluded.updated_at`,
-      [ownerPubky, conversationId, lastReadAt, now()],
-    );
+        [ownerPubky, conversationId, lastReadAt, now()],
+      );
+    });
   },
 
   /**
@@ -1009,6 +1198,7 @@ export const StorageService = {
     const tipEndpoints = (
       db.executeSync(`SELECT * FROM tip_endpoints WHERE owner_pubky = ?`, [ownerPubky]).rows ?? []
     ).map(rowToTipEndpoint);
+    const ownInvoiceHashes = readOwnInvoiceHashesForOwner(db, ownerPubky);
     const attachments = (
       db.executeSync(`SELECT * FROM attachments WHERE owner_pubky = ?`, [ownerPubky]).rows ?? []
     )
@@ -1032,6 +1222,7 @@ export const StorageService = {
       groupMessages,
       paymentRequests,
       tipEndpoints,
+      ownInvoiceHashes,
       attachments,
     };
   },
@@ -1045,7 +1236,6 @@ export const StorageService = {
     if (snapshot.ownerPubky !== ownerPubky) {
       throw new Error('Backup belongs to a different account');
     }
-    const db = await getDb();
     for (const contact of snapshot.contacts) {
       if (contact.ownerPubky !== ownerPubky) continue;
       await StorageService.upsertContact(contact);
@@ -1077,26 +1267,80 @@ export const StorageService = {
       if (payment.ownerPubky !== ownerPubky) continue;
       await StorageService.savePaymentRequest(payment);
     }
-    for (const tip of snapshot.tipEndpoints) {
-      if (tip.ownerPubky !== ownerPubky) continue;
-      db.executeSync(
-        `INSERT OR REPLACE INTO tip_endpoints
+    await ownedTransact(ownerPubky, db => {
+      for (const tip of snapshot.tipEndpoints) {
+        if (tip.ownerPubky !== ownerPubky) continue;
+        db.executeSync(
+          `INSERT OR REPLACE INTO tip_endpoints
           (owner_pubky, peer_pubky, identifier, payload, updated_at,
            validation_status, invoice_amount, invoice_expires_at, payment_hash)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [
+          [
+            ownerPubky,
+            tip.peerPubky,
+            tip.identifier,
+            tip.payload,
+            tip.updatedAt,
+            tip.validationStatus,
+            tip.invoiceAmount,
+            tip.invoiceExpiresAt,
+            tip.paymentHash,
+          ],
+        );
+        if (tip.peerPubky === ownerPubky && tip.paymentHash) {
+          const binding = bindingFromEndpoint(tip);
+          insertOwnInvoiceHash(
+            db,
+            ownerPubky,
+            tip.identifier,
+            tip.paymentHash,
+            tip.updatedAt,
+            binding.amountMsat,
+            binding.expiresAt,
+          );
+        }
+      }
+      for (const hashRow of snapshot.ownInvoiceHashes ?? []) {
+        if (hashRow.ownerPubky !== ownerPubky) continue;
+        const matchingTip = snapshot.tipEndpoints.find(
+          tip =>
+            tip.ownerPubky === ownerPubky &&
+            tip.peerPubky === ownerPubky &&
+            tip.identifier === hashRow.endpointIdentifier &&
+            tip.paymentHash === hashRow.paymentHash,
+        );
+        if (matchingTip) {
+          const binding = bindingFromEndpoint(matchingTip);
+          insertOwnInvoiceHash(
+            db,
+            ownerPubky,
+            hashRow.endpointIdentifier,
+            hashRow.paymentHash,
+            hashRow.firstSeenAt,
+            binding.amountMsat,
+            binding.expiresAt,
+            {
+              context: hashRow.displayContext,
+              paymentRequestId: hashRow.paymentRequestId,
+            },
+          );
+          continue;
+        }
+        insertOwnInvoiceHash(
+          db,
           ownerPubky,
-          tip.peerPubky,
-          tip.identifier,
-          tip.payload,
-          tip.updatedAt,
-          tip.validationStatus,
-          tip.invoiceAmount,
-          tip.invoiceExpiresAt,
-          tip.paymentHash,
-        ],
-      );
-    }
+          hashRow.endpointIdentifier,
+          hashRow.paymentHash,
+          hashRow.firstSeenAt,
+          hashRow.invoiceAmountMsat ?? null,
+          hashRow.invoiceExpiresAt ?? null,
+          {
+            context: hashRow.displayContext,
+            paymentRequestId: hashRow.paymentRequestId,
+          },
+        );
+      }
+    });
     for (const attachment of snapshot.attachments) {
       if (attachment.ownerPubky !== ownerPubky) continue;
       await StorageService.saveAttachment({
@@ -1135,7 +1379,10 @@ export const StorageService = {
 
     const ownerQueueIds: string[] = [];
     for (const item of await StorageService.listDeliveryQueue()) {
-      if (queuePayloadBelongsToOwner(item.payload, ownerPubky)) {
+      if (
+        queuePayloadBelongsToOwner(item.payload, ownerPubky) ||
+        queueOwnerFromPayload(item.payload) === null
+      ) {
         ownerQueueIds.push(item.id);
       }
     }
@@ -1170,12 +1417,34 @@ export const StorageService = {
         );
       }
       for (const id of ownerQueueIds) {
-        db.executeSync('DELETE FROM delivery_queue WHERE id = ?', [id]);
+        db.executeSync(
+          `DELETE FROM delivery_queue
+           WHERE id = ?
+             AND (
+               json_valid(payload) = 0
+               OR json_extract(payload, '$.ownerPubky') = ?
+               OR json_extract(payload, '$.ownerPubky') IS NULL
+             )`,
+          [id, ownerPubky],
+        );
       }
+      db.executeSync(
+        `DELETE FROM delivery_queue
+         WHERE json_valid(payload) = 0
+            OR json_extract(payload, '$.ownerPubky') IS NULL`,
+      );
       db.executeSync('DELETE FROM attachments WHERE owner_pubky = ?', [ownerPubky]);
       db.executeSync('DELETE FROM payment_events WHERE owner_pubky = ?', [ownerPubky]);
       db.executeSync('DELETE FROM payment_requests WHERE owner_pubky = ?', [ownerPubky]);
+      try {
+        db.executeSync('DELETE FROM own_invoice_hashes WHERE owner_pubky = ?', [ownerPubky]);
+      } catch (err) {
+        if (!isMissingOwnInvoiceHashesTableError(err)) throw err;
+        logMissingOwnInvoiceHashTableRuntime();
+      }
       db.executeSync('DELETE FROM tip_endpoints WHERE owner_pubky = ?', [ownerPubky]);
+      db.executeSync('DELETE FROM group_fanout_outcomes WHERE owner_pubky = ?', [ownerPubky]);
+      db.executeSync('DELETE FROM blocked_peers WHERE owner_pubky = ?', [ownerPubky]);
       db.executeSync('DELETE FROM group_deferred_events WHERE owner_pubky = ?', [ownerPubky]);
       db.executeSync('DELETE FROM group_seen_events WHERE owner_pubky = ?', [ownerPubky]);
       db.executeSync('DELETE FROM group_messages WHERE owner_pubky = ?', [ownerPubky]);
@@ -1200,6 +1469,8 @@ export const StorageService = {
       const ownerPubky = String(row.owner_pubky);
       const targetKind = String(row.target_kind);
       const target = String(row.target);
+      if (targetKind === SIGN_OUT_INCOMPLETE_KIND) continue;
+      if (targetKind === SIGN_OUT_WIPE_FAILURES_KIND) continue;
       let ok = false;
       if (
         targetKind === 'keystore' &&
@@ -1228,11 +1499,112 @@ export const StorageService = {
     }
   },
 
+  async persistSignOutIncompleteJournal(
+    ownerPubky: PubkyKey,
+    alias?: string | null,
+  ): Promise<void> {
+    const db = await getDb();
+    const target = journalTargetForAlias(alias);
+    transact(db, () => {
+      db.executeSync(`DELETE FROM pending_cleanup WHERE target_kind = ? AND owner_pubky = ?`, [
+        SIGN_OUT_INCOMPLETE_KIND,
+        ownerPubky,
+      ]);
+      db.executeSync(
+        `INSERT INTO pending_cleanup
+          (owner_pubky, target_kind, target, created_at)
+         VALUES (?, ?, ?, ?)`,
+        [ownerPubky, SIGN_OUT_INCOMPLETE_KIND, target, now()],
+      );
+    });
+  },
+
+  async hasSignOutIncompleteJournal(): Promise<boolean> {
+    const db = await getDb();
+    const result = db.executeSync(`SELECT 1 FROM pending_cleanup WHERE target_kind = ? LIMIT 1`, [
+      SIGN_OUT_INCOMPLETE_KIND,
+    ]);
+    return (result.rows?.length ?? 0) > 0;
+  },
+
+  async getSignOutIncompleteJournalOwner(expectedOwner?: PubkyKey): Promise<PubkyKey | null> {
+    const db = await getDb();
+    const result = expectedOwner
+      ? db.executeSync(
+          `SELECT owner_pubky FROM pending_cleanup WHERE target_kind = ? AND owner_pubky = ? LIMIT 1`,
+          [SIGN_OUT_INCOMPLETE_KIND, expectedOwner],
+        )
+      : db.executeSync(`SELECT owner_pubky FROM pending_cleanup WHERE target_kind = ? LIMIT 1`, [
+          SIGN_OUT_INCOMPLETE_KIND,
+        ]);
+    const owner = result.rows?.[0]?.owner_pubky;
+    return typeof owner === 'string' && owner.length > 0 ? owner : null;
+  },
+
+  async getSignOutIncompleteJournalAlias(ownerPubky: PubkyKey): Promise<string | null> {
+    const db = await getDb();
+    const result = db.executeSync(
+      `SELECT target FROM pending_cleanup WHERE target_kind = ? AND owner_pubky = ? LIMIT 1`,
+      [SIGN_OUT_INCOMPLETE_KIND, ownerPubky],
+    );
+    const target = result.rows?.[0]?.target;
+    return typeof target === 'string' ? aliasFromJournalTarget(target) : null;
+  },
+
+  async clearSignOutIncompleteJournal(ownerPubky?: PubkyKey): Promise<void> {
+    const db = await getDb();
+    if (ownerPubky) {
+      db.executeSync(`DELETE FROM pending_cleanup WHERE target_kind = ? AND owner_pubky = ?`, [
+        SIGN_OUT_INCOMPLETE_KIND,
+        ownerPubky,
+      ]);
+      return;
+    }
+    db.executeSync(`DELETE FROM pending_cleanup WHERE target_kind = ?`, [SIGN_OUT_INCOMPLETE_KIND]);
+  },
+
+  async persistSignOutWipeFailureCount(ownerPubky: PubkyKey, count: number): Promise<void> {
+    const db = await getDb();
+    transact(db, () => {
+      db.executeSync(`DELETE FROM pending_cleanup WHERE target_kind = ? AND owner_pubky = ?`, [
+        SIGN_OUT_WIPE_FAILURES_KIND,
+        ownerPubky,
+      ]);
+      db.executeSync(
+        `INSERT INTO pending_cleanup
+          (owner_pubky, target_kind, target, created_at)
+         VALUES (?, ?, ?, ?)`,
+        [ownerPubky, SIGN_OUT_WIPE_FAILURES_KIND, String(count), now()],
+      );
+    });
+  },
+
+  async getSignOutWipeFailureCount(ownerPubky: PubkyKey): Promise<number> {
+    const db = await getDb();
+    const result = db.executeSync(
+      `SELECT target FROM pending_cleanup WHERE target_kind = ? AND owner_pubky = ? LIMIT 1`,
+      [SIGN_OUT_WIPE_FAILURES_KIND, ownerPubky],
+    );
+    const raw = result.rows?.[0]?.target;
+    if (typeof raw !== 'string') return 0;
+    const n = Number(raw);
+    return Number.isInteger(n) && n >= 0 ? n : 0;
+  },
+
+  async clearSignOutWipeFailureCount(ownerPubky: PubkyKey): Promise<void> {
+    const db = await getDb();
+    db.executeSync(`DELETE FROM pending_cleanup WHERE target_kind = ? AND owner_pubky = ?`, [
+      SIGN_OUT_WIPE_FAILURES_KIND,
+      ownerPubky,
+    ]);
+  },
+
   // ── Attachments (M4) ──────────────────────────────────────────────────────
 
   async saveAttachment(record: AttachmentRecord): Promise<void> {
-    const db = await getDb();
-    insertAttachment(db, record);
+    await ownedWrite(record.ownerPubky, db => {
+      insertAttachment(db, record);
+    });
   },
 
   async getAttachment(
@@ -1297,22 +1669,23 @@ export const StorageService = {
     eventId: string,
     patch: { resolveState: AttachmentResolveState; localCachePath?: string | null },
   ): Promise<void> {
-    const db = await getDb();
-    if (patch.localCachePath !== undefined) {
-      db.executeSync(
-        `UPDATE attachments
+    await ownedWrite(ownerPubky, db => {
+      if (patch.localCachePath !== undefined) {
+        db.executeSync(
+          `UPDATE attachments
          SET resolve_state = ?, local_cache_path = ?, updated_at = ?
          WHERE owner_pubky = ? AND sender_pubky = ? AND event_id = ?`,
-        [patch.resolveState, patch.localCachePath, now(), ownerPubky, senderPubky, eventId],
-      );
-      return;
-    }
-    db.executeSync(
-      `UPDATE attachments
+          [patch.resolveState, patch.localCachePath, now(), ownerPubky, senderPubky, eventId],
+        );
+        return;
+      }
+      db.executeSync(
+        `UPDATE attachments
        SET resolve_state = ?, updated_at = ?
        WHERE owner_pubky = ? AND sender_pubky = ? AND event_id = ?`,
-      [patch.resolveState, now(), ownerPubky, senderPubky, eventId],
-    );
+        [patch.resolveState, now(), ownerPubky, senderPubky, eventId],
+      );
+    });
   },
 
   async updateAttachmentDelivery(
@@ -1321,21 +1694,22 @@ export const StorageService = {
     eventId: string,
     deliveryState: AttachmentRecord['deliveryState'],
   ): Promise<void> {
-    const db = await getDb();
-    db.executeSync(
-      `UPDATE attachments
+    await ownedWrite(ownerPubky, db => {
+      db.executeSync(
+        `UPDATE attachments
        SET delivery_state = ?, updated_at = ?
        WHERE owner_pubky = ? AND sender_pubky = ? AND event_id = ?`,
-      [deliveryState, now(), ownerPubky, senderPubky, eventId],
-    );
+        [deliveryState, now(), ownerPubky, senderPubky, eventId],
+      );
+    });
   },
 
   // ── Group channels (M3, owner-scoped) ─────────────────────────────────────
 
   async upsertGroupChannel(channel: GroupChannel): Promise<void> {
-    const db = await getDb();
-    db.executeSync(
-      `INSERT INTO group_channels
+    await ownedWrite(channel.ownerPubky, db => {
+      db.executeSync(
+        `INSERT INTO group_channels
         (owner_pubky, channel_id, name, created_at, updated_at, created_by,
          is_public, last_message_at, membership_epoch)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -1343,18 +1717,19 @@ export const StorageService = {
          name              = excluded.name,
          updated_at        = excluded.updated_at,
          last_message_at   = excluded.last_message_at`,
-      [
-        channel.ownerPubky,
-        channel.channelId,
-        channel.name,
-        channel.createdAt,
-        channel.updatedAt,
-        channel.createdBy,
-        channel.isPublic ? 1 : 0,
-        channel.lastMessageAt,
-        channel.membershipEpoch,
-      ],
-    );
+        [
+          channel.ownerPubky,
+          channel.channelId,
+          channel.name,
+          channel.createdAt,
+          channel.updatedAt,
+          channel.createdBy,
+          channel.isPublic ? 1 : 0,
+          channel.lastMessageAt,
+          channel.membershipEpoch,
+        ],
+      );
+    });
   },
 
   /**
@@ -1365,9 +1740,8 @@ export const StorageService = {
     channel: GroupChannel;
     members: GroupMember[];
   }): Promise<'inserted' | 'exists' | 'founder-mismatch'> {
-    const db = await getDb();
     let outcome: 'inserted' | 'exists' | 'founder-mismatch' = 'exists';
-    transact(db, () => {
+    await ownedTransact(input.channel.ownerPubky, db => {
       const existing = db.executeSync(
         'SELECT created_by FROM group_channels WHERE owner_pubky = ? AND channel_id = ?',
         [input.channel.ownerPubky, input.channel.channelId],
@@ -1406,13 +1780,14 @@ export const StorageService = {
     channelId: string,
     name: string,
   ): Promise<void> {
-    const db = await getDb();
-    db.executeSync(
-      `UPDATE group_channels
+    await ownedWrite(ownerPubky, db => {
+      db.executeSync(
+        `UPDATE group_channels
        SET name = ?, updated_at = ?
        WHERE owner_pubky = ? AND channel_id = ?`,
-      [name, now(), ownerPubky, channelId],
-    );
+        [name, now(), ownerPubky, channelId],
+      );
+    });
   },
 
   async getGroupChannel(ownerPubky: PubkyKey, channelId: string): Promise<GroupChannel | null> {
@@ -1482,40 +1857,76 @@ export const StorageService = {
     return Number(result.rows?.[0]?.unread ?? 0);
   },
 
+  async unreadCountsForGroupChannels(ownerPubky: PubkyKey): Promise<Record<string, number>> {
+    const db = await getDb();
+    const channels = await StorageService.listGroupChannels(ownerPubky);
+    const counts: Record<string, number> = {};
+    for (const channel of channels) {
+      const cursorId = groupReadCursorId(channel.channelId);
+      const result = db.executeSync(
+        `SELECT COUNT(*) AS n FROM group_messages
+          WHERE owner_pubky = ?
+            AND channel_id = ?
+            AND sender_pubky != ?
+            AND deleted = 0
+            AND kind IN (?, ?, ?)
+            AND sent_at > COALESCE(
+              (SELECT last_read_at FROM link_read_cursors
+                WHERE owner_pubky = ? AND conversation_id = ?),
+              0
+            )`,
+        [
+          ownerPubky,
+          channel.channelId,
+          ownerPubky,
+          GROUP_MESSAGE_KIND,
+          PUBLIC_CHANNEL_MESSAGE_KIND,
+          CHAT_ATTACHMENT_KIND,
+          ownerPubky,
+          cursorId,
+        ],
+      );
+      counts[channel.channelId] = Number(result.rows?.[0]?.n ?? 0);
+    }
+    return counts;
+  },
+
   async touchGroupChannel(
     ownerPubky: PubkyKey,
     channelId: string,
     lastMessageAt: number,
   ): Promise<void> {
-    const db = await getDb();
-    db.executeSync(
-      `UPDATE group_channels
+    await ownedWrite(ownerPubky, db => {
+      db.executeSync(
+        `UPDATE group_channels
        SET last_message_at = ?, updated_at = ?
        WHERE owner_pubky = ? AND channel_id = ?`,
-      [lastMessageAt, now(), ownerPubky, channelId],
-    );
+        [lastMessageAt, now(), ownerPubky, channelId],
+      );
+    });
   },
 
   async bumpGroupMembershipEpoch(ownerPubky: PubkyKey, channelId: string): Promise<number> {
-    const db = await getDb();
-    const ts = now();
-    db.executeSync(
-      `UPDATE group_channels
+    return ownedWrite(ownerPubky, db => {
+      const ts = now();
+      db.executeSync(
+        `UPDATE group_channels
        SET membership_epoch = membership_epoch + 1, updated_at = ?
        WHERE owner_pubky = ? AND channel_id = ?`,
-      [ts, ownerPubky, channelId],
-    );
-    const result = db.executeSync(
-      'SELECT membership_epoch FROM group_channels WHERE owner_pubky = ? AND channel_id = ?',
-      [ownerPubky, channelId],
-    );
-    return (result.rows?.[0]?.membership_epoch as number) ?? 0;
+        [ts, ownerPubky, channelId],
+      );
+      const result = db.executeSync(
+        'SELECT membership_epoch FROM group_channels WHERE owner_pubky = ? AND channel_id = ?',
+        [ownerPubky, channelId],
+      );
+      return (result.rows?.[0]?.membership_epoch as number) ?? 0;
+    });
   },
 
   async upsertGroupMember(member: GroupMember): Promise<void> {
-    const db = await getDb();
-    db.executeSync(
-      `INSERT INTO group_members
+    await ownedWrite(member.ownerPubky, db => {
+      db.executeSync(
+        `INSERT INTO group_members
         (owner_pubky, channel_id, member_pubky, role, added_at, removed_at, status)
        VALUES (?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(owner_pubky, channel_id, member_pubky) DO UPDATE SET
@@ -1523,16 +1934,17 @@ export const StorageService = {
          added_at    = excluded.added_at,
          removed_at  = excluded.removed_at,
          status      = excluded.status`,
-      [
-        member.ownerPubky,
-        member.channelId,
-        member.memberPubky,
-        member.role,
-        member.addedAt,
-        member.removedAt,
-        member.status,
-      ],
-    );
+        [
+          member.ownerPubky,
+          member.channelId,
+          member.memberPubky,
+          member.role,
+          member.addedAt,
+          member.removedAt,
+          member.status,
+        ],
+      );
+    });
   },
 
   async getGroupMember(
@@ -1585,16 +1997,17 @@ export const StorageService = {
   },
 
   async saveGroupMessage(message: GroupMessage): Promise<boolean> {
-    const db = await getDb();
-    const existed = await this.hasGroupMessage(
-      message.ownerPubky,
-      message.channelId,
-      message.senderPubky,
-      message.eventId,
-    );
-    if (existed) return false;
-    insertGroupMessage(db, message);
-    return true;
+    return ownedWrite(message.ownerPubky, db => {
+      const existed = db.executeSync(
+        `SELECT 1 FROM group_messages
+       WHERE owner_pubky = ? AND channel_id = ? AND sender_pubky = ? AND event_id = ?
+       LIMIT 1`,
+        [message.ownerPubky, message.channelId, message.senderPubky, message.eventId],
+      );
+      if ((existed.rows?.length ?? 0) > 0) return false;
+      insertGroupMessage(db, message);
+      return true;
+    });
   },
 
   async hasGroupMessage(
@@ -1678,13 +2091,14 @@ export const StorageService = {
     eventId: string,
     receivedAt: number,
   ): Promise<void> {
-    const db = await getDb();
-    db.executeSync(
-      `INSERT OR IGNORE INTO group_seen_events
+    await ownedWrite(ownerPubky, db => {
+      db.executeSync(
+        `INSERT OR IGNORE INTO group_seen_events
         (owner_pubky, channel_id, sender_pubky, event_id, received_at)
        VALUES (?, ?, ?, ?, ?)`,
-      [ownerPubky, channelId, senderPubky, eventId, receivedAt],
-    );
+        [ownerPubky, channelId, senderPubky, eventId, receivedAt],
+      );
+    });
   },
 
   async hasGroupEventSeen(
@@ -1704,9 +2118,8 @@ export const StorageService = {
   },
 
   async saveGroupDeferred(event: GroupDeferredEvent): Promise<void> {
-    const db = await getDb();
     const cutoff = now() - GROUP_DEFERRED_TTL_MS;
-    transact(db, () => {
+    await ownedTransact(event.ownerPubky, db => {
       const expired = db.executeSync(
         `SELECT sender_pubky, event_id, received_at FROM group_deferred_events
          WHERE owner_pubky = ? AND channel_id = ? AND sender_pubky = ? AND received_at < ?`,
@@ -1826,12 +2239,13 @@ export const StorageService = {
     senderPubky: PubkyKey,
     eventId: string,
   ): Promise<void> {
-    const db = await getDb();
-    db.executeSync(
-      `DELETE FROM group_deferred_events
+    await ownedWrite(ownerPubky, db => {
+      db.executeSync(
+        `DELETE FROM group_deferred_events
        WHERE owner_pubky = ? AND channel_id = ? AND sender_pubky = ? AND event_id = ?`,
-      [ownerPubky, channelId, senderPubky, eventId],
-    );
+        [ownerPubky, channelId, senderPubky, eventId],
+      );
+    });
   },
 
   /**
@@ -1840,11 +2254,12 @@ export const StorageService = {
    * cannot promote declined-peer content into `group_messages`.
    */
   async deleteGroupDeferredForSender(ownerPubky: PubkyKey, senderPubky: PubkyKey): Promise<void> {
-    const db = await getDb();
-    db.executeSync(`DELETE FROM group_deferred_events WHERE owner_pubky = ? AND sender_pubky = ?`, [
-      ownerPubky,
-      senderPubky,
-    ]);
+    await ownedWrite(ownerPubky, db => {
+      db.executeSync(
+        `DELETE FROM group_deferred_events WHERE owner_pubky = ? AND sender_pubky = ?`,
+        [ownerPubky, senderPubky],
+      );
+    });
   },
 
   /**
@@ -1853,11 +2268,12 @@ export const StorageService = {
    * Does not touch already-persisted `group_messages`.
    */
   async deleteGroupSeenEventsForSender(ownerPubky: PubkyKey, senderPubky: PubkyKey): Promise<void> {
-    const db = await getDb();
-    db.executeSync(`DELETE FROM group_seen_events WHERE owner_pubky = ? AND sender_pubky = ?`, [
-      ownerPubky,
-      senderPubky,
-    ]);
+    await ownedWrite(ownerPubky, db => {
+      db.executeSync(`DELETE FROM group_seen_events WHERE owner_pubky = ? AND sender_pubky = ?`, [
+        ownerPubky,
+        senderPubky,
+      ]);
+    });
   },
 
   async listGroupMessages(
@@ -1907,13 +2323,14 @@ export const StorageService = {
     eventId: string,
     state: LinkDeliveryState,
   ): Promise<void> {
-    const db = await getDb();
-    db.executeSync(
-      `UPDATE group_messages
+    await ownedWrite(ownerPubky, db => {
+      db.executeSync(
+        `UPDATE group_messages
        SET delivery_state = ?, updated_at = ?
        WHERE owner_pubky = ? AND channel_id = ? AND sender_pubky = ? AND event_id = ?`,
-      [state, now(), ownerPubky, channelId, senderPubky, eventId],
-    );
+        [state, now(), ownerPubky, channelId, senderPubky, eventId],
+      );
+    });
   },
 
   async applyGroupMessageEdit(
@@ -1924,13 +2341,14 @@ export const StorageService = {
     body: string,
     editedAt: number,
   ): Promise<void> {
-    const db = await getDb();
-    db.executeSync(
-      `UPDATE group_messages
+    await ownedWrite(ownerPubky, db => {
+      db.executeSync(
+        `UPDATE group_messages
        SET body = ?, edited_at = ?, updated_at = ?
        WHERE owner_pubky = ? AND channel_id = ? AND sender_pubky = ? AND event_id = ?`,
-      [body, editedAt, now(), ownerPubky, channelId, senderPubky, eventId],
-    );
+        [body, editedAt, now(), ownerPubky, channelId, senderPubky, eventId],
+      );
+    });
   },
 
   async tombstoneGroupMessage(
@@ -1939,69 +2357,271 @@ export const StorageService = {
     senderPubky: PubkyKey,
     eventId: string,
   ): Promise<void> {
-    const db = await getDb();
-    db.executeSync(
-      `UPDATE group_messages
+    await ownedWrite(ownerPubky, db => {
+      db.executeSync(
+        `UPDATE group_messages
        SET deleted = 1, updated_at = ?
        WHERE owner_pubky = ? AND channel_id = ? AND sender_pubky = ? AND event_id = ?`,
-      [now(), ownerPubky, channelId, senderPubky, eventId],
-    );
+        [now(), ownerPubky, channelId, senderPubky, eventId],
+      );
+    });
   },
 
   /**
-   * Atomic pre-fan-out persist: the group message row AND one retry item
-   * per recipient, before any native send.
+   * Atomic pre-fan-out persist: the group message row, one retry item per
+   * recipient, and one `pending` outcome per recipient, before any native send.
+   * Insert-only: if the group message already exists, this is a no-op so a
+   * resend cannot duplicate queue rows or reset terminal outcomes.
    */
   async persistGroupSendIntent(input: {
     message: GroupMessage;
     queueItems: DeliveryQueueItem[];
   }): Promise<void> {
-    const db = await getDb();
-    transact(db, () => {
+    await ownedTransact(input.message.ownerPubky, db => {
+      const existing = db.executeSync(
+        `SELECT 1 AS n FROM group_messages
+         WHERE owner_pubky = ? AND channel_id = ? AND sender_pubky = ? AND event_id = ?
+         LIMIT 1`,
+        [
+          input.message.ownerPubky,
+          input.message.channelId,
+          input.message.senderPubky,
+          input.message.eventId,
+        ],
+      );
+      if ((existing.rows?.length ?? 0) > 0) return;
       insertGroupMessage(db, input.message);
+      const ts = now();
       for (const item of input.queueItems) {
-        insertQueueItem(db, item);
+        const bound = bindQueueItemToOwner(item, input.message.ownerPubky);
+        insertQueueItem(db, bound, input.message.ownerPubky);
+        upsertFanoutOutcomeLocked(db, {
+          ownerPubky: input.message.ownerPubky,
+          channelId: input.message.channelId,
+          eventId: input.message.eventId,
+          senderPubky: input.message.senderPubky,
+          recipientPubky: item.recipientPubky,
+          status: 'pending',
+          reason: null,
+          updatedAt: ts,
+        });
       }
     });
   },
 
   /**
-   * Post-send persist for one fan-out recipient: advanced snapshot + dequeue.
-   * Does not rewrite `group_messages.delivery_state` (that is settled after
-   * the remaining queue for this event_id is empty).
+   * Post-send persist for one fan-out recipient: advanced snapshot, terminal
+   * `sent` outcome, dequeue, and aggregate settle — one transaction.
    */
   async finalizeGroupFanoutSend(input: {
     ownerPubky: PubkyKey;
     peerPubky: PubkyKey;
     snapshot: string;
     queueId: string;
+    channelId: string;
+    eventId: string;
+    senderPubky: PubkyKey;
+    kind: string;
   }): Promise<void> {
-    const db = await getDb();
-    const ts = now();
-    transact(db, () => {
+    await ownedTransact(input.ownerPubky, db => {
+      const ts = now();
       db.executeSync(
         `UPDATE links
          SET snapshot = ?, status = 'established', consecutive_failures = 0, updated_at = ?
          WHERE owner_pubky = ? AND peer_pubky = ?`,
         [input.snapshot, ts, input.ownerPubky, input.peerPubky],
       );
+      upsertFanoutOutcomeLocked(db, {
+        ownerPubky: input.ownerPubky,
+        channelId: input.channelId,
+        eventId: input.eventId,
+        senderPubky: input.senderPubky,
+        recipientPubky: input.peerPubky,
+        status: 'sent',
+        reason: null,
+        updatedAt: ts,
+      });
       db.executeSync('DELETE FROM delivery_queue WHERE id = ?', [input.queueId]);
+      settleGroupFanoutLocked(db, input, ts);
     });
   },
 
-  async countDeliveryQueueForMessage(messageId: string): Promise<number> {
+  /**
+   * Permanent fan-out drop (denied or max-attempt): terminal outcome, aggregate
+   * settle, and queue delete in one transaction. A throw rolls all three back.
+   */
+  async completeGroupFanoutRecipient(input: {
+    ownerPubky: PubkyKey;
+    channelId: string;
+    eventId: string;
+    senderPubky: PubkyKey;
+    recipientPubky: PubkyKey;
+    status: 'sent' | 'failed';
+    reason: 'blocked' | null;
+    queueId: string;
+    kind: string;
+  }): Promise<void> {
+    await ownedTransact(input.ownerPubky, db => {
+      const ts = now();
+      upsertFanoutOutcomeLocked(db, {
+        ownerPubky: input.ownerPubky,
+        channelId: input.channelId,
+        eventId: input.eventId,
+        senderPubky: input.senderPubky,
+        recipientPubky: input.recipientPubky,
+        status: input.status,
+        reason: input.reason,
+        updatedAt: ts,
+      });
+      db.executeSync('DELETE FROM delivery_queue WHERE id = ?', [input.queueId]);
+      settleGroupFanoutLocked(db, input, ts);
+    });
+  },
+
+  async countDeliveryQueueForMessage(messageId: string, excludeId?: string): Promise<number> {
     const db = await getDb();
-    const result = db.executeSync('SELECT COUNT(*) AS n FROM delivery_queue WHERE message_id = ?', [
-      messageId,
-    ]);
+    const result =
+      excludeId !== undefined
+        ? db.executeSync(
+            'SELECT COUNT(*) AS n FROM delivery_queue WHERE message_id = ? AND id != ?',
+            [messageId, excludeId],
+          )
+        : db.executeSync('SELECT COUNT(*) AS n FROM delivery_queue WHERE message_id = ?', [
+            messageId,
+          ]);
     return (result.rows?.[0]?.n as number) ?? 0;
+  },
+
+  async upsertGroupFanoutOutcome(outcome: GroupFanoutOutcome): Promise<void> {
+    await ownedWrite(outcome.ownerPubky, db => {
+      upsertFanoutOutcomeLocked(db, outcome);
+    });
+  },
+
+  async listGroupFanoutOutcomes(
+    ownerPubky: PubkyKey,
+    channelId: string,
+    senderPubky: PubkyKey,
+    eventId: string,
+  ): Promise<GroupFanoutOutcome[]> {
+    const db = await getDb();
+    const result = db.executeSync(
+      `SELECT * FROM group_fanout_outcomes
+       WHERE owner_pubky = ? AND channel_id = ? AND sender_pubky = ? AND event_id = ?
+       ORDER BY recipient_pubky ASC`,
+      [ownerPubky, channelId, senderPubky, eventId],
+    );
+    return (result.rows ?? []).map(rowToGroupFanoutOutcome);
+  },
+
+  async getGroupFanoutAggregate(
+    ownerPubky: PubkyKey,
+    channelId: string,
+    senderPubky: PubkyKey,
+    eventId: string,
+  ): Promise<GroupFanoutOutcome[]> {
+    return StorageService.listGroupFanoutOutcomes(ownerPubky, channelId, senderPubky, eventId);
+  },
+
+  async listGroupFanoutOutcomesForChannel(
+    ownerPubky: PubkyKey,
+    channelId: string,
+  ): Promise<GroupFanoutOutcome[]> {
+    const db = await getDb();
+    const result = db.executeSync(
+      `SELECT * FROM group_fanout_outcomes
+       WHERE owner_pubky = ? AND channel_id = ?
+       ORDER BY event_id ASC, recipient_pubky ASC`,
+      [ownerPubky, channelId],
+    );
+    return (result.rows ?? []).map(rowToGroupFanoutOutcome);
+  },
+
+  async insertBlockedPeer(ownerPubky: PubkyKey, peerPubky: PubkyKey): Promise<void> {
+    await ownedWrite(ownerPubky, db => {
+      db.executeSync(
+        `INSERT INTO blocked_peers (owner_pubky, peer_pubky, blocked_at, cleanup_pending)
+       VALUES (?, ?, ?, 1)
+       ON CONFLICT(owner_pubky, peer_pubky) DO UPDATE SET
+         blocked_at = excluded.blocked_at,
+         cleanup_pending = 1`,
+        [ownerPubky, peerPubky, now()],
+      );
+    });
+  },
+
+  async insertBlockedPeers(ownerPubky: PubkyKey, peerPubkys: readonly PubkyKey[]): Promise<void> {
+    const ts = now();
+    await ownedTransact(ownerPubky, db => {
+      for (const peerPubky of peerPubkys) {
+        db.executeSync(
+          `INSERT OR IGNORE INTO blocked_peers (owner_pubky, peer_pubky, blocked_at)
+           VALUES (?, ?, ?)`,
+          [ownerPubky, peerPubky, ts],
+        );
+      }
+    });
+  },
+
+  async deleteBlockedPeer(ownerPubky: PubkyKey, peerPubky: PubkyKey): Promise<void> {
+    await ownedWrite(ownerPubky, db => {
+      db.executeSync('DELETE FROM blocked_peers WHERE owner_pubky = ? AND peer_pubky = ?', [
+        ownerPubky,
+        peerPubky,
+      ]);
+    });
+  },
+
+  async listBlockedPeers(ownerPubky: PubkyKey): Promise<PubkyKey[]> {
+    const db = await getDb();
+    const result = db.executeSync(
+      'SELECT peer_pubky FROM blocked_peers WHERE owner_pubky = ? ORDER BY peer_pubky ASC',
+      [ownerPubky],
+    );
+    return (result.rows ?? []).map(row => String(row.peer_pubky));
+  },
+
+  async hasBlockedPeer(ownerPubky: PubkyKey, peerPubky: PubkyKey): Promise<boolean> {
+    const db = await getDb();
+    const result = db.executeSync(
+      'SELECT 1 AS n FROM blocked_peers WHERE owner_pubky = ? AND peer_pubky = ? LIMIT 1',
+      [ownerPubky, peerPubky],
+    );
+    return (result.rows?.length ?? 0) > 0;
+  },
+
+  async listBlockedPeerCleanupPending(ownerPubky: PubkyKey): Promise<PubkyKey[]> {
+    const db = await getDb();
+    const result = db.executeSync(
+      `SELECT peer_pubky FROM blocked_peers
+       WHERE owner_pubky = ? AND cleanup_pending = 1
+       ORDER BY peer_pubky ASC`,
+      [ownerPubky],
+    );
+    return (result.rows ?? []).map(row => String(row.peer_pubky));
+  },
+
+  async setBlockedPeerCleanupPending(
+    ownerPubky: PubkyKey,
+    peerPubky: PubkyKey,
+    pending: boolean,
+  ): Promise<void> {
+    await ownedWrite(ownerPubky, db => {
+      db.executeSync(
+        `UPDATE blocked_peers
+       SET cleanup_pending = ?
+       WHERE owner_pubky = ? AND peer_pubky = ?`,
+        [pending ? 1 : 0, ownerPubky, peerPubky],
+      );
+    });
   },
 
   // ── Payments (M5) ─────────────────────────────────────────────────────────
 
   async savePaymentRequest(record: PaymentRequestRecord): Promise<void> {
-    const db = await getDb();
-    insertPaymentRequest(db, record);
+    await ownedWrite(record.ownerPubky, db => {
+      insertPaymentRequest(db, record);
+    });
   },
 
   async getPaymentRequest(
@@ -2040,14 +2660,8 @@ export const StorageService = {
     expectedStatuses: readonly PaymentStatus[],
     patch: PaymentRequestPatch,
   ): Promise<boolean> {
-    const db = await getDb();
-    return compareAndSetPaymentRequestRow(
-      db,
-      ownerPubky,
-      peerPubky,
-      paymentRequestId,
-      expectedStatuses,
-      patch,
+    return ownedWrite(ownerPubky, db =>
+      casPaymentRequestRow(db, ownerPubky, peerPubky, paymentRequestId, expectedStatuses, patch),
     );
   },
 
@@ -2065,10 +2679,9 @@ export const StorageService = {
     event: PaymentEventRecord;
     sendIntent: { message: LinkMessage; queueItem: DeliveryQueueItem };
   }): Promise<boolean> {
-    const db = await getDb();
     try {
-      transact(db, () => {
-        const applied = compareAndSetPaymentRequestRow(
+      await ownedTransact(input.ownerPubky, db => {
+        const applied = casPaymentRequestRow(
           db,
           input.ownerPubky,
           input.peerPubky,
@@ -2079,7 +2692,11 @@ export const StorageService = {
         if (!applied) throw new CasConflictError();
         insertPaymentEvent(db, input.event);
         insertLinkMessage(db, input.sendIntent.message);
-        insertQueueItem(db, input.sendIntent.queueItem);
+        insertQueueItem(
+          db,
+          bindQueueItemToOwner(input.sendIntent.queueItem, input.ownerPubky),
+          input.ownerPubky,
+        );
       });
       return true;
     } catch (err) {
@@ -2093,12 +2710,22 @@ export const StorageService = {
     event: PaymentEventRecord;
     sendIntent: { message: LinkMessage; queueItem: DeliveryQueueItem };
   }): Promise<void> {
-    const db = await getDb();
-    transact(db, () => {
-      insertPaymentRequest(db, input.record);
+    await ownedTransact(input.record.ownerPubky, db => {
+      releaseExpiredOwnInvoiceBindings(db, input.record.ownerPubky, now());
+      // Reuse check must sit inside the create transaction so concurrent
+      // creates sharing one invoice cannot both observe invoiceReused=false.
+      const displayed = input.record.displayedPaymentHash;
+      const invoiceReused =
+        displayed !== null && hasDisplayedPaymentHashSync(db, input.record.ownerPubky, displayed);
+      const record = { ...input.record, invoiceReused };
+      insertPaymentRequest(db, record);
       insertPaymentEvent(db, input.event);
       insertLinkMessage(db, input.sendIntent.message);
-      insertQueueItem(db, input.sendIntent.queueItem);
+      insertQueueItem(
+        db,
+        bindQueueItemToOwner(input.sendIntent.queueItem, input.record.ownerPubky),
+        input.record.ownerPubky,
+      );
     });
   },
 
@@ -2106,11 +2733,14 @@ export const StorageService = {
     event: PaymentEventRecord;
     sendIntent: { message: LinkMessage; queueItem: DeliveryQueueItem };
   }): Promise<void> {
-    const db = await getDb();
-    transact(db, () => {
+    await ownedTransact(input.event.ownerPubky, db => {
       insertPaymentEvent(db, input.event);
       insertLinkMessage(db, input.sendIntent.message);
-      insertQueueItem(db, input.sendIntent.queueItem);
+      insertQueueItem(
+        db,
+        bindQueueItemToOwner(input.sendIntent.queueItem, input.event.ownerPubky),
+        input.event.ownerPubky,
+      );
     });
   },
 
@@ -2126,12 +2756,13 @@ export const StorageService = {
   },
 
   async clearPaymentPendingEvent(ownerPubky: PubkyKey, pendingEventId: string): Promise<void> {
-    const db = await getDb();
-    db.executeSync(
-      `UPDATE payment_requests SET pending_event_id = NULL, updated_at = ?
+    await ownedWrite(ownerPubky, db => {
+      db.executeSync(
+        `UPDATE payment_requests SET pending_event_id = NULL, updated_at = ?
        WHERE owner_pubky = ? AND pending_event_id = ?`,
-      [now(), ownerPubky, pendingEventId],
-    );
+        [now(), ownerPubky, pendingEventId],
+      );
+    });
   },
 
   async getLinkMessageByEventId(
@@ -2164,13 +2795,129 @@ export const StorageService = {
     paymentRequestId: string,
     paymentHash: string,
   ): Promise<void> {
+    await ownedWrite(ownerPubky, db => {
+      db.executeSync(
+        `UPDATE payment_requests
+         SET displayed_payment_hash = ?, updated_at = ?
+         WHERE owner_pubky = ? AND peer_pubky = ? AND payment_request_id = ?
+           AND (proof_verified IS NULL OR proof_verified != 1)`,
+        [paymentHash, now(), ownerPubky, peerPubky, paymentRequestId],
+      );
+    });
+  },
+
+  /**
+   * Record that this owner displayed `paymentHash` for a request or a tip.
+   * Tip context is sticky and never overwritten by a later request bind.
+   * A request id is write-once until the bound request is cancelled, rejected,
+   * or proposal-expired, which clears it so a later request can bind. A
+   * verified/paid binding is never cleared.
+   */
+  async recordOwnInvoiceDisplay(input: {
+    ownerPubky: PubkyKey;
+    endpointIdentifier: string;
+    paymentHash: string;
+    context: OwnInvoiceDisplayContext;
+    paymentRequestId: string | null;
+    firstSeenAt: number;
+    invoiceAmountMsat?: string | null;
+    invoiceExpiresAt?: number | null;
+  }): Promise<void> {
+    await ownedWrite(input.ownerPubky, db => {
+      insertOwnInvoiceHash(
+        db,
+        input.ownerPubky,
+        input.endpointIdentifier,
+        input.paymentHash,
+        input.firstSeenAt,
+        input.invoiceAmountMsat ?? null,
+        input.invoiceExpiresAt ?? null,
+        { context: input.context, paymentRequestId: input.paymentRequestId },
+      );
+    });
+  },
+
+  /**
+   * True when this owner already verified a proof against `paymentHash` on a
+   * different request. Blocks cross-request preimage reuse.
+   */
+  async hasVerifiedPaymentHash(
+    ownerPubky: PubkyKey,
+    paymentHash: string,
+    exceptPaymentRequestId: string,
+  ): Promise<boolean> {
     const db = await getDb();
-    db.executeSync(
-      `UPDATE payment_requests
-       SET displayed_payment_hash = ?, updated_at = ?
-       WHERE owner_pubky = ? AND peer_pubky = ? AND payment_request_id = ?`,
-      [paymentHash, now(), ownerPubky, peerPubky, paymentRequestId],
+    const result = db.executeSync(
+      `SELECT 1 FROM payment_requests
+       WHERE owner_pubky = ?
+         AND payment_request_id != ?
+         AND displayed_payment_hash = ?
+         AND proof_verified = 1
+       LIMIT 1`,
+      [ownerPubky, exceptPaymentRequestId, paymentHash],
     );
+    return (result.rows?.length ?? 0) > 0;
+  },
+
+  /**
+   * True when this owner already has any request whose displayed invoice hash
+   * is `paymentHash`, including cancelled, rejected, expired, and paid rows.
+   * Used to flag a new request that reused an invoice.
+   */
+  async hasDisplayedPaymentHash(ownerPubky: PubkyKey, paymentHash: string): Promise<boolean> {
+    const db = await getDb();
+    const result = db.executeSync(
+      `SELECT 1 FROM payment_requests
+       WHERE owner_pubky = ?
+         AND displayed_payment_hash = ?
+       LIMIT 1`,
+      [ownerPubky, paymentHash],
+    );
+    return (result.rows?.length ?? 0) > 0;
+  },
+
+  /**
+   * Clear `own_invoice_hashes.payment_request_id` when the bound request is
+   * cancelled, rejected, or proposal-expired. Verified/paid bindings stay.
+   */
+  async releaseOwnInvoiceBindingIfInactive(
+    ownerPubky: PubkyKey,
+    paymentRequestId: string,
+    nowMs: number,
+  ): Promise<void> {
+    const db = await getDb();
+    releaseOwnInvoiceBindingIfInactiveRow(db, ownerPubky, paymentRequestId, nowMs);
+  },
+
+  async hasOwnInvoiceHash(
+    ownerPubky: PubkyKey,
+    endpointIdentifier: string,
+    paymentHash: string,
+  ): Promise<boolean> {
+    const row = await StorageService.getOwnInvoiceHash(ownerPubky, endpointIdentifier, paymentHash);
+    return row !== null;
+  },
+
+  async getOwnInvoiceHash(
+    ownerPubky: PubkyKey,
+    endpointIdentifier: string,
+    paymentHash: string,
+  ): Promise<OwnInvoiceHashRecord | null> {
+    const db = await getDb();
+    try {
+      const result = db.executeSync(
+        `SELECT * FROM own_invoice_hashes
+         WHERE owner_pubky = ? AND endpoint_identifier = ? AND payment_hash = ?
+         LIMIT 1`,
+        [ownerPubky, endpointIdentifier, paymentHash],
+      );
+      const row = result.rows?.[0];
+      return row ? rowToOwnInvoiceHash(row) : null;
+    } catch (err) {
+      if (!isMissingOwnInvoiceHashesTableError(err)) throw err;
+      logMissingOwnInvoiceHashTableRuntime();
+      return null;
+    }
   },
 
   async getTipEndpoint(
@@ -2189,30 +2936,17 @@ export const StorageService = {
   },
 
   async savePaymentEvent(record: PaymentEventRecord): Promise<boolean> {
-    const db = await getDb();
-    const before = db.executeSync(
-      `SELECT 1 FROM payment_events
+    return ownedWrite(record.ownerPubky, db => {
+      const before = db.executeSync(
+        `SELECT 1 FROM payment_events
        WHERE owner_pubky = ? AND conversation_id = ? AND sender_pubky = ? AND event_id = ?`,
-      [record.ownerPubky, record.conversationId, record.senderPubky, record.eventId],
-    );
-    if ((before.rows?.length ?? 0) > 0) return false;
-    db.executeSync(
-      `INSERT OR IGNORE INTO payment_events
-        (owner_pubky, conversation_id, sender_pubky, event_id, kind,
-         payment_request_id, applied, received_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        record.ownerPubky,
-        record.conversationId,
-        record.senderPubky,
-        record.eventId,
-        record.kind,
-        record.paymentRequestId,
-        record.applied ? 1 : 0,
-        record.receivedAt,
-      ],
-    );
-    return true;
+        [record.ownerPubky, record.conversationId, record.senderPubky, record.eventId],
+      );
+      if ((before.rows?.length ?? 0) > 0) return false;
+      // insertPaymentEvent also prunes unapplied rows per sender (W2c hazard).
+      insertPaymentEvent(db, record);
+      return true;
+    });
   },
 
   async hasPaymentEvent(
@@ -2243,9 +2977,16 @@ export const StorageService = {
       paymentHash?: string | null;
     }[],
     updatedAt: number,
-  ): Promise<void> {
-    const db = await getDb();
-    transact(db, () => {
+  ): Promise<boolean> {
+    return ownedWrite(ownerPubky, db => {
+      const existing =
+        db.executeSync(
+          `SELECT identifier, payload, validation_status
+             FROM tip_endpoints
+            WHERE owner_pubky = ? AND peer_pubky = ?`,
+          [ownerPubky, peerPubky],
+        ).rows ?? [];
+      if (tipEndpointsUnchanged(existing, endpoints)) return false;
       db.executeSync('DELETE FROM tip_endpoints WHERE owner_pubky = ? AND peer_pubky = ?', [
         ownerPubky,
         peerPubky,
@@ -2268,7 +3009,24 @@ export const StorageService = {
             endpoint.paymentHash ?? null,
           ],
         );
+        if (
+          ownerPubky === peerPubky &&
+          endpoint.paymentHash &&
+          endpoint.validationStatus !== 'rejected'
+        ) {
+          const binding = bindingFromEndpoint(endpoint);
+          insertOwnInvoiceHash(
+            db,
+            ownerPubky,
+            endpoint.identifier,
+            endpoint.paymentHash,
+            updatedAt,
+            binding.amountMsat,
+            binding.expiresAt,
+          );
+        }
       }
+      return true;
     });
   },
 
@@ -2295,6 +3053,19 @@ export const StorageService = {
 };
 
 // ─── Row mappers ──────────────────────────────────────────────────────────
+
+function readOwnInvoiceHashesForOwner(db: SqlExecutor, ownerPubky: string): OwnInvoiceHashRecord[] {
+  try {
+    return (
+      db.executeSync(`SELECT * FROM own_invoice_hashes WHERE owner_pubky = ?`, [ownerPubky]).rows ??
+      []
+    ).map(rowToOwnInvoiceHash);
+  } catch (err) {
+    if (!isMissingOwnInvoiceHashesTableError(err)) throw err;
+    logMissingOwnInvoiceHashTableRuntime();
+    return [];
+  }
+}
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function rowToContact(row: any): Contact {
@@ -2339,7 +3110,107 @@ function rowToQueueItem(row: any): DeliveryQueueItem {
   };
 }
 
-function insertQueueItem(db: SqlExecutor, item: DeliveryQueueItem): void {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function rowToGroupFanoutOutcome(row: any): GroupFanoutOutcome {
+  const rawStatus = String(row.status);
+  const status: GroupFanoutOutcome['status'] =
+    rawStatus === 'failed' ? 'failed' : rawStatus === 'pending' ? 'pending' : 'sent';
+  return {
+    ownerPubky: row.owner_pubky,
+    channelId: row.channel_id,
+    eventId: row.event_id,
+    senderPubky: row.sender_pubky,
+    recipientPubky: row.recipient_pubky,
+    status,
+    reason: row.reason === 'blocked' ? 'blocked' : null,
+    updatedAt: row.updated_at,
+  };
+}
+
+function upsertFanoutOutcomeLocked(db: SqlExecutor, outcome: GroupFanoutOutcome): void {
+  db.executeSync(
+    `INSERT INTO group_fanout_outcomes
+      (owner_pubky, channel_id, event_id, sender_pubky, recipient_pubky, status, reason, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(owner_pubky, channel_id, event_id, sender_pubky, recipient_pubky) DO UPDATE SET
+       status = excluded.status,
+       reason = excluded.reason,
+       updated_at = excluded.updated_at`,
+    [
+      outcome.ownerPubky,
+      outcome.channelId,
+      outcome.eventId,
+      outcome.senderPubky,
+      outcome.recipientPubky,
+      outcome.status,
+      outcome.reason,
+      outcome.updatedAt,
+    ],
+  );
+}
+
+function settleGroupFanoutLocked(
+  db: SqlExecutor,
+  input: {
+    ownerPubky: PubkyKey;
+    channelId: string;
+    eventId: string;
+    senderPubky: PubkyKey;
+    kind: string;
+  },
+  ts: number,
+): void {
+  const result = db.executeSync(
+    `SELECT status FROM group_fanout_outcomes
+     WHERE owner_pubky = ? AND channel_id = ? AND sender_pubky = ? AND event_id = ?`,
+    [input.ownerPubky, input.channelId, input.senderPubky, input.eventId],
+  );
+  const rows = result.rows ?? [];
+  if (rows.length === 0) return;
+  if (rows.some(row => row.status !== 'sent' && row.status !== 'failed')) return;
+  const terminal = rows.every(row => row.status === 'failed') ? 'failed' : 'sent';
+  db.executeSync(
+    `UPDATE group_messages
+     SET delivery_state = ?, updated_at = ?
+     WHERE owner_pubky = ? AND channel_id = ? AND sender_pubky = ? AND event_id = ?`,
+    [terminal, ts, input.ownerPubky, input.channelId, input.senderPubky, input.eventId],
+  );
+  if (input.kind === CHAT_ATTACHMENT_KIND) {
+    db.executeSync(
+      `UPDATE attachments
+       SET delivery_state = ?, updated_at = ?
+       WHERE owner_pubky = ? AND sender_pubky = ? AND event_id = ?`,
+      [terminal, ts, input.ownerPubky, input.senderPubky, input.eventId],
+    );
+  }
+}
+
+function bindQueueItemToOwner(item: DeliveryQueueItem, expectedOwner: PubkyKey): DeliveryQueueItem {
+  let parsed: Record<string, unknown>;
+  try {
+    const value = JSON.parse(item.payload) as unknown;
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+      throw new LinkSendError('owner-changed', 'StorageService: queue payload owner mismatch');
+    }
+    parsed = value as Record<string, unknown>;
+  } catch (err) {
+    if (err instanceof LinkSendError) throw err;
+    throw new LinkSendError('owner-changed', 'StorageService: queue payload owner mismatch');
+  }
+  const existing = parsed.ownerPubky;
+  if (typeof existing !== 'string' || existing.length === 0) {
+    throw new LinkSendError('owner-changed', 'StorageService: queue payload missing owner');
+  }
+  if (existing !== expectedOwner) {
+    throw new LinkSendError('owner-changed', 'StorageService: queue payload owner mismatch');
+  }
+  return item;
+}
+
+function insertQueueItem(db: SqlExecutor, item: DeliveryQueueItem, expectedOwner: PubkyKey): void {
+  if (queueOwnerFromPayload(item.payload) !== expectedOwner) {
+    throw new LinkSendError('owner-changed', 'StorageService: queue payload owner mismatch');
+  }
   db.executeSync(
     `INSERT OR REPLACE INTO delivery_queue
       (id, message_id, recipient_pubky, payload, attempts, next_retry_at, created_at)
@@ -2586,6 +3457,38 @@ function persistRawJson(kind: string | null | undefined, rawJson: string): strin
   return rawJson;
 }
 
+function queueOwnerFromPayload(payload: string): PubkyKey | null {
+  try {
+    const parsed = JSON.parse(payload) as { ownerPubky?: unknown };
+    return typeof parsed.ownerPubky === 'string' && parsed.ownerPubky.length > 0
+      ? parsed.ownerPubky
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+async function mutateOwnedQueueRow(
+  id: string,
+  fn: (db: SqlExecutor, owner: PubkyKey) => void,
+): Promise<boolean> {
+  const db = await getDb();
+  const result = db.executeSync('SELECT payload FROM delivery_queue WHERE id = ? LIMIT 1', [id]);
+  const row = result.rows?.[0];
+  if (!row) return false;
+  const raw = row.payload;
+  if (typeof raw !== 'string') {
+    throw new LinkSendError('owner-changed', 'StorageService: queue payload is not a string');
+  }
+  const owner = queueOwnerFromPayload(raw);
+  if (!owner) {
+    throw new LinkSendError('owner-changed', 'StorageService: queue payload missing owner');
+  }
+  assertOwnerAtCommit(owner);
+  fn(db, owner);
+  return true;
+}
+
 function persistQueuePayload(payload: string): string {
   try {
     const parsed = JSON.parse(payload) as { kind?: unknown; rawJson?: unknown };
@@ -2599,12 +3502,7 @@ function persistQueuePayload(payload: string): string {
 }
 
 function queuePayloadBelongsToOwner(payload: string, ownerPubky: string): boolean {
-  try {
-    const parsed = JSON.parse(payload) as { ownerPubky?: unknown };
-    return parsed.ownerPubky === ownerPubky;
-  } catch {
-    return false;
-  }
+  return queueOwnerFromPayload(payload) === ownerPubky;
 }
 
 function insertAttachment(db: SqlExecutor, record: AttachmentRecord): void {
@@ -2689,6 +3587,7 @@ function rowToPaymentRequest(row: any): PaymentRequestRecord {
     displayedPaymentHash:
       typeof row.displayed_payment_hash === 'string' ? row.displayed_payment_hash : null,
     proofVerified: row.proof_verified === 1 ? true : row.proof_verified === 0 ? false : null,
+    invoiceReused: row.invoice_reused === 1,
   };
 }
 
@@ -2707,6 +3606,275 @@ function rowToTipEndpoint(row: any): TipEndpointRecord {
   };
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function rowToOwnInvoiceHash(row: any): OwnInvoiceHashRecord {
+  const contextRaw = typeof row.display_context === 'string' ? row.display_context : null;
+  // Unknown display_context values (anything other than `tip` / `request`)
+  // normalize to NULL and remain corroboration-eligible. Writers are
+  // first-party (display records, seed, owner-trusted backup restore). A
+  // third context must be added to OwnInvoiceDisplayContext and this
+  // normalizer together.
+  const displayContext: OwnInvoiceDisplayContext | null =
+    contextRaw === 'tip' || contextRaw === 'request' ? contextRaw : null;
+  return {
+    ownerPubky: String(row.owner_pubky),
+    endpointIdentifier: String(row.endpoint_identifier),
+    paymentHash: String(row.payment_hash),
+    firstSeenAt: Number(row.first_seen_at),
+    invoiceAmountMsat: typeof row.invoice_amount_msat === 'string' ? row.invoice_amount_msat : null,
+    invoiceExpiresAt: typeof row.invoice_expires_at === 'number' ? row.invoice_expires_at : null,
+    displayContext,
+    paymentRequestId: typeof row.payment_request_id === 'string' ? row.payment_request_id : null,
+  };
+}
+
+type OwnInvoiceDisplay = {
+  context: OwnInvoiceDisplayContext | null;
+  paymentRequestId: string | null;
+};
+
+function nextDisplayContext(
+  current: string | null,
+  incoming: OwnInvoiceDisplayContext | null,
+): string | null {
+  if (current === 'tip') return 'tip';
+  if (current === 'request') return 'request';
+  return incoming;
+}
+
+function nextPaymentRequestId(current: string | null, incoming: string | null): string | null {
+  if (current !== null && current.length > 0) return current;
+  return incoming;
+}
+
+function tipEndpointsUnchanged(
+  existing: readonly Record<string, unknown>[],
+  incoming: readonly {
+    identifier: string;
+    payload: string;
+    validationStatus?: 'valid' | 'rejected';
+  }[],
+): boolean {
+  if (existing.length !== incoming.length) return false;
+  const byId = new Map<string, { payload: string; status: string }>();
+  for (const row of existing) {
+    byId.set(String(row.identifier), {
+      payload: String(row.payload),
+      status: row.validation_status === 'rejected' ? 'rejected' : 'valid',
+    });
+  }
+  for (const endpoint of incoming) {
+    const prev = byId.get(endpoint.identifier);
+    if (!prev) return false;
+    if (prev.payload !== endpoint.payload) return false;
+    if (prev.status !== (endpoint.validationStatus ?? 'valid')) return false;
+  }
+  return true;
+}
+
+function hasDisplayedPaymentHashSync(
+  db: SqlExecutor,
+  ownerPubky: string,
+  paymentHash: string,
+): boolean {
+  const result = db.executeSync(
+    `SELECT 1 FROM payment_requests
+     WHERE owner_pubky = ?
+       AND displayed_payment_hash = ?
+     LIMIT 1`,
+    [ownerPubky, paymentHash],
+  );
+  return (result.rows?.length ?? 0) > 0;
+}
+
+function releaseOwnInvoiceRequestBinding(
+  db: SqlExecutor,
+  ownerPubky: string,
+  paymentRequestId: string,
+): void {
+  try {
+    db.executeSync(
+      `UPDATE own_invoice_hashes
+          SET payment_request_id = NULL
+        WHERE owner_pubky = ?
+          AND payment_request_id = ?
+          AND EXISTS (
+            SELECT 1 FROM payment_requests AS r
+             WHERE r.owner_pubky = ?
+               AND r.payment_request_id = ?
+               AND r.direction = 'sent'
+          )`,
+      [ownerPubky, paymentRequestId, ownerPubky, paymentRequestId],
+    );
+  } catch (err) {
+    if (!isMissingOwnInvoiceHashesTableError(err)) throw err;
+    logMissingOwnInvoiceHashTableRuntime();
+  }
+}
+
+function releaseExpiredOwnInvoiceBindings(
+  db: SqlExecutor,
+  ownerPubky: string,
+  nowMs: number,
+): void {
+  try {
+    db.executeSync(
+      `UPDATE own_invoice_hashes
+          SET payment_request_id = NULL
+        WHERE owner_pubky = ?
+          AND payment_request_id IS NOT NULL
+          AND EXISTS (
+            SELECT 1 FROM payment_requests AS r
+             WHERE r.owner_pubky = own_invoice_hashes.owner_pubky
+               AND r.payment_request_id = own_invoice_hashes.payment_request_id
+               AND r.direction = 'sent'
+               AND r.status = 'pending'
+               AND r.expires_at IS NOT NULL
+               AND r.expires_at <= ?
+          )`,
+      [ownerPubky, nowMs],
+    );
+  } catch (err) {
+    if (!isMissingOwnInvoiceHashesTableError(err)) throw err;
+    logMissingOwnInvoiceHashTableRuntime();
+  }
+}
+
+function releaseOwnInvoiceBindingIfInactiveRow(
+  db: SqlExecutor,
+  ownerPubky: string,
+  paymentRequestId: string,
+  nowMs: number,
+): void {
+  try {
+    db.executeSync(
+      `UPDATE own_invoice_hashes
+          SET payment_request_id = NULL
+        WHERE owner_pubky = ?
+          AND payment_request_id = ?
+          AND EXISTS (
+            SELECT 1 FROM payment_requests AS r
+             WHERE r.owner_pubky = ?
+               AND r.payment_request_id = ?
+               AND r.direction = 'sent'
+               AND (
+                 r.status IN ('cancelled', 'rejected')
+                 OR (
+                   r.status = 'pending'
+                   AND r.expires_at IS NOT NULL
+                   AND r.expires_at <= ?
+                 )
+               )
+          )`,
+      [ownerPubky, paymentRequestId, ownerPubky, paymentRequestId, nowMs],
+    );
+  } catch (err) {
+    if (!isMissingOwnInvoiceHashesTableError(err)) throw err;
+    logMissingOwnInvoiceHashTableRuntime();
+  }
+}
+
+function insertOwnInvoiceHash(
+  db: SqlExecutor,
+  ownerPubky: string,
+  endpointIdentifier: string,
+  paymentHash: string,
+  firstSeenAt: number,
+  invoiceAmountMsat: string | null,
+  invoiceExpiresAt: number | null,
+  display?: OwnInvoiceDisplay,
+): void {
+  try {
+    insertOwnInvoiceHashInner(
+      db,
+      ownerPubky,
+      endpointIdentifier,
+      paymentHash,
+      firstSeenAt,
+      invoiceAmountMsat,
+      invoiceExpiresAt,
+      display,
+    );
+  } catch (err) {
+    if (!isMissingOwnInvoiceHashesTableError(err)) throw err;
+    logMissingOwnInvoiceHashTableRuntime();
+  }
+}
+
+function insertOwnInvoiceHashInner(
+  db: SqlExecutor,
+  ownerPubky: string,
+  endpointIdentifier: string,
+  paymentHash: string,
+  firstSeenAt: number,
+  invoiceAmountMsat: string | null,
+  invoiceExpiresAt: number | null,
+  display?: OwnInvoiceDisplay,
+): void {
+  const existing = db.executeSync(
+    `SELECT invoice_amount_msat, invoice_expires_at, display_context, payment_request_id
+       FROM own_invoice_hashes
+        WHERE owner_pubky = ? AND endpoint_identifier = ? AND payment_hash = ?`,
+    [ownerPubky, endpointIdentifier, paymentHash],
+  ).rows?.[0];
+  const incomingContext = display?.context ?? null;
+  const incomingRequestId = display?.paymentRequestId ?? null;
+  if (!existing) {
+    db.executeSync(
+      `INSERT INTO own_invoice_hashes
+        (owner_pubky, endpoint_identifier, payment_hash, first_seen_at,
+         invoice_amount_msat, invoice_expires_at, display_context, payment_request_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        ownerPubky,
+        endpointIdentifier,
+        paymentHash,
+        firstSeenAt,
+        invoiceAmountMsat,
+        invoiceExpiresAt,
+        incomingContext,
+        incomingRequestId,
+      ],
+    );
+    return;
+  }
+  const currentAmount =
+    typeof existing.invoice_amount_msat === 'string' ? existing.invoice_amount_msat : null;
+  const currentExpiry =
+    typeof existing.invoice_expires_at === 'number' ? existing.invoice_expires_at : null;
+  const currentContext =
+    typeof existing.display_context === 'string' ? existing.display_context : null;
+  const currentRequestId =
+    typeof existing.payment_request_id === 'string' ? existing.payment_request_id : null;
+  const nextAmount = preferVerifiedInvoiceAmount(currentAmount, invoiceAmountMsat);
+  const nextExpiry = currentExpiry ?? invoiceExpiresAt;
+  const nextContext = nextDisplayContext(currentContext, incomingContext);
+  const nextRequestId = nextPaymentRequestId(currentRequestId, incomingRequestId);
+  if (
+    nextAmount === currentAmount &&
+    nextExpiry === currentExpiry &&
+    nextContext === currentContext &&
+    nextRequestId === currentRequestId
+  ) {
+    return;
+  }
+  db.executeSync(
+    `UPDATE own_invoice_hashes
+        SET invoice_amount_msat = ?, invoice_expires_at = ?,
+            display_context = ?, payment_request_id = ?
+      WHERE owner_pubky = ? AND endpoint_identifier = ? AND payment_hash = ?`,
+    [
+      nextAmount,
+      nextExpiry,
+      nextContext,
+      nextRequestId,
+      ownerPubky,
+      endpointIdentifier,
+      paymentHash,
+    ],
+  );
+}
+
 class CasConflictError extends Error {
   constructor() {
     super('already transitioned');
@@ -2719,35 +3887,91 @@ function sqliteChanges(db: SqlExecutor): number {
   return Number(result.rows?.[0]?.n ?? 0);
 }
 
+function casPaymentRequestRow(
+  db: SqlExecutor,
+  ownerPubky: string,
+  peerPubky: string,
+  paymentRequestId: string,
+  expectedStatuses: readonly PaymentStatus[],
+  patch: PaymentRequestPatch,
+): boolean {
+  try {
+    const applied = compareAndSetPaymentRequestRow(
+      db,
+      ownerPubky,
+      peerPubky,
+      paymentRequestId,
+      expectedStatuses,
+      patch,
+    );
+    if (applied && (patch.status === 'cancelled' || patch.status === 'rejected')) {
+      releaseOwnInvoiceRequestBinding(db, ownerPubky, paymentRequestId);
+    }
+    return applied;
+  } catch (err) {
+    if (!isVerifiedHashUniqueError(err) || patch.proofVerified !== true) throw err;
+    const replayPatch: PaymentRequestPatch = {
+      status: 'accepted',
+      proofVerified: false,
+    };
+    if (patch.proofJson !== undefined) replayPatch.proofJson = patch.proofJson;
+    if (patch.reason !== undefined) replayPatch.reason = patch.reason;
+    if (patch.pendingEventId !== undefined) replayPatch.pendingEventId = patch.pendingEventId;
+    return compareAndSetPaymentRequestRow(
+      db,
+      ownerPubky,
+      peerPubky,
+      paymentRequestId,
+      expectedStatuses,
+      replayPatch,
+    );
+  }
+}
+
 function insertPaymentRequest(db: SqlExecutor, record: PaymentRequestRecord): void {
-  db.executeSync(
-    `INSERT OR IGNORE INTO payment_requests
-      (owner_pubky, peer_pubky, direction, payment_request_id, event_id,
-       amount_value, amount_asset, payment_reference, endpoint_ids, expires_at,
-       status, created_at, updated_at, proof_json, reason,
-       pending_event_id, displayed_payment_hash, proof_verified)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [
-      record.ownerPubky,
-      record.peerPubky,
-      record.direction,
-      record.paymentRequestId,
-      record.eventId,
-      record.amountValue,
-      record.amountAsset,
-      record.paymentReference,
-      JSON.stringify(record.endpointIds),
-      record.expiresAt,
-      record.status,
-      record.createdAt,
-      record.updatedAt,
-      record.proofJson,
-      record.reason,
-      record.pendingEventId,
-      record.displayedPaymentHash,
-      record.proofVerified === null ? null : record.proofVerified ? 1 : 0,
-    ],
-  );
+  const baseParams: SqlValue[] = [
+    record.ownerPubky,
+    record.peerPubky,
+    record.direction,
+    record.paymentRequestId,
+    record.eventId,
+    record.amountValue,
+    record.amountAsset,
+    record.paymentReference,
+    JSON.stringify(record.endpointIds),
+    record.expiresAt,
+    record.status,
+    record.createdAt,
+    record.updatedAt,
+    record.proofJson,
+    record.reason,
+    record.pendingEventId,
+    record.displayedPaymentHash,
+    record.proofVerified === null ? null : record.proofVerified ? 1 : 0,
+  ];
+  try {
+    db.executeSync(
+      `INSERT OR IGNORE INTO payment_requests
+        (owner_pubky, peer_pubky, direction, payment_request_id, event_id,
+         amount_value, amount_asset, payment_reference, endpoint_ids, expires_at,
+         status, created_at, updated_at, proof_json, reason,
+         pending_event_id, displayed_payment_hash, proof_verified, invoice_reused)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [...baseParams, record.invoiceReused === true ? 1 : null],
+    );
+  } catch (err) {
+    if (!isMissingPaymentRequestInvoiceReusedColumnError(err)) throw err;
+    logMissingPaymentRequestInvoiceReusedColumn();
+    db.executeSync(
+      `INSERT OR IGNORE INTO payment_requests
+        (owner_pubky, peer_pubky, direction, payment_request_id, event_id,
+         amount_value, amount_asset, payment_reference, endpoint_ids, expires_at,
+         status, created_at, updated_at, proof_json, reason,
+         pending_event_id, displayed_payment_hash, proof_verified)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      baseParams,
+    );
+  }
 }
 
 function insertPaymentEvent(db: SqlExecutor, record: PaymentEventRecord): void {
@@ -2765,6 +3989,36 @@ function insertPaymentEvent(db: SqlExecutor, record: PaymentEventRecord): void {
       record.paymentRequestId,
       record.applied ? 1 : 0,
       record.receivedAt,
+    ],
+  );
+  pruneUnappliedPaymentEvents(db, record.ownerPubky, record.conversationId, record.senderPubky);
+}
+
+function pruneUnappliedPaymentEvents(
+  db: SqlExecutor,
+  ownerPubky: string,
+  conversationId: string,
+  senderPubky: string,
+): void {
+  db.executeSync(
+    `DELETE FROM payment_events
+      WHERE owner_pubky = ? AND conversation_id = ? AND sender_pubky = ?
+        AND applied = 0
+        AND rowid NOT IN (
+          SELECT rowid FROM payment_events
+           WHERE owner_pubky = ? AND conversation_id = ? AND sender_pubky = ?
+             AND applied = 0
+           ORDER BY received_at DESC, rowid DESC
+           LIMIT ?
+        )`,
+    [
+      ownerPubky,
+      conversationId,
+      senderPubky,
+      ownerPubky,
+      conversationId,
+      senderPubky,
+      PAYMENT_EVENTS_UNAPPLIED_KEEP_PER_SENDER,
     ],
   );
 }
@@ -2796,7 +4050,11 @@ function compareAndSetPaymentRequestRow(
       patch.reason === undefined ? null : patch.reason,
       patch.pendingEventId === undefined ? null : patch.pendingEventId,
       patch.displayedPaymentHash === undefined ? null : patch.displayedPaymentHash,
-      patch.proofVerified === undefined ? null : patch.proofVerified ? 1 : 0,
+      patch.proofVerified === undefined || patch.proofVerified === null
+        ? null
+        : patch.proofVerified
+          ? 1
+          : 0,
       now(),
       ownerPubky,
       peerPubky,

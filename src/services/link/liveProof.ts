@@ -7,6 +7,7 @@ import {
   decodeLinkEnvelope,
 } from '../../types/link';
 import {
+  EMPTY_PAYMENT_RECORD_EXTRAS,
   ENDPOINT_LIGHTNING_BOLT11,
   PAYKIT_PAYMENT_ACCEPTANCE_KIND,
   PAYKIT_PAYMENT_PROOF_KIND,
@@ -21,6 +22,7 @@ import {
   type PaymentStatus,
 } from '../../types/payment';
 import { StorageService } from '../StorageService';
+import { paintOwner } from '../paintedOwner';
 import { applyPaymentInbound } from '../payments/applyPaymentInbound';
 import {
   cleanupNativeParties,
@@ -272,6 +274,7 @@ export async function runLinkLiveProof(
 
     if (
       !(await record('receive-payment-request-b', async () => {
+        paintOwner(pubkyB);
         const raw = await receivePaymentJson(
           native,
           partyB,
@@ -309,6 +312,7 @@ export async function runLinkLiveProof(
 
     if (
       !(await record('send-payment-acceptance-b', async () => {
+        paintOwner(pubkyB);
         await StorageService.compareAndSetPaymentRequest(
           pubkyB,
           pubkyA,
@@ -328,6 +332,7 @@ export async function runLinkLiveProof(
 
     if (
       !(await record('receive-payment-acceptance-a', async () => {
+        paintOwner(pubkyA);
         const raw = await receivePaymentJson(
           native,
           partyA,
@@ -368,6 +373,7 @@ export async function runLinkLiveProof(
 
     if (
       !(await record('send-payment-proof-b', async () => {
+        paintOwner(pubkyB);
         await StorageService.compareAndSetPaymentRequest(
           pubkyB,
           pubkyA,
@@ -387,6 +393,7 @@ export async function runLinkLiveProof(
 
     if (
       !(await record('receive-payment-proof-a', async () => {
+        paintOwner(pubkyA);
         const raw = await receivePaymentJson(
           native,
           partyA,
@@ -408,10 +415,10 @@ export async function runLinkLiveProof(
           pubkyA,
           pubkyB,
           requestOne.envelope.payment_request_id,
-          'proof_received',
+          'accepted',
         );
         if (applied.action !== 'applied') throw new Error(`A apply proof: ${applied.action}`);
-        return 'proof_received (dummy hex — does not close P4)';
+        return 'accepted (dummy hex — unverifiable proof stays non-terminal)';
       }))
     ) {
       return failed();
@@ -440,6 +447,7 @@ export async function runLinkLiveProof(
 
     if (
       !(await record('receive-payment-request-2-b', async () => {
+        paintOwner(pubkyB);
         const raw = await receivePaymentJson(
           native,
           partyB,
@@ -478,6 +486,7 @@ export async function runLinkLiveProof(
 
     if (
       !(await record('send-payment-rejection-b', async () => {
+        paintOwner(pubkyB);
         await StorageService.compareAndSetPaymentRequest(
           pubkyB,
           pubkyA,
@@ -497,6 +506,7 @@ export async function runLinkLiveProof(
 
     if (
       !(await record('receive-payment-rejection-a', async () => {
+        paintOwner(pubkyA);
         const raw = await receivePaymentJson(
           native,
           partyA,
@@ -524,7 +534,7 @@ export async function runLinkLiveProof(
           pubkyA,
           pubkyB,
           requestOne.envelope.payment_request_id,
-          'proof_received',
+          'accepted',
         );
         if (applied.action !== 'applied') throw new Error(`A apply rejection: ${applied.action}`);
         return 'rejected';
@@ -554,6 +564,7 @@ async function persistOutboundRequest(
   },
   nowMs: number,
 ): Promise<void> {
+  paintOwner(ownerPubky);
   await StorageService.savePaymentRequest({
     ownerPubky,
     peerPubky,
@@ -570,9 +581,7 @@ async function persistOutboundRequest(
     updatedAt: nowMs,
     proofJson: null,
     reason: null,
-    pendingEventId: null,
-    displayedPaymentHash: null,
-    proofVerified: null,
+    ...EMPTY_PAYMENT_RECORD_EXTRAS,
   });
   await StorageService.savePaymentEvent({
     ownerPubky,

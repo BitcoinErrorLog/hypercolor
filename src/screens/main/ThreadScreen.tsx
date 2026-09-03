@@ -11,6 +11,9 @@ import {
   SafeAreaView,
   ActivityIndicator,
   Alert,
+  Linking,
+  AccessibilityInfo,
+  findNodeHandle,
 } from 'react-native';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
@@ -22,24 +25,53 @@ import { useAuthStore } from '../../stores/authStore';
 import { StorageService } from '../../services/StorageService';
 import { LinkService } from '../../services/link/LinkService';
 import { AttachmentBubble } from '../../components/AttachmentBubble';
-import { ComposerAttachButton } from '../../components/ComposerAttachButton';
-import { PaymentRequestBubble } from '../../components/PaymentRequestBubble';
+import {
+  pickAndSendFile,
+  pickAndSendPhoto,
+  type ComposerAttachNotice,
+} from '../../components/ComposerAttachButton';
+import { ComposerActionMenu } from '../../components/ComposerActionMenu';
+import {
+  PaymentRequestBubble,
+  type PaymentReviewRequest,
+} from '../../components/PaymentRequestBubble';
+import { useTickingNow } from '../../components/PaymentRequestCard';
 import { PaymentComposeSheet } from '../../components/PaymentComposeSheet';
-import { ThreadTipBar } from '../../components/ThreadTipBar';
+import { PaymentReviewSheet } from '../../components/PaymentReviewSheet';
+import { ThreadDeniedBanner } from './contacts/ThreadDeniedBanner';
+import { ThreadDeclinedNotice } from './contacts/ThreadDeclinedNotice';
+import { useThreadPeerGate } from './contacts/useThreadPeerGate';
+import { ThreadTipBarContent } from '../../components/ThreadTipBar';
 import { EnableMessagingCta } from '../../components/EnableMessagingCta';
 import { PaymentService } from '../../services/payments/PaymentService';
-import { isPaykitPaymentKind, PaymentError, type PaymentRequestRecord } from '../../types/payment';
+import {
+  isPaykitPaymentKind,
+  PaymentError,
+  isPositiveBtcAmount,
+  type PaymentRequestRecord,
+} from '../../types/payment';
 import type { TipEndpointRecord } from '../../types/payment';
-import { COPY } from '../../copy/uxCopy';
+import { COPY, messageByteCountLabel } from '../../copy/uxCopy';
 import { HIT_SLOP_44, minHitStyle } from '../../ui/hitTarget';
 import { formatDeliveryState, formatLinkStatus } from '../../ui/messageStatus';
 import { peerIdentity } from '../../ui/peerIdentity';
 import { copyText } from '../../utils/copyText';
 import type { Contact } from '../../types';
 import type { LinkStatus } from '../../types/link';
+import { LINK_MESSAGE_MAX_BYTES } from '../../types/link';
 import { StatusBanner } from '../../ui/StatusBanner';
 import { useSessionStatusStore } from '../../stores/sessionStatusStore';
 import { sanitizeError } from '../../ui/sanitizedError';
+import {
+  composerActionItems,
+  draftEnvelopeByteSize,
+  draftExceedsByteCap,
+} from '../../ui/composerActions';
+import { mapPaymentReview } from '../../ui/paymentReview';
+import { openBuiltUri } from '../../services/payments/walletHandoff';
+import { continuePaymentReview } from './continuePaymentReview';
+import { eventIdsWithDeliveryQueue } from '../../ui/failedSendRetry';
+import { useReduceMotion } from '../../ui/reduceMotion';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Thread'>;
 
@@ -66,9 +98,23 @@ export default function ThreadScreen({ route }: Props) {
   const [payments, setPayments] = useState<PaymentRequestRecord[]>([]);
   const [tipEndpoints, setTipEndpoints] = useState<TipEndpointRecord[]>([]);
   const [composePayment, setComposePayment] = useState(false);
+  const [composeIntent, setComposeIntent] = useState<'request' | 'tip'>('request');
+  const [pendingTipEndpoint, setPendingTipEndpoint] = useState<TipEndpointRecord | null>(null);
   const [paymentBusy, setPaymentBusy] = useState(false);
+  const [actionMenuOpen, setActionMenuOpen] = useState(false);
+  const [tipPickerOpen, setTipPickerOpen] = useState(false);
+  const [review, setReview] = useState<PaymentReviewRequest | null>(null);
+  const [walletUnavailable, setWalletUnavailable] = useState(false);
+  const [recordFailed, setRecordFailed] = useState(false);
+  const [reviewHandoffError, setReviewHandoffError] = useState<string | null>(null);
+  const [composerNotice, setComposerNotice] = useState<ComposerAttachNotice | null>(null);
   const [peerContact, setPeerContact] = useState<Contact | null>(null);
   const [linkStatus, setLinkStatus] = useState<LinkStatus | null>(null);
+  const [retryableEventIds, setRetryableEventIds] = useState<Set<string>>(() => new Set());
+  const [requestStatus, setRequestStatus] = useState<'pending' | 'accepted' | 'declined' | null>(
+    null,
+  );
+  const { peerBlocked, runUnblock } = useThreadPeerGate(localPubky, participantPubky);
   const sessionKind = useSessionStatusStore(s => s.kind);
 
   const conversationId = buildDmConversationId(participantPubky);
@@ -85,11 +131,18 @@ export default function ThreadScreen({ route }: Props) {
     setAttachments(atts);
     setPayments(pays);
     setTipEndpoints(tips);
+    const failedIds = [
+      ...msgs.filter(row => row.deliveryState === 'failed').map(row => row.eventId),
+      ...atts.filter(row => row.deliveryState === 'failed').map(row => row.eventId),
+    ];
+    setRetryableEventIds(await eventIdsWithDeliveryQueue(failedIds));
     setLoading(false);
     const latest = msgs.reduce((max, m) => Math.max(max, m.sentAt), 0);
     await LinkService.markRead(conversationId, latest > 0 ? latest : Date.now());
     const contact = await StorageService.getContact(participantPubky, localPubky);
     setPeerContact(contact);
+    const request = await StorageService.getMessageRequest(localPubky, participantPubky);
+    setRequestStatus(request?.status ?? null);
     try {
       setLinkStatus(await LinkService.getLinkStatus(participantPubky));
     } catch {
@@ -121,18 +174,18 @@ export default function ThreadScreen({ route }: Props) {
 
   const handleSend = useCallback(async () => {
     const text = draft.trim();
-    if (!text || sending) return;
-    setDraft('');
+    if (!text || sending || peerBlocked || draftExceedsByteCap(text, { surface: 'dm' })) return;
     setSending(true);
     try {
       await LinkService.sendDm(participantPubky, text);
+      setDraft('');
       await reloadEncrypted();
     } catch {
       await reloadEncrypted();
     } finally {
       setSending(false);
     }
-  }, [draft, sending, participantPubky, reloadEncrypted]);
+  }, [draft, sending, peerBlocked, participantPubky, reloadEncrypted]);
 
   return (
     <ThreadScreenContent
@@ -146,18 +199,92 @@ export default function ThreadScreen({ route }: Props) {
       payments={payments}
       tipEndpoints={tipEndpoints}
       composePayment={composePayment}
+      composeIntent={composeIntent}
       paymentBusy={paymentBusy}
+      actionMenuOpen={actionMenuOpen}
+      tipPickerOpen={tipPickerOpen}
+      review={review}
+      walletUnavailable={walletUnavailable}
+      recordFailed={recordFailed}
+      reviewHandoffError={reviewHandoffError}
+      retryableEventIds={retryableEventIds}
+      peerBlocked={peerBlocked}
+      peerDeclined={requestStatus === 'declined' && !peerBlocked}
+      onUnblock={runUnblock}
+      composerNotice={composerNotice}
       onBack={() => nav.goBack()}
       onChangeDraft={setDraft}
       onSend={() => {
         void handleSend();
       }}
-      onAttachSent={() => {
-        void reloadEncrypted();
+      onOpenActionMenu={() => setActionMenuOpen(true)}
+      onCloseActionMenu={() => {
+        setActionMenuOpen(false);
       }}
-      onOpenPaymentCompose={() => setComposePayment(true)}
-      onClosePaymentCompose={() => setComposePayment(false)}
+      onComposerAction={id => {
+        setActionMenuOpen(false);
+        if (id === 'photo') {
+          void pickAndSendPhoto({ type: 'conversation', peerPubky: participantPubky }).then(
+            result => {
+              if (result.ok) void reloadEncrypted();
+              else if ('notice' in result) setComposerNotice(result.notice);
+            },
+          );
+          return;
+        }
+        if (id === 'file') {
+          void pickAndSendFile({ type: 'conversation', peerPubky: participantPubky }).then(
+            result => {
+              if (result.ok) void reloadEncrypted();
+              else if ('notice' in result) setComposerNotice(result.notice);
+            },
+          );
+          return;
+        }
+        if (id === 'request-payment') {
+          setComposeIntent('request');
+          setComposePayment(true);
+        }
+        if (id === 'send-tip') setTipPickerOpen(true);
+        if (id === 'send-tip-list') {
+          void PaymentService.sendTipList(participantPubky)
+            .then(() => {
+              void reloadEncrypted();
+            })
+            .catch(err => {
+              const sanitized = sanitizeError(
+                err instanceof PaymentError || err instanceof Error
+                  ? err
+                  : 'Could not send tip list',
+                'Could not send tip list',
+              );
+              Alert.alert('Tip list', sanitized.message);
+            });
+        }
+      }}
+      onClosePaymentCompose={() => {
+        setComposePayment(false);
+        setPendingTipEndpoint(null);
+        setComposeIntent('request');
+      }}
       onSubmitPayment={(amountBtc, reference) => {
+        if (composeIntent === 'tip' && pendingTipEndpoint) {
+          if (!isPositiveBtcAmount(amountBtc)) return;
+          setComposePayment(false);
+          setReview({
+            kind: 'tip',
+            record: null,
+            peerPubky: participantPubky,
+            amountBtc,
+            amountAsset: 'btc',
+            reference: null,
+            destinations: [pendingTipEndpoint],
+            selected: pendingTipEndpoint,
+          });
+          setPendingTipEndpoint(null);
+          setComposeIntent('request');
+          return;
+        }
         setPaymentBusy(true);
         void PaymentService.requestPayment(participantPubky, { value: amountBtc }, reference)
           .then(() => {
@@ -178,17 +305,74 @@ export default function ThreadScreen({ route }: Props) {
       onPaymentsChanged={() => {
         void reloadEncrypted();
       }}
+      onReview={next => {
+        setWalletUnavailable(false);
+        setReviewHandoffError(null);
+        setReview(next);
+        setTipPickerOpen(false);
+      }}
+      onCloseReview={() => {
+        setReview(null);
+        setWalletUnavailable(false);
+        setRecordFailed(false);
+        setReviewHandoffError(null);
+      }}
+      onCloseTipPicker={() => setTipPickerOpen(false)}
+      onNeedTipAmount={endpoint => {
+        setPendingTipEndpoint(endpoint);
+        setComposeIntent('tip');
+        setComposePayment(true);
+        setTipPickerOpen(false);
+      }}
+      onContinueReview={() => {
+        if (!review) return;
+        void (async () => {
+          try {
+            const result = await continuePaymentReview(review, {
+              canOpenURL: url => Linking.canOpenURL(url),
+              openUri: url => openBuiltUri(url),
+              recordDisplayedInvoice: (peer, paymentRequestId, paymentHash, endpointIdentifier) =>
+                PaymentService.recordDisplayedInvoice(
+                  peer,
+                  paymentRequestId,
+                  paymentHash,
+                  endpointIdentifier,
+                ),
+              recordDisplayedTipInvoice: (endpointIdentifier, paymentHash) =>
+                PaymentService.recordDisplayedTipInvoice(endpointIdentifier, paymentHash),
+            });
+            setWalletUnavailable(result.walletUnavailable);
+            setRecordFailed(result.recordFailed);
+            setReviewHandoffError(result.error);
+            if (result.closeReview) {
+              setReview(null);
+              setWalletUnavailable(false);
+              setRecordFailed(false);
+              setReviewHandoffError(null);
+            }
+          } catch (err) {
+            setWalletUnavailable(true);
+            setRecordFailed(false);
+            setReviewHandoffError(sanitizeError(err, COPY.couldNotOpenWallet).message);
+          }
+        })();
+      }}
       sessionKind={sessionKind}
       peerContact={peerContact}
       linkStatus={linkStatus}
       onEnableMessaging={() => nav.navigate('EnableMessaging' as never)}
-      onRetryFailed={() => {
+      onRetryFailed={eventId => {
         void (async () => {
+          if (!retryableEventIds.has(eventId)) return;
           try {
             await LinkService.recoverPendingSends();
             await LinkService.drainRetries();
           } catch {
-            // Bubble stays Failed until a drain succeeds.
+            setRetryableEventIds(prev => {
+              const next = new Set(prev);
+              next.delete(eventId);
+              return next;
+            });
           }
           await reloadEncrypted();
         })();
@@ -209,15 +393,33 @@ export function ThreadScreenContent({
   payments,
   tipEndpoints,
   composePayment,
+  composeIntent,
   paymentBusy,
+  actionMenuOpen,
+  tipPickerOpen,
+  review,
+  walletUnavailable,
+  recordFailed,
+  reviewHandoffError,
+  retryableEventIds,
+  peerBlocked,
+  peerDeclined,
+  onUnblock,
+  composerNotice,
   onBack,
   onChangeDraft,
   onSend,
-  onAttachSent,
-  onOpenPaymentCompose,
+  onOpenActionMenu,
+  onCloseActionMenu,
+  onComposerAction,
   onClosePaymentCompose,
   onSubmitPayment,
   onPaymentsChanged,
+  onReview,
+  onCloseReview,
+  onCloseTipPicker,
+  onNeedTipAmount,
+  onContinueReview,
   sessionKind,
   peerContact,
   linkStatus,
@@ -235,23 +437,46 @@ export function ThreadScreenContent({
   payments: PaymentRequestRecord[];
   tipEndpoints: TipEndpointRecord[];
   composePayment: boolean;
+  composeIntent: 'request' | 'tip';
   paymentBusy: boolean;
+  actionMenuOpen: boolean;
+  tipPickerOpen: boolean;
+  review: PaymentReviewRequest | null;
+  walletUnavailable: boolean;
+  recordFailed: boolean;
+  reviewHandoffError: string | null;
+  retryableEventIds: ReadonlySet<string>;
+  peerBlocked: boolean;
+  peerDeclined: boolean;
+  onUnblock: () => void;
+  composerNotice: ComposerAttachNotice | null;
   onBack: () => void;
   onChangeDraft: (value: string) => void;
   onSend: () => void;
-  onAttachSent: () => void;
-  onOpenPaymentCompose: () => void;
+  onOpenActionMenu: () => void;
+  onCloseActionMenu: () => void;
+  onComposerAction: (
+    id: 'photo' | 'file' | 'request-payment' | 'send-tip' | 'send-tip-list',
+  ) => void;
   onClosePaymentCompose: () => void;
   onSubmitPayment: (amountBtc: string, reference: string) => void;
   onPaymentsChanged: () => void;
+  onReview: (request: PaymentReviewRequest) => void;
+  onCloseReview: () => void;
+  onCloseTipPicker: () => void;
+  onNeedTipAmount: (endpoint: TipEndpointRecord) => void;
+  onContinueReview: (uri: string) => void;
   sessionKind: 'offline' | 'needs-enable' | 'revoked' | string;
   peerContact: Contact | null;
   linkStatus: LinkStatus | null;
   onEnableMessaging: () => void;
-  onRetryFailed: () => void;
+  onRetryFailed: (eventId: string) => void;
   onCopyPubky: () => void;
 }) {
   const flatListRef = useRef<FlatList<ThreadItem>>(null);
+  const plusRef = useRef<View>(null);
+  const menuWasOpen = useRef(false);
+  const reduceMotion = useReduceMotion();
   const items = useMemo(
     () => mergeThreadItems(linkMessages, attachments, payments),
     [linkMessages, attachments, payments],
@@ -259,9 +484,20 @@ export function ThreadScreenContent({
 
   useEffect(() => {
     if (items.length > 0) {
-      flatListRef.current?.scrollToEnd({ animated: true });
+      flatListRef.current?.scrollToEnd({ animated: !reduceMotion });
     }
-  }, [items.length]);
+  }, [items.length, reduceMotion]);
+
+  useEffect(() => {
+    if (actionMenuOpen) {
+      menuWasOpen.current = true;
+      return;
+    }
+    if (!menuWasOpen.current) return;
+    menuWasOpen.current = false;
+    const tag = findNodeHandle(plusRef.current);
+    if (tag != null) AccessibilityInfo.setAccessibilityFocus(tag);
+  }, [actionMenuOpen]);
 
   const renderItem = useCallback(
     ({ item }: { item: ThreadItem }) => {
@@ -277,6 +513,7 @@ export function ThreadScreenContent({
                 record={item.record}
                 localPubky={localPubky}
                 onChanged={onPaymentsChanged}
+                onReview={onReview}
               />
             ) : null}
             <View style={styles.meta}>
@@ -289,7 +526,15 @@ export function ThreadScreenContent({
         const isMine = item.record.senderPubky === localPubky;
         return (
           <View style={[styles.bubble, isMine ? styles.mine : styles.theirs]}>
-            <AttachmentBubble record={item.record} isMine={isMine} />
+            <AttachmentBubble
+              record={item.record}
+              isMine={isMine}
+              onRetrySend={
+                retryableEventIds.has(item.record.eventId)
+                  ? () => onRetryFailed(item.record.eventId)
+                  : undefined
+              }
+            />
             <View style={styles.meta}>
               <Text style={styles.time}>{formatTime(item.sentAt)}</Text>
             </View>
@@ -318,15 +563,25 @@ export function ThreadScreenContent({
                 >
                   {formatDeliveryState(item.message.deliveryState)}
                 </Text>
-                {item.message.deliveryState === 'failed' ? (
-                  <TouchableOpacity
-                    accessibilityRole="button"
-                    accessibilityLabel={COPY.retry}
-                    hitSlop={HIT_SLOP_44}
-                    onPress={onRetryFailed}
-                  >
-                    <Text style={styles.retry}>{COPY.retry}</Text>
-                  </TouchableOpacity>
+                {item.message.deliveryState === 'failed' && !peerBlocked ? (
+                  retryableEventIds.has(item.message.eventId) ? (
+                    <TouchableOpacity
+                      accessibilityRole="button"
+                      accessibilityLabel={COPY.retry}
+                      hitSlop={HIT_SLOP_44}
+                      onPress={() => onRetryFailed(item.message.eventId)}
+                    >
+                      <Text style={styles.retry}>{COPY.retry}</Text>
+                    </TouchableOpacity>
+                  ) : (
+                    <Text
+                      testID="threadSendTerminal"
+                      accessibilityRole="text"
+                      style={styles.statusFailed}
+                    >
+                      {COPY.couldNotSendStartAgain}
+                    </Text>
+                  )
                 ) : null}
               </>
             ) : null}
@@ -334,14 +589,43 @@ export function ThreadScreenContent({
         </View>
       );
     },
-    [localPubky, onPaymentsChanged, onRetryFailed],
+    [localPubky, onPaymentsChanged, onRetryFailed, onReview, peerBlocked, retryableEventIds],
   );
 
   const identity = peerIdentity(participantPubky, peerContact);
   const linkLabel = formatLinkStatus(linkStatus);
   const needsEnable =
     sessionKind === 'needs-enable' || sessionKind === 'revoked' || sessionKind === 'unavailable';
-  const composerEnabled = !needsEnable;
+  const composerEnabled = !needsEnable && !peerBlocked;
+  const inboxClosed = linkStatus === 'not-enrolled';
+  const actions = composerActionItems('dm', {
+    messagingEnabled: composerEnabled,
+    inboxClosed,
+    hasTipEndpoints: tipEndpoints.some(row => row.validationStatus !== 'rejected'),
+  });
+  const overCap = draftExceedsByteCap(draft, { surface: 'dm' });
+  const byteLabel = messageByteCountLabel(
+    draftEnvelopeByteSize(draft, { surface: 'dm' }),
+    LINK_MESSAGE_MAX_BYTES,
+  );
+  const nowMs = useTickingNow();
+  const reviewView = review
+    ? mapPaymentReview({
+        kind: review.kind,
+        recipientPubky: review.peerPubky,
+        recipientContact: peerContact,
+        requestAmountBtc: review.amountBtc,
+        amountAsset: review.amountAsset,
+        reference: review.reference,
+        endpoint: review.selected,
+        destinations: review.destinations,
+        nowMs,
+        destinationsEmpty: review.destinations.length === 0,
+        walletUnavailable,
+        recordFailed,
+        handoffError: recordFailed ? null : reviewHandoffError,
+      })
+    : null;
 
   return (
     <SafeAreaView style={styles.container} testID="threadScreen">
@@ -382,22 +666,10 @@ export function ThreadScreenContent({
             </Text>
           ) : null}
         </TouchableOpacity>
-        <TouchableOpacity
-          testID="threadRequestPay"
-          accessibilityRole="button"
-          accessibilityLabel="Request payment"
-          onPress={onOpenPaymentCompose}
-          hitSlop={HIT_SLOP_44}
-          style={styles.backBtn}
-        >
-          <Text style={styles.requestPay}>₿</Text>
-        </TouchableOpacity>
+        <View style={styles.backBtn} />
       </View>
-      <ThreadTipBar
-        peerPubky={participantPubky}
-        endpoints={tipEndpoints}
-        onChanged={onPaymentsChanged}
-      />
+      {peerBlocked ? <ThreadDeniedBanner onUnblock={onUnblock} /> : null}
+      {peerDeclined ? <ThreadDeclinedNotice /> : null}
       {needsEnable ? (
         <EnableMessagingCta testID="threadEnableMessaging" onPress={onEnableMessaging} />
       ) : null}
@@ -429,48 +701,142 @@ export function ThreadScreenContent({
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         keyboardVerticalOffset={0}
       >
-        <View style={styles.composer}>
-          <PaymentComposeSheet
-            visible={composePayment}
-            busy={paymentBusy}
-            onClose={onClosePaymentCompose}
-            onSubmit={onSubmitPayment}
-          />
-          <ComposerAttachButton
-            target={{ type: 'conversation', peerPubky: participantPubky }}
-            disabled={sending}
-            onSent={onAttachSent}
-          />
-          <TextInput
-            testID="threadComposer"
-            accessibilityLabel="Message"
-            style={styles.input}
-            value={draft}
-            onChangeText={onChangeDraft}
-            placeholder="Message…"
-            placeholderTextColor="#4b5563"
-            multiline
-            maxLength={4000}
-            editable={composerEnabled}
-            returnKeyType="default"
-          />
-          <TouchableOpacity
-            testID="threadSend"
-            accessibilityRole="button"
-            accessibilityLabel="Send message"
-            style={[
-              styles.sendBtn,
-              (!draft.trim() || sending || !composerEnabled) && styles.sendBtnDisabled,
-            ]}
-            onPress={onSend}
-            disabled={!draft.trim() || sending || !composerEnabled}
+        <View style={styles.composerColumn}>
+          {composerNotice ? (
+            <View testID="composerNotice" accessibilityRole="alert" style={styles.notice}>
+              <Text style={styles.noticeText}>{composerNotice.message}</Text>
+              {composerNotice.actionLabel && composerNotice.onAction ? (
+                <TouchableOpacity
+                  accessibilityRole="button"
+                  accessibilityLabel={composerNotice.actionLabel}
+                  hitSlop={HIT_SLOP_44}
+                  onPress={composerNotice.onAction}
+                  style={styles.noticeAction}
+                >
+                  <Text style={styles.noticeActionText}>{composerNotice.actionLabel}</Text>
+                </TouchableOpacity>
+              ) : null}
+            </View>
+          ) : null}
+          {tipPickerOpen ? (
+            <ThreadTipBarContent
+              endpoints={tipEndpoints}
+              onTip={identifier => {
+                const match = tipEndpoints.find(row => row.identifier === identifier) ?? null;
+                if (!match) return;
+                if (isPositiveBtcAmount(match.invoiceAmount ?? '')) {
+                  onReview({
+                    kind: 'tip',
+                    record: null,
+                    peerPubky: participantPubky,
+                    amountBtc: match.invoiceAmount ?? '',
+                    amountAsset: 'btc',
+                    reference: null,
+                    destinations: [match],
+                    selected: match,
+                  });
+                  return;
+                }
+                onNeedTipAmount(match);
+              }}
+            />
+          ) : null}
+          <View style={styles.composer}>
+            <PaymentComposeSheet
+              visible={composePayment}
+              busy={paymentBusy}
+              intent={composeIntent}
+              onClose={onClosePaymentCompose}
+              onSubmit={onSubmitPayment}
+            />
+            <ComposerActionMenu
+              visible={actionMenuOpen}
+              actions={actions}
+              onSelect={onComposerAction}
+              onClose={onCloseActionMenu}
+            />
+            {reviewView ? (
+              <PaymentReviewSheet
+                visible
+                review={reviewView}
+                busy={false}
+                onClose={onCloseReview}
+                onContinue={() => {
+                  if (reviewView.uri) onContinueReview(reviewView.uri);
+                }}
+                onCopyUri={() => {
+                  if (reviewView.uri) copyText(reviewView.uri);
+                }}
+                onSelectDestination={identifier => {
+                  if (!review) return;
+                  const next =
+                    review.destinations.find(row => row.identifier === identifier) ?? null;
+                  onReview({ ...review, selected: next });
+                }}
+              />
+            ) : null}
+            <TouchableOpacity
+              ref={plusRef}
+              testID="threadComposerPlus"
+              accessibilityRole="button"
+              accessibilityLabel={COPY.composerAttach}
+              hitSlop={HIT_SLOP_44}
+              onPress={onOpenActionMenu}
+              style={styles.plusBtn}
+            >
+              <Text style={styles.plusIcon}>+</Text>
+            </TouchableOpacity>
+            <TextInput
+              testID="threadComposer"
+              accessibilityLabel="Message"
+              style={styles.input}
+              value={draft}
+              onChangeText={onChangeDraft}
+              placeholder="Message…"
+              placeholderTextColor="#4b5563"
+              multiline
+              editable={composerEnabled}
+              returnKeyType="default"
+            />
+            <TouchableOpacity
+              testID="threadSend"
+              accessibilityRole="button"
+              accessibilityLabel="Send message"
+              accessibilityState={{
+                disabled: !draft.trim() || sending || !composerEnabled || overCap,
+              }}
+              style={[
+                styles.sendBtn,
+                (!draft.trim() || sending || !composerEnabled || overCap) && styles.sendBtnDisabled,
+              ]}
+              onPress={onSend}
+              disabled={!draft.trim() || sending || !composerEnabled || overCap}
+            >
+              {sending ? (
+                <ActivityIndicator color="#fff" size="small" />
+              ) : (
+                <Text style={styles.sendIcon}>↑</Text>
+              )}
+            </TouchableOpacity>
+          </View>
+          <Text
+            testID="threadByteCap"
+            accessibilityLabel={byteLabel}
+            style={[styles.byteCap, overCap && styles.byteCapOver]}
           >
-            {sending ? (
-              <ActivityIndicator color="#fff" size="small" />
-            ) : (
-              <Text style={styles.sendIcon}>↑</Text>
-            )}
-          </TouchableOpacity>
+            {byteLabel}. {COPY.messageByteCap}
+          </Text>
+          {tipPickerOpen ? (
+            <TouchableOpacity
+              accessibilityRole="button"
+              accessibilityLabel={COPY.cancel}
+              hitSlop={HIT_SLOP_44}
+              onPress={onCloseTipPicker}
+              style={styles.noticeAction}
+            >
+              <Text style={styles.noticeActionText}>{COPY.cancel}</Text>
+            </TouchableOpacity>
+          ) : null}
         </View>
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -614,5 +980,25 @@ const styles = StyleSheet.create({
   },
   sendBtnDisabled: { opacity: 0.4 },
   sendIcon: { color: '#fff', fontSize: 18, fontWeight: '700' },
-  requestPay: { fontSize: 18, color: '#c4b5fd', textAlign: 'right' },
+  composerColumn: { backgroundColor: '#0a0a0a' },
+  plusBtn: {
+    ...minHitStyle,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#1f1f1f',
+  },
+  plusIcon: { color: '#c4b5fd', fontSize: 22, fontWeight: '700', marginTop: -2 },
+  byteCap: { color: '#808692', fontSize: 12, paddingHorizontal: 16, paddingBottom: 8 },
+  byteCapOver: { color: '#fca5a5' },
+  notice: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 16,
+    paddingTop: 8,
+  },
+  noticeText: { flex: 1, color: '#fca5a5', fontSize: 13 },
+  noticeAction: { minHeight: 44, justifyContent: 'center', paddingHorizontal: 8 },
+  noticeActionText: { color: '#8f57f0', fontSize: 14, fontWeight: '700' },
 });

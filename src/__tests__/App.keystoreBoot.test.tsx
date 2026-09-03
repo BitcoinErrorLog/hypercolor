@@ -12,10 +12,15 @@ const mockReconcileAtBoot = jest.fn();
 const mockDrainRetries = jest.fn();
 const mockHasSession = jest.fn(() => false);
 const mockSyncInbox = jest.fn();
-const mockHydrate = jest.fn();
+const mockHasInterruptedSignOut = jest.fn();
+const mockCompleteInterruptedSignOut = jest.fn();
+const mockRecordBootWipeFailure = jest.fn();
 const mockMarkKeystoreUnavailable = jest.fn();
 const mockRefresh = jest.fn();
 const mockStartDrain = jest.fn(() => () => undefined);
+const mockShouldHoldPreAuthWork = jest.fn(() => false);
+const mockPaintNeedsSignIn = jest.fn();
+let ownerPaintedListener: (() => void) | null = null;
 
 const appStateListeners: Array<(state: string) => void> = [];
 
@@ -33,6 +38,7 @@ jest.mock('../../src/navigation/e2eDeepLinks', () => ({
 
 jest.mock('../../src/navigation/tabBarIcons', () => ({
   loadMainTabIconFont: jest.fn(async () => undefined),
+  MainTabBarIcon: () => null,
 }));
 
 jest.mock('../../src/services/KeyStore', () => ({
@@ -40,6 +46,8 @@ jest.mock('../../src/services/KeyStore', () => ({
     initKeyStore: (...args: unknown[]) => mockInitKeyStore(...args),
     isInitialized: () => mockIsInitialized(),
     getPubky: (...args: unknown[]) => mockGetPubky(...args),
+    getHomeserver: () => null,
+    hasPersistedSession: async () => false,
     readLinkSession: (...args: unknown[]) => mockReadLinkSession(...args),
   },
 }));
@@ -56,8 +64,32 @@ jest.mock('../../src/services/link/LinkService', () => ({
   startLinkRetryDrain: () => mockStartDrain(),
 }));
 
-jest.mock('../../src/stores/hydrateAuthSession', () => ({
-  hydratePersistedAuth: (...args: unknown[]) => mockHydrate(...args),
+// Use the real hydrateAuthSession so a double consume would be visible
+// as two recordBootWipeFailure calls. Mock only its leaf dependencies.
+jest.mock('../../src/services/PubkyService', () => ({
+  PubkyService: {
+    hasInterruptedSignOut: (...args: unknown[]) => mockHasInterruptedSignOut(...args),
+    completeInterruptedSignOut: (...args: unknown[]) => mockCompleteInterruptedSignOut(...args),
+  },
+}));
+
+jest.mock('../../src/services/resetAfterFailedWipe', () => ({
+  recordBootWipeFailure: (...args: unknown[]) => mockRecordBootWipeFailure(...args),
+}));
+
+jest.mock('../../src/stores/authStore', () => ({
+  useAuthStore: {
+    getState: () => ({ setAuthenticated: jest.fn() }),
+  },
+}));
+
+jest.mock('../../src/services/paintedOwner', () => ({
+  paintNeedsSignIn: (...args: unknown[]) => mockPaintNeedsSignIn(...args),
+  resetPaintOverlayForBoot: jest.fn(),
+  registerOnOwnerPainted: (listener: (() => void) | null) => {
+    ownerPaintedListener = listener;
+  },
+  shouldHoldPreAuthWork: () => mockShouldHoldPreAuthWork(),
 }));
 
 jest.mock('../../src/stores/sessionStatusStore', () => ({
@@ -81,6 +113,7 @@ describe('App keystore boot ordering', () => {
 
   beforeEach(() => {
     appStateListeners.length = 0;
+    ownerPaintedListener = null;
     addSpy = jest.spyOn(AppState, 'addEventListener').mockImplementation((_event, cb) => {
       appStateListeners.push(cb as (state: string) => void);
       return { remove: jest.fn() };
@@ -93,16 +126,23 @@ describe('App keystore boot ordering', () => {
     mockRestorePersistedSession.mockReset();
     mockReconcileAtBoot.mockReset();
     mockDrainRetries.mockReset();
-    mockHydrate.mockReset();
+    mockHasInterruptedSignOut.mockReset();
+    mockCompleteInterruptedSignOut.mockReset();
+    mockRecordBootWipeFailure.mockReset();
     mockMarkKeystoreUnavailable.mockReset();
     mockRefresh.mockReset();
     mockStartDrain.mockClear();
+    mockShouldHoldPreAuthWork.mockReset();
+    mockPaintNeedsSignIn.mockReset();
+    mockShouldHoldPreAuthWork.mockReturnValue(false);
     mockInitKeyStore.mockReturnValue(new Promise(() => undefined));
     mockRecoverPendingSends.mockResolvedValue(undefined);
     mockRestorePersistedSession.mockResolvedValue(undefined);
     mockReconcileAtBoot.mockResolvedValue(undefined);
     mockDrainRetries.mockResolvedValue(undefined);
-    mockHydrate.mockResolvedValue(false);
+    mockHasInterruptedSignOut.mockResolvedValue(false);
+    mockCompleteInterruptedSignOut.mockResolvedValue(undefined);
+    mockRecordBootWipeFailure.mockResolvedValue(undefined);
     mockRefresh.mockResolvedValue(undefined);
   });
 
@@ -124,6 +164,95 @@ describe('App keystore boot ordering', () => {
     expect(mockReadLinkSession).not.toHaveBeenCalled();
     expect(mockRecoverPendingSends).not.toHaveBeenCalled();
     expect(mockRestorePersistedSession).not.toHaveBeenCalled();
+    expect(mockHasInterruptedSignOut).not.toHaveBeenCalled();
+    expect(mockReconcileAtBoot).not.toHaveBeenCalled();
+  });
+
+  it('runs init → interrupted wipe → reconcile → hydrate before drain', async () => {
+    const callOrder: string[] = [];
+    let resolveInit!: () => void;
+    mockInitKeyStore.mockImplementation(
+      () =>
+        new Promise<void>(resolve => {
+          callOrder.push('initKeyStore');
+          resolveInit = resolve;
+        }),
+    );
+    mockReconcileAtBoot.mockImplementation(async () => {
+      callOrder.push('reconcileAdoptedSessionsAtBoot');
+    });
+    // Real hydrateAuthSession: App calls consume once (hasInterrupted + maybe
+    // complete), then hydrate checks hasInterrupted again without completing.
+    let interruptedChecks = 0;
+    mockHasInterruptedSignOut.mockImplementation(async () => {
+      interruptedChecks += 1;
+      if (interruptedChecks === 1) {
+        callOrder.push('consumeInterruptedSignOutAtBoot');
+      } else {
+        callOrder.push('hydratePersistedAuth');
+      }
+      return false;
+    });
+    mockShouldHoldPreAuthWork.mockReturnValue(true);
+
+    await act(async () => {
+      tree = create(React.createElement(App));
+    });
+    expect(callOrder).toEqual(['initKeyStore']);
+    expect(mockHasInterruptedSignOut).not.toHaveBeenCalled();
+
+    mockIsInitialized.mockReturnValue(true);
+    await act(async () => {
+      resolveInit();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(callOrder).toEqual([
+      'initKeyStore',
+      'consumeInterruptedSignOutAtBoot',
+      'reconcileAdoptedSessionsAtBoot',
+      'hydratePersistedAuth',
+    ]);
+    expect(mockStartDrain).not.toHaveBeenCalled();
+    expect(ownerPaintedListener).not.toBeNull();
+
+    mockShouldHoldPreAuthWork.mockReturnValue(false);
+    await act(async () => {
+      ownerPaintedListener?.();
+    });
+    expect(mockStartDrain).toHaveBeenCalled();
+  });
+
+  it('records exactly one boot wipe failure when consume runs once through App boot', async () => {
+    let resolveInit!: () => void;
+    mockInitKeyStore.mockImplementation(
+      () =>
+        new Promise<void>(resolve => {
+          resolveInit = resolve;
+        }),
+    );
+    mockHasInterruptedSignOut.mockResolvedValue(true);
+    mockCompleteInterruptedSignOut.mockRejectedValue(new Error('wipe boom'));
+    mockIsInitialized.mockReturnValue(true);
+
+    await act(async () => {
+      tree = create(<App />);
+    });
+    await act(async () => {
+      resolveInit();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(mockCompleteInterruptedSignOut).toHaveBeenCalledTimes(1);
+    expect(mockRecordBootWipeFailure).toHaveBeenCalledTimes(1);
   });
 
   it('no-ops AppState active with a fixed log when KeyStore is not ready', async () => {

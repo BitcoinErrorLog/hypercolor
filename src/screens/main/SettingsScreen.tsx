@@ -12,8 +12,14 @@ import {
   Alert,
   BackHandler,
 } from 'react-native';
-import { useNavigation, usePreventRemove, type NavigationAction } from '@react-navigation/native';
+import {
+  useNavigation,
+  usePreventRemove,
+  useRoute,
+  type NavigationAction,
+} from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import type { RouteProp } from '@react-navigation/native';
 import { FeatureFlags } from '../../flags';
 import { useAuthStore } from '../../stores/authStore';
 import { useSessionStatusStore } from '../../stores/sessionStatusStore';
@@ -34,11 +40,17 @@ import { sanitizeError } from '../../ui/sanitizedError';
 import { setLastBackupAt } from '../../stores/backupMetaStore';
 import { shortPubky } from '../../ui/shortPubky';
 import { copyText } from '../../utils/copyText';
+import { useReduceMotion } from '../../ui/reduceMotion';
+import { scrollSettingsToSection, focusSettingsSection } from '../../ui/settingsSectionFocus';
 
 type Nav = NativeStackNavigationProp<RootStackParamList, 'Settings'>;
+type SettingsRoute = RouteProp<RootStackParamList, 'Settings'>;
+type SettingsSectionFocus = 'backup' | 'payments';
 
 export default function SettingsScreen() {
   const nav = useNavigation<Nav>();
+  const route = useRoute<SettingsRoute>();
+  const sectionParam = route.params?.section;
   const homeserver = useAuthStore(s => s.homeserver);
   const pubky = useAuthStore(s => s.pubky);
   const sessionKind = useSessionStatusStore(s => s.kind);
@@ -56,6 +68,37 @@ export default function SettingsScreen() {
   const [restoreError, setRestoreError] = useState<string | null>(null);
   const leavingRef = useRef(false);
   const alertVisibleRef = useRef(false);
+  const [highlightedSection, setHighlightedSection] = useState<SettingsSectionFocus | null>(null);
+  const scrollRef = useRef<ScrollView>(null);
+  const backupRef = useRef<View>(null);
+  const paymentsRef = useRef<View>(null);
+  const backupY = useRef(0);
+  const paymentsY = useRef(0);
+  const reduceMotion = useReduceMotion();
+  const markedSection = highlightedSection ?? sectionParam ?? null;
+
+  const consumeSectionFocus = useCallback(
+    (target: SettingsSectionFocus, y: number, node: View | null) => {
+      if (recoveryGateActive) return;
+      if (sectionParam !== target) return;
+      scrollSettingsToSection(scrollRef.current, y, reduceMotion);
+      focusSettingsSection(node);
+      setHighlightedSection(target);
+      nav.setParams({ section: undefined });
+    },
+    [nav, recoveryGateActive, reduceMotion, sectionParam],
+  );
+
+  useEffect(() => {
+    if (recoveryGateActive) return;
+    if (sectionParam !== 'backup' && sectionParam !== 'payments') return;
+    const y = sectionParam === 'backup' ? backupY.current : paymentsY.current;
+    const node = sectionParam === 'backup' ? backupRef.current : paymentsRef.current;
+    const timer = setTimeout(() => {
+      consumeSectionFocus(sectionParam, y, node);
+    }, 50);
+    return () => clearTimeout(timer);
+  }, [consumeSectionFocus, recoveryGateActive, sectionParam]);
 
   const leaveSettings = useCallback(
     (action?: NavigationAction) => {
@@ -167,7 +210,7 @@ export default function SettingsScreen() {
         <View style={styles.backHit} />
       </View>
 
-      <ScrollView contentContainerStyle={styles.content}>
+      <ScrollView ref={scrollRef} testID="settingsScroll" contentContainerStyle={styles.content}>
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Identity</Text>
           <View style={styles.row}>
@@ -215,7 +258,16 @@ export default function SettingsScreen() {
           </View>
         </View>
 
-        <View style={styles.section}>
+        <View
+          ref={backupRef}
+          testID="settingsFocusBackup"
+          accessibilityState={{ selected: markedSection === 'backup' }}
+          onLayout={event => {
+            backupY.current = event.nativeEvent.layout.y;
+            consumeSectionFocus('backup', event.nativeEvent.layout.y, backupRef.current);
+          }}
+          style={styles.section}
+        >
           <Text style={styles.sectionTitle}>Encrypted backup</Text>
           <View style={styles.row}>
             <Text style={styles.rowHint}>{COPY.backupExplanation}</Text>
@@ -386,7 +438,17 @@ export default function SettingsScreen() {
           </TouchableOpacity>
         </View>
 
-        <TipEndpointsSettings />
+        <View
+          ref={paymentsRef}
+          testID="settingsFocusPayments"
+          accessibilityState={{ selected: markedSection === 'payments' }}
+          onLayout={event => {
+            paymentsY.current = event.nativeEvent.layout.y;
+            consumeSectionFocus('payments', event.nativeEvent.layout.y, paymentsRef.current);
+          }}
+        >
+          <TipEndpointsSettings />
+        </View>
 
         {__DEV__ ? <LiveProofSettingsPanel /> : null}
       </ScrollView>

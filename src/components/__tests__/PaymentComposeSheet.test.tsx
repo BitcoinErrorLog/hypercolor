@@ -2,6 +2,7 @@ import React from 'react';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import { PaymentComposeSheet, paymentComposeError } from '../PaymentComposeSheet';
 import { PAYMENT_REFERENCE_MAX_LEN } from '../../types/payment';
+import { amountSatsApprox } from '../../copy/uxCopy';
 
 async function render(element: React.ReactElement): Promise<ReactTestRenderer> {
   let tree!: ReactTestRenderer;
@@ -42,17 +43,28 @@ describe('paymentComposeError', () => {
 });
 
 describe('PaymentComposeSheet', () => {
+  it('starts with an empty amount so the user must enter one', async () => {
+    const tree = await render(
+      <PaymentComposeSheet visible busy={false} onClose={jest.fn()} onSubmit={jest.fn()} />,
+    );
+    expect(tree.root.findByProps({ testID: 'paymentComposeAmount' }).props.value).toBe('');
+    await unmount(tree);
+  });
+
   it('does not submit an empty payment reference and shows an error', async () => {
     const onSubmit = jest.fn();
     const tree = await render(
       <PaymentComposeSheet visible busy={false} onClose={jest.fn()} onSubmit={onSubmit} />,
     );
+    await act(async () => {
+      tree.root.findByProps({ testID: 'paymentComposeAmount' }).props.onChangeText('0.001');
+    });
     const submit = tree.root.findByProps({ testID: 'paymentComposeSubmit' });
     await act(async () => {
       submit.props.onPress();
     });
     expect(onSubmit).not.toHaveBeenCalled();
-    expect(tree.root.findByProps({ testID: 'paymentComposeError' }).props.children).toBe(
+    expect(tree.root.findByProps({ testID: 'paymentComposeError' }).props.accessibilityLabel).toBe(
       'Enter a payment reference',
     );
     await unmount(tree);
@@ -64,6 +76,9 @@ describe('PaymentComposeSheet', () => {
       <PaymentComposeSheet visible busy={false} onClose={jest.fn()} onSubmit={onSubmit} />,
     );
     await act(async () => {
+      tree.root.findByProps({ testID: 'paymentComposeAmount' }).props.onChangeText('0.001');
+    });
+    await act(async () => {
       tree.root.findByProps({ testID: 'paymentComposeReference' }).props.onChangeText('  p7-ref  ');
     });
     await act(async () => {
@@ -72,6 +87,54 @@ describe('PaymentComposeSheet', () => {
     expect(onSubmit).toHaveBeenCalledTimes(1);
     expect(onSubmit).toHaveBeenCalledWith('0.001', 'p7-ref');
     expect(tree.root.findAllByProps({ testID: 'paymentComposeError' })).toHaveLength(0);
+    await unmount(tree);
+  });
+
+  it('requires a positive amount for a tip and skips the reference field', async () => {
+    const onSubmit = jest.fn();
+    const tree = await render(
+      <PaymentComposeSheet
+        visible
+        busy={false}
+        intent="tip"
+        onClose={jest.fn()}
+        onSubmit={onSubmit}
+      />,
+    );
+    expect(tree.root.findAllByProps({ testID: 'paymentComposeReference' })).toHaveLength(0);
+    expect(tree.root.findByProps({ testID: 'paymentComposeSubmit' }).props.disabled).toBe(true);
+    await act(async () => {
+      tree.root.findByProps({ testID: 'paymentComposeAmount' }).props.onChangeText('0');
+    });
+    await act(async () => {
+      tree.root.findByProps({ testID: 'paymentComposeSubmit' }).props.onPress();
+    });
+    expect(onSubmit).not.toHaveBeenCalled();
+    await act(async () => {
+      tree.root.findByProps({ testID: 'paymentComposeAmount' }).props.onChangeText('0.001');
+    });
+    await act(async () => {
+      tree.root.findByProps({ testID: 'paymentComposeSubmit' }).props.onPress();
+    });
+    expect(onSubmit).toHaveBeenCalledWith('0.001', '');
+    await unmount(tree);
+  });
+
+  it('shows a live sats conversion for the BTC amount', async () => {
+    const tree = await render(
+      <PaymentComposeSheet visible busy={false} onClose={jest.fn()} onSubmit={jest.fn()} />,
+    );
+    expect(tree.root.findAllByProps({ testID: 'paymentComposeSats' })).toHaveLength(0);
+    await act(async () => {
+      tree.root.findByProps({ testID: 'paymentComposeAmount' }).props.onChangeText('0.001');
+    });
+    expect(tree.root.findByProps({ testID: 'paymentComposeSats' }).props.children).toBe(
+      '100,000 sats',
+    );
+    expect(amountSatsApprox(100_000)).toBe('100,000 sats');
+    expect(amountSatsApprox(100_000, 'en-US')).toBe('100,000 sats');
+    expect(amountSatsApprox(100_000, 'en-US')).not.toMatch(/≈/);
+    expect(amountSatsApprox(50_000_000)).toBe(amountSatsApprox(50_000_000, 'en-US'));
     await unmount(tree);
   });
 });

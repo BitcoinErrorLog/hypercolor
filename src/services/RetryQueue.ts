@@ -26,27 +26,20 @@ function nextRetryMs(attempts: number): number {
 
 export const RetryQueue = {
   /**
+   * True when one more failure would permanently drop the item. Callers that
+   * must write a terminal outcome in the same transaction as the dequeue
+   * consult this instead of `recordFailure`.
+   */
+  wouldDrop(currentAttempts: number): boolean {
+    return currentAttempts + 1 >= MAX_ATTEMPTS;
+  },
+  /**
    * The backoff schedule above, as a timestamp, for callers that schedule
    * their own periodic work against the same curve instead of standing up a
    * second cadence. Used by the Encrypted-Link handshake stepper.
    */
   nextAttemptAt(attempts: number): number {
     return nextRetryMs(attempts);
-  },
-
-  /**
-   * Adds a delivery item to the persistent queue.
-   */
-  async enqueue(
-    item: Omit<DeliveryQueueItem, 'attempts' | 'nextRetryAt' | 'createdAt'>,
-  ): Promise<void> {
-    const now = Date.now();
-    await StorageService.enqueue({
-      ...item,
-      attempts: 0,
-      nextRetryAt: now, // eligible immediately on first try
-      createdAt: now,
-    });
   },
 
   /**

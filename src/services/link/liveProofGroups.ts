@@ -367,6 +367,7 @@ export async function runGroupLiveProof(
 
     if (
       !(await record('forged-channel-and-event-rejected', async () => {
+        await switchToParty(link, partyA);
         const forgedChannelId = buildPrivateChannelId(pubkyA, uuidv4());
         const forgedCreate = buildGroupMembershipEnvelope({
           channelId: forgedChannelId,

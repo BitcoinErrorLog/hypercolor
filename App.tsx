@@ -20,7 +20,15 @@ import { handleE2eDeepLink } from './src/navigation/e2eDeepLinks';
 import { loadMainTabIconFont } from './src/navigation/tabBarIcons';
 import { KeyStore } from './src/services/KeyStore';
 import { LinkService, startLinkRetryDrain } from './src/services/link/LinkService';
-import { hydratePersistedAuth } from './src/stores/hydrateAuthSession';
+import {
+  paintNeedsSignIn,
+  registerOnOwnerPainted,
+  shouldHoldPreAuthWork,
+} from './src/services/paintedOwner';
+import {
+  consumeInterruptedSignOutAtBoot,
+  hydratePersistedAuth,
+} from './src/stores/hydrateAuthSession';
 import { useSessionStatusStore } from './src/stores/sessionStatusStore';
 import { ReduceMotionProvider } from './src/ui/reduceMotion';
 
@@ -87,11 +95,13 @@ export default function App() {
         console.warn('[App] keystore unavailable');
         return;
       }
+      if (shouldHoldPreAuthWork()) return;
       try {
         await LinkService.restorePersistedSession();
       } catch {
         // Alias is kept on network failure; auth failure is handled inside restore.
       }
+      if (shouldHoldPreAuthWork()) return;
       try {
         await LinkService.recoverPendingSends();
         await LinkService.drainRetries();
@@ -99,9 +109,17 @@ export default function App() {
           await LinkService.syncInbox();
         }
       } catch (err) {
-        console.warn('[App] link send recovery failed:', err);
+        console.warn('[App] link send recovery failed');
       }
     };
+
+    const startDrainIfReady = () => {
+      if (disposed) return;
+      if (shouldHoldPreAuthWork()) return;
+      stopDrain?.();
+      stopDrain = startLinkRetryDrain();
+    };
+    registerOnOwnerPainted(startDrainIfReady);
 
     const onAppState = (state: AppStateStatus) => {
       if (disposed) return;
@@ -110,8 +128,8 @@ export default function App() {
         return;
       }
       if (state === 'active') {
-        stopDrain?.();
-        stopDrain = startLinkRetryDrain();
+        if (shouldHoldPreAuthWork()) return;
+        startDrainIfReady();
         void recoverAndDrain();
       } else {
         stopDrain?.();
@@ -147,8 +165,17 @@ export default function App() {
     // v1→v2 MMKV migration runs inside initKeyStore. Reconcile must wait
     // so a live alias is in KeyStore before native sighting. Reconcile is
     // report-only: it never deletes a bearer.
+    // Required boot order: initKeyStore → interrupted-sign-out wipe →
+    // report-only reconcile → normal hydrate → drain (gated on owner paint).
     KeyStore.initKeyStore()
       .then(async () => {
+        if (disposed || myEpoch !== initEpochRef.current) return;
+        try {
+          await consumeInterruptedSignOutAtBoot();
+        } catch {
+          paintNeedsSignIn();
+        }
+        if (disposed || myEpoch !== initEpochRef.current) return;
         try {
           await LinkService.reconcileAdoptedSessionsAtBoot();
         } catch {
@@ -158,11 +185,13 @@ export default function App() {
         try {
           await hydratePersistedAuth();
         } catch {
-          // Auth hydrate is best-effort; Welcome is still the right screen.
+          paintNeedsSignIn();
         }
         if (disposed || myEpoch !== initEpochRef.current) return;
-        void recoverAndDrain();
-        stopDrain = startLinkRetryDrain();
+        if (!shouldHoldPreAuthWork()) {
+          void recoverAndDrain();
+          startDrainIfReady();
+        }
         appStateSub = AppState.addEventListener('change', onAppState);
         if (KeyStore.isInitialized()) {
           void useSessionStatusStore.getState().refresh();
@@ -192,6 +221,7 @@ export default function App() {
       clearTimeout(continueTimer);
       appStateSub?.remove();
       linkingSub?.remove();
+      registerOnOwnerPainted(null);
       stopDrain?.();
     };
   }, []);

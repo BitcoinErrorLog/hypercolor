@@ -5,16 +5,20 @@ import {
   HANDSHAKE_PENDING_ADVANCE_LIMIT,
   LINK_RETRY_DRAIN_INTERVAL_MS,
   LINK_RETRY_PAYLOAD_TYPE,
+  LINK_GROUP_FANOUT_PAYLOAD_TYPE,
   LINK_RETRY_TICK_PHASE_TIMEOUT_MS,
   LinkService,
   linkQueueEntryCountForTests,
   resetLinkServiceHarnessState,
   startLinkRetryDrain,
+  stopLinkRetryDrain,
 } from '../LinkService';
 import { PaykitLinkNative } from '../PaykitLinkNative';
 import { StorageService } from '../../StorageService';
 import { KeyStore } from '../../KeyStore';
 import { RetryQueue } from '../../RetryQueue';
+import { paintOwner, resetPaintOverlayForBoot } from '../../paintedOwner';
+import { wireSignOutMarkerMocks } from '../../__tests__/wireSignOutMarkerMocks';
 import {
   CHAT_MESSAGE_KIND,
   LINK_MESSAGE_MAX_BYTES,
@@ -30,6 +34,8 @@ import type { DeliveryQueueItem } from '../../../types';
 import { applyGroupInbound } from '../../group/applyGroupInbound';
 import { applyAttachmentInbound } from '../../attachments/applyAttachmentInbound';
 import { applyPaymentInbound } from '../../payments/applyPaymentInbound';
+import { FollowsImportSettings } from '../../contacts/followsImportSettings';
+import { LinkSendError } from '../LinkSendError';
 import { PAYKIT_PAYMENT_REQUEST_KIND } from '../../../types/payment';
 import { GROUP_MESSAGE_KIND } from '../../../types/group';
 import {
@@ -120,12 +126,17 @@ jest.mock('../../StorageService', () => ({
     getLinkMessage: jest.fn(),
     getLinkMessagesForConversation: jest.fn(),
     updateLinkMessageDeliveryState: jest.fn(),
+    failLinkMessageAndDequeue: jest.fn(),
     saveLinkStreamItems: jest.fn(),
     getUnprocessedLinkStreamItems: jest.fn(),
     markLinkStreamItemProcessed: jest.fn(),
     getLinkReadCursor: jest.fn(),
     setLinkReadCursor: jest.fn(),
     clearAccountData: jest.fn(),
+    persistSignOutIncompleteJournal: jest.fn().mockResolvedValue(undefined),
+    hasSignOutIncompleteJournal: jest.fn().mockResolvedValue(false),
+    getSignOutIncompleteJournalOwner: jest.fn().mockResolvedValue(null),
+    clearSignOutIncompleteJournal: jest.fn().mockResolvedValue(undefined),
     retryPendingCleanup: jest.fn(),
     markGroupEventSeen: jest.fn(),
     listDeliveryQueue: jest.fn(),
@@ -140,6 +151,8 @@ jest.mock('../../StorageService', () => ({
     getAllContacts: jest.fn(),
     getMessageRequest: jest.fn(),
     upsertMessageRequest: jest.fn(),
+    acceptDeclinedMessageRequest: jest.fn(),
+    deleteMessageRequest: jest.fn(),
     listMessageRequests: jest.fn(),
     countPendingMessageRequests: jest.fn(),
     deleteLinkStreamItemsForPeer: jest.fn(),
@@ -152,7 +165,17 @@ jest.mock('../../StorageService', () => ({
     hasGroupMessage: jest.fn(),
     finalizeGroupFanoutSend: jest.fn(),
     countDeliveryQueueForMessage: jest.fn(),
+    upsertGroupFanoutOutcome: jest.fn(),
+    listGroupFanoutOutcomes: jest.fn(),
     updateGroupMessageDeliveryState: jest.fn(),
+    completeGroupFanoutRecipient: jest.fn(),
+    getGroupFanoutAggregate: jest.fn(),
+    listBlockedPeers: jest.fn(),
+    listBlockedPeerCleanupPending: jest.fn(),
+    setBlockedPeerCleanupPending: jest.fn(),
+    insertBlockedPeer: jest.fn(),
+    insertBlockedPeers: jest.fn(),
+    deleteBlockedPeer: jest.fn(),
     saveAttachment: jest.fn(),
     getAttachment: jest.fn(),
     hasAttachment: jest.fn(),
@@ -191,6 +214,10 @@ jest.mock('../../KeyStore', () => ({
     deleteLinkSessionIfAlias: jest.fn(),
     isInitialized: jest.fn(),
     readLinkSession: jest.fn(),
+    markSignOutIncomplete: jest.fn(),
+    isSignOutIncomplete: jest.fn(() => false),
+    getSignOutIncompleteOwner: jest.fn(() => null),
+    clearSignOutIncomplete: jest.fn(),
     setAttachmentSecret: jest.fn(),
     getAttachmentSecret: jest.fn(),
     deleteAttachmentSecrets: jest.fn(),
@@ -199,12 +226,12 @@ jest.mock('../../KeyStore', () => ({
 
 jest.mock('../../RetryQueue', () => ({
   RetryQueue: {
-    enqueue: jest.fn(),
     getDue: jest.fn(),
     nextAttemptAt: jest.fn(),
     recordFailure: jest.fn(),
     recordSuccess: jest.fn(),
     defer: jest.fn(),
+    wouldDrop: jest.fn((attempts: number) => attempts + 1 >= 10),
   },
 }));
 
@@ -403,6 +430,8 @@ function expectedJson(eventId = EVENT_ID, body = 'hello'): string {
 describe('LinkService', () => {
   beforeEach(async () => {
     jest.resetAllMocks();
+    resetLinkServiceHarnessState();
+    resetPaintOverlayForBoot();
     jest.spyOn(Date, 'now').mockReturnValue(NOW);
     mockedUuid.mockReturnValueOnce(EVENT_ID).mockReturnValue(QUEUE_ID);
     resetConnectDelegationForTests();
@@ -439,6 +468,7 @@ describe('LinkService', () => {
       mockedKeyStore.deleteLinkSession();
       return true;
     });
+    wireSignOutMarkerMocks(mockedKeyStore, mockedStorage);
     mockedStorage.getLinkReceiver.mockResolvedValue(receiverRow);
     mockedStorage.getLink.mockResolvedValue(null);
     mockedStorage.getAllLinks.mockResolvedValue([]);
@@ -446,6 +476,8 @@ describe('LinkService', () => {
     mockedStorage.getHandshakeBudget.mockResolvedValue(null);
     mockedStorage.upsertHandshakeBudget.mockResolvedValue(undefined);
     mockedStorage.clearHandshakeBudget.mockResolvedValue(undefined);
+    mockedStorage.persistLinkSendIntent.mockResolvedValue(undefined);
+    mockedStorage.resetLinkConsecutiveFailures.mockResolvedValue(undefined);
     mockedStorage.hasQueueItem.mockResolvedValue(true);
     mockedStorage.listDeliveryQueue.mockResolvedValue([]);
     mockedStorage.listPaymentRequestsWithPendingEvent.mockResolvedValue([]);
@@ -463,6 +495,19 @@ describe('LinkService', () => {
     mockedStorage.countDeliveryQueueForMessage.mockResolvedValue(0);
     mockedStorage.updateGroupMessageDeliveryState.mockResolvedValue(undefined);
     mockedStorage.upsertMessageRequest.mockResolvedValue(undefined);
+    mockedStorage.acceptDeclinedMessageRequest.mockResolvedValue(false);
+    mockedStorage.upsertGroupFanoutOutcome.mockResolvedValue(undefined);
+    mockedStorage.listGroupFanoutOutcomes.mockResolvedValue([]);
+    mockedStorage.completeGroupFanoutRecipient.mockResolvedValue(undefined);
+    mockedStorage.failLinkMessageAndDequeue.mockResolvedValue(undefined);
+    mockedStorage.getGroupFanoutAggregate.mockResolvedValue([]);
+    mockedStorage.listBlockedPeers.mockResolvedValue([]);
+    mockedStorage.listBlockedPeerCleanupPending.mockResolvedValue([]);
+    mockedStorage.setBlockedPeerCleanupPending.mockResolvedValue(undefined);
+    mockedStorage.insertBlockedPeer.mockResolvedValue(undefined);
+    mockedStorage.deleteBlockedPeer.mockResolvedValue(undefined);
+    mockedRetryQueue.wouldDrop.mockImplementation((attempts: number) => attempts + 1 >= 10);
+    FollowsImportSettings.resetForTests();
     mockedStorage.deleteLinkStreamItemsForPeer.mockResolvedValue(undefined);
     mockedStorage.deleteLinkMessagesForPeer.mockResolvedValue(undefined);
     mockedStorage.getLinkMessage.mockResolvedValue(sendingRow());
@@ -473,10 +518,16 @@ describe('LinkService', () => {
     );
 
     await LinkService.clearSession();
+    mockedKeyStore.clearSignOutIncomplete();
+    await mockedStorage.clearSignOutIncompleteJournal();
     await LinkService.signinWithSecret('signin-secret-hex');
+    paintOwner(OWNER);
   });
 
   afterEach(() => {
+    stopLinkRetryDrain();
+    jest.clearAllTimers();
+    jest.useRealTimers();
     jest.restoreAllMocks();
   });
 
@@ -540,7 +591,7 @@ describe('LinkService', () => {
     });
 
     it('keeps the stored alias on a network restore error', async () => {
-      await LinkService.clearSession();
+      resetLinkServiceHarnessState();
       mockedKeyStore.deleteLinkSession.mockClear();
       mockedKeyStore.getLinkSession.mockReturnValue(SESSION_ALIAS);
       mockedNative.restoreSession.mockRejectedValue({ code: 'network', message: 'timeout' });
@@ -1133,10 +1184,20 @@ describe('LinkService', () => {
   });
 
   describe('ensureLinkWith — provisioning gates', () => {
-    it('reports needs-enable when there is no session', async () => {
+    it('reports error when sign-out paint is active and there is no session', async () => {
       await LinkService.clearSession();
       mockedKeyStore.getLinkSession.mockReturnValue(null);
       mockedKeyStore.getPubky.mockReturnValue(null);
+
+      await expect(LinkService.ensureLinkWith(PEER)).resolves.toBe('error');
+    });
+
+    it('reports needs-enable when there is no session and no paint', async () => {
+      resetLinkServiceHarnessState();
+      resetPaintOverlayForBoot();
+      mockedKeyStore.getLinkSession.mockReturnValue(null);
+      mockedKeyStore.getPubky.mockReturnValue(null);
+      mockedNative.isAvailable.mockReturnValue(false);
 
       await expect(LinkService.ensureLinkWith(PEER)).resolves.toBe('needs-enable');
     });
@@ -1628,6 +1689,161 @@ describe('LinkService', () => {
       const acceptOrder = mockedStorage.upsertMessageRequest.mock.invocationCallOrder[0]!;
       expect(restoreOrder).toBeLessThan(acceptOrder);
     });
+
+    it('aborts with owner-changed and persists nothing when identity switches during ensureLinkLocked', async () => {
+      mockedStorage.getMessageRequest.mockResolvedValue(null);
+      mockedNative.getReceiverMarker.mockImplementation(async () => {
+        mockedNative.signinWithSecret.mockResolvedValue({
+          sessionAlias: 'session-b',
+          pubky: OTHER_OWNER,
+        });
+        mockedKeyStore.getPubky.mockReturnValue(OTHER_OWNER);
+        await LinkService.signinWithSecret('owner-b-secret');
+        return { noisePublicKey: PEER_NOISE, capabilitiesJson: '{}' };
+      });
+
+      await expect(LinkService.sendDm(PEER, 'hello')).rejects.toEqual(
+        expect.objectContaining({
+          name: 'LinkSendError',
+          code: 'owner-changed',
+        }),
+      );
+      expect(mockedStorage.persistLinkSendIntent).not.toHaveBeenCalled();
+      expect(mockedStorage.acceptDeclinedMessageRequest).not.toHaveBeenCalled();
+      expect(mockedStorage.upsertMessageRequest).not.toHaveBeenCalled();
+    });
+
+    it('never puts a 52-char z32 pubky in thrown send errors or warn output', async () => {
+      const z32 = /[ybndrfg8ejkmcpqxot1uwisza345h769]{52}/;
+      const warns: string[] = [];
+      const warnSpy = jest.spyOn(console, 'warn').mockImplementation((...args: unknown[]) => {
+        warns.push(args.map(String).join(' '));
+      });
+      mockedNative.getReceiverMarker.mockResolvedValue(null);
+
+      await expect(LinkService.sendDm(PEER, 'hello')).rejects.toBeInstanceOf(LinkSendError);
+      await expect(LinkService.sendDm(PEER, 'hello')).rejects.toMatchObject({
+        code: 'not-sendable',
+      });
+      const thrown = await LinkService.sendDm(PEER, 'hello').catch((err: unknown) => err);
+      expect(thrown).toBeInstanceOf(Error);
+      expect((thrown as Error).message).not.toMatch(z32);
+      expect((thrown as Error).message).not.toContain(PEER);
+      expect((thrown as Error).message).not.toContain(OWNER);
+
+      givenEstablishedLink();
+      mockedNative.sendPrivateMessageJson.mockRejectedValue({
+        code: 'protocol',
+        message: `native failed for ${PEER}`,
+      });
+      await expect(LinkService.sendDm(PEER, 'hello')).rejects.toBeTruthy();
+      expect(warns.join('\n')).not.toMatch(z32);
+      expect(warns.join('\n')).not.toContain(PEER);
+
+      mockedNative.sendPrivateMessageJson.mockRejectedValue({
+        code: 'protocol',
+        message: `group native failed for ${PEER}`,
+      });
+      await expect(
+        LinkService.sendPersistedLinkJson({
+          ownerPubky: OWNER,
+          senderPubky: OWNER,
+          peerPubky: PEER,
+          queueId: QUEUE_ID,
+          kind: GROUP_MESSAGE_KIND,
+          eventId: EVENT_ID,
+          rawJson: '{}',
+          channelId: `${OWNER}:00000000-0000-4000-8000-00000000bbbb`,
+        }),
+      ).resolves.toBe('queued');
+      mockedRetryQueue.getDue.mockResolvedValue([
+        {
+          id: 'q-group-warn',
+          messageId: EVENT_ID,
+          recipientPubky: PEER,
+          payload: JSON.stringify({
+            type: LINK_GROUP_FANOUT_PAYLOAD_TYPE,
+            ownerPubky: OWNER,
+            peerPubky: PEER,
+            senderPubky: OWNER,
+            kind: GROUP_MESSAGE_KIND,
+            eventId: EVENT_ID,
+            channelId: `${OWNER}:00000000-0000-4000-8000-00000000bbbb`,
+            rawJson: '{}',
+          }),
+          attempts: 0,
+          nextRetryAt: NOW,
+          createdAt: NOW,
+        },
+      ]);
+      await LinkService.drainRetries();
+      expect(warns.join('\n')).not.toMatch(z32);
+      expect(warns.join('\n')).not.toContain(PEER);
+      warnSpy.mockRestore();
+    });
+
+    it('aborts live handshake advance after an identity switch without charging or snapshotting', async () => {
+      mockedStorage.getLink.mockResolvedValue(storedLink({ snapshot: 'hs-2' }));
+      mockedNative.restoreHandshake.mockResolvedValue({ linkId: 'hs-handle', status: 'pending' });
+      mockedNative.advanceHandshake.mockImplementation(async () => {
+        mockedNative.signinWithSecret.mockResolvedValue({
+          sessionAlias: 'session-b',
+          pubky: OTHER_OWNER,
+        });
+        mockedKeyStore.getPubky.mockReturnValue(OTHER_OWNER);
+        await LinkService.signinWithSecret('owner-b-secret');
+        return { status: 'pending', snapshot: 'hs-3' };
+      });
+
+      await expect(LinkService.sendDm(PEER, 'hello')).rejects.toEqual(
+        expect.objectContaining({
+          name: 'LinkSendError',
+          code: 'owner-changed',
+        }),
+      );
+      expect(mockedStorage.upsertHandshakeBudget).not.toHaveBeenCalled();
+      expect(mockedStorage.updateLinkSnapshot).not.toHaveBeenCalled();
+      expect(mockedStorage.persistLinkSendIntent).not.toHaveBeenCalled();
+    });
+
+    it('does not charge a queued handshake advance after an identity switch', async () => {
+      mockedStorage.getLink.mockResolvedValue(storedLink({ snapshot: 'hs-2' }));
+      mockedNative.restoreHandshake.mockResolvedValue({ linkId: 'hs-handle', status: 'pending' });
+      mockedNative.advanceHandshake.mockImplementation(async () => {
+        mockedNative.signinWithSecret.mockResolvedValue({
+          sessionAlias: 'session-b',
+          pubky: OTHER_OWNER,
+        });
+        mockedKeyStore.getPubky.mockReturnValue(OTHER_OWNER);
+        await LinkService.signinWithSecret('owner-b-secret');
+        return { status: 'pending', snapshot: 'hs-3' };
+      });
+      mockedRetryQueue.getDue.mockResolvedValue([
+        {
+          id: 'q-hs-switch',
+          messageId: EVENT_ID,
+          recipientPubky: PEER,
+          payload: JSON.stringify({
+            type: LINK_RETRY_PAYLOAD_TYPE,
+            ownerPubky: OWNER,
+            peerPubky: PEER,
+            senderPubky: OWNER,
+            kind: CHAT_MESSAGE_KIND,
+            eventId: EVENT_ID,
+            rawJson: wireMessage(EVENT_ID),
+          }),
+          attempts: 0,
+          nextRetryAt: NOW,
+          createdAt: NOW,
+        },
+      ]);
+
+      await LinkService.drainRetries();
+
+      expect(mockedStorage.upsertHandshakeBudget).not.toHaveBeenCalled();
+      expect(mockedStorage.updateLinkSnapshot).not.toHaveBeenCalled();
+      expect(mockedNative.sendPrivateMessageJson).not.toHaveBeenCalled();
+    });
   });
 
   describe('syncInbox', () => {
@@ -2079,18 +2295,58 @@ describe('LinkService', () => {
       givenEstablishedLink();
       mockedRetryQueue.getDue.mockResolvedValue([linkItem]);
       mockedNative.sendPrivateMessageJson.mockRejectedValue(new Error('still unreachable'));
-      mockedRetryQueue.recordFailure.mockResolvedValue(true);
+      mockedRetryQueue.wouldDrop.mockReturnValue(true);
 
       await LinkService.drainRetries();
 
-      expect(mockedRetryQueue.recordFailure).toHaveBeenCalledWith('q-link', 2);
-      expect(mockedStorage.updateLinkMessageDeliveryState).toHaveBeenCalledWith(
-        OWNER,
-        OWNER,
-        CHAT_MESSAGE_KIND,
-        EVENT_ID,
-        'failed',
-      );
+      expect(mockedStorage.failLinkMessageAndDequeue).toHaveBeenCalledWith({
+        ownerPubky: OWNER,
+        senderPubky: OWNER,
+        kind: CHAT_MESSAGE_KIND,
+        eventId: EVENT_ID,
+        queueId: 'q-link',
+      });
+      expect(mockedRetryQueue.recordFailure).not.toHaveBeenCalled();
+    });
+
+    it('writes a terminal group outcome and dequeues atomically on max-attempt drop', async () => {
+      givenEstablishedLink();
+      const groupItem: DeliveryQueueItem = {
+        id: 'q-group-max',
+        messageId: EVENT_ID,
+        recipientPubky: PEER,
+        payload: JSON.stringify({
+          type: LINK_GROUP_FANOUT_PAYLOAD_TYPE,
+          ownerPubky: OWNER,
+          peerPubky: PEER,
+          senderPubky: OWNER,
+          kind: GROUP_MESSAGE_KIND,
+          eventId: EVENT_ID,
+          channelId: `${OWNER}:chan`,
+          rawJson: '{}',
+        }),
+        attempts: 9,
+        nextRetryAt: NOW,
+        createdAt: NOW,
+      };
+      mockedRetryQueue.getDue.mockResolvedValue([groupItem]);
+      mockedRetryQueue.wouldDrop.mockReturnValue(true);
+      mockedNative.sendPrivateMessageJson.mockRejectedValue(new Error('still unreachable'));
+
+      await LinkService.drainRetries();
+
+      expect(mockedStorage.completeGroupFanoutRecipient).toHaveBeenCalledWith({
+        ownerPubky: OWNER,
+        channelId: `${OWNER}:chan`,
+        eventId: EVENT_ID,
+        senderPubky: OWNER,
+        recipientPubky: PEER,
+        status: 'failed',
+        reason: null,
+        queueId: 'q-group-max',
+        kind: GROUP_MESSAGE_KIND,
+      });
+      expect(mockedRetryQueue.recordFailure).not.toHaveBeenCalled();
     });
 
     it('retries due link items whose delivery state is failed', async () => {
@@ -2426,14 +2682,13 @@ describe('LinkService', () => {
       expect(mockedStorage.deleteLink).toHaveBeenCalledWith(OWNER, PEER);
       // The stuck send stops pretending: `failed` is what ThreadScreen renders
       // in red, and the outbox entry is gone so nothing keeps spinning.
-      expect(mockedStorage.removeFromQueue).toHaveBeenCalledWith('q-stalled');
-      expect(mockedStorage.updateLinkMessageDeliveryState).toHaveBeenCalledWith(
-        OWNER,
-        OWNER,
-        CHAT_MESSAGE_KIND,
-        EVENT_ID,
-        'failed',
-      );
+      expect(mockedStorage.failLinkMessageAndDequeue).toHaveBeenCalledWith({
+        ownerPubky: OWNER,
+        senderPubky: OWNER,
+        kind: CHAT_MESSAGE_KIND,
+        eventId: EVENT_ID,
+        queueId: 'q-stalled',
+      });
 
       // And the abandoned link is no longer timer work at all.
       mockedNative.advanceHandshake.mockClear();
@@ -2892,6 +3147,10 @@ describe('LinkService', () => {
       mockedStorage.getAllLinks.mockResolvedValue([
         storedLink({ status: 'established', snapshot: 'est-1' }),
       ]);
+      mockedNative.closeLink.mockClear();
+      mockedNative.removeReceiverMarker.mockClear();
+      mockedNative.signOutSession.mockClear();
+      mockedNative.clearAllNativeSecrets.mockClear();
       mockedStorage.listDeliveryQueue.mockResolvedValue([
         {
           id: 'q-mine',
@@ -2944,8 +3203,7 @@ describe('LinkService', () => {
       const wipeOrder = mockedNative.clearAllNativeSecrets.mock.invocationCallOrder[0]!;
       expect(signOutOrder).toBeLessThan(wipeOrder);
       expect(mockedStorage.clearAccountData).toHaveBeenCalledWith(OWNER);
-      expect(mockedStorage.removeFromQueue).toHaveBeenCalledWith('q-mine');
-      expect(mockedStorage.removeFromQueue).not.toHaveBeenCalledWith('q-other');
+      expect(mockedStorage.removeFromQueue).not.toHaveBeenCalled();
       expect(LinkService.hasSession()).toBe(false);
     });
 

@@ -9,6 +9,7 @@ import { runMigrations } from '../../../db/migrations';
 import { openMemoryDb } from '../../../db/__tests__/betterSqliteAdapter';
 import { StorageService } from '../../StorageService';
 import { KeyStore } from '../../KeyStore';
+import { paintOwner } from '../../paintedOwner';
 import { LinkService } from '../../link/LinkService';
 import { PubkyService } from '../../PubkyService';
 import { applyGroupInbound } from '../applyGroupInbound';
@@ -72,15 +73,27 @@ const EVENT3 = '00000000-0000-4000-8000-000000000003';
 const NOW = 1_700_000_000_000;
 
 describe('GroupService', () => {
+  let db: ReturnType<typeof openMemoryDb> | null = null;
+
   beforeEach(async () => {
     jest.clearAllMocks();
     jest.spyOn(Date, 'now').mockReturnValue(NOW);
-    const db = openMemoryDb();
+    db = openMemoryDb();
     setDbForTests(db);
     await runMigrations(db);
     mockedKeyStore.getPubky.mockReturnValue(OWNER);
+    paintOwner(OWNER);
     mockedLink.sendPersistedLinkJson.mockImplementation(async input => {
-      await StorageService.removeFromQueue(input.queueId);
+      await StorageService.finalizeGroupFanoutSend({
+        ownerPubky: OWNER,
+        peerPubky: input.peerPubky,
+        snapshot: 'est-out',
+        queueId: input.queueId,
+        channelId: input.channelId,
+        eventId: input.eventId,
+        senderPubky: OWNER,
+        kind: input.kind,
+      });
       return 'sent';
     });
     mockedPubky.put.mockResolvedValue(undefined);
@@ -89,6 +102,8 @@ describe('GroupService', () => {
   });
 
   afterEach(() => {
+    db?.close();
+    db = null;
     setDbForTests(null);
     jest.restoreAllMocks();
   });
@@ -412,6 +427,7 @@ describe('GroupService', () => {
     expect(sent.body).toBe('hello public');
 
     mockedKeyStore.getPubky.mockReturnValue(PEER_A);
+    paintOwner(PEER_A);
     const joined = await GroupService.joinPublicChannel(created.channelId);
     expect(joined).toEqual(
       expect.objectContaining({
@@ -423,6 +439,14 @@ describe('GroupService', () => {
     );
     const msgs = await GroupService.listMessages(joined.channelId);
     expect(msgs.some(m => m.body === 'hello public' && m.senderPubky === OWNER)).toBe(true);
+  });
+
+  it('lists local channels without reading the public homeserver', async () => {
+    mockedPubky.get.mockClear();
+    mockedPubky.list.mockClear();
+    await GroupService.listChannels();
+    expect(mockedPubky.get).not.toHaveBeenCalled();
+    expect(mockedPubky.list).not.toHaveBeenCalled();
   });
 });
 

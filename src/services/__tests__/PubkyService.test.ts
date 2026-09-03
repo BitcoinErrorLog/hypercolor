@@ -4,6 +4,12 @@ const mockIsAppCertValid = jest.fn();
 const mockGetAppKeypair = jest.fn();
 const mockRnPut = jest.fn();
 
+jest.mock('../resetAfterFailedWipe', () => ({
+  shouldOfferResetAfterFailedWipe: jest.fn(),
+  resetAppDataAfterFailedWipe: jest.fn(),
+  recordBootWipeFailure: jest.fn(),
+}));
+
 jest.mock('../link/LinkService', () => ({
   LinkService: {
     putOwnerDocument: (...args: unknown[]) => mockPutOwnerDocument(...args),
@@ -17,7 +23,20 @@ jest.mock('../KeyStore', () => ({
     isAppCertValid: (...args: unknown[]) => mockIsAppCertValid(...args),
     getAppKeypair: (...args: unknown[]) => mockGetAppKeypair(...args),
     getSessionSecret: jest.fn(),
-    clear: jest.fn(),
+    markSignOutIncomplete: jest.fn(),
+    isSignOutIncomplete: jest.fn(() => false),
+    getSignOutIncompleteOwner: jest.fn(() => null),
+    clearSignOutIncomplete: jest.fn(),
+    clearIfPubky: jest.fn(),
+  },
+}));
+
+jest.mock('../StorageService', () => ({
+  StorageService: {
+    persistSignOutIncompleteJournal: jest.fn().mockResolvedValue(undefined),
+    hasSignOutIncompleteJournal: jest.fn().mockResolvedValue(false),
+    getSignOutIncompleteJournalOwner: jest.fn().mockResolvedValue(null),
+    clearSignOutIncompleteJournal: jest.fn().mockResolvedValue(undefined),
   },
 }));
 
@@ -28,6 +47,12 @@ jest.mock('@synonymdev/react-native-pubky', () => ({
   deleteFile: jest.fn(),
   list: jest.fn(),
   getHomeserver: jest.fn(),
+}));
+
+jest.mock('../../stores/authStore', () => ({
+  useAuthStore: {
+    getState: () => ({ clearSession: jest.fn() }),
+  },
 }));
 
 import { PubkyService } from '../PubkyService';

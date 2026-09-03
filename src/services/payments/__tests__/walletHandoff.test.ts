@@ -1,4 +1,5 @@
-import { buildPayUri, openPayUri, prepareRequestHandoff } from '../walletHandoff';
+import { COPY } from '../../../copy/uxCopy';
+import { buildPayUri, openBuiltUri, prepareRequestHandoff } from '../walletHandoff';
 import { ENDPOINT_BITCOIN_P2TR, ENDPOINT_LIGHTNING_BOLT11 } from '../../../types/payment';
 import {
   MAINNET_BOLT11_20U,
@@ -37,12 +38,23 @@ describe('buildPayUri', () => {
     expect(() => buildPayUri(ENDPOINT_BITCOIN_P2TR, `bc1p${'a'.repeat(100)}`)).toThrow();
     expect(() => buildPayUri('https-url', 'https://evil.example')).toThrow();
   });
+
+  it('refuses a sub-satoshi BIP21 amount instead of emitting more than eight decimals', () => {
+    expect(() => buildPayUri(ENDPOINT_BITCOIN_P2TR, MAINNET_P2TR, '0.000000001')).toThrow(
+      'on-chain amount must be a whole-satoshi BTC decimal',
+    );
+    expect(() => buildPayUri(ENDPOINT_BITCOIN_P2TR, MAINNET_P2TR, '0.000000001')).toThrow();
+    const { uri } = buildPayUri(ENDPOINT_BITCOIN_P2TR, MAINNET_P2TR, '0.000000010');
+    expect(uri).toBe(`bitcoin:${MAINNET_P2TR}?amount=0.00000001`);
+    expect(uri).not.toMatch(/amount=0\.000000001\b/);
+  });
 });
 
 describe('prepareRequestHandoff', () => {
   it('blocks when the invoice amount differs from the request amount', () => {
     const result = prepareRequestHandoff({
       requestAmountBtc: '0.001',
+      amountAsset: 'btc',
       endpointIdentifier: ENDPOINT_LIGHTNING_BOLT11,
       payload: MAINNET_BOLT11_20U,
     });
@@ -56,6 +68,7 @@ describe('prepareRequestHandoff', () => {
   it('allows a matching invoice amount and surfaces the decoded amount', () => {
     const result = prepareRequestHandoff({
       requestAmountBtc: MAINNET_BOLT11_20U_BTC,
+      amountAsset: 'btc',
       endpointIdentifier: ENDPOINT_LIGHTNING_BOLT11,
       payload: MAINNET_BOLT11_20U,
     });
@@ -74,6 +87,7 @@ describe('prepareRequestHandoff', () => {
   it('warns on an amountless invoice and names the request amount', () => {
     const result = prepareRequestHandoff({
       requestAmountBtc: '0.001',
+      amountAsset: 'btc',
       endpointIdentifier: ENDPOINT_LIGHTNING_BOLT11,
       payload: MAINNET_BOLT11_AMOUNTLESS,
     });
@@ -84,9 +98,22 @@ describe('prepareRequestHandoff', () => {
     expect(result.uri).toBe(`lightning:${MAINNET_BOLT11_AMOUNTLESS}`);
   });
 
+  it('refuses to treat a non-BTC request amount as bitcoin', () => {
+    const result = prepareRequestHandoff({
+      requestAmountBtc: '1',
+      amountAsset: 'usd',
+      endpointIdentifier: ENDPOINT_LIGHTNING_BOLT11,
+      payload: MAINNET_BOLT11_20U,
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toBe('This payment request is not a supported bitcoin amount.');
+  });
+
   it('binds bitcoin: URIs to the request amount', () => {
     const result = prepareRequestHandoff({
       requestAmountBtc: '0.001',
+      amountAsset: 'btc',
       endpointIdentifier: ENDPOINT_BITCOIN_P2TR,
       payload: MAINNET_P2TR,
     });
@@ -100,12 +127,35 @@ describe('prepareRequestHandoff', () => {
       }),
     );
   });
+
+  it('refuses on-chain handoff for a sub-satoshi request and keeps Lightning exact', () => {
+    const onchain = prepareRequestHandoff({
+      requestAmountBtc: '0.000000001',
+      amountAsset: 'btc',
+      endpointIdentifier: ENDPOINT_BITCOIN_P2TR,
+      payload: MAINNET_P2TR,
+    });
+    expect(onchain.ok).toBe(false);
+    if (onchain.ok) return;
+    expect(onchain.error).toBe(COPY.onlyLightningCanPayAmount);
+
+    const lightning = prepareRequestHandoff({
+      requestAmountBtc: '0.000000001',
+      amountAsset: 'btc',
+      endpointIdentifier: ENDPOINT_LIGHTNING_BOLT11,
+      payload: MAINNET_BOLT11_AMOUNTLESS,
+    });
+    expect(lightning.ok).toBe(true);
+    if (!lightning.ok) return;
+    expect(lightning.uri).toBe(`lightning:${MAINNET_BOLT11_AMOUNTLESS}`);
+  });
 });
 
-describe('openPayUri', () => {
+describe('openBuiltUri', () => {
   it('opens when a wallet is installed', async () => {
     const openURL = jest.fn().mockResolvedValue(undefined);
-    const result = await openPayUri(ENDPOINT_LIGHTNING_BOLT11, MAINNET_BOLT11_20U, {
+    const uri = buildPayUri(ENDPOINT_LIGHTNING_BOLT11, MAINNET_BOLT11_20U).uri;
+    const result = await openBuiltUri(uri, {
       canOpenURL: async () => true,
       openURL,
     });
@@ -116,7 +166,8 @@ describe('openPayUri', () => {
   it('falls back to copy-to-clipboard when canOpenURL is false', async () => {
     const copyText = jest.fn();
     const openURL = jest.fn();
-    const result = await openPayUri(ENDPOINT_LIGHTNING_BOLT11, MAINNET_BOLT11_20U, {
+    const uri = buildPayUri(ENDPOINT_LIGHTNING_BOLT11, MAINNET_BOLT11_20U).uri;
+    const result = await openBuiltUri(uri, {
       canOpenURL: async () => false,
       openURL,
       copyText,
@@ -127,5 +178,22 @@ describe('openPayUri', () => {
     expect(result).toBe('copied');
     expect(openURL).not.toHaveBeenCalled();
     expect(copyText).toHaveBeenCalledWith(`lightning:${MAINNET_BOLT11_20U}`);
+  });
+});
+
+describe('prepareRequestHandoff decode errors', () => {
+  it('maps bolt11 decode failures to fixed copy and never surfaces library text', () => {
+    const result = prepareRequestHandoff({
+      requestAmountBtc: '0.001',
+      amountAsset: 'btc',
+      endpointIdentifier: ENDPOINT_LIGHTNING_BOLT11,
+      payload: 'lnbc1not-a-real-invoice',
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toBe(COPY.invoiceInvalid);
+    expect(result.error).not.toMatch(/Not a proper/i);
+    expect(result.error).not.toMatch(/lightning payment request/i);
+    expect(result.error.toLowerCase()).not.toContain('bolt11');
   });
 });

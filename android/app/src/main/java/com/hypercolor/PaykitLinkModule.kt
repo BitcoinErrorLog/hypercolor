@@ -127,7 +127,7 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
             val secret = generateReceiverNoiseSecretKeyHex()
             val publicKey = receiverNoisePublicKeyFromSecretHex(secret)
             val alias = UUID.randomUUID().toString()
-            store.putString(PaykitLinkStore.receiverKey(alias), secret)
+            store.putReceiverSecret(alias, secret)
             resolveMap(promise) {
                 putString("receiverAlias", alias)
                 putString("noisePublicKey", publicKey)
@@ -966,8 +966,19 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
         val bearer = store.getString(PaykitLinkStore.sessionKey(alias))
             ?: throw PaykitLinkBridgeError("auth", "session alias not found")
         val restored = chatClient().restoreSession(bearer)
-        store.putString(PaykitLinkStore.sessionKey(alias), restored.exportSession())
-        sessions[alias] = restored
+        // Re-check liveness under pendingIo before bearer write-back so a
+        // concurrent signOutSession / clearAllNativeSecrets cannot resurrect
+        // a deleted alias via the rotated export.
+        synchronized(pendingIo) {
+            if (PaykitLinkSessionGuard.isPending(flows.isPending(alias), store.hasPendingMarker(alias))) {
+                throw PaykitLinkBridgeError("unavailable", staticMessage("unavailable"))
+            }
+            if (store.getString(PaykitLinkStore.sessionKey(alias)) == null) {
+                throw PaykitLinkBridgeError("auth", "session alias not found")
+            }
+            store.putString(PaykitLinkStore.sessionKey(alias), restored.exportSession())
+            sessions[alias] = restored
+        }
         return restored
     }
 
@@ -1204,13 +1215,13 @@ private data class LinkCallArgs(
     val remoteReceiverPath: String,
 )
 
-private enum class SnapshotRole(val wire: String) {
+internal enum class SnapshotRole(val wire: String) {
     INITIATOR("initiator"),
     RESPONDER("responder"),
     LINK("link"),
 }
 
-private data class SnapshotContext(
+internal data class SnapshotContext(
     val ownerPubky: String,
     val peerPubky: String,
     val localReceiverPath: String,
@@ -1234,11 +1245,23 @@ private data class LinkHandle(
     val context: SnapshotContext,
 )
 
-private class PaykitLinkStore(context: Context) : PaykitLinkSessionCatalog {
-    private val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+internal class PaykitLinkStore(context: Context) : PaykitLinkSessionCatalog {
+    private val appContext = context.applicationContext
+    private val prefs = appContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
     fun putString(key: String, value: String) {
         prefs.edit().putString(key, wrap(value.toByteArray(StandardCharsets.UTF_8), key.toByteArray(StandardCharsets.UTF_8))).apply()
+    }
+
+    /** Receiver Noise secrets must flush synchronously (commit), matching session material. */
+    fun putReceiverSecret(alias: String, secret: String) {
+        val key = receiverKey(alias)
+        commitEdits { editor ->
+            editor.putString(
+                key,
+                wrap(secret.toByteArray(StandardCharsets.UTF_8), key.toByteArray(StandardCharsets.UTF_8)),
+            )
+        }
     }
 
     override fun putPendingSession(alias: String, bearer: String) {
@@ -1340,6 +1363,30 @@ private class PaykitLinkStore(context: Context) : PaykitLinkSessionCatalog {
             }
         } catch (_: Exception) {
             // Prefs entries are already gone; snapshot key deletion is best-effort.
+        }
+        unlinkLegacyMmkvBestEffort()
+    }
+
+    /** Best-effort unlink of known legacy MMKV files under the app files dir. */
+    private fun unlinkLegacyMmkvBestEffort() {
+        try {
+            val mmkvDir = java.io.File(appContext.filesDir, "mmkv")
+            if (!mmkvDir.isDirectory) return
+            val allowed = setOf(
+                "hypercolor-keystore",
+                "hypercolor-keystore.crc",
+                "hypercolor-keystore.default",
+                "hypercolor-keystore.default.crc",
+                "paykit-link-legacy",
+                "paykit-link-legacy.crc",
+            )
+            mmkvDir.listFiles()?.forEach { file ->
+                if (file.name in allowed) {
+                    runCatching { file.delete() }
+                }
+            }
+        } catch (_: Throwable) {
+            // Remanence reduction only.
         }
     }
 

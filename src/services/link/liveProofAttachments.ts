@@ -32,6 +32,7 @@ import {
   resolveClock,
   signupParty,
   switchToParty,
+  addPastedContact,
   type LiveProofConfig,
   type LiveProofReport,
   type ProductLiveProofDeps,
@@ -113,27 +114,8 @@ export async function runAttachmentLiveProof(
 
     if (
       !(await record('add-contact-ab-paste', async () => {
-        const ts = now();
-        await storage.upsertContact({
-          pubky: pubkyB,
-          ownerPubky: pubkyA,
-          trustScore: 0,
-          isFollowing: false,
-          isFollower: false,
-          isMutual: false,
-          addedManually: true,
-          firstSeenAt: ts,
-        });
-        await storage.upsertContact({
-          pubky: pubkyA,
-          ownerPubky: pubkyB,
-          trustScore: 0,
-          isFollowing: false,
-          isFollower: false,
-          isMutual: false,
-          addedManually: true,
-          firstSeenAt: ts,
-        });
+        await addPastedContact(storage, pubkyA, pubkyB, now);
+        await addPastedContact(storage, pubkyB, pubkyA, now);
         return 'A↔B addedManually';
       }))
     ) {

@@ -17,6 +17,8 @@ import { COPY } from '../../copy/uxCopy';
 import { CustodyLine } from '../../ui/CustodyLine';
 import { ErrorDetails } from '../../ui/ErrorDetails';
 import { sanitizeError } from '../../ui/sanitizedError';
+import { ConfirmSheet } from '../../ui/contacts/ConfirmSheet';
+import { PubkyService } from '../../services/PubkyService';
 import {
   finishConnectDelegation,
   subscribeConnectDelegationIdle,
@@ -30,13 +32,21 @@ export default function WelcomeScreen() {
   const [loading, setLoading] = useState(false);
   const [connectPending, setConnectPending] = useState(false);
   const [error, setError] = useState<{ message: string; details: string | null } | null>(null);
+  const [resetAvailable, setResetAvailable] = useState(false);
+  const [resetOpen, setResetOpen] = useState(false);
+  const [resetBusy, setResetBusy] = useState(false);
   const connectTokenRef = useRef<number | null>(null);
 
   useFocusEffect(
     useCallback(() => {
       setLoading(false);
       setConnectPending(false);
+      let cancelled = false;
+      void PubkyService.shouldOfferResetAfterFailedWipe().then(offer => {
+        if (!cancelled) setResetAvailable(offer);
+      });
       return () => {
+        cancelled = true;
         const token = connectTokenRef.current;
         if (token != null) {
           finishConnectDelegation(token);
@@ -63,6 +73,7 @@ export default function WelcomeScreen() {
     setLoading(true);
     setError(null);
     try {
+      await PubkyService.awaitSignOutWipe();
       const deviceId = `hypercolor-${Date.now().toString(16)}`;
       const { url, expiresAt, generation } = await PubkyRingAuthService.requestDelegation(deviceId);
       nav.navigate('AwaitingRingAuth', { ringAuthUrl: url, expiresAt, generation });
@@ -77,6 +88,22 @@ export default function WelcomeScreen() {
         connectTokenRef.current = null;
       }
       setLoading(false);
+    }
+  }
+
+  async function handleResetConfirm() {
+    if (resetBusy) return;
+    setResetBusy(true);
+    setError(null);
+    try {
+      await PubkyService.resetAppDataAfterFailedWipe();
+      setResetOpen(false);
+      setResetAvailable(false);
+    } catch (err) {
+      const sanitized = sanitizeError(err, COPY.resetAppDataFailed);
+      setError({ message: sanitized.message, details: sanitized.details });
+    } finally {
+      setResetBusy(false);
     }
   }
 
@@ -116,11 +143,40 @@ export default function WelcomeScreen() {
             </View>
           </TouchableOpacity>
 
+          {resetAvailable ? (
+            <TouchableOpacity
+              testID="welcomeResetAppData"
+              accessibilityRole="button"
+              accessibilityLabel={COPY.resetAppData}
+              accessibilityState={{ busy: resetBusy, disabled: resetBusy }}
+              style={styles.resetButton}
+              onPress={() => {
+                setResetOpen(true);
+              }}
+              disabled={resetBusy}
+            >
+              <Text style={styles.resetButtonText}>{COPY.resetAppData}</Text>
+            </TouchableOpacity>
+          ) : null}
+
           {__DEV__ ? (
             <DebugSignupPanel title="Debug signup" submitLabel="Debug signup" e2eSlot="a" />
           ) : null}
         </View>
       </ScrollView>
+      <ConfirmSheet
+        visible={resetOpen}
+        title={COPY.resetAppDataTitle}
+        body={COPY.resetAppDataBody}
+        confirmLabel={COPY.resetAppData}
+        destructive
+        onConfirm={() => {
+          void handleResetConfirm();
+        }}
+        onDismiss={() => {
+          if (!resetBusy) setResetOpen(false);
+        }}
+      />
     </SafeAreaView>
   );
 }
@@ -190,6 +246,17 @@ const styles = StyleSheet.create({
   primaryButtonText: {
     color: '#fff',
     fontSize: 16,
+    fontWeight: '600',
+  },
+  resetButton: {
+    minHeight: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 12,
+  },
+  resetButtonText: {
+    color: '#fca5a5',
+    fontSize: 15,
     fontWeight: '600',
   },
 });

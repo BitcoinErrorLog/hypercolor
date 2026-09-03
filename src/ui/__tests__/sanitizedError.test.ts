@@ -1,4 +1,6 @@
 import { COPY } from '../../copy/uxCopy';
+import { LinkSendError } from '../../services/link/LinkSendError';
+import { CONTACTS_COPY } from '../contacts/contactsCopy';
 import { classifyError, sanitizeError, stripSensitive } from '../sanitizedError';
 
 const SAMPLE_PUBKY = 'gcumbhd7sqit6nn457jxmrwqx9pyymqwamnarekgo3xppqo6a19o';
@@ -30,6 +32,61 @@ describe('sanitizeError', () => {
     expect(sanitized.details).not.toContain('https://evil.example');
     expect(sanitized.details).not.toContain(SAMPLE_PUBKY);
     expect(classifyError(err)).toBe('unknown');
+  });
+
+  it('maps a denied send to the blocked-contact contract copy', () => {
+    const err = new LinkSendError('denied', CONTACTS_COPY.deniedSendMessage);
+    const sanitized = sanitizeError(err);
+    expect(sanitized.category).toBe('blocked-send');
+    expect(sanitized.message).toBe(CONTACTS_COPY.deniedSendMessage);
+    expect(sanitized.details).toBeNull();
+  });
+
+  it('does not surface owner-changed, deny-unavailable, or not-sendable internals', () => {
+    for (const code of ['owner-changed', 'deny-unavailable', 'not-sendable'] as const) {
+      const sanitized = sanitizeError(
+        new LinkSendError(code, `LinkService.sendDm ${code} ${SAMPLE_PUBKY}`),
+        CONTACTS_COPY.couldNotSendMessage,
+      );
+      expect(sanitized.category).toBe('unknown');
+      expect(sanitized.message).toBe(CONTACTS_COPY.couldNotSendMessage);
+      expect(sanitized.details).toBeNull();
+    }
+  });
+
+  it('never surfaces an internal sendDm template or a raw pubky', () => {
+    const err = new Error(
+      `LinkService.sendDm: cannot send to ${SAMPLE_PUBKY} — link status is 'queued'`,
+    );
+    const sanitized = sanitizeError(err, CONTACTS_COPY.couldNotSendMessage);
+    expect(sanitized.category).toBe('unknown');
+    expect(sanitized.message).toBe(CONTACTS_COPY.couldNotSendMessage);
+    expect(sanitized.message).not.toContain('LinkService.sendDm');
+    expect(sanitized.message).not.toContain(SAMPLE_PUBKY);
+    expect(sanitized.details).not.toContain(SAMPLE_PUBKY);
+    expect(sanitized.details).toContain('[pubky]');
+  });
+
+  it('maps a hung wipe timeout to sign-out-incomplete copy instead of expired', () => {
+    const err = {
+      name: 'WipeWaitTimeoutError',
+      code: 'wipe-wait-timeout',
+      message: 'wipe-wait-timeout',
+    };
+    const sanitized = sanitizeError(err);
+    expect(sanitized.message).toBe(COPY.signOutIncompleteTryAgain);
+    expect(sanitized.details).toBeNull();
+    expect(classifyError(err)).toBe('expired');
+  });
+
+  it('maps a failed app-data reset to retryable product copy', () => {
+    const sanitized = sanitizeError({
+      name: 'ResetAppDataError',
+      code: 'reset-app-data-failed',
+      message: 'reset-app-data-failed',
+    });
+    expect(sanitized.message).toBe(COPY.resetAppDataFailed);
+    expect(sanitized.details).toBeNull();
   });
 });
 

@@ -1,5 +1,12 @@
 import { Alert, Clipboard, Linking } from 'react-native';
-import { isValidOnchainAddress, schemeForEndpointIdentifier } from '../../types/payment';
+import { COPY } from '../../copy/uxCopy';
+import {
+  btcDecimalToSats,
+  isSupportedV1PaymentAmount,
+  isValidOnchainAddress,
+  satsToBtcDecimal,
+  schemeForEndpointIdentifier,
+} from '../../types/payment';
 import {
   amountsMatchExactly,
   decodeBolt11Invoice,
@@ -62,11 +69,14 @@ export function buildPayUri(
     if (!isValidOnchainAddress(payload)) {
       throw new Error('on-chain address failed validation');
     }
-    const uri =
-      requestAmountBtc !== undefined && requestAmountBtc.length > 0
-        ? `bitcoin:${payload}?amount=${requestAmountBtc}`
-        : `bitcoin:${payload}`;
-    return { uri, scheme };
+    if (requestAmountBtc !== undefined && requestAmountBtc.length > 0) {
+      const sats = btcDecimalToSats(requestAmountBtc);
+      if (sats === null) {
+        throw new Error('on-chain amount must be a whole-satoshi BTC decimal');
+      }
+      return { uri: `bitcoin:${payload}?amount=${satsToBtcDecimal(sats)}`, scheme };
+    }
+    return { uri: `bitcoin:${payload}`, scheme };
   }
   throw new Error('endpoint identifier is not a lightning or bitcoin destination');
 }
@@ -80,9 +90,30 @@ export function prepareRequestHandoff(input: {
   requestAmountBtc: string;
   endpointIdentifier: string;
   payload: string;
+  amountAsset: string;
 }): RequestHandoffResult {
+  if (!isSupportedV1PaymentAmount({ value: input.requestAmountBtc, asset: input.amountAsset })) {
+    return {
+      ok: false,
+      error: COPY.unsupportedPaymentAmount,
+      requestAmountBtc: input.requestAmountBtc,
+      invoiceAmountBtc: null,
+      paymentHash: null,
+      expiresAtMs: null,
+    };
+  }
   const scheme = schemeForEndpointIdentifier(input.endpointIdentifier);
   if (scheme === 'bitcoin') {
+    if (btcDecimalToSats(input.requestAmountBtc) === null) {
+      return {
+        ok: false,
+        error: COPY.onlyLightningCanPayAmount,
+        requestAmountBtc: input.requestAmountBtc,
+        invoiceAmountBtc: null,
+        paymentHash: null,
+        expiresAtMs: null,
+      };
+    }
     try {
       const { uri } = buildPayUri(input.endpointIdentifier, input.payload, input.requestAmountBtc);
       return {
@@ -119,10 +150,10 @@ export function prepareRequestHandoff(input: {
   let decoded: DecodedBolt11Invoice;
   try {
     decoded = decodeBolt11Invoice(input.payload);
-  } catch (err) {
+  } catch {
     return {
       ok: false,
-      error: err instanceof Error ? err.message : 'bolt11 invoice failed validation',
+      error: COPY.invoiceInvalid,
       requestAmountBtc: input.requestAmountBtc,
       invoiceAmountBtc: null,
       paymentHash: null,
@@ -170,16 +201,6 @@ export function prepareRequestHandoff(input: {
     expiresAtMs: decoded.expiresAtMs,
     warning: `Invoice has no amount. Enter ${input.requestAmountBtc} BTC in the wallet.`,
   };
-}
-
-export async function openPayUri(
-  endpointIdentifier: string,
-  payload: string,
-  deps: WalletHandoffDeps = {},
-  requestAmountBtc?: string,
-): Promise<'opened' | 'copied'> {
-  const { uri } = buildPayUri(endpointIdentifier, payload, requestAmountBtc);
-  return openBuiltUri(uri, deps);
 }
 
 export async function openBuiltUri(

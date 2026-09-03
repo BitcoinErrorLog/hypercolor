@@ -1,4 +1,142 @@
 /**
+ * Schema migrations for Hypercolor local SQLite.
+ *
+ * Both W2b and W2c shipped unreleased `user_version = 16` with different
+ * tables. Devices may already be on either shape. v16 in this tree keeps
+ * the W2b statements (fan-out outcomes + blocked peers). v17 applies the
+ * W2c own-invoice-hash statements AND re-applies W2b CREATE IF NOT EXISTS
+ * so a W2c-stamped v16 database still gains the contacts/deny-list tables.
+ * Every statement is idempotent; ALTER ADD COLUMN is PRAGMA-guarded in
+ * the migration runner. A version bump (not an in-place v16 replay alone)
+ * gives a clear stamp once the union is present, while idempotent repairs
+ * still re-run every launch.
+ */
+
+/**
+ * Schema v16 — group fan-out outcomes + blocked peers (W2b).
+ *
+ * Devices that installed W2b already stamp user_version=16 with these objects.
+ * Keep this body stable; W2c own-invoice work lands in v17.
+ */
+export const SCHEMA_V16_STATEMENTS: readonly string[] = [
+  `CREATE TABLE IF NOT EXISTS group_fanout_outcomes (
+    owner_pubky      TEXT NOT NULL,
+    channel_id       TEXT NOT NULL,
+    event_id         TEXT NOT NULL,
+    sender_pubky     TEXT NOT NULL,
+    recipient_pubky  TEXT NOT NULL,
+    status           TEXT NOT NULL,
+    reason           TEXT,
+    updated_at       INTEGER NOT NULL,
+    PRIMARY KEY (owner_pubky, channel_id, event_id, sender_pubky, recipient_pubky)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_group_fanout_outcomes_event
+    ON group_fanout_outcomes(owner_pubky, channel_id, sender_pubky, event_id)`,
+  `CREATE TABLE IF NOT EXISTS blocked_peers (
+    owner_pubky       TEXT NOT NULL,
+    peer_pubky        TEXT NOT NULL,
+    blocked_at        INTEGER NOT NULL,
+    cleanup_pending   INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (owner_pubky, peer_pubky)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_blocked_peers_owner
+    ON blocked_peers(owner_pubky)`,
+  `ALTER TABLE blocked_peers ADD COLUMN cleanup_pending INTEGER NOT NULL DEFAULT 0`,
+];
+
+export const OWN_INVOICE_HASHES_CREATE_SQL = `CREATE TABLE IF NOT EXISTS own_invoice_hashes (
+    owner_pubky           TEXT    NOT NULL,
+    endpoint_identifier   TEXT    NOT NULL,
+    payment_hash          TEXT    NOT NULL,
+    first_seen_at         INTEGER NOT NULL,
+    invoice_amount_msat   TEXT,
+    invoice_expires_at    INTEGER,
+    display_context       TEXT,
+    payment_request_id    TEXT,
+    PRIMARY KEY (owner_pubky, endpoint_identifier, payment_hash)
+  )`;
+
+export const OWN_INVOICE_HASHES_SEED_SQL = `INSERT OR IGNORE INTO own_invoice_hashes
+     (owner_pubky, endpoint_identifier, payment_hash, first_seen_at,
+      invoice_amount_msat, invoice_expires_at)
+   SELECT owner_pubky, identifier, payment_hash, updated_at,
+          NULL,
+          invoice_expires_at
+     FROM tip_endpoints
+    WHERE owner_pubky = peer_pubky
+      AND payment_hash IS NOT NULL`;
+
+export const PAYMENT_REQUESTS_VERIFIED_HASH_DEDUP_SQL = `UPDATE payment_requests
+      SET proof_verified = NULL
+    WHERE rowid IN (
+      SELECT rowid FROM (
+        SELECT p.rowid AS rowid
+          FROM payment_requests AS p
+         WHERE p.proof_verified = 1
+           AND p.displayed_payment_hash IS NOT NULL
+           AND EXISTS (
+             SELECT 1
+               FROM payment_requests AS o
+              WHERE o.owner_pubky = p.owner_pubky
+                AND o.displayed_payment_hash = p.displayed_payment_hash
+                AND o.proof_verified = 1
+                AND (
+                  o.created_at < p.created_at
+                  OR (o.created_at = p.created_at AND o.rowid < p.rowid)
+                )
+           )
+      )
+    )`;
+
+export const PAYMENT_REQUESTS_VERIFIED_HASH_INDEX_SQL = `CREATE UNIQUE INDEX IF NOT EXISTS idx_payment_requests_owner_verified_hash
+     ON payment_requests(owner_pubky, displayed_payment_hash)
+     WHERE proof_verified = 1`;
+
+/**
+ * Schema v17 — W2c own-invoice history + reconciliation of W2b v16 objects.
+ *
+ * Own-invoice hash tracking (amount/expiry/display context) and the verified
+ * payment-hash unique index ship here. W2b CREATE IF NOT EXISTS statements are
+ * re-applied so devices that stamped W2c's v16 still gain fan-out outcomes and
+ * blocked_peers.
+ */
+/**
+ * Versioned v17 body is CREATE-only. Seed / verified-hash dedup+index run in
+ * `repairOwnInvoiceHashes` (own transaction, never startup-fatal) so that:
+ * - devices without `tip_endpoints` yet (bare v16 stamp tests, mid-upgrade)
+ *   do not fail the version bump on the SEED SELECT;
+ * - `invoice_reused` can commit before a later index statement throws, matching
+ *   W2c's repair isolation.
+ * W2b CREATE IF NOT EXISTS statements are re-applied so a W2c-shaped v16 still
+ * gains fan-out outcomes and blocked_peers.
+ */
+export const SCHEMA_V17_STATEMENTS: readonly string[] = [
+  OWN_INVOICE_HASHES_CREATE_SQL,
+  `CREATE TABLE IF NOT EXISTS group_fanout_outcomes (
+    owner_pubky      TEXT NOT NULL,
+    channel_id       TEXT NOT NULL,
+    event_id         TEXT NOT NULL,
+    sender_pubky     TEXT NOT NULL,
+    recipient_pubky  TEXT NOT NULL,
+    status           TEXT NOT NULL,
+    reason           TEXT,
+    updated_at       INTEGER NOT NULL,
+    PRIMARY KEY (owner_pubky, channel_id, event_id, sender_pubky, recipient_pubky)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_group_fanout_outcomes_event
+    ON group_fanout_outcomes(owner_pubky, channel_id, sender_pubky, event_id)`,
+  `CREATE TABLE IF NOT EXISTS blocked_peers (
+    owner_pubky       TEXT NOT NULL,
+    peer_pubky        TEXT NOT NULL,
+    blocked_at        INTEGER NOT NULL,
+    cleanup_pending   INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (owner_pubky, peer_pubky)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_blocked_peers_owner
+    ON blocked_peers(owner_pubky)`,
+];
+
+/**
  * Schema v15 — move the handshake advance budget off the `links` row.
  *
  * v14 put `pending_advances` / `next_advance_at` on `links`, which is deleted
