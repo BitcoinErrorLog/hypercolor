@@ -8,6 +8,8 @@ export type PageHeaderProps = {
   subtitle?: string;
   onBack?: () => void;
   backLabel?: string;
+  backAccessibilityLabel?: string;
+  backTestID?: string;
   trailing?: React.ReactNode;
   testID?: string;
 };
@@ -17,6 +19,8 @@ export function PageHeader({
   subtitle,
   onBack,
   backLabel = 'Back',
+  backAccessibilityLabel,
+  backTestID,
   trailing,
   testID,
 }: PageHeaderProps) {
@@ -25,9 +29,9 @@ export function PageHeader({
       <View style={styles.row}>
         {onBack ? (
           <Pressable
-            {...(testID ? { testID: `${testID}Back` } : {})}
+            {...(backTestID || testID ? { testID: backTestID ?? `${testID}Back` } : {})}
             accessibilityRole="button"
-            accessibilityLabel={backLabel}
+            accessibilityLabel={backAccessibilityLabel ?? backLabel}
             onPress={onBack}
             style={styles.back}
           >

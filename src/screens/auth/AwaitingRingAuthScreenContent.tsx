@@ -62,7 +62,9 @@ export function AwaitingRingAuthScreenContent({
         <PageHeader
           title={title}
           onBack={onCancel}
-          backLabel="Cancel Pubky Ring connection"
+          backLabel={COPY.back}
+          backAccessibilityLabel="Cancel Pubky Ring connection"
+          backTestID="awaitingRingAuthCancel"
           testID="awaitingRingAuth"
         />
         <View style={styles.content}>
@@ -71,12 +73,21 @@ export function AwaitingRingAuthScreenContent({
           ) : (
             <ErrorState title={title} body={body} testID="awaitingRingAuthError" />
           )}
-          {phase === 'waiting' ? <Text style={styles.description}>{body}</Text> : null}
+          {phase === 'waiting' ? (
+            <Text testID="awaitingRingAuthScanHint" style={styles.description}>
+              {body}
+            </Text>
+          ) : null}
           {phase === 'waiting' && ringAuthUrl ? (
             <View style={styles.urlBlock}>
               <Text style={styles.sectionTitle}>Paykit-connect link</Text>
               <AuthQr value={ringAuthUrl} />
-              <Text selectable style={styles.hint} testID="mask-auth-url">
+              <Text
+                selectable
+                style={styles.hint}
+                testID="mask-auth-url"
+                accessibilityLabel={COPY.waitingForRingBody}
+              >
                 {ringAuthUrl}
               </Text>
               <Button

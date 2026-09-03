@@ -165,6 +165,7 @@ export function PaymentReviewSheet({
           </ScrollView>
           <Button
             testID="paymentReviewContinue"
+            accessibilityLabel={review.primaryLabel}
             accessibilityHint={
               review.primaryAction === 'copy'
                 ? 'Copies the payment URI'
@@ -180,6 +181,7 @@ export function PaymentReviewSheet({
           {review.secondaryLabel ? (
             <Button
               testID="paymentReviewCopy"
+              accessibilityLabel={review.secondaryLabel}
               label={review.secondaryLabel}
               variant="secondary"
               onPress={handleSecondary}

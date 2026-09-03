@@ -1,6 +1,7 @@
 import React from 'react';
-import { Text } from 'react-native';
+import { StyleSheet, Text } from 'react-native';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
+import { color } from '../../../theme';
 import { CONTACTS_COPY } from '../../../ui/contacts/contactsCopy';
 import { ThreadScreenContent } from '../ThreadScreen';
 
@@ -154,6 +155,8 @@ describe('ThreadScreenContent blocked send', () => {
     expect(json).toContain(CONTACTS_COPY.deniedSendMessage);
     expect(json).not.toContain('LinkService.sendDm');
     expect(tree.root.findByProps({ testID: 'threadSend' }).props.disabled).toBe(true);
+    expect(tree.root.findByProps({ testID: 'threadBubbleMine' })).toBeTruthy();
+    expect(tree.root.findAllByProps({ testID: 'threadByteCap' })).toHaveLength(0);
     expect(tree.root.findAllByType(Text).some(node => node.props.children === 'Failed')).toBe(true);
     await act(async () => {
       tree.root.findByProps({ testID: 'threadUnblock' }).props.onPress();
@@ -174,6 +177,37 @@ describe('ThreadScreenContent blocked send', () => {
     expect(json).toContain(CONTACTS_COPY.declinedSendNotice);
     expect(tree.root.findByProps({ testID: 'threadSend' }).props.disabled).toBe(false);
     expect(tree.root.findAllByProps({ testID: 'threadBlockedBanner' })).toHaveLength(0);
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('uses MessageBubble alignment for mine and theirs messages', async () => {
+    const incoming = {
+      ...contentProps().linkMessages[0]!,
+      eventId: 'evt-2',
+      senderPubky: PEER,
+      direction: 'received' as const,
+      body: 'incoming',
+      deliveryState: 'sent' as const,
+    };
+    const tree = await render(
+      <ThreadScreenContent
+        {...contentProps({ linkMessages: [...contentProps().linkMessages, incoming] })}
+      />,
+    );
+    const mineBubble = tree.root
+      .findAllByProps({ testID: 'threadBubbleMine' })
+      .find(node => node.props.style);
+    const theirsBubble = tree.root
+      .findAllByProps({ testID: 'threadBubbleTheirs' })
+      .find(node => node.props.style);
+    expect(StyleSheet.flatten(mineBubble?.props.style)).toMatchObject({
+      backgroundColor: color.brand,
+    });
+    expect(StyleSheet.flatten(theirsBubble?.props.style)).toMatchObject({
+      backgroundColor: color.bubbleIncoming,
+    });
     await act(async () => {
       tree.unmount();
     });

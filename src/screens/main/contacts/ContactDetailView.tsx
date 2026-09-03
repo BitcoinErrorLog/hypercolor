@@ -110,7 +110,8 @@ export function ContactDetailView({
       <PageHeader
         title="Contact"
         onBack={onBack}
-        backLabel="Back to Contacts"
+        backLabel="Back"
+        backAccessibilityLabel="Back to Contacts"
         testID="contactDetail"
       />
       {loading ? (
@@ -138,12 +139,6 @@ export function ContactDetailView({
               retryLabel={CONTACTS_COPY.blockedCleanupRetry}
             />
           ) : null}
-          <Button
-            testID="contactDetailCopy"
-            label="Copy pubky"
-            variant="secondary"
-            onPress={onCopy}
-          />
           <View style={styles.danger}>
             <Button
               testID="contactDetailUnblock"
@@ -170,12 +165,6 @@ export function ContactDetailView({
             pubky={contact?.pubky ?? pubky}
             onCopy={onCopy}
             testID="contactDetailPubkyChip"
-          />
-          <Button
-            testID="contactDetailCopy"
-            label="Copy pubky"
-            variant="secondary"
-            onPress={onCopy}
           />
           <View style={styles.details}>
             <DetailRow label="Relationship" value={relation} testID="contactDetailRelationship" />

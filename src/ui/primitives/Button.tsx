@@ -23,6 +23,7 @@ export type ButtonProps = {
   testID?: string;
   accessibilityLabel?: string;
   accessibilityHint?: string;
+  accessibilityState?: AccessibilityState;
   style?: StyleProp<ViewStyle>;
 };
 
@@ -45,9 +46,9 @@ const variantStyles: Record<
     disabledLabel: color.textMuted,
   },
   destructive: {
-    bg: color.dangerStrong,
-    border: color.dangerStrong,
-    label: color.textOnBrand,
+    bg: color.dangerSurface,
+    border: color.dangerSurface,
+    label: color.onDanger,
     disabledBg: color.surfaceRaised,
     disabledLabel: color.textMuted,
   },
@@ -70,12 +71,13 @@ export function Button({
   testID,
   accessibilityLabel,
   accessibilityHint,
+  accessibilityState,
   style,
 }: ButtonProps) {
   const blocked = disabled || busy;
   const palette = variantStyles[variant];
   const reason = disabled && disabledReason ? disabledReason : undefined;
-  const a11yState: AccessibilityState = {
+  const a11yState: AccessibilityState = accessibilityState ?? {
     disabled: blocked,
     busy: busy || undefined,
   };
@@ -93,9 +95,19 @@ export function Button({
         style={({ pressed }) => [
           styles.base,
           {
-            backgroundColor: blocked ? palette.disabledBg : palette.bg,
-            borderColor: blocked ? color.hairlineStrong : palette.border,
-            opacity: pressed && !blocked ? 0.88 : 1,
+            backgroundColor:
+              pressed && !blocked && variant === 'destructive'
+                ? color.dangerSurfacePressed
+                : blocked
+                  ? palette.disabledBg
+                  : palette.bg,
+            borderColor:
+              pressed && !blocked && variant === 'destructive'
+                ? color.dangerSurfacePressed
+                : blocked
+                  ? color.hairlineStrong
+                  : palette.border,
+            opacity: pressed && !blocked && variant !== 'destructive' ? 0.88 : 1,
           },
         ]}
       >

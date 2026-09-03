@@ -54,7 +54,11 @@ export function ChatsScreenContent({
           testID="chatRow"
           accessibilityLabel={identity.title}
           title={identity.title}
-          subtitle={item.lastMessage || COPY.noMessagesYet}
+          subtitle={
+            identity.subtitle
+              ? `${identity.subtitle} · ${item.lastMessage || COPY.noMessagesYet}`
+              : item.lastMessage || COPY.noMessagesYet
+          }
           meta={item.lastMessageAt ? formatRelativeTime(item.lastMessageAt, nowMs) : undefined}
           badge={item.unreadCount}
           unread={unread}
@@ -105,7 +109,7 @@ export function ChatsScreenContent({
           <Icon name="add" tone={needsEnable ? 'muted' : 'brand'} />
         </TouchableOpacity>
       </View>
-      <Text style={styles.sectionTitle}>Requests</Text>
+      <Text style={styles.sectionTitle}>{COPY.messageRequests}</Text>
       {requestsRow}
       {showEnableCta ? (
         <EnableMessagingCta testID="chatsEnableMessaging" onPress={onEnableMessaging} />

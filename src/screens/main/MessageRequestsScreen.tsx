@@ -13,6 +13,7 @@ import { copyText } from '../../utils/copyText';
 import { sanitizeError } from '../../ui/sanitizedError';
 import { useSessionStatusStore } from '../../stores/sessionStatusStore';
 import { CONTACTS_COPY } from '../../ui/contacts/contactsCopy';
+import { shortPubky } from '../../ui/shortPubky';
 import { color, space, typeRole } from '../../theme';
 import {
   Avatar,
@@ -158,6 +159,7 @@ export function MessageRequestsContent({
     ({ item }: { item: RequestRow }) => {
       const peer = item.request.peerPubky;
       const identity = peerIdentity(peer, item.contact);
+      const peerShort = shortPubky(peer);
       const busy = busyPeer === peer;
       return (
         <View style={styles.requestCard}>
@@ -169,7 +171,12 @@ export function MessageRequestsContent({
             hideDivider
           />
           <View style={styles.body}>
-            <PubkyChip pubky={peer} testID="messageRequestPubkyChip" />
+            <PubkyChip
+              pubky={peer}
+              onCopy={() => copyText(peer)}
+              copyLabel={`Copy pubky ${peerShort}`}
+              testID="messageRequestPubkyChip"
+            />
             <Text style={styles.hint}>{COPY.inboundRequestHint}</Text>
           </View>
           <View style={styles.actions}>
@@ -180,12 +187,14 @@ export function MessageRequestsContent({
                 <Button
                   testID="messageRequestAccept"
                   label={COPY.accept}
+                  accessibilityLabel={`Accept message request from ${peerShort}`}
                   onPress={() => onAccept(peer)}
                   style={styles.actionButton}
                 />
                 <Button
                   testID="messageRequestDecline"
                   label={COPY.decline}
+                  accessibilityLabel={`Decline message request from ${peerShort}`}
                   variant="destructive"
                   onPress={() => onDecline(peer)}
                   style={styles.actionButton}
@@ -203,6 +212,7 @@ export function MessageRequestsContent({
     ({ item }: { item: RequestRow }) => {
       const peer = item.request.peerPubky;
       const identity = peerIdentity(peer, item.contact);
+      const peerShort = shortPubky(peer);
       const busy = busyPeer === peer;
       return (
         <View style={styles.requestCard}>
@@ -214,7 +224,12 @@ export function MessageRequestsContent({
             hideDivider
           />
           <View style={styles.body}>
-            <PubkyChip pubky={peer} testID="messageRequestPubkyChip" />
+            <PubkyChip
+              pubky={peer}
+              onCopy={() => copyText(peer)}
+              copyLabel={`Copy pubky ${peerShort}`}
+              testID="messageRequestPubkyChip"
+            />
             <Text style={styles.hint}>{CONTACTS_COPY.declinedSection}</Text>
           </View>
           <View style={styles.actions}>
@@ -224,6 +239,7 @@ export function MessageRequestsContent({
               <Button
                 testID="messageRequestAcceptDeclined"
                 label={COPY.accept}
+                accessibilityLabel={`Accept declined request from ${peerShort}`}
                 onPress={() => onAcceptDeclined(peer)}
                 style={styles.actionButton}
               />

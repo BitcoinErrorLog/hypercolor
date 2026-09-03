@@ -57,7 +57,7 @@ export function ListRow({
           </Text>
         ) : null}
       </View>
-      {meta || badge !== undefined || navigates || trailing ? (
+      {meta || badge !== undefined ? (
         <View style={styles.trailingColumn}>
           {meta ? (
             <Text style={[styles.meta, unread ? styles.unreadMeta : null]}>{meta}</Text>
@@ -160,7 +160,7 @@ const styles = StyleSheet.create({
     color: color.textPrimary,
     fontSize: typeRole.body.fontSize,
     lineHeight: typeRole.body.lineHeight,
-    fontWeight: typeRole.bodyStrong.fontWeight,
+    fontWeight: typeRole.body.fontWeight,
   },
   unreadTitle: {
     fontWeight: typeRole.bodyStrong.fontWeight,

@@ -1,6 +1,6 @@
 import React from 'react';
 import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
-import { color, iconSize, space, typeRole } from '../../theme';
+import { color, measure, space, typeRole } from '../../theme';
 
 export type LoadingStateProps = {
   label?: string;
@@ -34,8 +34,8 @@ const styles = StyleSheet.create({
     backgroundColor: color.canvas,
   },
   indicatorSlot: {
-    width: iconSize.lg,
-    height: iconSize.lg,
+    width: measure.hitTarget,
+    height: measure.hitTarget,
     alignItems: 'center',
     justifyContent: 'center',
     overflow: 'visible',

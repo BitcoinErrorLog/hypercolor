@@ -72,6 +72,19 @@ describe('design tokens', () => {
     });
   });
 
+  it('keeps filled destructive labels body-safe in default and pressed states', () => {
+    expect(contrastRatio(color.onDanger, color.dangerSurface)).toBeGreaterThanOrEqual(WCAG_AA_BODY);
+    expect(contrastRatio(color.onDanger, color.dangerSurfacePressed)).toBeGreaterThanOrEqual(
+      WCAG_AA_BODY,
+    );
+    expect(textOnSurfacePairs.find(pair => pair.name === 'onDanger/dangerSurface')).toMatchObject({
+      usage: 'body',
+    });
+    expect(
+      textOnSurfacePairs.find(pair => pair.name === 'onDanger/dangerSurfacePressed'),
+    ).toMatchObject({ usage: 'body' });
+  });
+
   it('scales type layout with fontScale without mutating the 100% role', () => {
     const base = typeRole.body.fontSize;
     const layout = typeLayoutSize('body', 2);

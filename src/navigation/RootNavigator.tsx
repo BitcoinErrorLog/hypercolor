@@ -90,6 +90,13 @@ function LoadingFallback() {
   }, []);
   return (
     <View style={styles.loading}>
+      <Text
+        testID="navigationLoadingWordmark"
+        accessibilityRole="header"
+        style={styles.loadingWordmark}
+      >
+        Hypercolor
+      </Text>
       <ActivityIndicator size="large" color={color.brand} />
       {showExit ? (
         <TouchableOpacity
@@ -243,6 +250,12 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     gap: space.xxl,
+  },
+  loadingWordmark: {
+    color: color.brand,
+    fontSize: typeRole.display.fontSize,
+    lineHeight: typeRole.display.lineHeight,
+    fontWeight: typeRole.display.fontWeight,
   },
   loadingContinue: {
     minHeight: measure.hitTarget,

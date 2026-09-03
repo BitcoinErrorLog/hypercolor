@@ -47,6 +47,7 @@ export type SettingsScreenContentProps = {
   onChangeRestoreCode: (value: string) => void;
   onRestore: () => void;
   onEnableMessaging: () => void;
+  onCopyPubky: () => void;
   onBackupLayout?: (y: number) => void;
   onPaymentsLayout?: (y: number) => void;
 };
@@ -80,6 +81,7 @@ export function SettingsScreenContent({
   onChangeRestoreCode,
   onRestore,
   onEnableMessaging,
+  onCopyPubky,
   onBackupLayout,
   onPaymentsLayout,
 }: SettingsScreenContentProps): React.ReactElement {
@@ -94,7 +96,7 @@ export function SettingsScreenContent({
             <ListRow
               title={shortPubky(pubky)}
               leading={null}
-              trailing={<PubkyChip pubky={pubky} testID="mask-pubky" />}
+              trailing={<PubkyChip pubky={pubky} onCopy={onCopyPubky} testID="mask-pubky" />}
               showChevron={false}
             />
           ) : (
@@ -290,7 +292,7 @@ export function SettingsScreenContent({
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: color.canvas },
-  content: { paddingVertical: space.xxl },
+  content: { paddingTop: space.xxl, paddingBottom: space.xxxl + space.xl },
   section: { marginBottom: space.xxxl },
   sectionTitle: {
     fontSize: typeRole.meta.fontSize,

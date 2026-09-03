@@ -42,7 +42,7 @@ import {
 import { modalAnimationType, useReduceMotion } from '../../ui/reduceMotion';
 import { sanitizeError } from '../../ui/sanitizedError';
 import { color, space, radius, typeRole, measure } from '../../theme';
-import { Icon } from '../../ui/primitives';
+import { Icon, ListRow } from '../../ui/primitives';
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
 type ChannelsRoute = RouteProp<MainTabParamList, 'Channels'>;
@@ -275,43 +275,21 @@ export function ChannelsScreenContent({
 
   const renderChannel = useCallback(
     ({ item }: { item: ChannelListItem }) => (
-      <TouchableOpacity
+      <ListRow
         testID={item.isPublic ? 'channelRowPublic' : 'channelRowPrivate'}
-        style={styles.row}
-        onPress={() => onOpenChannel(item.channelId)}
-        accessibilityRole="button"
         accessibilityLabel={`${item.name}, ${item.isPublic ? COPY.publicTopic : COPY.privateGroup}${
           item.unreadCount > 0 ? `, ${item.unreadCount} unread` : ''
         }`}
-      >
-        <View style={styles.avatar}>
-          <Text style={styles.avatarLetter}>
-            {item.isPublic ? '#' : item.name.charAt(0).toUpperCase()}
-          </Text>
-        </View>
-        <View style={styles.body}>
-          <View style={styles.rowHeader}>
-            <Text style={styles.name} numberOfLines={1}>
-              {item.name}
-            </Text>
-            {item.lastMessageAt ? (
-              <Text style={styles.time}>{formatRelativeTime(item.lastMessageAt)}</Text>
-            ) : null}
-          </View>
-          <View style={styles.metaRow}>
-            <Text style={styles.meta} numberOfLines={1}>
-              {item.isPublic ? COPY.publicTopic : COPY.privateGroup}
-            </Text>
-            {item.unreadCount > 0 ? (
-              <View testID="channelUnreadBadge" style={styles.badge}>
-                <Text style={styles.badgeText}>
-                  {item.unreadCount > 99 ? '99+' : item.unreadCount}
-                </Text>
-              </View>
-            ) : null}
-          </View>
-        </View>
-      </TouchableOpacity>
+        title={item.name}
+        subtitle={item.isPublic ? COPY.publicTopic : COPY.privateGroup}
+        meta={item.lastMessageAt ? formatRelativeTime(item.lastMessageAt) : undefined}
+        badge={item.unreadCount}
+        unread={item.unreadCount > 0}
+        leading={
+          <Icon name={item.isPublic ? 'radio-outline' : 'people-outline'} tone="secondary" />
+        }
+        onPress={() => onOpenChannel(item.channelId)}
+      />
     ),
     [onOpenChannel],
   );
@@ -394,7 +372,9 @@ export function ChannelsScreenContent({
           onPress={() => onModeChange('private')}
           style={[styles.segmentBtn, mode === 'private' && styles.segmentOn]}
         >
-          <Text style={styles.segmentText}>{COPY.channelsPrivate}</Text>
+          <Text style={[styles.segmentText, mode === 'private' && styles.segmentTextOn]}>
+            {COPY.channelsPrivate}
+          </Text>
         </TouchableOpacity>
         <TouchableOpacity
           testID="channelsModePublic"
@@ -405,7 +385,9 @@ export function ChannelsScreenContent({
           onPress={() => onModeChange('public')}
           style={[styles.segmentBtn, mode === 'public' && styles.segmentOn]}
         >
-          <Text style={styles.segmentText}>{COPY.channelsPublic}</Text>
+          <Text style={[styles.segmentText, mode === 'public' && styles.segmentTextOn]}>
+            {COPY.channelsPublic}
+          </Text>
         </TouchableOpacity>
       </View>
 
@@ -653,7 +635,9 @@ function formatRelativeTime(ms: number): string {
   if (diff < 60_000) return 'now';
   if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m`;
   if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h`;
-  return new Date(ms).toLocaleDateString();
+  const days = Math.floor(diff / 86_400_000);
+  if (days < 7) return `${days}d`;
+  return new Date(ms).toLocaleDateString([], { month: 'short', day: 'numeric' });
 }
 
 const styles = StyleSheet.create({
@@ -695,7 +679,8 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   segmentOn: { backgroundColor: color.brand },
-  segmentText: { color: color.textPrimary, fontWeight: '600' },
+  segmentText: { color: color.textMuted, fontWeight: typeRole.body.fontWeight },
+  segmentTextOn: { color: color.textPrimary, fontWeight: typeRole.bodyStrong.fontWeight },
   warning: {
     marginHorizontal: space.lg,
     marginTop: space.md,

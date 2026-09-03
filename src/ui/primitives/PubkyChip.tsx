@@ -12,8 +12,22 @@ export type PubkyChipProps = {
 };
 
 export function PubkyChip({ pubky, onCopy, copyLabel = 'Copy pubky', testID }: PubkyChipProps) {
-  const chip = (
-    <View {...(testID ? { testID } : {})} accessibilityLabel={pubky} style={styles.chip}>
+  const chipProps = {
+    ...(testID ? { testID } : {}),
+    accessible: true,
+    accessibilityRole: 'text' as const,
+    accessibilityLabel: pubky,
+    accessibilityValue: { text: pubky },
+    style: styles.chip,
+  };
+  const chip = onCopy ? (
+    <Pressable {...chipProps} onLongPress={onCopy}>
+      <Text style={styles.text} numberOfLines={1} ellipsizeMode="clip">
+        {shortPubky(pubky)}
+      </Text>
+    </Pressable>
+  ) : (
+    <View {...chipProps}>
       <Text style={styles.text} numberOfLines={1} ellipsizeMode="clip">
         {shortPubky(pubky)}
       </Text>

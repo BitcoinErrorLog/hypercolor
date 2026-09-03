@@ -1,7 +1,8 @@
 import React from 'react';
-import { Text } from 'react-native';
+import { StyleSheet, Text } from 'react-native';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import { COPY } from '../../../copy/uxCopy';
+import { color } from '../../../theme';
 import { PRIVATE_GROUP_MEMBER_CAP } from '../../../flags/config';
 import { GROUP_MESSAGE_KIND, type GroupChannel, type GroupMessage } from '../../../types/group';
 import { sendingNofM, sentToNofM } from '../../../ui/groupFanoutStatus';
@@ -215,6 +216,35 @@ describe('ChannelScreenContent fan-out labels', () => {
         .findAllByType(Text)
         .some(node => String(node.props.children).includes(COPY.sending)),
     ).toBe(true);
+    const mineBubble = tree.root
+      .findAllByProps({ testID: 'channelBubbleMine' })
+      .find(node => node.props.style);
+    expect(StyleSheet.flatten(mineBubble?.props.style)).toMatchObject({
+      backgroundColor: color.brand,
+    });
+    expect(tree.root.findAllByProps({ testID: 'channelByteCap' })).toHaveLength(0);
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('uses MessageBubble alignment for incoming channel messages', async () => {
+    const incoming = {
+      ...message,
+      eventId: 'evt-incoming',
+      senderPubky: ALICE,
+      body: 'from Alice',
+    };
+    const tree = await render(
+      <ChannelScreenContent {...contentProps({ messages: [message, incoming] })} />,
+    );
+    const theirsBubble = tree.root
+      .findAllByProps({ testID: 'channelBubbleTheirs' })
+      .find(node => node.props.style);
+    expect(StyleSheet.flatten(theirsBubble?.props.style)).toMatchObject({
+      backgroundColor: color.bubbleIncoming,
+    });
+    expect(tree.root.findByProps({ testID: 'channelBubbleTheirsAvatar' })).toBeTruthy();
     await act(async () => {
       tree.unmount();
     });

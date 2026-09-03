@@ -137,7 +137,9 @@ describe('ui primitives', () => {
     });
     const json = JSON.stringify(tree.toJSON());
     expect(json).toContain('abcdef…wxyz');
-    expect(json).not.toContain(pubky);
+    const chip = hostByTestId(tree, 'pubkyChip');
+    expect(chip.props.accessibilityLabel).toBe(pubky);
+    expect(chip.props.accessibilityValue).toEqual({ text: pubky });
     expect(hostByTestId(tree, 'pubkyChipCopy').props.accessibilityRole).toBe('button');
   });
 

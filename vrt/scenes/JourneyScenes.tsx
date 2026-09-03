@@ -240,6 +240,7 @@ function settings(patch: Partial<React.ComponentProps<typeof SettingsScreenConte
       onChangeRestoreCode={n}
       onRestore={n}
       onEnableMessaging={n}
+      onCopyPubky={n}
       {...patch}
     />
   );

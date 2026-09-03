@@ -1,20 +1,12 @@
 import React from 'react';
-import {
-  View,
-  Text,
-  TouchableOpacity,
-  StyleSheet,
-  SafeAreaView,
-  ScrollView,
-  ActivityIndicator,
-} from 'react-native';
+import { View, Text, StyleSheet, SafeAreaView, ScrollView } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AuthQr } from '../../components/AuthQr';
 import { COPY, RING_GRANT_SCOPE_DETAIL } from '../../copy/uxCopy';
 import { CustodyLine } from '../../ui/CustodyLine';
 import { ErrorDetails } from '../../ui/ErrorDetails';
-import { HIT_SLOP_44 } from '../../ui/hitTarget';
-import { color, space, radius, typeRole, measure } from '../../theme';
+import { color, space, radius, typeRole } from '../../theme';
+import { Button, ErrorState, LoadingState, PageHeader, StatusBanner } from '../../ui/primitives';
 import { type EnableMessagingPhase, type EnableMessagingState } from './enableMessagingController';
 
 export function enableStatusLabel(phase: EnableMessagingPhase): string {
@@ -93,25 +85,23 @@ export function EnableMessagingScreenContent({
             : null;
 
   const countdown = state.phase === 'authorizing' && remainingLabel ? remainingLabel : null;
+  const isFailure =
+    state.phase === 'expired' ||
+    state.phase === 'denied' ||
+    state.phase === 'error' ||
+    state.phase === 'native-missing' ||
+    state.phase === 'session-offline';
 
   return (
     <SafeAreaView style={styles.container} testID="enableMessagingScreen">
-      <View style={styles.header}>
-        <TouchableOpacity
-          testID="enableMessagingBack"
-          accessibilityRole="button"
-          accessibilityLabel="Back"
-          hitSlop={HIT_SLOP_44}
-          onPress={onBack}
-          style={styles.backHit}
-        >
-          <Text style={styles.back}>← Back</Text>
-        </TouchableOpacity>
-        <Text style={styles.title}>{COPY.enableEncryptedMessaging}</Text>
-        <View style={styles.backHit} />
-      </View>
+      <PageHeader title={COPY.enableEncryptedMessaging} onBack={onBack} testID="enableMessaging" />
 
-      <ScrollView contentContainerStyle={styles.content}>
+      <ScrollView
+        contentContainerStyle={[
+          styles.content,
+          { paddingBottom: space.xl + Math.max(insets.bottom, 0) },
+        ]}
+      >
         <Text style={styles.heading}>{COPY.enableEncryptedMessaging}</Text>
         <Text style={styles.explanation}>{COPY.approveScopesBody}</Text>
         <Text style={styles.scopeDetail}>{RING_GRANT_SCOPE_DETAIL}</Text>
@@ -130,7 +120,15 @@ export function EnableMessagingScreenContent({
         </View>
 
         {state.phase === 'checking' ? (
-          <ActivityIndicator size="large" color={color.brand} style={styles.spinner} />
+          <LoadingState label={COPY.checkingMessaging} testID="enableMessagingLoading" />
+        ) : null}
+
+        {isFailure ? (
+          <ErrorState
+            title={enableStatusLabel(state.phase)}
+            body={state.message ?? COPY.couldNotStartAuthorization}
+            testID="enableMessagingError"
+          />
         ) : null}
 
         {showAuthUrl && state.authorizationUrl ? (
@@ -146,21 +144,15 @@ export function EnableMessagingScreenContent({
         ) : null}
 
         {state.phase === 'success' ? (
-          <View style={styles.successBlock} testID="enableMessagingSuccess">
-            <View
-              style={styles.successGlyph}
-              accessibilityRole="image"
-              accessibilityLabel="Enabled"
-            >
-              <Text style={styles.successGlyphMark}>✓</Text>
-            </View>
-            <Text style={styles.successTitle}>{COPY.encryptedMessagingEnabled}</Text>
-            <Text style={styles.successBody}>{COPY.encryptedMessagingEnabledBody}</Text>
-          </View>
+          <StatusBanner
+            label={COPY.encryptedMessagingEnabledBody}
+            tone="success"
+            testID="enableMessagingSuccess"
+          />
         ) : null}
 
         {primaryLabel ? (
-          <TouchableOpacity
+          <Button
             testID={
               state.phase === 'success'
                 ? 'enableMessagingOpenChats'
@@ -170,49 +162,34 @@ export function EnableMessagingScreenContent({
                     ? 'enableMessagingStart'
                     : 'enableMessagingRetry'
             }
-            accessibilityRole="button"
             accessibilityLabel={primaryLabel}
             accessibilityState={{
               busy: state.starting && state.phase === 'needs-enable',
               disabled: state.starting && state.phase === 'needs-enable',
             }}
-            style={[
-              styles.primaryButton,
-              state.starting && state.phase === 'needs-enable' && styles.buttonDisabled,
-            ]}
             disabled={state.starting && state.phase === 'needs-enable'}
+            busy={state.starting && state.phase === 'needs-enable'}
             onPress={onPrimary}
-          >
-            <Text style={styles.primaryButtonText}>{primaryLabel}</Text>
-          </TouchableOpacity>
+            label={primaryLabel}
+          />
         ) : null}
 
         {state.phase === 'authorizing' ? (
-          <TouchableOpacity
+          <Button
             testID="enableMessagingCopy"
-            accessibilityRole="button"
             accessibilityLabel={COPY.copyAuthorizationUrl}
-            style={styles.secondaryButton}
+            label={state.copied ? COPY.copied : COPY.copyAuthorizationUrl}
+            variant="secondary"
             onPress={onCopyAuth}
-          >
-            <Text style={styles.secondaryButtonText}>
-              {state.copied ? COPY.copied : COPY.copyAuthorizationUrl}
-            </Text>
-          </TouchableOpacity>
+          />
         ) : secondaryLabel ? (
-          <TouchableOpacity
+          <Button
             testID={state.phase === 'success' ? 'enableMessagingDone' : 'enableMessagingSecondary'}
-            accessibilityRole="button"
             accessibilityLabel={secondaryLabel}
-            style={state.phase === 'success' ? styles.textButton : styles.secondaryButton}
+            label={secondaryLabel}
+            variant="secondary"
             onPress={onSecondary}
-          >
-            <Text
-              style={state.phase === 'success' ? styles.textButtonText : styles.secondaryButtonText}
-            >
-              {secondaryLabel}
-            </Text>
-          </TouchableOpacity>
+          />
         ) : null}
 
         <View style={styles.custodyWrap}>
@@ -236,24 +213,6 @@ export function EnableMessagingScreenContent({
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: color.canvas },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: space.xl,
-    paddingVertical: space.sm,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: color.surfaceRaised,
-  },
-  backHit: { minWidth: measure.hitTarget, minHeight: measure.hitTarget, justifyContent: 'center' },
-  back: { color: color.brandText, fontSize: typeRole.body.fontSize },
-  title: {
-    flex: 1,
-    fontSize: typeRole.titleStack.fontSize,
-    fontWeight: '600',
-    color: color.textPrimary,
-    textAlign: 'center',
-  },
   content: { paddingHorizontal: space.xl, paddingVertical: space.xxl, gap: space.lg, flexGrow: 1 },
   heading: { fontSize: typeRole.heading.fontSize, fontWeight: '700', color: color.textPrimary },
   explanation: { fontSize: typeRole.callout.fontSize, color: color.textSecondary, lineHeight: 22 },
@@ -279,62 +238,8 @@ const styles = StyleSheet.create({
   },
   statusValue: { fontSize: typeRole.body.fontSize, fontWeight: '600', color: color.textPrimary },
   statusMessage: { fontSize: typeRole.secondary.fontSize, color: color.textMuted, lineHeight: 20 },
-  spinner: { marginVertical: space.sm },
   urlBlock: { gap: space.md },
   scanHint: { fontSize: typeRole.secondary.fontSize, color: color.textMuted, lineHeight: 20 },
-  successBlock: { alignItems: 'center', gap: space.md, paddingVertical: space.md },
-  successGlyph: {
-    width: 72,
-    height: 72,
-    borderRadius: radius.full,
-    backgroundColor: color.surfaceBrand,
-    borderWidth: 2,
-    borderColor: color.brand,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  successGlyphMark: {
-    color: color.success,
-    fontSize: typeRole.display.fontSize,
-    fontWeight: '700',
-  },
-  successTitle: {
-    fontSize: typeRole.heading.fontSize,
-    fontWeight: '700',
-    color: color.textPrimary,
-    textAlign: 'center',
-  },
-  successBody: {
-    fontSize: typeRole.callout.fontSize,
-    color: color.textSecondary,
-    lineHeight: 22,
-    textAlign: 'center',
-  },
-  primaryButton: {
-    backgroundColor: color.brand,
-    borderRadius: radius.md,
-    paddingVertical: space.lg,
-    minHeight: measure.hitTarget,
-    alignItems: 'center',
-    alignSelf: 'stretch',
-  },
-  buttonDisabled: { opacity: 0.6 },
-  primaryButtonText: {
-    color: color.textOnBrand,
-    fontSize: typeRole.body.fontSize,
-    fontWeight: '600',
-  },
-  secondaryButton: {
-    borderWidth: 1,
-    borderColor: color.hairlineStrong,
-    borderRadius: radius.md,
-    paddingVertical: space.lg,
-    minHeight: measure.hitTarget,
-    alignItems: 'center',
-  },
-  secondaryButtonText: { color: color.textMuted, fontSize: typeRole.body.fontSize },
-  textButton: { minHeight: measure.hitTarget, alignItems: 'center', justifyContent: 'center' },
-  textButtonText: { color: color.brandText, fontSize: typeRole.body.fontSize, fontWeight: '600' },
   custodyWrap: { marginTop: 'auto', paddingTop: space.xxl, paddingBottom: space.sm },
   countdownBar: {
     borderTopWidth: StyleSheet.hairlineWidth,

@@ -73,7 +73,7 @@ import { continuePaymentReview } from './continuePaymentReview';
 import { eventIdsWithDeliveryQueue } from '../../ui/failedSendRetry';
 import { useReduceMotion } from '../../ui/reduceMotion';
 import { color, space, radius, typeRole, measure } from '../../theme';
-import { Icon } from '../../ui/primitives';
+import { Icon, MessageBubble } from '../../ui/primitives';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Thread'>;
 
@@ -476,7 +476,7 @@ export function ThreadScreenContent({
   onCopyPubky: () => void;
 }) {
   const flatListRef = useRef<FlatList<ThreadItem>>(null);
-  const plusRef = useRef<TouchableOpacity>(null);
+  const plusRef = useRef<View>(null);
   const menuWasOpen = useRef(false);
   const reduceMotion = useReduceMotion();
   const items = useMemo(
@@ -506,10 +506,7 @@ export function ThreadScreenContent({
       if (item.kind === 'payment') {
         const isMine = item.record.direction === 'sent';
         return (
-          <View
-            testID="threadPaymentBubble"
-            style={[styles.bubble, isMine ? styles.mine : styles.theirs]}
-          >
+          <MessageBubble testID="threadPaymentBubble" mine={isMine} time={formatTime(item.sentAt)}>
             {localPubky ? (
               <PaymentRequestBubble
                 record={item.record}
@@ -518,16 +515,17 @@ export function ThreadScreenContent({
                 onReview={onReview}
               />
             ) : null}
-            <View style={styles.meta}>
-              <Text style={styles.time}>{formatTime(item.sentAt)}</Text>
-            </View>
-          </View>
+          </MessageBubble>
         );
       }
       if (item.kind === 'attachment') {
         const isMine = item.record.senderPubky === localPubky;
         return (
-          <View style={[styles.bubble, isMine ? styles.mine : styles.theirs]}>
+          <MessageBubble
+            testID={isMine ? 'threadAttachmentBubbleMine' : 'threadAttachmentBubbleTheirs'}
+            mine={isMine}
+            time={formatTime(item.sentAt)}
+          >
             <AttachmentBubble
               record={item.record}
               isMine={isMine}
@@ -537,58 +535,42 @@ export function ThreadScreenContent({
                   : undefined
               }
             />
-            <View style={styles.meta}>
-              <Text style={styles.time}>{formatTime(item.sentAt)}</Text>
-            </View>
-          </View>
+          </MessageBubble>
         );
       }
       const isMine = item.message.senderPubky === localPubky;
       return (
-        <View
+        <MessageBubble
           testID={isMine ? 'threadBubbleMine' : 'threadBubbleTheirs'}
-          accessibilityLabel={item.message.body}
-          style={[styles.bubble, isMine ? styles.mine : styles.theirs]}
+          mine={isMine}
+          time={formatTime(item.message.sentAt)}
+          status={isMine ? formatDeliveryState(item.message.deliveryState) : null}
+          failed={item.message.deliveryState === 'failed'}
         >
           <Text style={[styles.bubbleText, isMine ? styles.mineText : styles.theirsText]}>
             {item.message.body}
           </Text>
-          <View style={styles.meta}>
-            <Text style={styles.time}>{formatTime(item.message.sentAt)}</Text>
-            {isMine ? (
-              <>
-                <Text
-                  style={[
-                    styles.status,
-                    item.message.deliveryState === 'failed' ? styles.statusFailed : null,
-                  ]}
-                >
-                  {formatDeliveryState(item.message.deliveryState)}
-                </Text>
-                {item.message.deliveryState === 'failed' && !peerBlocked ? (
-                  retryableEventIds.has(item.message.eventId) ? (
-                    <TouchableOpacity
-                      accessibilityRole="button"
-                      accessibilityLabel={COPY.retry}
-                      hitSlop={HIT_SLOP_44}
-                      onPress={() => onRetryFailed(item.message.eventId)}
-                    >
-                      <Text style={styles.retry}>{COPY.retry}</Text>
-                    </TouchableOpacity>
-                  ) : (
-                    <Text
-                      testID="threadSendTerminal"
-                      accessibilityRole="text"
-                      style={styles.statusFailed}
-                    >
-                      {COPY.couldNotSendStartAgain}
-                    </Text>
-                  )
-                ) : null}
-              </>
-            ) : null}
-          </View>
-        </View>
+          {isMine && item.message.deliveryState === 'failed' && !peerBlocked ? (
+            retryableEventIds.has(item.message.eventId) ? (
+              <TouchableOpacity
+                accessibilityRole="button"
+                accessibilityLabel={COPY.retry}
+                hitSlop={HIT_SLOP_44}
+                onPress={() => onRetryFailed(item.message.eventId)}
+              >
+                <Text style={styles.retry}>{COPY.retry}</Text>
+              </TouchableOpacity>
+            ) : (
+              <Text
+                testID="threadSendTerminal"
+                accessibilityRole="text"
+                style={styles.statusFailed}
+              >
+                {COPY.couldNotSendStartAgain}
+              </Text>
+            )
+          ) : null}
+        </MessageBubble>
       );
     },
     [localPubky, onPaymentsChanged, onRetryFailed, onReview, peerBlocked, retryableEventIds],
@@ -956,7 +938,7 @@ const styles = StyleSheet.create({
     lineHeight: 20,
   },
   loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  messageList: { padding: space.lg, gap: space.sm },
+  messageList: { padding: space.lg, paddingBottom: space.xxxl + space.xl, gap: space.sm },
   bubble: {
     maxWidth: '78%',
     borderRadius: radius.lg,
@@ -1018,7 +1000,7 @@ const styles = StyleSheet.create({
   },
   sendBtnDisabled: { opacity: 0.4 },
   sendIcon: { color: color.textOnBrand, fontSize: typeRole.numeric.fontSize, fontWeight: '700' },
-  composerColumn: { backgroundColor: color.canvas },
+  composerColumn: { backgroundColor: color.canvas, paddingBottom: space.lg },
   plusBtn: {
     ...minHitStyle,
     width: 44,

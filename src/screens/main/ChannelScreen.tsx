@@ -60,7 +60,7 @@ import {
 } from '../../ui/composerActions';
 import { LINK_MESSAGE_MAX_BYTES } from '../../types/link';
 import { color, space, radius, typeRole, measure } from '../../theme';
-import { Icon } from '../../ui/primitives';
+import { Icon, MessageBubble } from '../../ui/primitives';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'ChannelScreen'>;
 
@@ -396,7 +396,7 @@ export function ChannelScreenContent({
   onRetryFailed: (eventId: string) => void;
 }) {
   const flatListRef = useRef<FlatList<GroupMessage>>(null);
-  const plusRef = useRef<TouchableOpacity>(null);
+  const plusRef = useRef<View>(null);
   const menuWasOpen = useRef(false);
   const byAuthorEvent = useMemo(() => {
     const map = new Map<string, GroupMessage>();
@@ -493,16 +493,24 @@ export function ChannelScreenContent({
         : undefined;
       const reactions = reactionsByTarget.get(`${item.senderPubky}:${item.eventId}`);
       const attachment = attachments.find(a => a.eventId === item.eventId);
+      const senderName = peerIdentity(
+        item.senderPubky,
+        contacts.find(c => c.pubky === item.senderPubky) ?? null,
+      ).title;
       return (
-        <View style={[styles.bubble, isMine ? styles.mine : styles.theirs]}>
+        <MessageBubble
+          testID={isMine ? 'channelBubbleMine' : 'channelBubbleTheirs'}
+          mine={isMine}
+          time={formatTime(item.sentAt)}
+          status={outboundLabel}
+          failed={item.deliveryState === 'failed'}
+          senderName={senderName}
+          senderPubky={item.senderPubky}
+          showIncomingAvatar={!isMine}
+        >
           {!isMine && (
             <Text style={styles.sender} numberOfLines={1} ellipsizeMode="middle">
-              {
-                peerIdentity(
-                  item.senderPubky,
-                  contacts.find(c => c.pubky === item.senderPubky) ?? null,
-                ).title
-              }
+              {senderName}
             </Text>
           )}
           {parent ? (
@@ -525,47 +533,27 @@ export function ChannelScreenContent({
               {item.deleted ? 'Message deleted' : item.body}
             </Text>
           )}
-          <View style={styles.meta}>
-            <Text style={styles.time}>{formatTime(item.sentAt)}</Text>
-            {item.editedAt ? <Text style={styles.time}> · edited</Text> : null}
-            {isMine && !isPublic ? (
-              <>
-                {outboundLabel ? (
-                  <Text
-                    style={[
-                      styles.time,
-                      item.deliveryState === 'failed' ? styles.statusFailed : null,
-                    ]}
-                  >
-                    {' '}
-                    · {outboundLabel}
-                  </Text>
-                ) : null}
-                {item.deliveryState === 'failed' ? (
-                  retryableEventIds.has(item.eventId) ? (
-                    <TouchableOpacity
-                      accessibilityRole="button"
-                      accessibilityLabel={COPY.retry}
-                      hitSlop={HIT_SLOP_44}
-                      onPress={() => onRetryFailed(item.eventId)}
-                    >
-                      <Text style={styles.retry}>{COPY.retry}</Text>
-                    </TouchableOpacity>
-                  ) : (
-                    <Text
-                      testID="channelSendTerminal"
-                      accessibilityRole="text"
-                      style={styles.statusFailed}
-                    >
-                      {COPY.couldNotSendStartAgain}
-                    </Text>
-                  )
-                ) : null}
-              </>
-            ) : outboundLabel ? (
-              <Text style={styles.time}> · {outboundLabel}</Text>
-            ) : null}
-          </View>
+          {item.editedAt ? <Text style={styles.time}>edited</Text> : null}
+          {isMine && !isPublic && item.deliveryState === 'failed' ? (
+            retryableEventIds.has(item.eventId) ? (
+              <TouchableOpacity
+                accessibilityRole="button"
+                accessibilityLabel={COPY.retry}
+                hitSlop={HIT_SLOP_44}
+                onPress={() => onRetryFailed(item.eventId)}
+              >
+                <Text style={styles.retry}>{COPY.retry}</Text>
+              </TouchableOpacity>
+            ) : (
+              <Text
+                testID="channelSendTerminal"
+                accessibilityRole="text"
+                style={styles.statusFailed}
+              >
+                {COPY.couldNotSendStartAgain}
+              </Text>
+            )
+          ) : null}
           {reactions && reactions.size > 0 ? (
             <View style={styles.reactionRow}>
               {[...reactions.entries()].map(([emoji, count]) => (
@@ -624,7 +612,7 @@ export function ChannelScreenContent({
               ) : null}
             </View>
           ) : null}
-        </View>
+        </MessageBubble>
       );
     },
     [
@@ -929,7 +917,7 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  messageList: { padding: space.lg, gap: space.sm },
+  messageList: { padding: space.lg, paddingBottom: space.xxxl + space.xl, gap: space.sm },
   bubble: {
     maxWidth: '78%',
     borderRadius: radius.lg,
@@ -982,6 +970,7 @@ const styles = StyleSheet.create({
     alignItems: 'flex-end',
     gap: space.sm,
     padding: space.md,
+    paddingBottom: space.lg,
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: color.surfaceRaised,
     backgroundColor: color.canvas,
@@ -1053,7 +1042,7 @@ const styles = StyleSheet.create({
     paddingTop: space.sm,
   },
   replyBarText: { color: color.textMuted, flex: 1, marginRight: space.sm },
-  memberPane: { padding: space.xl, gap: space.md },
+  memberPane: { padding: space.xl, paddingBottom: space.xxxl + space.xl, gap: space.md },
   memberHeading: {
     color: color.textPrimary,
     fontSize: typeRole.body.fontSize,

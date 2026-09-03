@@ -29,7 +29,7 @@ export function ComposerActionMenu({
 }) {
   const reduceMotion = useReduceMotion();
   const titleRef = useRef<Text>(null);
-  const firstEnabledRef = useRef<TouchableOpacity>(null);
+  const firstEnabledRef = useRef<View>(null);
   const firstEnabledId = actions.find(action => !action.disabled)?.id ?? null;
 
   useEffect(() => {
