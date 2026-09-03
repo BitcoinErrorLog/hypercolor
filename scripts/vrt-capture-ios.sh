@@ -47,9 +47,19 @@ override_status_bar() {
 launch_app_once() {
   local udid="$1"
   local app_path
-  app_path="$(find "$HOME/Library/Developer/Xcode/DerivedData" -path '*Debug-iphonesimulator/hypercolor.app' 2>/dev/null | head -1)"
+  app_path="$(
+    mdfind "kMDItemFSName == 'hypercolor.app' && kMDItemDisplayName == 'hypercolor'" 2>/dev/null \
+      | grep 'Debug-iphonesimulator/hypercolor.app$' \
+      | head -1 || true
+  )"
+  if [ -z "$app_path" ]; then
+    app_path="$(ls -d "$HOME"/Library/Developer/Xcode/DerivedData/hypercolor-*/Build/Products/Debug-iphonesimulator/hypercolor.app 2>/dev/null | head -1 || true)"
+  fi
   if [ -n "$app_path" ]; then
+    echo "installing $app_path"
     xcrun simctl install "$udid" "$app_path" >/dev/null
+  else
+    echo "warning: hypercolor.app not found; assuming already installed on $udid" >&2
   fi
   # Never use openLink on iOS — it leaves a sticky "Open in hypercolor?" sheet.
   xcrun simctl terminate "$udid" "$APP" 2>/dev/null || true
