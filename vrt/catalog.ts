@@ -2,18 +2,35 @@ import { createElement } from 'react';
 import { catalogMetaById, VRT_CATALOG_META } from './catalogMeta';
 import { TokenSwatchScreen } from './scenes/TokenSwatchScreen';
 import {
+  AwaitingRingWaitingScene,
+  AwaitingRingWithUrlScene,
+  ChannelsEmptyScene,
+  ChannelsPopulatedScene,
   ChatsEmptyScene,
   ChatsOfflineScene,
+  ChatsPopulatedScene,
+  ComposerSheetScene,
+  ContactsContentEmptyScene,
+  ContactsContentOfflineScene,
+  ContactsContentPopulatedScene,
   ContactsEmptyScene,
   ContactsOfflineScene,
   ContactsPopulatedScene,
+  EnableAuthorizingScene,
+  EnableCheckingScene,
+  EnableErrorScene,
+  EnableSuccessScene,
+  MessageRequestsEmptyScene,
+  MessageRequestsPopulatedScene,
+  PaymentReviewScene,
+  SettingsDefaultScene,
+  SettingsRecoveryGateScene,
+  ThreadEmptyScene,
+  ThreadLoadingScene,
+  ThreadPopulatedScene,
   WelcomeErrorScene,
   WelcomeIdleScene,
-  EnableCheckingScene,
-  EnableSuccessScene,
-  SettingsDefaultScene,
-  ThreadEmptyScene,
-  ChannelsEmptyScene,
+  WelcomeLoadingScene,
 } from './scenes/JourneyScenes';
 import type { VrtCatalogEntry } from './types';
 
@@ -39,9 +56,37 @@ const RENDERERS: Record<string, VrtCatalogEntry['render']> = {
     assertCatalogAllowed();
     return createElement(WelcomeIdleScene);
   },
+  'auth.welcome.loading': () => {
+    assertCatalogAllowed();
+    return createElement(WelcomeLoadingScene);
+  },
   'auth.welcome.error': () => {
     assertCatalogAllowed();
     return createElement(WelcomeErrorScene);
+  },
+  'auth.awaiting-ring.with-url': () => {
+    assertCatalogAllowed();
+    return createElement(AwaitingRingWithUrlScene);
+  },
+  'auth.awaiting-ring.waiting': () => {
+    assertCatalogAllowed();
+    return createElement(AwaitingRingWaitingScene);
+  },
+  'auth.enable.checking': () => {
+    assertCatalogAllowed();
+    return createElement(EnableCheckingScene);
+  },
+  'auth.enable.authorizing': () => {
+    assertCatalogAllowed();
+    return createElement(EnableAuthorizingScene);
+  },
+  'auth.enable.success': () => {
+    assertCatalogAllowed();
+    return createElement(EnableSuccessScene);
+  },
+  'auth.enable.error': () => {
+    assertCatalogAllowed();
+    return createElement(EnableErrorScene);
   },
   'tabs.chats.empty': () => {
     assertCatalogAllowed();
@@ -50,6 +95,10 @@ const RENDERERS: Record<string, VrtCatalogEntry['render']> = {
   'tabs.chats.offline': () => {
     assertCatalogAllowed();
     return createElement(ChatsOfflineScene);
+  },
+  'tabs.chats.populated': () => {
+    assertCatalogAllowed();
+    return createElement(ChatsPopulatedScene);
   },
   'tabs.contacts.empty': () => {
     assertCatalogAllowed();
@@ -63,25 +112,61 @@ const RENDERERS: Record<string, VrtCatalogEntry['render']> = {
     assertCatalogAllowed();
     return createElement(ContactsOfflineScene);
   },
-  'auth.enable.checking': () => {
+  'tabs.contacts.content-empty': () => {
     assertCatalogAllowed();
-    return createElement(EnableCheckingScene);
+    return createElement(ContactsContentEmptyScene);
   },
-  'auth.enable.success': () => {
+  'tabs.contacts.content-populated': () => {
     assertCatalogAllowed();
-    return createElement(EnableSuccessScene);
+    return createElement(ContactsContentPopulatedScene);
+  },
+  'tabs.contacts.content-offline': () => {
+    assertCatalogAllowed();
+    return createElement(ContactsContentOfflineScene);
+  },
+  'tabs.message-requests.empty': () => {
+    assertCatalogAllowed();
+    return createElement(MessageRequestsEmptyScene);
+  },
+  'tabs.message-requests.populated': () => {
+    assertCatalogAllowed();
+    return createElement(MessageRequestsPopulatedScene);
   },
   'tabs.settings.default': () => {
     assertCatalogAllowed();
     return createElement(SettingsDefaultScene);
   },
+  'tabs.settings.recovery-gate': () => {
+    assertCatalogAllowed();
+    return createElement(SettingsRecoveryGateScene);
+  },
   'stack.thread.empty': () => {
     assertCatalogAllowed();
     return createElement(ThreadEmptyScene);
   },
+  'stack.thread.loading': () => {
+    assertCatalogAllowed();
+    return createElement(ThreadLoadingScene);
+  },
+  'stack.thread.populated': () => {
+    assertCatalogAllowed();
+    return createElement(ThreadPopulatedScene);
+  },
+  'stack.composer.sheet': () => {
+    assertCatalogAllowed();
+    return createElement(ComposerSheetScene);
+  },
+  'stack.payment.review': () => {
+    assertCatalogAllowed();
+    return createElement(PaymentReviewScene);
+  },
   'tabs.channels.empty': () => {
     assertCatalogAllowed();
     return createElement(ChannelsEmptyScene);
+  },
+  'tabs.channels.populated': () => {
+    assertCatalogAllowed();
+    return createElement(ChannelsPopulatedScene);
   },
 };
 

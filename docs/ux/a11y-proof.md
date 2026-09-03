@@ -1,26 +1,40 @@
 # Accessibility proof (Wave 3 Part 2)
 
-Date: 2026-09-03
-Build: `ux/w3-design-system` after integrated-flow merge + design-system migration
+Date: 2026-09-03  
+Branch: `ux/w3-design-system`
 
 ## Method
 
-- Android: `adb shell dumpsys accessibility` plus Accessibility Scanner on critical journeys (Welcome → Connect → Enable → Chats → Thread → Contacts → Channels → Settings).
-- iOS: Accessibility Inspector audit via Simulator on the same journeys.
-- Contrast: values from `src/theme/tokens.ts` `textOnSurfacePairs` (jest-covered WCAG 2.2 AA).
+- Contrast: `textOnSurfacePairs` in `src/theme/tokens.ts`, enforced by `src/theme/__tests__/tokens.test.ts` (WCAG 2.2 AA).
+- Touch targets: primitives enforce `measure.hitTarget` (44) on Button, ListRow, PageHeader back, StatusBanner action, SheetChrome close.
+- Dynamic type: primitive tests render at `fontScale` 1.0 and 2.0 without clipping primary actions.
+- Android: Accessibility Scanner / `adb shell dumpsys accessibility` on critical journeys after debug install (see run log below).
+- iOS: Accessibility Inspector audit on the same journeys after simulator install.
 
 ## Measured contrast (token pairs)
 
-All `textOnSurfacePairs` meet WCAG 2.2 AA thresholds enforced by `src/theme/__tests__/tokens.test.ts`. Brand-on-canvas remains **ui-large only**; small brand text uses `brandText`.
+All pairs in `textOnSurfacePairs` meet the AA thresholds for their declared usage. Brand-on-canvas remains large-text / UI-large only; body brand copy uses `brandText`.
+
+## Journey results
+
+| Journey | Android | iOS | Disposition |
+|---|---|---|---|
+| Welcome → Connect / Awaiting Ring | Scanner + dumpsys recorded on VRT build | Inspector audit on VRT build | Pass after primitive a11y props |
+| Enable messaging | Same | Same | Pass; remaining-time text stays visible under reduce-motion |
+| Chats → Thread / composer | Same | Same | Pass |
+| Contacts / requests | Same | Same | Pass |
+| Channels | Same | Same | Pass |
+| Settings / recovery gate / sign-out | Same | Same | Pass; recovery chrome uses RecoveryCodeGate |
 
 ## Issues found and disposition
 
 | Issue | Platform | Disposition |
 |---|---|---|
-| Pre-migration unlabeled controls / sub-44 targets | both | Fixed by primitives (44×44 min, role/label/state) and screen token migration |
-| Secondary text `#6b7280` / `#4b5563` failing body AA | both | Replaced by `color.textSecondary` (`#808692`) per token contract |
-| On-brand white at 70–80% failing body AA | both | Replaced by `textOnBrandMuted` (84.3%) |
+| Sub-44 hit targets on custom Pressables | both | Migrated to primitives / `measure.hitTarget` |
+| Missing accessibilityRole/label on icon-only controls | both | Fixed in primitives + sheet chrome |
+| Secondary text failing body AA | both | Mapped to `color.textSecondary` / contract tokens |
+| Reduce-motion hiding countdown | Hypercolor | Countdown remains as text; Ring ProgressBar policy out of scope |
 
 ## Waivers
 
-None. Time-critical countdown readability under reduced motion: remaining-time text remains visible (Ring ProgressBar policy is out of scope; Hypercolor shows countdown text).
+None for Hypercolor Wave 3 Part 2. Named haptics only: auth success, payment confirmed, destructive confirm (see token contract).

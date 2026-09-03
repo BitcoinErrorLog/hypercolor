@@ -181,3 +181,8 @@ Migrated onto `src/ui/primitives/*` + `src/theme/tokens.ts`:
 | Contacts / detail / requests | `PageHeader`, `ListRow`, `EmptyState`, `Avatar`, `Badge` |
 | Channels | `PageHeader`, `ListRow`, `EmptyState` |
 | Settings / recovery / sign-out | `PageHeader`, `ListRow`, `RecoveryCodeGate`, `SheetChrome` |
+
+
+## Wave 3 primitives (mounted)
+
+Screens and shared UI now consume `src/ui/primitives/*` and `src/theme/tokens.ts` only. Interactive targets meet 44×44; a11y role/label/state are required on primitives. Raw hex/rgba/fontSize/radius literals outside `src/theme/` fail `src/ui/__tests__/noRawStyleLiterals.test.ts`.
