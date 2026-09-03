@@ -55,4 +55,19 @@ describe('integrityGate', () => {
     expect(result.markerAssertMissing).toContain('auth.welcome.idle|android|pixel-4a');
     await rm(tmp, { recursive: true, force: true });
   });
+
+  it('accepts explicit scene-pair waivers only', async () => {
+    const tmp = path.join(os.tmpdir(), `vrt-waiver-${process.pid}-${Date.now()}`);
+    await mkdir(tmp, { recursive: true });
+    const buf = solidPng(20, 20, [10, 20, 30]);
+    await writeFile(path.join(tmp, 'auth_enable_enabled_android_pixel-4a.png'), buf);
+    await writeFile(path.join(tmp, 'auth_enable_success_android_pixel-4a.png'), buf);
+
+    const result = await runIntegrityGate({ baselineDir: tmp });
+    expect(result.ok).toBe(true);
+    expect(result.failures).toHaveLength(0);
+    expect(result.waivedPairs).toHaveLength(1);
+    expect(result.waivedPairs[0]?.reason).toContain('success presenter');
+    await rm(tmp, { recursive: true, force: true });
+  });
 });

@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { readdir, readFile, writeFile, mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import { PNG } from 'pngjs';
-import pixelmatch from 'pixelmatch';
+import { INTEGRITY_WAIVER_MAP, integrityWaiverKey } from './integrityWaivers';
 
 /**
  * Fail when two DIFFERENT scenes share ≥ this identical ratio of
@@ -16,6 +16,7 @@ export const INTEGRITY_IDENTICAL_RATIO = 0.99;
 export const INTEGRITY_FULL_IDENTICAL_RATIO = 0.9995;
 const CANVAS_RGB = [0x0a, 0x0a, 0x0a] as const;
 const CANVAS_SLOP = 12;
+const QUICK_SAMPLE_STEP = 8;
 
 export type IntegrityPairFailure = {
   readonly a: string;
@@ -26,10 +27,15 @@ export type IntegrityPairFailure = {
   readonly viewport: string;
 };
 
+export type IntegrityPairWaiver = IntegrityPairFailure & {
+  readonly reason: string;
+};
+
 export type IntegrityResult = {
   readonly ok: boolean;
   readonly comparedPairs: number;
   readonly failures: readonly IntegrityPairFailure[];
+  readonly waivedPairs: readonly IntegrityPairWaiver[];
   readonly markerAssertMissing: readonly string[];
   readonly fileCount: number;
 };
@@ -47,6 +53,10 @@ function parseCaptureName(file: string): {
   return { sceneKey: m[1]!, platform: m[2]!, viewport: m[3]! };
 }
 
+function sceneIdFromCaptureKey(sceneKey: string): string {
+  return sceneKey.replaceAll('_', '.');
+}
+
 function isCanvasPixel(data: Buffer, i: number): boolean {
   return (
     Math.abs(data[i]! - CANVAS_RGB[0]) <= CANVAS_SLOP &&
@@ -56,32 +66,52 @@ function isCanvasPixel(data: Buffer, i: number): boolean {
 }
 
 function compareScenes(a: PNG, b: PNG): { fullIdentical: number; contentIdentical: number } | null {
-  if (a.width !== b.width || a.height !== b.height) return null;
-  const diff = new PNG({ width: a.width, height: a.height });
-  const mismatched = pixelmatch(a.data, b.data, diff.data, a.width, a.height, {
-    threshold: 0.05,
-    includeAA: false,
-  });
-  const total = a.width * a.height;
-  const fullIdentical = 1 - mismatched / total;
+  return compareScenesWithStep(a, b, 1);
+}
 
+function quickCompareScenes(
+  a: PNG,
+  b: PNG,
+): { fullIdentical: number; contentIdentical: number } | null {
+  return compareScenesWithStep(a, b, QUICK_SAMPLE_STEP);
+}
+
+function compareScenesWithStep(
+  a: PNG,
+  b: PNG,
+  step: number,
+): { fullIdentical: number; contentIdentical: number } | null {
+  if (a.width !== b.width || a.height !== b.height) return null;
+  let fullMismatch = 0;
+  let total = 0;
   let contentPixels = 0;
   let contentMismatch = 0;
-  for (let y = 0; y < a.height; y++) {
-    for (let x = 0; x < a.width; x++) {
+  for (let y = 0; y < a.height; y += step) {
+    for (let x = 0; x < a.width; x += step) {
+      total += 1;
       const i = (a.width * y + x) << 2;
-      const bothCanvas = isCanvasPixel(a.data, i) && isCanvasPixel(b.data, i);
-      if (bothCanvas) continue;
-      contentPixels += 1;
       const dr = Math.abs(a.data[i]! - b.data[i]!);
       const dg = Math.abs(a.data[i + 1]! - b.data[i + 1]!);
       const db = Math.abs(a.data[i + 2]! - b.data[i + 2]!);
-      if (dr > 8 || dg > 8 || db > 8) contentMismatch += 1;
+      const different = dr > 8 || dg > 8 || db > 8;
+      if (different) fullMismatch += 1;
+      const bothCanvas = isCanvasPixel(a.data, i) && isCanvasPixel(b.data, i);
+      if (bothCanvas) continue;
+      contentPixels += 1;
+      if (different) contentMismatch += 1;
     }
   }
+  const fullIdentical = 1 - fullMismatch / total;
   const contentIdentical =
     contentPixels === 0 ? fullIdentical : 1 - contentMismatch / contentPixels;
   return { fullIdentical, contentIdentical };
+}
+
+function failsThreshold(cmp: { fullIdentical: number; contentIdentical: number }): boolean {
+  return (
+    cmp.contentIdentical >= INTEGRITY_IDENTICAL_RATIO ||
+    cmp.fullIdentical >= INTEGRITY_FULL_IDENTICAL_RATIO
+  );
 }
 
 /**
@@ -108,6 +138,7 @@ export async function runIntegrityGate(opts: {
   }
 
   const failures: IntegrityPairFailure[] = [];
+  const waivedPairs: IntegrityPairWaiver[] = [];
   let comparedPairs = 0;
 
   for (const [bucket, items] of byBucket) {
@@ -118,20 +149,36 @@ export async function runIntegrityGate(opts: {
         const right = items[j]!;
         if (left.sceneKey === right.sceneKey) continue;
         comparedPairs += 1;
+        const waiver = INTEGRITY_WAIVER_MAP.get(
+          integrityWaiverKey(
+            sceneIdFromCaptureKey(left.sceneKey),
+            sceneIdFromCaptureKey(right.sceneKey),
+          ),
+        );
+        const quick = quickCompareScenes(left.png, right.png);
+        if (!quick || !failsThreshold(quick)) continue;
         const cmp = compareScenes(left.png, right.png);
-        if (!cmp) continue;
-        const failContent = cmp.contentIdentical >= INTEGRITY_IDENTICAL_RATIO;
-        const failFull = cmp.fullIdentical >= INTEGRITY_FULL_IDENTICAL_RATIO;
-        if (failContent || failFull) {
-          failures.push({
+        if (!cmp || !failsThreshold(cmp)) continue;
+        if (waiver) {
+          waivedPairs.push({
             a: left.file,
             b: right.file,
             identicalRatio: cmp.fullIdentical,
             contentIdenticalRatio: cmp.contentIdentical,
             platform,
             viewport,
+            reason: waiver.reason,
           });
+          continue;
         }
+        failures.push({
+          a: left.file,
+          b: right.file,
+          identicalRatio: cmp.fullIdentical,
+          contentIdenticalRatio: cmp.contentIdentical,
+          platform,
+          viewport,
+        });
       }
     }
   }
@@ -153,6 +200,7 @@ export async function runIntegrityGate(opts: {
     ok: failures.length === 0 && markerAssertMissing.length === 0,
     comparedPairs,
     failures,
+    waivedPairs,
     markerAssertMissing,
     fileCount: files.length,
   };

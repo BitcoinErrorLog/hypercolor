@@ -7,6 +7,7 @@ GEN="$ROOT/.maestro/vrt/generated"
 OUT="$ROOT/vrt/baselines/ios"
 LEDGER_DIR="$ROOT/vrt/output/report"
 VIEWPORT_FILTER="${VRT_IOS_VIEWPORT:-}"
+SCENE_FILTER="${VRT_SCENES:-}"
 PROFILES="$LEDGER_DIR/device-profiles-ios.json"
 mkdir -p "$OUT" "$LEDGER_DIR"
 export PATH="$HOME/.maestro/bin:$PATH"
@@ -44,7 +45,7 @@ override_status_bar() {
     --wifiBars 3 2>/dev/null || true
 }
 
-launch_app_once() {
+install_app_if_present() {
   local udid="$1"
   local app_path
   app_path="$(
@@ -57,26 +58,59 @@ launch_app_once() {
   fi
   if [ -n "$app_path" ]; then
     echo "installing $app_path"
-    xcrun simctl install "$udid" "$app_path" >/dev/null
+    xcrun simctl install "$udid" "$app_path" >/dev/null || echo "install_warn $?"
   else
     echo "warning: hypercolor.app not found; assuming already installed on $udid" >&2
   fi
+}
+
+scene_selected() {
+  local scene="$1"
+  if [ -z "$SCENE_FILTER" ]; then
+    return 0
+  fi
+  case " ${SCENE_FILTER//,/ } " in
+    *" $scene "*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+launch_app() {
+  local udid="$1"
   # Never use openLink on iOS — it leaves a sticky "Open in hypercolor?" sheet.
   xcrun simctl terminate "$udid" "$APP" 2>/dev/null || true
   sleep 1
   xcrun simctl launch "$udid" "$APP" >/dev/null
-  sleep 10
+  sleep 8
   override_status_bar "$udid"
 }
 
+set_font_scale_for_scene() {
+  local udid="$1"
+  local scene="$2"
+  if [ "$scene" = "a11y.font-scale.two" ]; then
+    xcrun simctl ui "$udid" content_size accessibility-extra-extra-extra-large 2>/dev/null || true
+  else
+    xcrun simctl ui "$udid" content_size large 2>/dev/null || true
+  fi
+}
+
 echo '{}' > "$PROFILES"
-: > /tmp/hc-vrt-ios-asserted.txt
+if [ -z "${VRT_IOS_KEEP_BOOTED:-}" ]; then
+  : > /tmp/hc-vrt-ios-asserted.txt
+fi
 # Capture start time so we only promote PNGs from this run
 CAPTURE_START=$(date +%s)
 
 DEVICES="iphone-se-3 iphone-16-pro-max"
 if [ -n "$VIEWPORT_FILTER" ]; then
   DEVICES="$VIEWPORT_FILTER"
+fi
+
+if [ -z "${VRT_IOS_KEEP_BOOTED:-}" ] || [ ! -s /tmp/hc-vrt-ios-asserted.txt ]; then
+  for device in $DEVICES; do
+    rm -f "$OUT"/*_ios_"${device}".png
+  done
 fi
 
 for device in $DEVICES; do
@@ -99,40 +133,86 @@ p.write_text(json.dumps(data, indent=2) + "\n")
 print("profile", viewport, data[viewport])
 PY
 
-  launch_app_once "$udid"
+  xcrun simctl terminate "$udid" "$APP" 2>/dev/null || true
+  install_app_if_present "$udid"
+  launch_app "$udid"
 
   shopt -s nullglob
   for flow in "$GEN"/*_ios_"${device}".yaml; do
     scene="$(awk '/^name: VRT /{print $3; exit}' "$flow")"
+    if ! scene_selected "$scene"; then
+      continue
+    fi
+    if grep -qx "${scene}|ios|${device}" /tmp/hc-vrt-ios-asserted.txt 2>/dev/null; then
+      echo "skip $scene ($device already asserted)"
+      ok=$((ok + 1))
+      continue
+    fi
     echo "==> $scene ($device / $udid)"
-    override_status_bar "$udid"
-    "$ROOT/scripts/e2e-ios-cmd.sh" "$udid" "$APP" "hypercolor://e2e/vrt?scene=${scene}" || true
-    sleep 1
-    if maestro --device "$udid" test "$flow"; then
+    scene_ok=0
+    for attempt in 1 2 3; do
+      override_status_bar "$udid"
+      set_font_scale_for_scene "$udid" "$scene"
+      "$ROOT/scripts/e2e-ios-cmd.sh" "$udid" "$APP" "hypercolor://e2e/vrt?scene=${scene}" || true
+      sleep 2
+      if maestro --device "$udid" test "$flow"; then
+        scene_ok=1
+        break
+      fi
+      echo "retry $attempt $scene" >&2
+      sleep 4
+      if [ "$attempt" -eq 2 ]; then
+        launch_app "$udid"
+      fi
+    done
+    set_font_scale_for_scene "$udid" default
+    if [ "$scene_ok" -eq 1 ]; then
       ok=$((ok + 1))
       echo "${scene}|ios|${device}" >> /tmp/hc-vrt-ios-asserted.txt
-    else
-      fail=$((fail + 1))
-      echo "FAIL $scene" >&2
-      # Re-launch if the sim dropped the app
-      launch_app_once "$udid"
-    fi
-  done
-done
-
-python3 - "$CAPTURE_START" <<'PY'
+      python3 - "$scene" "$device" <<'PY'
 from pathlib import Path
-import shutil, sys, time
-start = int(sys.argv[1])
+import shutil, sys
+scene, device = sys.argv[1], sys.argv[2]
+needle = scene.replace(".", "_") + f"_ios_{device}.png"
 root = Path.home() / ".maestro" / "tests"
 dest = Path("/Users/johncarvalho/work/hypercolor-ux-w3/vrt/baselines/ios")
 dest.mkdir(parents=True, exist_ok=True)
-# Wipe stale baselines so we never promote prior-run fakes
-for old in dest.glob("*.png"):
-    old.unlink()
+newest = None
+for png in root.rglob(needle):
+    if newest is None or png.stat().st_mtime > newest.stat().st_mtime:
+        newest = png
+if newest:
+    shutil.copy2(newest, dest / newest.name)
+    print("copied", newest.name)
+PY
+    else
+      fail=$((fail + 1))
+      echo "FAIL $scene" >&2
+    fi
+  done
+  if [ -z "${VRT_IOS_KEEP_BOOTED:-}" ]; then
+    set_font_scale_for_scene "$udid" default
+    echo "shutdown $device $udid"
+    xcrun simctl shutdown "$udid" 2>/dev/null || true
+  fi
+done
+
+python3 - "$CAPTURE_START" "$DEVICES" "$SCENE_FILTER" <<'PY'
+from pathlib import Path
+import shutil, sys
+start = int(sys.argv[1])
+devices = sys.argv[2].split()
+scenes = set(sys.argv[3].replace(",", " ").split())
+root = Path.home() / ".maestro" / "tests"
+dest = Path("/Users/johncarvalho/work/hypercolor-ux-w3/vrt/baselines/ios")
+dest.mkdir(parents=True, exist_ok=True)
 newest = {}
 for png in root.rglob("*ios_*.png"):
     if png.stat().st_mtime < start - 5:
+        continue
+    if not any(png.name.endswith(f"_ios_{d}.png") for d in devices):
+        continue
+    if scenes and png.name.rsplit("_ios_", 1)[0].replace("_", ".") not in scenes:
         continue
     prev = newest.get(png.name)
     if prev is None or png.stat().st_mtime > prev.stat().st_mtime:
@@ -142,11 +222,22 @@ for name, png in newest.items():
 print("ios_baselines", len(list(dest.glob("*.png"))), "updated", len(newest))
 PY
 
-python3 - <<'PY'
-import json
+python3 - "$DEVICES" "$SCENE_FILTER" <<'PY'
+import json, sys
 from pathlib import Path
 root = Path("/Users/johncarvalho/work/hypercolor-ux-w3")
+devices = set(sys.argv[1].split())
+scenes = set(sys.argv[2].replace(",", " ").split())
 asserted = [ln.strip() for ln in Path("/tmp/hc-vrt-ios-asserted.txt").read_text().splitlines() if ln.strip()]
+ledger_path = root / "vrt/output/report/marker-ledger-ios.json"
+prior = []
+if ledger_path.exists():
+    try:
+        prior = json.loads(ledger_path.read_text()).get("asserted") or []
+    except Exception:
+        prior = []
+kept = [a for a in prior if a.split("|")[-1] not in devices]
+asserted = kept + asserted
 expected = []
 for flow in sorted((root / ".maestro/vrt/generated").glob("*_ios_*.yaml")):
     for line in flow.read_text().splitlines():
@@ -154,13 +245,16 @@ for flow in sorted((root / ".maestro/vrt/generated").glob("*_ios_*.yaml")):
             parts = line.split()
             scene = parts[2]
             device = flow.name.split("_ios_")[-1].replace(".yaml", "")
+            if scenes and scene not in scenes:
+                continue
             expected.append(f"{scene}|ios|{device}")
             break
-(root / "vrt/output/report/marker-ledger-ios.json").write_text(
+ledger_path.write_text(
     json.dumps({"asserted": asserted, "expected": expected, "okCount": len(asserted)}, indent=2) + "\n"
 )
-missing = [e for e in expected if e not in set(asserted)]
-print("ledger asserted", len(asserted), "expected", len(expected), "missing", len(missing))
+run_expected = [e for e in expected if e.split("|")[-1] in devices]
+missing = [e for e in run_expected if e not in set(asserted)]
+print("ledger asserted", len(asserted), "expected", len(expected), "this_run", len(run_expected), "missing", len(missing))
 if missing:
     raise SystemExit("marker asserts missing: " + ", ".join(missing[:5]))
 PY

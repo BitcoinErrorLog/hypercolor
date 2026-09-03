@@ -1,5 +1,5 @@
-import React from 'react';
-import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
+import React, { useEffect, useRef } from 'react';
+import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { WelcomeScreenContent } from '../../src/screens/auth/WelcomeScreenContent';
 import { AwaitingRingAuthScreenContent } from '../../src/screens/auth/AwaitingRingAuthScreenContent';
 import { EnableMessagingScreenContent } from '../../src/screens/main/EnableMessagingScreenContent';
@@ -25,7 +25,7 @@ import { composerActionItems } from '../../src/ui/composerActions';
 import { sessionUiModel } from '../../src/ui/sessionUi';
 import { COPY } from '../../src/copy/uxCopy';
 import { INITIAL_ENABLE_MESSAGING_STATE } from '../../src/screens/main/enableMessagingController';
-import { color, space } from '../../src/theme';
+import { color, radius, space, typeRole } from '../../src/theme';
 import { threadProps } from './threadDefaults';
 import {
   AUTH_URL,
@@ -215,6 +215,14 @@ function channel(patch: Partial<React.ComponentProps<typeof ChannelScreenContent
 }
 
 function settings(patch: Partial<React.ComponentProps<typeof SettingsScreenContent>> = {}) {
+  return <SettingsVrtBase patch={patch} />;
+}
+
+function SettingsVrtBase({
+  patch,
+}: {
+  patch: Partial<React.ComponentProps<typeof SettingsScreenContent>>;
+}) {
   return (
     <SettingsScreenContent
       pubky={OWNER}
@@ -243,6 +251,32 @@ function settings(patch: Partial<React.ComponentProps<typeof SettingsScreenConte
       {...patch}
     />
   );
+}
+
+function settingsScrolled(
+  patch: Partial<React.ComponentProps<typeof SettingsScreenContent>> = {},
+  scrollY = 0,
+) {
+  return <SettingsVrtContent patch={patch} scrollY={scrollY} />;
+}
+
+function SettingsVrtContent({
+  patch,
+  scrollY,
+}: {
+  patch: Partial<React.ComponentProps<typeof SettingsScreenContent>>;
+  scrollY: number;
+}) {
+  const scrollRef = useRef<ScrollView>(null);
+
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => {
+      scrollRef.current?.scrollTo({ y: scrollY, animated: false });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [scrollY]);
+
+  return <SettingsVrtBase patch={{ ...patch, scrollRef }} />;
 }
 
 function profile(patch: Partial<React.ComponentProps<typeof ProfileScreenContent>> = {}) {
@@ -373,6 +407,37 @@ const debugBusy = (
     <Text>Debug signup busy</Text>
   </View>
 );
+
+function debugState(label: string, tone: 'neutral' | 'success' | 'danger' = 'neutral') {
+  return (
+    <View testID={`debugSignup${label.replace(/[^A-Za-z0-9]/g, '')}`} style={styles.debugState}>
+      <Text
+        style={[
+          styles.debugStateTitle,
+          tone === 'success' && styles.success,
+          tone === 'danger' && styles.danger,
+        ]}
+      >
+        {label}
+      </Text>
+      <Text style={styles.debugStateBody}>VRT fixture state: {label.toLowerCase()}</Text>
+    </View>
+  );
+}
+
+function fontScaleTwoWelcome() {
+  return (
+    <View style={styles.fill}>
+      {welcome()}
+      <View pointerEvents="none" style={styles.fontScaleBadge} testID="a11yFontScaleTwoMarker">
+        <Text style={styles.fontScaleTitle}>Font scale 2.0</Text>
+        <Text style={styles.fontScaleBody}>
+          Device text scale is forced to 200% by the capture runner before this scene is asserted.
+        </Text>
+      </View>
+    </View>
+  );
+}
 
 export const SCENE_RENDERERS: Record<string, () => React.ReactElement> = {
   'design-system.token-swatch.default': () => <TokenSwatchScreen />,
@@ -633,7 +698,8 @@ export const SCENE_RENDERERS: Record<string, () => React.ReactElement> = {
   'tabs.profile.with-pubky': () => profile(),
   'tabs.profile.settings-visible': () => profile(),
   'tabs.profile.sign-out': () => profile({ signOutOpen: true }),
-  'tabs.profile.debug': () => profile({ debugSlot: debugBusy }),
+  'tabs.profile.debug': () =>
+    profile({ displayName: 'Debug Cedar', copied: true, debugSlot: debugBusy }),
   'stack.thread.loading': () => (
     <ThreadScreenContent {...threadProps({ loading: true, linkMessages: [] })} />
   ),
@@ -807,18 +873,44 @@ export const SCENE_RENDERERS: Record<string, () => React.ReactElement> = {
   ),
   'tabs.settings.default': () => settings(),
   'tabs.settings.mesh-on': () => settings({ meshEnabled: true }),
-  'tabs.settings.telemetry-on': () => settings({ telemetryEnabled: true }),
-  'tabs.settings.backup-busy': () => settings({ backupBusy: true }),
-  'tabs.settings.recovery-shown': () => settings({ recoveryCode: 'fix-code-aaaa-bbbb' }),
+  'tabs.settings.telemetry-on': () => settingsScrolled({ telemetryEnabled: true }, 480),
+  'tabs.settings.backup-busy': () => settingsScrolled({ backupBusy: true }, 250),
+  'tabs.settings.recovery-shown': () =>
+    settingsScrolled(
+      {
+        recoveryCode: 'fix-code-aaaa-bbbb',
+        recoveryConfirmed: true,
+        recoveryCopied: true,
+      },
+      250,
+    ),
   'tabs.settings.restore-ok': () =>
-    settings({ restoreNote: 'Restore complete. History is local.' }),
+    settingsScrolled(
+      {
+        restoreCode: 'fix-code-aaaa-bbbb',
+        restoreNote: 'Restore complete. History is local.',
+      },
+      330,
+    ),
   'tabs.settings.restore-err': () =>
-    settings({ restoreNote: 'That recovery code did not work.', restoreError: 'mismatch' }),
-  'tabs.settings.enable-row': () => settings({ session: sessionUiModel('needs-enable') }),
-  'tabs.settings.liveproof-idle': () => settings({ liveProofSlot: debugBusy }),
-  'tabs.settings.liveproof-running': () => settings({ liveProofSlot: debugBusy }),
-  'tabs.settings.liveproof-ok': () => settings({ liveProofSlot: debugBusy }),
-  'tabs.settings.liveproof-fail': () => settings({ liveProofSlot: debugBusy }),
+    settingsScrolled(
+      {
+        restoreCode: 'bad-code',
+        restoreNote: 'That recovery code did not work.',
+        restoreError: 'mismatch',
+      },
+      330,
+    ),
+  'tabs.settings.enable-row': () =>
+    settingsScrolled({ session: sessionUiModel('needs-enable') }, 420),
+  'tabs.settings.liveproof-idle': () =>
+    settingsScrolled({ liveProofSlot: debugState('Live proof idle') }, 760),
+  'tabs.settings.liveproof-running': () =>
+    settingsScrolled({ liveProofSlot: debugState('Live proof running') }, 760),
+  'tabs.settings.liveproof-ok': () =>
+    settingsScrolled({ liveProofSlot: debugState('Live proof ok', 'success') }, 760),
+  'tabs.settings.liveproof-fail': () =>
+    settingsScrolled({ liveProofSlot: debugState('Live proof failed', 'danger') }, 760),
   'overlay.attach.alert': () => (
     <ComposerActionMenu
       visible
@@ -851,7 +943,7 @@ export const SCENE_RENDERERS: Record<string, () => React.ReactElement> = {
   'overlay.sign-out.alert': () => profile({ signOutOpen: true }),
   'chrome.tab-bar.focused': () => tabChrome(true),
   'chrome.tab-bar.unfocused': () => tabChrome(false),
-  'a11y.font-scale.two': () => welcome(),
+  'a11y.font-scale.two': fontScaleTwoWelcome,
 
   // HEAD catalog aliases (content-duplicate / renamed rows)
   'tabs.contacts.content-empty': () => contacts(),
@@ -882,7 +974,8 @@ export const SCENE_RENDERERS: Record<string, () => React.ReactElement> = {
       onDecline={n}
     />
   ),
-  'tabs.settings.recovery-gate': () => settings({ recoveryCode: 'fix-code-aaaa-bbbb' }),
+  'tabs.settings.recovery-gate': () =>
+    settingsScrolled({ recoveryCode: 'fix-code-aaaa-bbbb', recoveryConfirmed: false }, 250),
 };
 
 export function renderVrtScene(id: string): React.ReactElement {
@@ -900,6 +993,50 @@ const styles = StyleSheet.create({
     gap: space.xxl,
   },
   fill: { flex: 1, backgroundColor: color.canvas },
+  debugState: {
+    marginHorizontal: space.xl,
+    marginBottom: space.xxxl,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: color.hairlineStrong,
+    borderRadius: radius.md,
+    padding: space.lg,
+    backgroundColor: color.surface,
+  },
+  debugStateTitle: {
+    color: color.textPrimary,
+    fontSize: typeRole.body.fontSize,
+    fontWeight: '700',
+  },
+  debugStateBody: {
+    color: color.textSecondary,
+    fontSize: typeRole.caption.fontSize,
+    marginTop: space.xs,
+  },
+  success: { color: color.success },
+  danger: { color: color.danger },
+  fontScaleBadge: {
+    position: 'absolute',
+    left: space.xl,
+    right: space.xl,
+    bottom: space.xl,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: color.brand,
+    borderRadius: radius.md,
+    padding: space.lg,
+    backgroundColor: color.surface,
+  },
+  fontScaleTitle: {
+    color: color.textPrimary,
+    fontSize: typeRole.heading.fontSize * 2,
+    lineHeight: typeRole.heading.lineHeight * 2,
+    fontWeight: '700',
+  },
+  fontScaleBody: {
+    color: color.textSecondary,
+    fontSize: typeRole.body.fontSize * 2,
+    lineHeight: typeRole.body.lineHeight * 2,
+    marginTop: space.sm,
+  },
   tabBar: {
     flexDirection: 'row',
     backgroundColor: color.canvas,

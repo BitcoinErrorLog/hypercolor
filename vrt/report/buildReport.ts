@@ -1,6 +1,7 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { CaptureTarget } from '../types';
+import { vrtSceneReadyTestIds } from '../sceneReady';
 
 export type ReportRow = {
   readonly captureName: string;
@@ -108,20 +109,39 @@ export async function writeReport(
 export function maestroFlow(target: CaptureTarget, appId: string): string {
   const scene = target.entry.id;
   const shot = `${scene.replace(/\./g, '_')}_${target.platform}_${target.device}`;
-  const marker = `vrt-scene:${scene}`;
+  const sceneReadyIds = vrtSceneReadyTestIds(scene);
+  const assertedIds =
+    target.platform === 'android'
+      ? sceneReadyIds.slice(0, 1)
+      : sceneReadyIds.length > 1
+        ? sceneReadyIds.slice(1)
+        : sceneReadyIds;
+  const readyAssertions = assertedIds
+    .map(id => {
+      const exactSceneMarker = id.startsWith('vrt-scene:');
+      const selector =
+        target.platform === 'ios' && exactSceneMarker
+          ? `text: ${JSON.stringify(id)}`
+          : id.startsWith('text:')
+            ? `text: ${JSON.stringify(id.slice('text:'.length))}`
+            : `id: ${id}`;
+      return `- extendedWaitUntil:
+    visible:
+      ${selector}
+    timeout: 45000
+- assertVisible:
+    ${selector}`;
+    })
+    .join('\n');
   // Neither platform launches here. Capture scripts launch once, inject the
   // scene (Android HC_E2E file / iOS Documents sidecar), then this flow
-  // asserts the exact catalog-id marker before screenshot.
+  // asserts the exact catalog-id marker and any scene-owned sheet marker
+  // before screenshot.
   // iOS must NOT use openLink — it surfaces an "Open in hypercolor?" sheet.
   return `appId: ${appId}
 name: VRT ${scene} ${target.platform} ${target.device}
 ---
-- extendedWaitUntil:
-    visible:
-      id: ${marker}
-    timeout: 45000
-- assertVisible:
-    id: ${marker}
+${readyAssertions}
 - takeScreenshot: ${shot}
 `;
 }

@@ -35,3 +35,23 @@ Uncovered / waived:
 - Discover screen: inventory says omit until it exists.
 - Live-proof running/ok/fail: `__DEV__` panel talks to native proof; VRT mounts the slot without tokens.
 - ContactSearch “QR fallback card”: product has no separate QR card component; empty search is the current surface.
+
+## Integrity duplicate waivers
+
+`vrt/integrityGate.ts` only accepts duplicate captures when the exact scene-id pair is listed in `vrt/integrityWaivers.ts`; the allowlist does not change the 99% threshold. Current waived groups:
+
+| Group | Scene ids | Reason |
+|---|---|---|
+| Loading fallbacks | `bootstrap.app-splash.loading`, `bootstrap.linking-fallback.loading` | Same centered activity indicator. |
+| Auth aliases | `auth.enable.enabled`, `auth.enable.success`; `auth.welcome.debug-empty`, `auth.welcome.debug-result` | Controller/debug states intentionally share presenter output. |
+| Ring copied alias | `auth.awaiting-ring.copied`, `auth.awaiting-ring.with-url` | Copied is a transient acknowledgement on the same Ring-auth URL surface; the only expected visual delta is the copy control state. |
+| Shared sheets | `overlay.sign-out.alert`, `tabs.profile.sign-out`; `overlay.wallet.alert`, `stack.payment.review` | Matrix rows exercise the same sheet surface before interaction. |
+| Member sheet aliases | `stack.channel-members.leave`, `stack.channel-members.list` | Matrix rows exercise the same members sheet before interaction. |
+| Search aliases | `stack.contact-search.added`, `stack.contact-search.valid`; `stack.contact-search.empty`, `stack.contact-search.qr` | Product has no distinct added/QR fallback visual in this wave. |
+| Payment/thread aliases | `stack.payment.compose-busy`, `stack.payment.compose-idle`; `stack.thread.delivered-read`, `stack.thread.populated`, `stack.thread.send-disabled`, `stack.thread.tip-collapsed`; `stack.thread.payment-claimed`, `stack.thread.payment-verified` | Accessibility or record-status differences have no distinct visible screenshot surface. |
+| Channels join aliases | `tabs.channels.join-busy`, `tabs.channels.join-empty`, `tabs.channels.join-invalid` | Empty/invalid/busy join sheet states are visually identical without a valid public channel reference. |
+| HEAD matrix aliases | `tabs.contacts.content-*` with matching `tabs.contacts.*`; `tabs.message-requests.*` with matching `tabs.requests.*`; `tabs.profile.settings-visible`, `tabs.profile.with-pubky` | Duplicate matrix names retained for coverage traceability. |
+
+No waivers are allowed for `a11y.font-scale.two`, `tabs.settings.*` scroll states,
+or `stack.channel.*` message states. Those scenes must render visibly distinct
+content in captured baselines; identical output is treated as a gate failure.

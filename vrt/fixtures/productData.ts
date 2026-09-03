@@ -1,7 +1,12 @@
 import type { Contact, MessageRequest } from '../../src/types';
 import type { LinkConversationSummary, LinkMessage } from '../../src/types/link';
 import type { ChannelListItem } from '../../src/ui/channelList';
-import type { GroupChannel, GroupMember, GroupMessage } from '../../src/types/group';
+import {
+  GROUP_MESSAGE_KIND,
+  type GroupChannel,
+  type GroupMember,
+  type GroupMessage,
+} from '../../src/types/group';
 import type { PaymentReviewView } from '../../src/ui/paymentReview';
 import { SYNTHETIC_IDENTITIES } from './identities';
 
@@ -139,7 +144,7 @@ export const CHANNEL_MESSAGES: GroupMessage[] = [
     channelId: CHANNEL_FIXTURE.channelId,
     eventId: 'g-evt-1',
     senderPubky: PEER,
-    kind: 'group.message.v0',
+    kind: GROUP_MESSAGE_KIND,
     body: 'Channel theirs fixture',
     rawJson: '{}',
     sentAt: FIXED_NOW_MS - 120_000,
@@ -157,7 +162,7 @@ export const CHANNEL_MESSAGES: GroupMessage[] = [
     channelId: CHANNEL_FIXTURE.channelId,
     eventId: 'g-evt-2',
     senderPubky: OWNER,
-    kind: 'group.message.v0',
+    kind: GROUP_MESSAGE_KIND,
     body: 'Channel mine fixture',
     rawJson: '{}',
     sentAt: FIXED_NOW_MS - 60_000,
