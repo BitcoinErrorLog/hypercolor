@@ -324,8 +324,7 @@ async function handleE2eDeepLinkOnce(url: string): Promise<boolean> {
       const scene = (params.get('scene') ?? '').trim();
       if (!scene) throw new Error('e2e/vrt requires scene');
       if (__DEV__) {
-        const { setVrtScene } =
-          require('../../vrt/VrtCatalogRoot') as typeof import('../../vrt/VrtCatalogRoot');
+        const { setVrtScene } = await import('../../vrt/VrtCatalogRoot');
         setVrtScene(scene);
       }
       writeE2eReply(scene);
