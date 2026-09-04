@@ -17,6 +17,7 @@ import {
 } from 'react-native';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { RootStackParamList } from '../../types';
 import { CHAT_ATTACHMENT_KIND, type AttachmentRecord } from '../../types/attachment';
 import type { LinkMessage } from '../../types/link';
@@ -72,6 +73,8 @@ import { openBuiltUri } from '../../services/payments/walletHandoff';
 import { continuePaymentReview } from './continuePaymentReview';
 import { eventIdsWithDeliveryQueue } from '../../ui/failedSendRetry';
 import { useReduceMotion } from '../../ui/reduceMotion';
+import { color, space, radius, typeRole, measure } from '../../theme';
+import { Icon, MessageBubble } from '../../ui/primitives';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Thread'>;
 
@@ -477,6 +480,8 @@ export function ThreadScreenContent({
   const plusRef = useRef<View>(null);
   const menuWasOpen = useRef(false);
   const reduceMotion = useReduceMotion();
+  const insets = useSafeAreaInsets();
+  const bottomInset = Math.max(insets.bottom, 0);
   const items = useMemo(
     () => mergeThreadItems(linkMessages, attachments, payments),
     [linkMessages, attachments, payments],
@@ -499,101 +504,130 @@ export function ThreadScreenContent({
     if (tag != null) AccessibilityInfo.setAccessibilityFocus(tag);
   }, [actionMenuOpen]);
 
+  const identity = peerIdentity(participantPubky, peerContact);
+  const linkLabel = formatLinkStatus(linkStatus);
+
   const renderItem = useCallback(
-    ({ item }: { item: ThreadItem }) => {
+    ({ item, index }: { item: ThreadItem; index: number }) => {
+      const previous = items[index - 1];
+      const next = items[index + 1];
+      const grouped = previous
+        ? sameThreadRun(previous, item, localPubky, participantPubky)
+        : false;
+      const lastInGroup = next ? !sameThreadRun(item, next, localPubky, participantPubky) : true;
+      const daySeparator =
+        !previous || !sameCalendarDay(previous.sentAt, item.sentAt) ? (
+          <TimelineDaySeparator label={formatDaySeparator(item.sentAt)} />
+        ) : null;
       if (item.kind === 'payment') {
         const isMine = item.record.direction === 'sent';
         return (
-          <View
-            testID="threadPaymentBubble"
-            style={[styles.bubble, isMine ? styles.mine : styles.theirs]}
-          >
-            {localPubky ? (
-              <PaymentRequestBubble
-                record={item.record}
-                localPubky={localPubky}
-                onChanged={onPaymentsChanged}
-                onReview={onReview}
-              />
-            ) : null}
-            <View style={styles.meta}>
-              <Text style={styles.time}>{formatTime(item.sentAt)}</Text>
-            </View>
-          </View>
+          <>
+            {daySeparator}
+            <MessageBubble
+              testID="threadPaymentBubble"
+              mine={isMine}
+              time={formatTime(item.sentAt)}
+              grouped={grouped}
+              lastInGroup={lastInGroup}
+            >
+              {localPubky ? (
+                <PaymentRequestBubble
+                  record={item.record}
+                  localPubky={localPubky}
+                  onChanged={onPaymentsChanged}
+                  onReview={onReview}
+                />
+              ) : null}
+            </MessageBubble>
+          </>
         );
       }
       if (item.kind === 'attachment') {
         const isMine = item.record.senderPubky === localPubky;
         return (
-          <View style={[styles.bubble, isMine ? styles.mine : styles.theirs]}>
-            <AttachmentBubble
-              record={item.record}
-              isMine={isMine}
-              onRetrySend={
-                retryableEventIds.has(item.record.eventId)
-                  ? () => onRetryFailed(item.record.eventId)
-                  : undefined
-              }
-            />
-            <View style={styles.meta}>
-              <Text style={styles.time}>{formatTime(item.sentAt)}</Text>
-            </View>
-          </View>
+          <>
+            {daySeparator}
+            <MessageBubble
+              testID={isMine ? 'threadAttachmentBubbleMine' : 'threadAttachmentBubbleTheirs'}
+              mine={isMine}
+              time={formatTime(item.sentAt)}
+              grouped={grouped}
+              lastInGroup={lastInGroup}
+              showIncomingAvatar={!isMine && !grouped}
+              senderName={identity.title}
+              senderPubky={participantPubky}
+            >
+              <AttachmentBubble
+                record={item.record}
+                isMine={isMine}
+                onRetrySend={
+                  retryableEventIds.has(item.record.eventId)
+                    ? () => onRetryFailed(item.record.eventId)
+                    : undefined
+                }
+              />
+            </MessageBubble>
+          </>
         );
       }
       const isMine = item.message.senderPubky === localPubky;
       return (
-        <View
-          testID={isMine ? 'threadBubbleMine' : 'threadBubbleTheirs'}
-          accessibilityLabel={item.message.body}
-          style={[styles.bubble, isMine ? styles.mine : styles.theirs]}
-        >
-          <Text style={[styles.bubbleText, isMine ? styles.mineText : styles.theirsText]}>
-            {item.message.body}
-          </Text>
-          <View style={styles.meta}>
-            <Text style={styles.time}>{formatTime(item.message.sentAt)}</Text>
-            {isMine ? (
-              <>
-                <Text
-                  style={[
-                    styles.status,
-                    item.message.deliveryState === 'failed' ? styles.statusFailed : null,
-                  ]}
+        <>
+          {daySeparator}
+          <MessageBubble
+            testID={isMine ? 'threadBubbleMine' : 'threadBubbleTheirs'}
+            mine={isMine}
+            time={formatTime(item.message.sentAt)}
+            status={isMine ? formatDeliveryState(item.message.deliveryState) : null}
+            failed={item.message.deliveryState === 'failed'}
+            grouped={grouped}
+            lastInGroup={lastInGroup}
+            showIncomingAvatar={!isMine && !grouped}
+            senderName={identity.title}
+            senderPubky={participantPubky}
+            accessibilityLabel={item.message.body}
+          >
+            <Text style={[styles.bubbleText, isMine ? styles.mineText : styles.theirsText]}>
+              {item.message.body}
+            </Text>
+            {isMine && item.message.deliveryState === 'failed' && !peerBlocked ? (
+              retryableEventIds.has(item.message.eventId) ? (
+                <TouchableOpacity
+                  accessibilityRole="button"
+                  accessibilityLabel={COPY.retry}
+                  hitSlop={HIT_SLOP_44}
+                  onPress={() => onRetryFailed(item.message.eventId)}
                 >
-                  {formatDeliveryState(item.message.deliveryState)}
+                  <Text style={styles.retry}>{COPY.retry}</Text>
+                </TouchableOpacity>
+              ) : (
+                <Text
+                  testID="threadSendTerminal"
+                  accessibilityRole="text"
+                  style={styles.statusFailed}
+                >
+                  {COPY.couldNotSendStartAgain}
                 </Text>
-                {item.message.deliveryState === 'failed' && !peerBlocked ? (
-                  retryableEventIds.has(item.message.eventId) ? (
-                    <TouchableOpacity
-                      accessibilityRole="button"
-                      accessibilityLabel={COPY.retry}
-                      hitSlop={HIT_SLOP_44}
-                      onPress={() => onRetryFailed(item.message.eventId)}
-                    >
-                      <Text style={styles.retry}>{COPY.retry}</Text>
-                    </TouchableOpacity>
-                  ) : (
-                    <Text
-                      testID="threadSendTerminal"
-                      accessibilityRole="text"
-                      style={styles.statusFailed}
-                    >
-                      {COPY.couldNotSendStartAgain}
-                    </Text>
-                  )
-                ) : null}
-              </>
+              )
             ) : null}
-          </View>
-        </View>
+          </MessageBubble>
+        </>
       );
     },
-    [localPubky, onPaymentsChanged, onRetryFailed, onReview, peerBlocked, retryableEventIds],
+    [
+      identity.title,
+      items,
+      localPubky,
+      onPaymentsChanged,
+      onRetryFailed,
+      onReview,
+      participantPubky,
+      peerBlocked,
+      retryableEventIds,
+    ],
   );
 
-  const identity = peerIdentity(participantPubky, peerContact);
-  const linkLabel = formatLinkStatus(linkStatus);
   const needsEnable =
     sessionKind === 'needs-enable' || sessionKind === 'revoked' || sessionKind === 'unavailable';
   const composerEnabled = !needsEnable && !peerBlocked;
@@ -603,11 +637,10 @@ export function ThreadScreenContent({
     inboxClosed,
     hasTipEndpoints: tipEndpoints.some(row => row.validationStatus !== 'rejected'),
   });
+  const byteSize = draftEnvelopeByteSize(draft, { surface: 'dm' });
   const overCap = draftExceedsByteCap(draft, { surface: 'dm' });
-  const byteLabel = messageByteCountLabel(
-    draftEnvelopeByteSize(draft, { surface: 'dm' }),
-    LINK_MESSAGE_MAX_BYTES,
-  );
+  const showByteCap = byteSize >= LINK_MESSAGE_MAX_BYTES * 0.8 || overCap;
+  const byteLabel = messageByteCountLabel(byteSize, LINK_MESSAGE_MAX_BYTES);
   const nowMs = useTickingNow();
   const reviewView = review
     ? mapPaymentReview({
@@ -638,7 +671,7 @@ export function ThreadScreenContent({
           hitSlop={HIT_SLOP_44}
           style={styles.backBtn}
         >
-          <Text style={styles.backText}>←</Text>
+          <Icon name="chevron-back" tone="brand" />
         </TouchableOpacity>
         <TouchableOpacity
           style={styles.titleWrap}
@@ -679,7 +712,7 @@ export function ThreadScreenContent({
 
       {loading ? (
         <View style={styles.loadingContainer}>
-          <ActivityIndicator color="#7c3aed" />
+          <ActivityIndicator color={color.brand} />
         </View>
       ) : items.length === 0 ? (
         <View style={styles.empty}>
@@ -692,7 +725,7 @@ export function ThreadScreenContent({
           data={items}
           keyExtractor={item => item.id}
           renderItem={renderItem}
-          contentContainerStyle={styles.messageList}
+          contentContainerStyle={[styles.messageList, { paddingBottom: space.xl + bottomInset }]}
           onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: false })}
         />
       )}
@@ -701,7 +734,7 @@ export function ThreadScreenContent({
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         keyboardVerticalOffset={0}
       >
-        <View style={styles.composerColumn}>
+        <View style={[styles.composerColumn, { paddingBottom: space.lg + bottomInset }]}>
           {composerNotice ? (
             <View testID="composerNotice" accessibilityRole="alert" style={styles.notice}>
               <Text style={styles.noticeText}>{composerNotice.message}</Text>
@@ -767,6 +800,7 @@ export function ThreadScreenContent({
                 onCopyUri={() => {
                   if (reviewView.uri) copyText(reviewView.uri);
                 }}
+                onCopyRecipientPubky={() => copyText(reviewView.recipientPubky)}
                 onSelectDestination={identifier => {
                   if (!review) return;
                   const next =
@@ -784,7 +818,7 @@ export function ThreadScreenContent({
               onPress={onOpenActionMenu}
               style={styles.plusBtn}
             >
-              <Text style={styles.plusIcon}>+</Text>
+              <Icon name="add" tone="secondary" />
             </TouchableOpacity>
             <TextInput
               testID="threadComposer"
@@ -793,7 +827,7 @@ export function ThreadScreenContent({
               value={draft}
               onChangeText={onChangeDraft}
               placeholder="Message…"
-              placeholderTextColor="#4b5563"
+              placeholderTextColor={color.textSecondary}
               multiline
               editable={composerEnabled}
               returnKeyType="default"
@@ -813,19 +847,30 @@ export function ThreadScreenContent({
               disabled={!draft.trim() || sending || !composerEnabled || overCap}
             >
               {sending ? (
-                <ActivityIndicator color="#fff" size="small" />
+                <ActivityIndicator color={color.textOnBrand} size="small" />
               ) : (
-                <Text style={styles.sendIcon}>↑</Text>
+                <Icon
+                  name="arrow-up"
+                  tone={
+                    !draft.trim() || sending || !composerEnabled || overCap ? 'muted' : 'onBrand'
+                  }
+                />
               )}
             </TouchableOpacity>
           </View>
-          <Text
-            testID="threadByteCap"
-            accessibilityLabel={byteLabel}
-            style={[styles.byteCap, overCap && styles.byteCapOver]}
-          >
-            {byteLabel}. {COPY.messageByteCap}
-          </Text>
+          {showByteCap ? (
+            <Text
+              testID="threadByteCap"
+              accessibilityLabel={byteLabel}
+              numberOfLines={1}
+              style={[
+                styles.byteCap,
+                byteSize >= LINK_MESSAGE_MAX_BYTES * 0.95 && styles.byteCapOver,
+              ]}
+            >
+              {byteLabel}
+            </Text>
+          ) : null}
           {tipPickerOpen ? (
             <TouchableOpacity
               accessibilityRole="button"
@@ -902,103 +947,174 @@ function formatTime(ms: number): string {
   return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
+function TimelineDaySeparator({ label }: { label: string }) {
+  return (
+    <View style={styles.daySeparator} accessibilityRole="text">
+      <Text style={styles.daySeparatorText}>{label}</Text>
+    </View>
+  );
+}
+
+function sameThreadRun(
+  current: ThreadItem,
+  next: ThreadItem,
+  localPubky: string | null,
+  participantPubky: string,
+): boolean {
+  return (
+    sameCalendarDay(current.sentAt, next.sentAt) &&
+    threadItemSenderPubky(current, localPubky, participantPubky) ===
+      threadItemSenderPubky(next, localPubky, participantPubky)
+  );
+}
+
+function threadItemSenderPubky(
+  item: ThreadItem,
+  localPubky: string | null,
+  participantPubky: string,
+): string {
+  if (item.kind === 'link') return item.message.senderPubky;
+  if (item.kind === 'attachment') return item.record.senderPubky;
+  return item.record.direction === 'sent'
+    ? (localPubky ?? '')
+    : (item.record.peerPubky ?? participantPubky);
+}
+
+function sameCalendarDay(leftMs: number, rightMs: number): boolean {
+  return new Date(leftMs).toDateString() === new Date(rightMs).toDateString();
+}
+
+function formatDaySeparator(ms: number): string {
+  return new Date(ms).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#0a0a0a' },
+  container: { flex: 1, backgroundColor: color.canvas },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
+    paddingHorizontal: space.lg,
+    paddingVertical: space.md,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#1a1a1a',
+    borderBottomColor: color.surfaceRaised,
   },
   backBtn: { ...minHitStyle },
-  backText: { fontSize: 22, color: '#7c3aed' },
-  titleWrap: { flex: 1, alignItems: 'center', paddingHorizontal: 8 },
-  title: { fontSize: 15, fontWeight: '600', color: '#f9fafb', textAlign: 'center' },
-  claimed: { fontSize: 12, color: '#c4b5fd', textAlign: 'center' },
-  linkStatus: { fontSize: 12, color: '#fbbf24', textAlign: 'center', marginTop: 2 },
-  empty: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24, gap: 8 },
-  emptyTitle: { color: '#f9fafb', fontSize: 16, fontWeight: '600' },
-  emptyBody: { color: '#808692', fontSize: 14, textAlign: 'center', lineHeight: 20 },
+  backText: { fontSize: typeRole.heading.fontSize, color: color.brand },
+  titleWrap: { flex: 1, alignItems: 'center', paddingHorizontal: space.sm },
+  title: {
+    fontSize: typeRole.callout.fontSize,
+    fontWeight: '600',
+    color: color.textPrimary,
+    textAlign: 'center',
+  },
+  claimed: { fontSize: typeRole.meta.fontSize, color: color.brandMuted, textAlign: 'center' },
+  linkStatus: {
+    fontSize: typeRole.meta.fontSize,
+    color: color.warningStrong,
+    textAlign: 'center',
+    marginTop: 2,
+  },
+  empty: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: space.xxl,
+    gap: space.sm,
+  },
+  emptyTitle: { color: color.textPrimary, fontSize: typeRole.body.fontSize, fontWeight: '600' },
+  emptyBody: {
+    color: color.textSecondary,
+    fontSize: typeRole.secondary.fontSize,
+    textAlign: 'center',
+    lineHeight: 20,
+  },
   loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  messageList: { padding: 16, gap: 8 },
-  bubble: {
-    maxWidth: '78%',
-    borderRadius: 16,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    marginVertical: 2,
+  messageList: { padding: space.lg, gap: space.sm },
+  daySeparator: { alignItems: 'center', paddingVertical: space.md },
+  daySeparatorText: {
+    color: color.textMuted,
+    fontSize: typeRole.meta.fontSize,
+    lineHeight: typeRole.meta.lineHeight,
   },
-  mine: {
-    alignSelf: 'flex-end',
-    backgroundColor: '#7c3aed',
-    borderBottomRightRadius: 4,
+  bubbleText: { fontSize: typeRole.callout.fontSize, lineHeight: 20 },
+  mineText: { color: color.textOnBrand },
+  theirsText: { color: color.textPrimary },
+  statusFailed: { color: color.danger },
+  retry: {
+    fontSize: typeRole.meta.fontSize,
+    color: color.textOnBrand,
+    fontWeight: '700',
+    textDecorationLine: 'underline',
   },
-  theirs: {
-    alignSelf: 'flex-start',
-    backgroundColor: '#1f1f1f',
-    borderBottomLeftRadius: 4,
-  },
-  bubbleText: { fontSize: 15, lineHeight: 20 },
-  mineText: { color: '#fff' },
-  theirsText: { color: '#f9fafb' },
-  meta: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 4 },
-  time: { fontSize: 10, color: 'rgba(255,255,255,0.5)' },
-  status: { fontSize: 12, color: 'rgba(255,255,255,0.85)' },
-  statusFailed: { color: '#fca5a5' },
-  retry: { fontSize: 12, color: '#fff', fontWeight: '700', textDecorationLine: 'underline' },
   composer: {
     flexDirection: 'row',
     alignItems: 'flex-end',
-    gap: 8,
-    padding: 12,
+    gap: space.sm,
+    padding: space.md,
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: '#1a1a1a',
-    backgroundColor: '#0a0a0a',
+    borderTopColor: color.surfaceRaised,
+    backgroundColor: color.canvas,
   },
   input: {
     flex: 1,
-    backgroundColor: '#1a1a1a',
-    borderRadius: 20,
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    color: '#f9fafb',
-    fontSize: 15,
+    backgroundColor: color.surfaceRaised,
+    borderRadius: radius.xl,
+    paddingHorizontal: space.lg,
+    paddingVertical: space.md,
+    color: color.textPrimary,
+    fontSize: typeRole.callout.fontSize,
     maxHeight: 160,
   },
   sendBtn: {
-    minWidth: 44,
-    minHeight: 44,
+    minWidth: measure.hitTarget,
+    minHeight: measure.hitTarget,
     width: 44,
     height: 44,
-    borderRadius: 22,
-    backgroundColor: '#7c3aed',
+    borderRadius: radius.xxl,
+    backgroundColor: color.brand,
     justifyContent: 'center',
     alignItems: 'center',
   },
   sendBtnDisabled: { opacity: 0.4 },
-  sendIcon: { color: '#fff', fontSize: 18, fontWeight: '700' },
-  composerColumn: { backgroundColor: '#0a0a0a' },
+  sendIcon: { color: color.textOnBrand, fontSize: typeRole.numeric.fontSize, fontWeight: '700' },
+  composerColumn: { backgroundColor: color.canvas },
   plusBtn: {
     ...minHitStyle,
     width: 44,
     height: 44,
-    borderRadius: 22,
-    backgroundColor: '#1f1f1f',
+    borderRadius: radius.xxl,
+    backgroundColor: color.bubbleIncoming,
   },
-  plusIcon: { color: '#c4b5fd', fontSize: 22, fontWeight: '700', marginTop: -2 },
-  byteCap: { color: '#808692', fontSize: 12, paddingHorizontal: 16, paddingBottom: 8 },
-  byteCapOver: { color: '#fca5a5' },
+  plusIcon: {
+    color: color.brandMuted,
+    fontSize: typeRole.heading.fontSize,
+    fontWeight: '700',
+    marginTop: -2,
+  },
+  byteCap: {
+    color: color.textSecondary,
+    fontSize: typeRole.meta.fontSize,
+    paddingHorizontal: space.lg,
+    paddingBottom: space.sm,
+  },
+  byteCapOver: { color: color.danger },
   notice: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
-    paddingHorizontal: 16,
-    paddingTop: 8,
+    gap: space.sm,
+    paddingHorizontal: space.lg,
+    paddingTop: space.sm,
   },
-  noticeText: { flex: 1, color: '#fca5a5', fontSize: 13 },
-  noticeAction: { minHeight: 44, justifyContent: 'center', paddingHorizontal: 8 },
-  noticeActionText: { color: '#8f57f0', fontSize: 14, fontWeight: '700' },
+  noticeText: { flex: 1, color: color.danger, fontSize: typeRole.caption.fontSize },
+  noticeAction: {
+    minHeight: measure.hitTarget,
+    justifyContent: 'center',
+    paddingHorizontal: space.sm,
+  },
+  noticeActionText: {
+    color: color.brandText,
+    fontSize: typeRole.secondary.fontSize,
+    fontWeight: '700',
+  },
 });

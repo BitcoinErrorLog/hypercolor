@@ -5,6 +5,10 @@ const OWNER = 'a'.repeat(52);
 const mockClearSession = jest.fn();
 const mockNavigate = jest.fn();
 
+jest.mock('react-native-safe-area-context', () => ({
+  useSafeAreaInsets: () => ({ top: 0, bottom: 12, left: 0, right: 0 }),
+}));
+
 jest.mock('react-native-mmkv', () => ({
   createMMKV: () => {
     const data = new Map<string, string>();

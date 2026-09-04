@@ -1,5 +1,6 @@
 import React from 'react';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
+import { color } from '../../theme';
 import { MAIN_TAB_ICONS, MainTabBarIcon, type MainTabName } from '../tabBarIcons';
 
 jest.mock('@expo/vector-icons/Ionicons', () => {
@@ -36,11 +37,11 @@ describe('MainTabBarIcon', () => {
 
   it('renders the focused glyph with the tab bar color and size', async () => {
     const tree = await render(
-      <MainTabBarIcon routeName="Chats" focused color="#7c3aed" size={24} />,
+      <MainTabBarIcon routeName="Chats" focused color={color.brand} size={24} />,
     );
     const node = tree.root.findByProps({ testID: 'ionicon-chatbubble' });
     expect(node.props.name).toBe('chatbubble');
-    expect(node.props.color).toBe('#7c3aed');
+    expect(node.props.color).toBe(color.brand);
     expect(node.props.size).toBe(24);
     await act(async () => {
       tree.unmount();
@@ -49,11 +50,11 @@ describe('MainTabBarIcon', () => {
 
   it('renders the outline glyph when inactive', async () => {
     const tree = await render(
-      <MainTabBarIcon routeName="Contacts" focused={false} color="#6b7280" size={22} />,
+      <MainTabBarIcon routeName="Contacts" focused={false} color={color.textSecondary} size={22} />,
     );
     const node = tree.root.findByProps({ testID: 'ionicon-people-outline' });
     expect(node.props.name).toBe('people-outline');
-    expect(node.props.color).toBe('#6b7280');
+    expect(node.props.color).toBe(color.textSecondary);
     expect(node.props.size).toBe(22);
     await act(async () => {
       tree.unmount();

@@ -10,6 +10,7 @@ import {
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { color, space, typeRole } from '../../theme';
 import {
   CONTACTS_BODY,
   CONTACTS_BRAND,
@@ -111,7 +112,7 @@ export function ConfirmSheet({
 const styles = StyleSheet.create({
   backdrop: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.72)',
+    backgroundColor: color.overlay,
     justifyContent: 'flex-end',
   },
   sheet: {
@@ -120,14 +121,14 @@ const styles = StyleSheet.create({
     borderTopRightRadius: CONTACTS_RADIUS,
     borderColor: CONTACTS_HAIRLINE,
     borderWidth: StyleSheet.hairlineWidth,
-    paddingHorizontal: 20,
-    paddingTop: 20,
-    gap: 14,
+    paddingHorizontal: space.xl,
+    paddingTop: space.xl,
+    gap: space.lg,
   },
-  scrollContent: { gap: 14, paddingBottom: 8 },
-  title: { color: CONTACTS_BODY, fontSize: 20, fontWeight: '700' },
-  body: { color: CONTACTS_MUTED, fontSize: 15, lineHeight: 22 },
-  actions: { gap: 8 },
+  scrollContent: { gap: space.lg, paddingBottom: space.sm },
+  title: { color: CONTACTS_BODY, fontSize: typeRole.heading.fontSize, fontWeight: '700' },
+  body: { color: CONTACTS_MUTED, fontSize: typeRole.callout.fontSize, lineHeight: 22 },
+  actions: { gap: space.sm },
   primary: {
     minHeight: MIN_TARGET,
     borderRadius: CONTACTS_RADIUS,
@@ -135,8 +136,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  destructive: { backgroundColor: '#7f1d1d' },
-  primaryLabel: { color: '#fff', fontSize: 16, fontWeight: '600' },
+  destructive: { backgroundColor: color.dangerStrong },
+  primaryLabel: { color: color.textOnBrand, fontSize: typeRole.body.fontSize, fontWeight: '600' },
   secondary: { minHeight: MIN_TARGET, alignItems: 'center', justifyContent: 'center' },
-  secondaryLabel: { color: CONTACTS_BRAND_TEXT, fontSize: 16, fontWeight: '600' },
+  secondaryLabel: {
+    color: CONTACTS_BRAND_TEXT,
+    fontSize: typeRole.body.fontSize,
+    fontWeight: '600',
+  },
 });

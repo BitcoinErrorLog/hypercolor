@@ -1,6 +1,7 @@
 import React from 'react';
 import { TouchableOpacity, Text, StyleSheet } from 'react-native';
 import { COPY } from '../copy/uxCopy';
+import { color, space, radius, typeRole, measure } from '../theme';
 
 export function EnableMessagingCta({ onPress, testID }: { onPress: () => void; testID: string }) {
   return (
@@ -20,18 +21,23 @@ export function EnableMessagingCta({ onPress, testID }: { onPress: () => void; t
 
 const styles = StyleSheet.create({
   cta: {
-    marginHorizontal: 16,
-    marginVertical: 12,
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    minHeight: 44,
-    borderRadius: 12,
-    backgroundColor: '#1f1b2e',
+    marginHorizontal: space.lg,
+    marginVertical: space.md,
+    paddingHorizontal: space.lg,
+    paddingVertical: space.lg,
+    minHeight: measure.hitTarget,
+    borderRadius: radius.md,
+    backgroundColor: color.surfaceBrand,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#7c3aed',
-    gap: 4,
+    borderColor: color.brand,
+    gap: space.xs,
   },
-  title: { fontSize: 15, fontWeight: '600', color: '#f9fafb' },
-  hint: { fontSize: 13, color: '#c4b5fd' },
-  action: { fontSize: 15, fontWeight: '700', color: '#fff', marginTop: 6 },
+  title: { fontSize: typeRole.callout.fontSize, fontWeight: '600', color: color.textPrimary },
+  hint: { fontSize: typeRole.caption.fontSize, color: color.brandMuted },
+  action: {
+    fontSize: typeRole.callout.fontSize,
+    fontWeight: '700',
+    color: color.textOnBrand,
+    marginTop: space.sm,
+  },
 });

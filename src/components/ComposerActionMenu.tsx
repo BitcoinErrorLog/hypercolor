@@ -13,6 +13,8 @@ import { COPY } from '../copy/uxCopy';
 import { HIT_SLOP_44 } from '../ui/hitTarget';
 import { modalAnimationType, useReduceMotion } from '../ui/reduceMotion';
 import type { ComposerActionItem } from '../ui/composerActions';
+import { color, space, radius, typeRole, measure } from '../theme';
+import { Icon } from '../ui/primitives';
 
 export function ComposerActionMenu({
   visible,
@@ -50,9 +52,22 @@ export function ComposerActionMenu({
     >
       <View style={styles.backdrop}>
         <View testID="composerActionMenu" style={styles.sheet} accessibilityRole="menu">
-          <Text ref={titleRef} accessibilityRole="header" style={styles.title}>
-            {COPY.composerAttach}
-          </Text>
+          <View style={styles.handle} />
+          <View style={styles.header}>
+            <Text ref={titleRef} accessibilityRole="header" style={styles.title}>
+              {COPY.composerAttach}
+            </Text>
+            <TouchableOpacity
+              testID="composerActionClose"
+              accessibilityRole="button"
+              accessibilityLabel={COPY.cancel}
+              hitSlop={HIT_SLOP_44}
+              onPress={onClose}
+              style={styles.close}
+            >
+              <Icon name="close" tone="secondary" />
+            </TouchableOpacity>
+          </View>
           {actions.map(action => (
             <TouchableOpacity
               key={action.id}
@@ -70,9 +85,9 @@ export function ComposerActionMenu({
               onPress={() => onSelect(action.id)}
               style={[styles.row, action.disabled && styles.rowDisabled]}
             >
-              <Text style={[styles.icon, action.disabled && styles.labelDisabled]}>
-                {action.icon}
-              </Text>
+              <View style={styles.icon}>
+                <Icon name={action.icon} tone={action.disabled ? 'muted' : 'secondary'} />
+              </View>
               <View style={styles.rowCopy}>
                 <Text style={[styles.label, action.disabled && styles.labelDisabled]}>
                   {action.label}
@@ -83,16 +98,6 @@ export function ComposerActionMenu({
               </View>
             </TouchableOpacity>
           ))}
-          <TouchableOpacity
-            testID="composerActionCancel"
-            accessibilityRole="button"
-            accessibilityLabel={COPY.cancel}
-            hitSlop={HIT_SLOP_44}
-            onPress={onClose}
-            style={styles.cancel}
-          >
-            <Text style={styles.cancelText}>{COPY.cancel}</Text>
-          </TouchableOpacity>
         </View>
         <Pressable
           testID="composerActionBackdrop"
@@ -108,7 +113,7 @@ export function ComposerActionMenu({
 const styles = StyleSheet.create({
   backdrop: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.6)',
+    backgroundColor: color.overlay,
     justifyContent: 'flex-end',
   },
   backdropHit: {
@@ -116,37 +121,55 @@ const styles = StyleSheet.create({
     zIndex: 0,
   },
   sheet: {
-    backgroundColor: '#111',
-    borderTopLeftRadius: 16,
-    borderTopRightRadius: 16,
-    padding: 20,
-    gap: 4,
+    backgroundColor: color.surface,
+    borderTopLeftRadius: radius.lg,
+    borderTopRightRadius: radius.lg,
+    padding: space.xl,
+    gap: space.xs,
     zIndex: 1,
   },
-  title: { color: '#f9fafb', fontSize: 18, fontWeight: '700', marginBottom: 8 },
-  row: {
-    minHeight: 44,
-    paddingVertical: 10,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: '#1a1a1a',
+  handle: {
+    alignSelf: 'center',
+    width: measure.hitTarget,
+    height: space.xs,
+    borderRadius: radius.full,
+    backgroundColor: color.hairlineStrong,
+    marginBottom: space.sm,
+  },
+  header: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
+    minHeight: measure.hitTarget,
+  },
+  title: {
+    flex: 1,
+    color: color.textPrimary,
+    fontSize: typeRole.numeric.fontSize,
+    fontWeight: '700',
+    marginBottom: space.sm,
+  },
+  row: {
+    minHeight: measure.hitTarget,
+    paddingVertical: space.md,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: color.surfaceRaised,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.md,
   },
   rowDisabled: { opacity: 0.55 },
-  rowCopy: { flex: 1, gap: 4 },
-  icon: { color: '#c4b5fd', fontSize: 18, width: 24, textAlign: 'center' },
-  label: { color: '#f9fafb', fontSize: 16, fontWeight: '600' },
-  labelDisabled: { color: '#808692' },
-  reason: { color: '#808692', fontSize: 13 },
-  cancel: {
-    minHeight: 44,
-    marginTop: 8,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#374151',
-    alignItems: 'center',
+  rowCopy: { flex: 1, gap: space.xs },
+  close: {
+    minWidth: measure.hitTarget,
+    minHeight: measure.hitTarget,
+    alignItems: 'flex-end',
     justifyContent: 'center',
   },
-  cancelText: { color: '#f9fafb', fontSize: 16, fontWeight: '600' },
+  icon: {
+    width: measure.hitTarget,
+    alignItems: 'center',
+  },
+  label: { color: color.textPrimary, fontSize: typeRole.body.fontSize, fontWeight: '600' },
+  labelDisabled: { color: color.textMuted },
+  reason: { color: color.textMuted, fontSize: typeRole.caption.fontSize },
 });

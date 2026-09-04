@@ -1,6 +1,7 @@
 import React from 'react';
 import { Text, StyleSheet } from 'react-native';
 import { COPY } from '../copy/uxCopy';
+import { color, typeRole } from '../theme';
 
 export function CustodyLine({ testID }: { testID?: string }) {
   return (
@@ -12,8 +13,8 @@ export function CustodyLine({ testID }: { testID?: string }) {
 
 const styles = StyleSheet.create({
   line: {
-    fontSize: 14,
-    color: '#808692',
+    fontSize: typeRole.secondary.fontSize,
+    color: color.textSecondary,
     lineHeight: 20,
     textAlign: 'center',
   },

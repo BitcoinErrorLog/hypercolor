@@ -18,6 +18,7 @@ import {
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { Contact, RootStackParamList } from '../../types';
 import type {
   GroupChannel,
@@ -59,6 +60,8 @@ import {
   type DraftEnvelopeContext,
 } from '../../ui/composerActions';
 import { LINK_MESSAGE_MAX_BYTES } from '../../types/link';
+import { color, space, radius, typeRole, measure } from '../../theme';
+import { Avatar, Button, Icon, ListRow, MessageBubble } from '../../ui/primitives';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'ChannelScreen'>;
 
@@ -396,6 +399,8 @@ export function ChannelScreenContent({
   const flatListRef = useRef<FlatList<GroupMessage>>(null);
   const plusRef = useRef<View>(null);
   const menuWasOpen = useRef(false);
+  const insets = useSafeAreaInsets();
+  const bottomInset = Math.max(insets.bottom, 0);
   const byAuthorEvent = useMemo(() => {
     const map = new Map<string, GroupMessage>();
     for (const msg of messages) map.set(`${msg.senderPubky}:${msg.eventId}`, msg);
@@ -449,11 +454,10 @@ export function ChannelScreenContent({
   if (localPubky) envelopeCtx.authorPubky = localPubky;
   if (replyTo?.eventId) envelopeCtx.replyToEventId = replyTo.eventId;
   if (replyTo?.senderPubky) envelopeCtx.replyToAuthorPubky = replyTo.senderPubky;
+  const byteSize = draftEnvelopeByteSize(draft, envelopeCtx);
   const overCap = draftExceedsByteCap(draft, envelopeCtx);
-  const byteLabel = messageByteCountLabel(
-    draftEnvelopeByteSize(draft, envelopeCtx),
-    LINK_MESSAGE_MAX_BYTES,
-  );
+  const showByteCap = byteSize >= LINK_MESSAGE_MAX_BYTES * 0.8 || overCap;
+  const byteLabel = messageByteCountLabel(byteSize, LINK_MESSAGE_MAX_BYTES);
 
   useEffect(() => {
     if (actionMenuOpen) {
@@ -467,18 +471,31 @@ export function ChannelScreenContent({
   }, [actionMenuOpen]);
 
   const renderMessage = useCallback(
-    ({ item }: { item: GroupMessage }) => {
+    ({ item, index }: { item: GroupMessage; index: number }) => {
+      const previous = visible[index - 1];
+      const next = visible[index + 1];
+      const grouped = previous ? sameChannelRun(previous, item) : false;
+      const lastInGroup = next ? !sameChannelRun(item, next) : true;
+      const daySeparator =
+        !previous || !sameCalendarDay(previous.sentAt, item.sentAt) ? (
+          <TimelineDaySeparator label={formatDaySeparator(item.sentAt)} />
+        ) : null;
       if (item.kind === GROUP_MEMBERSHIP_KIND) {
         return (
-          <View style={styles.systemLine}>
-            <Text style={styles.systemText}>
-              {item.senderPubky.slice(0, 6)}… {item.body}
-            </Text>
-          </View>
+          <>
+            {daySeparator}
+            <View style={styles.systemLine}>
+              <Text style={styles.systemText}>
+                {item.senderPubky.slice(0, 6)}… {item.body}
+              </Text>
+            </View>
+          </>
         );
       }
       const isMine = item.senderPubky === localPubky;
       const fanout = fanoutByEvent.get(item.eventId);
+      const statusTextVisible =
+        isMine && !isPublic && fanout ? fanout.some(outcome => outcome.status !== 'sent') : false;
       const outboundLabel =
         isMine && !isPublic
           ? fanout && fanout.length > 0
@@ -492,138 +509,133 @@ export function ChannelScreenContent({
         : undefined;
       const reactions = reactionsByTarget.get(`${item.senderPubky}:${item.eventId}`);
       const attachment = attachments.find(a => a.eventId === item.eventId);
+      const senderName = peerIdentity(
+        item.senderPubky,
+        contacts.find(c => c.pubky === item.senderPubky) ?? null,
+      ).title;
       return (
-        <View style={[styles.bubble, isMine ? styles.mine : styles.theirs]}>
-          {!isMine && (
-            <Text style={styles.sender} numberOfLines={1} ellipsizeMode="middle">
-              {
-                peerIdentity(
-                  item.senderPubky,
-                  contacts.find(c => c.pubky === item.senderPubky) ?? null,
-                ).title
-              }
-            </Text>
-          )}
-          {parent ? (
-            <Text style={styles.replyPreview} numberOfLines={1}>
-              ↳ {parent.deleted ? 'deleted' : parent.body}
-            </Text>
-          ) : null}
-          {item.kind === CHAT_ATTACHMENT_KIND && attachment && !item.deleted ? (
-            <AttachmentBubble
-              record={attachment}
-              isMine={isMine}
-              onRetrySend={
-                retryableEventIds.has(attachment.eventId)
-                  ? () => onRetryFailed(attachment.eventId)
-                  : undefined
-              }
-            />
-          ) : (
-            <Text style={[styles.bubbleText, isMine ? styles.mineText : styles.theirsText]}>
-              {item.deleted ? 'Message deleted' : item.body}
-            </Text>
-          )}
-          <View style={styles.meta}>
-            <Text style={styles.time}>{formatTime(item.sentAt)}</Text>
-            {item.editedAt ? <Text style={styles.time}> · edited</Text> : null}
-            {isMine && !isPublic ? (
-              <>
-                {outboundLabel ? (
-                  <Text
-                    style={[
-                      styles.time,
-                      item.deliveryState === 'failed' ? styles.statusFailed : null,
-                    ]}
-                  >
-                    {' '}
-                    · {outboundLabel}
-                  </Text>
-                ) : null}
-                {item.deliveryState === 'failed' ? (
-                  retryableEventIds.has(item.eventId) ? (
-                    <TouchableOpacity
-                      accessibilityRole="button"
-                      accessibilityLabel={COPY.retry}
-                      hitSlop={HIT_SLOP_44}
-                      onPress={() => onRetryFailed(item.eventId)}
-                    >
-                      <Text style={styles.retry}>{COPY.retry}</Text>
-                    </TouchableOpacity>
-                  ) : (
-                    <Text
-                      testID="channelSendTerminal"
-                      accessibilityRole="text"
-                      style={styles.statusFailed}
-                    >
-                      {COPY.couldNotSendStartAgain}
-                    </Text>
-                  )
-                ) : null}
-              </>
-            ) : outboundLabel ? (
-              <Text style={styles.time}> · {outboundLabel}</Text>
+        <>
+          {daySeparator}
+          <MessageBubble
+            testID={isMine ? 'channelBubbleMine' : 'channelBubbleTheirs'}
+            mine={isMine}
+            time={formatTime(item.sentAt)}
+            status={outboundLabel}
+            statusTextVisible={statusTextVisible}
+            failed={item.deliveryState === 'failed'}
+            senderName={senderName}
+            senderPubky={item.senderPubky}
+            showIncomingAvatar={!isMine && !grouped}
+            grouped={grouped}
+            lastInGroup={lastInGroup}
+            accessibilityLabel={item.deleted ? 'Message deleted' : item.body}
+          >
+            {!isMine && (
+              <Text style={styles.sender} numberOfLines={1} ellipsizeMode="middle">
+                {senderName}
+              </Text>
+            )}
+            {parent ? (
+              <Text style={styles.replyPreview} numberOfLines={1}>
+                ↳ {parent.deleted ? 'deleted' : parent.body}
+              </Text>
             ) : null}
-          </View>
-          {reactions && reactions.size > 0 ? (
-            <View style={styles.reactionRow}>
-              {[...reactions.entries()].map(([emoji, count]) => (
-                <Text key={emoji} style={styles.reactionChip}>
-                  {emoji} {count}
+            {item.kind === CHAT_ATTACHMENT_KIND && attachment && !item.deleted ? (
+              <AttachmentBubble
+                record={attachment}
+                isMine={isMine}
+                onRetrySend={
+                  retryableEventIds.has(attachment.eventId)
+                    ? () => onRetryFailed(attachment.eventId)
+                    : undefined
+                }
+              />
+            ) : (
+              <Text style={[styles.bubbleText, isMine ? styles.mineText : styles.theirsText]}>
+                {item.deleted ? 'Message deleted' : item.body}
+              </Text>
+            )}
+            {item.editedAt ? <Text style={styles.time}>edited</Text> : null}
+            {isMine && !isPublic && item.deliveryState === 'failed' ? (
+              retryableEventIds.has(item.eventId) ? (
+                <TouchableOpacity
+                  accessibilityRole="button"
+                  accessibilityLabel={COPY.retry}
+                  hitSlop={HIT_SLOP_44}
+                  onPress={() => onRetryFailed(item.eventId)}
+                >
+                  <Text style={styles.retry}>{COPY.retry}</Text>
+                </TouchableOpacity>
+              ) : (
+                <Text
+                  testID="channelSendTerminal"
+                  accessibilityRole="text"
+                  style={styles.statusFailed}
+                >
+                  {COPY.couldNotSendStartAgain}
                 </Text>
-              ))}
-            </View>
-          ) : null}
-          {!item.deleted && selfActive ? (
-            <View style={styles.actionRow}>
-              <TouchableOpacity
-                accessibilityRole="button"
-                accessibilityLabel="Reply"
-                hitSlop={HIT_SLOP_44}
-                onPress={() => onReply(item)}
-                style={minHitStyle}
-              >
-                <Text style={styles.action}>Reply</Text>
-              </TouchableOpacity>
-              {!isPublic
-                ? REACTION_EMOJIS.map(emoji => (
+              )
+            ) : null}
+            {reactions && reactions.size > 0 ? (
+              <View style={styles.reactionRow}>
+                {[...reactions.entries()].map(([emoji, count]) => (
+                  <Text key={emoji} style={styles.reactionChip}>
+                    {emoji} {count}
+                  </Text>
+                ))}
+              </View>
+            ) : null}
+            {!item.deleted && selfActive ? (
+              <View style={styles.actionRow}>
+                <TouchableOpacity
+                  accessibilityRole="button"
+                  accessibilityLabel="Reply"
+                  hitSlop={HIT_SLOP_44}
+                  onPress={() => onReply(item)}
+                  style={minHitStyle}
+                >
+                  <Text style={styles.action}>Reply</Text>
+                </TouchableOpacity>
+                {!isPublic
+                  ? REACTION_EMOJIS.map(emoji => (
+                      <TouchableOpacity
+                        key={emoji}
+                        accessibilityRole="button"
+                        accessibilityLabel={`React with ${emoji}`}
+                        hitSlop={HIT_SLOP_44}
+                        onPress={() => onReact(item.eventId, item.senderPubky, emoji)}
+                        style={minHitStyle}
+                      >
+                        <Text style={styles.action}>{emoji}</Text>
+                      </TouchableOpacity>
+                    ))
+                  : null}
+                {isMine && !isPublic ? (
+                  <>
                     <TouchableOpacity
-                      key={emoji}
                       accessibilityRole="button"
-                      accessibilityLabel={`React with ${emoji}`}
+                      accessibilityLabel="Edit"
                       hitSlop={HIT_SLOP_44}
-                      onPress={() => onReact(item.eventId, item.senderPubky, emoji)}
+                      onPress={() => onEdit(item.eventId)}
                       style={minHitStyle}
                     >
-                      <Text style={styles.action}>{emoji}</Text>
+                      <Text style={styles.action}>Edit</Text>
                     </TouchableOpacity>
-                  ))
-                : null}
-              {isMine && !isPublic ? (
-                <>
-                  <TouchableOpacity
-                    accessibilityRole="button"
-                    accessibilityLabel="Edit"
-                    hitSlop={HIT_SLOP_44}
-                    onPress={() => onEdit(item.eventId)}
-                    style={minHitStyle}
-                  >
-                    <Text style={styles.action}>Edit</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    accessibilityRole="button"
-                    accessibilityLabel="Delete"
-                    hitSlop={HIT_SLOP_44}
-                    onPress={() => onDelete(item.eventId)}
-                    style={minHitStyle}
-                  >
-                    <Text style={styles.action}>Delete</Text>
-                  </TouchableOpacity>
-                </>
-              ) : null}
-            </View>
-          ) : null}
-        </View>
+                    <TouchableOpacity
+                      accessibilityRole="button"
+                      accessibilityLabel="Delete"
+                      hitSlop={HIT_SLOP_44}
+                      onPress={() => onDelete(item.eventId)}
+                      style={minHitStyle}
+                    >
+                      <Text style={styles.action}>Delete</Text>
+                    </TouchableOpacity>
+                  </>
+                ) : null}
+              </View>
+            ) : null}
+          </MessageBubble>
+        </>
       );
     },
     [
@@ -643,6 +655,7 @@ export function ChannelScreenContent({
       onDelete,
       onRetryFailed,
       retryableEventIds,
+      visible,
     ],
   );
 
@@ -665,7 +678,7 @@ export function ChannelScreenContent({
           onPress={onBack}
           style={styles.backBtn}
         >
-          <Text style={styles.backText}>←</Text>
+          <Icon name="chevron-back" tone="brand" />
         </TouchableOpacity>
         <Text
           style={styles.title}
@@ -699,40 +712,44 @@ export function ChannelScreenContent({
 
       {loading ? (
         <View style={styles.loadingContainer}>
-          <ActivityIndicator color="#7c3aed" />
+          <ActivityIndicator color={color.brand} />
         </View>
       ) : showMembers ? (
-        <ScrollView contentContainerStyle={styles.memberPane}>
+        <ScrollView
+          contentContainerStyle={[styles.memberPane, { paddingBottom: space.xl + bottomInset }]}
+        >
           <Text style={styles.memberHeading}>
             {activeMembers.length}
             {!isPublic ? ` / ${memberCap}` : ''} members
           </Text>
           {members.map(member => (
-            <View key={member.memberPubky} style={styles.memberRow}>
-              <View style={styles.memberBody}>
-                <Text style={styles.memberName} numberOfLines={1} ellipsizeMode="middle">
-                  {contactName(contacts, member.memberPubky)}
-                </Text>
-                <Text style={styles.memberMeta}>
-                  {member.role}
-                  {member.status === 'removed' ? ' · removed' : ''}
-                </Text>
-              </View>
-              {isAdmin &&
-              !isPublic &&
-              member.status === 'active' &&
-              member.memberPubky !== localPubky ? (
-                <TouchableOpacity
-                  accessibilityRole="button"
-                  accessibilityLabel={`Remove ${contactName(contacts, member.memberPubky)}`}
-                  hitSlop={HIT_SLOP_44}
-                  onPress={() => onRemoveMember(member.memberPubky)}
-                  style={minHitStyle}
-                >
-                  <Text style={styles.danger}>Remove</Text>
-                </TouchableOpacity>
-              ) : null}
-            </View>
+            <ListRow
+              key={member.memberPubky}
+              title={contactName(contacts, member.memberPubky)}
+              subtitle={`${member.role}${member.status === 'removed' ? ' · removed' : ''}`}
+              leading={
+                <Avatar
+                  name={contactName(contacts, member.memberPubky)}
+                  pubky={member.memberPubky}
+                  size="md"
+                />
+              }
+              trailing={
+                isAdmin &&
+                !isPublic &&
+                member.status === 'active' &&
+                member.memberPubky !== localPubky ? (
+                  <Button
+                    label="Remove"
+                    variant="destructive"
+                    accessibilityLabel={`Remove ${contactName(contacts, member.memberPubky)}`}
+                    onPress={() => onRemoveMember(member.memberPubky)}
+                  />
+                ) : undefined
+              }
+              showChevron={false}
+              hideDivider={members[members.length - 1] === member}
+            />
           ))}
           {isAdmin && !isPublic ? (
             <View style={styles.addRow}>
@@ -741,7 +758,7 @@ export function ChannelScreenContent({
                 value={addPubky}
                 onChangeText={onChangeAddPubky}
                 placeholder="Add member pubky"
-                placeholderTextColor="#4b5563"
+                placeholderTextColor={color.textSecondary}
                 autoCapitalize="none"
               />
               <TouchableOpacity
@@ -784,7 +801,7 @@ export function ChannelScreenContent({
           data={visible}
           keyExtractor={item => `${item.senderPubky}:${item.eventId}`}
           renderItem={renderMessage}
-          contentContainerStyle={styles.messageList}
+          contentContainerStyle={[styles.messageList, { paddingBottom: space.xl + bottomInset }]}
           onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: false })}
         />
       )}
@@ -826,7 +843,7 @@ export function ChannelScreenContent({
               ) : null}
             </View>
           ) : null}
-          <View style={styles.composer}>
+          <View style={[styles.composer, { paddingBottom: space.lg + bottomInset }]}>
             <ComposerActionMenu
               visible={actionMenuOpen}
               actions={composerActionItems(isPublic ? 'public-topic' : 'private-group', {
@@ -846,7 +863,7 @@ export function ChannelScreenContent({
               onPress={onOpenActionMenu}
               style={styles.plusBtn}
             >
-              <Text style={styles.plusIcon}>+</Text>
+              <Icon name="add" tone="secondary" />
             </TouchableOpacity>
             <TextInput
               accessibilityLabel="Message"
@@ -854,7 +871,7 @@ export function ChannelScreenContent({
               value={draft}
               onChangeText={onChangeDraft}
               placeholder="Message…"
-              placeholderTextColor="#4b5563"
+              placeholderTextColor={color.textSecondary}
               multiline
             />
             <TouchableOpacity
@@ -871,19 +888,28 @@ export function ChannelScreenContent({
               disabled={!draft.trim() || sending || overCap}
             >
               {sending ? (
-                <ActivityIndicator color="#fff" size="small" />
+                <ActivityIndicator color={color.textOnBrand} size="small" />
               ) : (
-                <Text style={styles.sendIcon}>↑</Text>
+                <Icon
+                  name="arrow-up"
+                  tone={!draft.trim() || sending || overCap ? 'muted' : 'onBrand'}
+                />
               )}
             </TouchableOpacity>
           </View>
-          <Text
-            testID="channelByteCap"
-            accessibilityLabel={byteLabel}
-            style={[styles.byteCap, overCap && styles.byteCapOver]}
-          >
-            {byteLabel}. {COPY.messageByteCap}
-          </Text>
+          {showByteCap ? (
+            <Text
+              testID="channelByteCap"
+              accessibilityLabel={byteLabel}
+              numberOfLines={1}
+              style={[
+                styles.byteCap,
+                byteSize >= LINK_MESSAGE_MAX_BYTES * 0.95 && styles.byteCapOver,
+              ]}
+            >
+              {byteLabel}
+            </Text>
+          ) : null}
         </KeyboardAvoidingView>
       ) : null}
     </SafeAreaView>
@@ -898,135 +924,186 @@ function formatTime(ms: number): string {
   return new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
+function TimelineDaySeparator({ label }: { label: string }) {
+  return (
+    <View style={styles.daySeparator} accessibilityRole="text">
+      <Text style={styles.daySeparatorText}>{label}</Text>
+    </View>
+  );
+}
+
+function sameChannelRun(previous: GroupMessage, next: GroupMessage): boolean {
+  if (previous.kind === GROUP_MEMBERSHIP_KIND || next.kind === GROUP_MEMBERSHIP_KIND) return false;
+  return previous.senderPubky === next.senderPubky && sameCalendarDay(previous.sentAt, next.sentAt);
+}
+
+function sameCalendarDay(leftMs: number, rightMs: number): boolean {
+  return new Date(leftMs).toDateString() === new Date(rightMs).toDateString();
+}
+
+function formatDaySeparator(ms: number): string {
+  return new Date(ms).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#0a0a0a' },
+  container: { flex: 1, backgroundColor: color.canvas },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
+    paddingHorizontal: space.lg,
+    paddingVertical: space.md,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#1a1a1a',
+    borderBottomColor: color.surfaceRaised,
   },
   backBtn: { ...minHitStyle },
-  backText: { fontSize: 22, color: '#7c3aed' },
-  title: { flex: 1, fontSize: 17, fontWeight: '700', color: '#f9fafb', textAlign: 'center' },
+  backText: { fontSize: typeRole.heading.fontSize, color: color.brand },
+  title: {
+    flex: 1,
+    fontSize: typeRole.titleStack.fontSize,
+    fontWeight: '700',
+    color: color.textPrimary,
+    textAlign: 'center',
+  },
   loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  messageList: { padding: 16, gap: 8 },
-  bubble: {
-    maxWidth: '78%',
-    borderRadius: 16,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    marginVertical: 2,
+  messageList: { padding: space.lg, gap: space.sm },
+  daySeparator: { alignItems: 'center', paddingVertical: space.md },
+  daySeparatorText: {
+    color: color.textMuted,
+    fontSize: typeRole.meta.fontSize,
+    lineHeight: typeRole.meta.lineHeight,
   },
-  mine: {
-    alignSelf: 'flex-end',
-    backgroundColor: '#7c3aed',
-    borderBottomRightRadius: 4,
+  sender: { fontSize: typeRole.meta.fontSize, color: color.brandMuted, marginBottom: 2 },
+  replyPreview: {
+    fontSize: typeRole.meta.fontSize,
+    color: color.textOnBrandUi,
+    marginBottom: space.xs,
   },
-  theirs: {
-    alignSelf: 'flex-start',
-    backgroundColor: '#1f1f1f',
-    borderBottomLeftRadius: 4,
+  bubbleText: { fontSize: typeRole.callout.fontSize, lineHeight: 20 },
+  mineText: { color: color.textOnBrand },
+  theirsText: { color: color.textPrimary },
+  meta: {
+    flexDirection: 'row',
+    marginTop: space.xs,
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: space.sm,
   },
-  sender: { fontSize: 10, color: '#c4b5fd', marginBottom: 2 },
-  replyPreview: { fontSize: 12, color: 'rgba(255,255,255,0.55)', marginBottom: 4 },
-  bubbleText: { fontSize: 15, lineHeight: 20 },
-  mineText: { color: '#fff' },
-  theirsText: { color: '#f9fafb' },
-  meta: { flexDirection: 'row', marginTop: 4, flexWrap: 'wrap', alignItems: 'center', gap: 6 },
-  time: { fontSize: 10, color: 'rgba(255,255,255,0.4)' },
-  statusFailed: { color: '#fca5a5' },
-  retry: { fontSize: 12, color: '#c4b5fd', fontWeight: '700', textDecorationLine: 'underline' },
-  reactionRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 6 },
-  reactionChip: { fontSize: 12, color: '#e5e7eb' },
-  actionRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 6 },
-  action: { color: '#c4b5fd', fontSize: 12, fontWeight: '600' },
-  systemLine: { alignSelf: 'center', paddingVertical: 6 },
-  systemText: { color: '#6b7280', fontSize: 12 },
+  time: { fontSize: typeRole.meta.fontSize, color: color.textOnBrandUi },
+  statusFailed: { color: color.danger },
+  retry: {
+    fontSize: typeRole.meta.fontSize,
+    color: color.brandMuted,
+    fontWeight: '700',
+    textDecorationLine: 'underline',
+  },
+  reactionRow: { flexDirection: 'row', flexWrap: 'wrap', gap: space.sm, marginTop: space.sm },
+  reactionChip: { fontSize: typeRole.meta.fontSize, color: color.textPrimary },
+  actionRow: { flexDirection: 'row', flexWrap: 'wrap', gap: space.sm, marginTop: space.sm },
+  action: { color: color.brandMuted, fontSize: typeRole.meta.fontSize, fontWeight: '600' },
+  systemLine: { alignSelf: 'center', paddingVertical: space.sm },
+  systemText: { color: color.textSecondary, fontSize: typeRole.meta.fontSize },
   composer: {
     flexDirection: 'row',
     alignItems: 'flex-end',
-    gap: 8,
-    padding: 12,
+    gap: space.sm,
+    padding: space.md,
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: '#1a1a1a',
-    backgroundColor: '#0a0a0a',
+    borderTopColor: color.surfaceRaised,
+    backgroundColor: color.canvas,
   },
   input: {
     flex: 1,
-    backgroundColor: '#1a1a1a',
-    borderRadius: 20,
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    color: '#f9fafb',
-    fontSize: 15,
+    backgroundColor: color.surfaceRaised,
+    borderRadius: radius.xl,
+    paddingHorizontal: space.lg,
+    paddingVertical: space.md,
+    color: color.textPrimary,
+    fontSize: typeRole.callout.fontSize,
     maxHeight: 160,
   },
   plusBtn: {
     ...minHitStyle,
     width: 44,
     height: 44,
-    borderRadius: 22,
-    backgroundColor: '#1f1f1f',
+    borderRadius: radius.xxl,
+    backgroundColor: color.bubbleIncoming,
   },
-  plusIcon: { color: '#c4b5fd', fontSize: 22, fontWeight: '700', marginTop: -2 },
-  byteCap: { color: '#808692', fontSize: 12, paddingHorizontal: 16, paddingBottom: 8 },
-  byteCapOver: { color: '#fca5a5' },
+  plusIcon: {
+    color: color.brandMuted,
+    fontSize: typeRole.heading.fontSize,
+    fontWeight: '700',
+    marginTop: -2,
+  },
+  byteCap: {
+    color: color.textSecondary,
+    fontSize: typeRole.meta.fontSize,
+    paddingHorizontal: space.lg,
+    paddingBottom: space.sm,
+  },
+  byteCapOver: { color: color.danger },
   notice: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
-    paddingHorizontal: 16,
-    paddingTop: 8,
+    gap: space.sm,
+    paddingHorizontal: space.lg,
+    paddingTop: space.sm,
   },
-  noticeText: { flex: 1, color: '#fca5a5', fontSize: 13 },
+  noticeText: { flex: 1, color: color.danger, fontSize: typeRole.caption.fontSize },
   destBanner: {
-    paddingHorizontal: 16,
-    paddingVertical: 8,
+    paddingHorizontal: space.lg,
+    paddingVertical: space.sm,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#1a1a1a',
-    gap: 4,
+    borderBottomColor: color.surfaceRaised,
+    gap: space.xs,
   },
-  destMeta: { color: '#c4b5fd', fontSize: 12, fontWeight: '700' },
-  destLine: { color: '#808692', fontSize: 13, lineHeight: 18 },
-  destWarning: { color: '#fbbf24', fontSize: 12, lineHeight: 16 },
+  destMeta: { color: color.brandMuted, fontSize: typeRole.meta.fontSize, fontWeight: '700' },
+  destLine: { color: color.textSecondary, fontSize: typeRole.caption.fontSize, lineHeight: 18 },
+  destWarning: { color: color.warningStrong, fontSize: typeRole.meta.fontSize, lineHeight: 16 },
   sendBtn: {
-    minWidth: 44,
-    minHeight: 44,
+    minWidth: measure.hitTarget,
+    minHeight: measure.hitTarget,
     width: 44,
     height: 44,
-    borderRadius: 22,
-    backgroundColor: '#7c3aed',
+    borderRadius: radius.xxl,
+    backgroundColor: color.brand,
     justifyContent: 'center',
     alignItems: 'center',
   },
   sendBtnDisabled: { opacity: 0.4 },
-  sendIcon: { color: '#fff', fontSize: 18, fontWeight: '700' },
+  sendIcon: { color: color.textOnBrand, fontSize: typeRole.numeric.fontSize, fontWeight: '700' },
   replyBar: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingTop: 8,
+    paddingHorizontal: space.lg,
+    paddingTop: space.sm,
   },
-  replyBarText: { color: '#9ca3af', flex: 1, marginRight: 8 },
-  memberPane: { padding: 20, gap: 10 },
-  memberHeading: { color: '#f9fafb', fontSize: 16, fontWeight: '700', marginBottom: 8 },
-  memberRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 6 },
+  replyBarText: { color: color.textMuted, flex: 1, marginRight: space.sm },
+  memberPane: { padding: space.xl, gap: space.md },
+  memberHeading: {
+    color: color.textPrimary,
+    fontSize: typeRole.body.fontSize,
+    fontWeight: '700',
+    marginBottom: space.sm,
+  },
+  memberRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.sm,
+    paddingVertical: space.sm,
+  },
   memberBody: { flex: 1 },
-  memberName: { color: '#f9fafb', fontSize: 14 },
-  memberMeta: { color: '#6b7280', fontSize: 12 },
-  addRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 12 },
+  memberName: { color: color.textPrimary, fontSize: typeRole.secondary.fontSize },
+  memberMeta: { color: color.textSecondary, fontSize: typeRole.meta.fontSize },
+  addRow: { flexDirection: 'row', alignItems: 'center', gap: space.sm, marginTop: space.md },
   addInput: {
     flex: 1,
-    backgroundColor: '#1a1a1a',
-    borderRadius: 10,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    color: '#f9fafb',
+    backgroundColor: color.surfaceRaised,
+    borderRadius: radius.md,
+    paddingHorizontal: space.md,
+    paddingVertical: space.sm,
+    color: color.textPrimary,
   },
-  leaveBtn: { marginTop: 16 },
-  danger: { color: '#f87171', fontWeight: '600' },
+  leaveBtn: { marginTop: space.lg },
+  danger: { color: color.danger, fontWeight: '600' },
 });

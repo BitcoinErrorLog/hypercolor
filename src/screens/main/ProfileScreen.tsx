@@ -1,5 +1,5 @@
 import React, { useCallback, useState } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, SafeAreaView, ScrollView } from 'react-native';
+import { TouchableOpacity, Text, StyleSheet } from 'react-native';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useAuthStore } from '../../stores/authStore';
@@ -11,19 +11,18 @@ import { getE2eIdentity } from '../../navigation/e2eSignupResult';
 import { switchE2eSavedSlotFromUi } from '../../navigation/e2eDeepLinks';
 import { COPY } from '../../copy/uxCopy';
 import { ensureSignOutPaint } from '../../services/paintedOwner';
-import { CustodyLine } from '../../ui/CustodyLine';
-import { SignOutSheet } from '../../ui/SignOutSheet';
-import { HIT_SLOP_44 } from '../../ui/hitTarget';
 import { shortPubky } from '../../ui/shortPubky';
 import { sessionUiModel } from '../../ui/sessionUi';
 import { sanitizeError } from '../../ui/sanitizedError';
 import { copyText } from '../../utils/copyText';
 import { PROFILE_BACKUP_ROUTE, PROFILE_TIP_ENDPOINTS_ROUTE } from '../../ui/exposurePaths';
+import { color, space, radius, typeRole, measure } from '../../theme';
 import {
   clearLastBackupAt,
   formatRelativeBackupTime,
   getLastBackupAt,
 } from '../../stores/backupMetaStore';
+import { ProfileScreenContent } from './ProfileScreenContent';
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
 
@@ -80,262 +79,90 @@ export default function ProfileScreen() {
     }
   }
 
-  return (
-    <SafeAreaView style={styles.container} testID="profileScreen">
-      <View style={styles.header}>
-        <Text style={styles.title}>Profile</Text>
+  const debugSlot = __DEV__ ? (
+    <>
+      {getE2eIdentity('a') ? (
         <TouchableOpacity
-          testID="profileSettings"
-          accessibilityRole="button"
-          accessibilityLabel={COPY.settingsRow}
-          hitSlop={HIT_SLOP_44}
-          onPress={() => nav.navigate('Settings')}
-          style={styles.headerAction}
+          testID="debugSwitchSlotA"
+          accessibilityLabel="E2E switch to slot A"
+          style={styles.e2eSwitch}
+          onPress={() => {
+            void switchE2eSavedSlotFromUi('a');
+          }}
         >
-          <Text style={styles.settings}>{COPY.settingsRow}</Text>
+          <Text style={styles.e2eSwitchText}>E2E switch A</Text>
         </TouchableOpacity>
-      </View>
-
-      <ScrollView contentContainerStyle={styles.scroll}>
-        <View style={styles.content}>
-          <View style={styles.avatar}>
-            <Text style={styles.avatarText}>{displayName.charAt(0).toUpperCase()}</Text>
-          </View>
-
-          <Text style={styles.displayName}>{displayName}</Text>
-
-          {pubky ? (
-            <>
-              <Text
-                testID="profilePubky"
-                accessibilityLabel="Profile pubky"
-                style={styles.pubkyKey}
-                selectable
-              >
-                {pubky}
-              </Text>
-              <TouchableOpacity
-                testID="profileCopyPubky"
-                accessibilityRole="button"
-                accessibilityLabel="Copy pubky"
-                hitSlop={HIT_SLOP_44}
-                onPress={() => {
-                  copyText(pubky);
-                  setCopied(true);
-                }}
-                style={styles.copyBtn}
-              >
-                <Text style={styles.copyText}>{copied ? COPY.copied : 'Copy'}</Text>
-              </TouchableOpacity>
-            </>
-          ) : null}
-
-          <CustodyLine />
-        </View>
-
-        <View style={styles.sessionRow} testID="profileSessionStatus">
-          <Text style={styles.sessionLabel}>{session.label}</Text>
-          {session.body ? <Text style={styles.sessionBody}>{session.body}</Text> : null}
-          {sessionKind === 'needs-enable' || sessionKind === 'revoked' ? (
-            <TouchableOpacity
-              accessibilityRole="button"
-              accessibilityLabel={COPY.enableEncryptedMessaging}
-              style={styles.sessionAction}
-              onPress={() => nav.navigate('EnableMessaging')}
-            >
-              <Text style={styles.sessionActionText}>{COPY.enableEncryptedMessaging}</Text>
-            </TouchableOpacity>
-          ) : null}
-        </View>
-
-        <View style={styles.actions}>
-          <TouchableOpacity
-            testID="profileMessageRequests"
-            accessibilityRole="button"
-            accessibilityLabel={COPY.messageRequestsNav}
-            style={styles.navRow}
-            onPress={() => nav.navigate('MessageRequests')}
-          >
-            <Text style={styles.navRowText}>{COPY.messageRequestsNav}</Text>
-            <Text style={styles.chevron}>›</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            testID="profileEncryptedBackup"
-            accessibilityRole="button"
-            accessibilityLabel={COPY.encryptedBackup}
-            style={styles.navRow}
-            onPress={() => nav.navigate(PROFILE_BACKUP_ROUTE.name, PROFILE_BACKUP_ROUTE.params)}
-          >
-            <Text style={styles.navRowText}>{COPY.encryptedBackup}</Text>
-            <Text style={styles.chevron}>›</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            testID="profileTipEndpoints"
-            accessibilityRole="button"
-            accessibilityLabel={COPY.myTipEndpoints}
-            style={styles.navRow}
-            onPress={() =>
-              nav.navigate(PROFILE_TIP_ENDPOINTS_ROUTE.name, PROFILE_TIP_ENDPOINTS_ROUTE.params)
-            }
-          >
-            <Text style={styles.navRowText}>{COPY.myTipEndpoints}</Text>
-            <Text style={styles.chevron}>›</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            testID="profileOpenSettings"
-            accessibilityRole="button"
-            accessibilityLabel={COPY.settingsRow}
-            style={styles.navRow}
-            onPress={() => nav.navigate('Settings')}
-          >
-            <Text style={styles.navRowText}>{COPY.settingsRow}</Text>
-            <Text style={styles.chevron}>›</Text>
-          </TouchableOpacity>
-
-          {__DEV__ ? (
-            <>
-              {getE2eIdentity('a') ? (
-                <TouchableOpacity
-                  testID="debugSwitchSlotA"
-                  accessibilityLabel="E2E switch to slot A"
-                  style={styles.e2eSwitch}
-                  onPress={() => {
-                    void switchE2eSavedSlotFromUi('a');
-                  }}
-                >
-                  <Text style={styles.e2eSwitchText}>E2E switch A</Text>
-                </TouchableOpacity>
-              ) : null}
-              {getE2eIdentity('b') ? (
-                <TouchableOpacity
-                  testID="debugSwitchSlotB"
-                  accessibilityLabel="E2E switch to slot B"
-                  style={styles.e2eSwitch}
-                  onPress={() => {
-                    void switchE2eSavedSlotFromUi('b');
-                  }}
-                >
-                  <Text style={styles.e2eSwitchText}>E2E switch B</Text>
-                </TouchableOpacity>
-              ) : null}
-              <DebugSignupPanel
-                title="Switch debug account"
-                submitLabel="Switch debug account"
-                e2eSlot="b"
-              />
-            </>
-          ) : null}
-          <TouchableOpacity
-            testID="profileSignOut"
-            accessibilityRole="button"
-            accessibilityLabel={COPY.signOut}
-            style={styles.dangerButton}
-            onPress={() => setSignOutOpen(true)}
-          >
-            <Text style={styles.dangerButtonText}>{COPY.signOut}</Text>
-          </TouchableOpacity>
-        </View>
-      </ScrollView>
-      <SignOutSheet
-        visible={signOutOpen}
-        lastBackupRelative={lastBackupAt ? formatRelativeBackupTime(lastBackupAt) : null}
-        busy={signOutBusy}
-        error={signOutError}
-        onCancel={() => {
-          if (signOutBusy) return;
-          setSignOutOpen(false);
-          setSignOutError(null);
-        }}
-        onConfirm={() => {
-          void confirmSignOut();
-        }}
+      ) : null}
+      {getE2eIdentity('b') ? (
+        <TouchableOpacity
+          testID="debugSwitchSlotB"
+          accessibilityLabel="E2E switch to slot B"
+          style={styles.e2eSwitch}
+          onPress={() => {
+            void switchE2eSavedSlotFromUi('b');
+          }}
+        >
+          <Text style={styles.e2eSwitchText}>E2E switch B</Text>
+        </TouchableOpacity>
+      ) : null}
+      <DebugSignupPanel
+        title="Switch debug account"
+        submitLabel="Switch debug account"
+        e2eSlot="b"
       />
-    </SafeAreaView>
+    </>
+  ) : null;
+
+  return (
+    <ProfileScreenContent
+      displayName={displayName}
+      pubky={pubky}
+      copied={copied}
+      session={session}
+      sessionKind={sessionKind}
+      showEnableMessaging={sessionKind === 'needs-enable' || sessionKind === 'revoked'}
+      signOutOpen={signOutOpen}
+      signOutBusy={signOutBusy}
+      signOutError={signOutError}
+      lastBackupRelative={lastBackupAt ? formatRelativeBackupTime(lastBackupAt) : null}
+      debugSlot={debugSlot}
+      onOpenSettings={() => nav.navigate('Settings')}
+      onCopyPubky={() => {
+        if (!pubky) return;
+        copyText(pubky);
+        setCopied(true);
+      }}
+      onEnableMessaging={() => nav.navigate('EnableMessaging')}
+      onOpenRequests={() => nav.navigate('MessageRequests')}
+      onOpenBackup={() => nav.navigate(PROFILE_BACKUP_ROUTE.name, PROFILE_BACKUP_ROUTE.params)}
+      onOpenTipEndpoints={() =>
+        nav.navigate(PROFILE_TIP_ENDPOINTS_ROUTE.name, PROFILE_TIP_ENDPOINTS_ROUTE.params)
+      }
+      onOpenSignOut={() => setSignOutOpen(true)}
+      onCancelSignOut={() => {
+        if (signOutBusy) return;
+        setSignOutOpen(false);
+        setSignOutError(null);
+      }}
+      onConfirmSignOut={() => {
+        void confirmSignOut();
+      }}
+    />
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#0a0a0a' },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 20,
-    paddingVertical: 12,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#1a1a1a',
-  },
-  title: { fontSize: 24, fontWeight: '700', color: '#f9fafb' },
-  headerAction: { minHeight: 44, justifyContent: 'center' },
-  settings: { fontSize: 16, color: '#8f57f0', fontWeight: '600' },
-  scroll: { flexGrow: 1 },
-  content: {
-    flexGrow: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 16,
-    paddingVertical: 24,
-    paddingHorizontal: 24,
-  },
-  avatar: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
-    backgroundColor: '#7c3aed',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  avatarText: { fontSize: 32, fontWeight: '700', color: '#fff' },
-  displayName: { fontSize: 20, fontWeight: '600', color: '#f9fafb' },
-  pubkyKey: {
-    fontSize: 12,
-    color: '#808692',
-    fontFamily: 'monospace',
-    maxWidth: 280,
-  },
-  copyBtn: { minHeight: 44, justifyContent: 'center' },
-  copyText: { color: '#8f57f0', fontSize: 15, fontWeight: '600' },
-  sessionRow: {
-    marginHorizontal: 20,
-    padding: 16,
-    borderRadius: 12,
-    backgroundColor: '#111111',
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#1a1a1a',
-    gap: 8,
-  },
-  sessionLabel: { color: '#f9fafb', fontSize: 16, fontWeight: '600' },
-  sessionBody: { color: '#808692', fontSize: 14, lineHeight: 20 },
-  sessionAction: { minHeight: 44, justifyContent: 'center' },
-  sessionActionText: { color: '#8f57f0', fontSize: 15, fontWeight: '700' },
-  actions: { paddingHorizontal: 20, paddingBottom: 48, gap: 12 },
-  navRow: {
-    minHeight: 44,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: 12,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: '#1a1a1a',
-  },
-  navRowText: { color: '#f9fafb', fontSize: 16 },
-  chevron: { fontSize: 20, color: '#808692' },
   e2eSwitch: {
     borderWidth: 1,
-    borderColor: '#374151',
-    borderRadius: 10,
-    paddingVertical: 10,
-    minHeight: 44,
+    borderColor: color.hairlineStrong,
+    borderRadius: radius.md,
+    paddingVertical: space.md,
+    minHeight: measure.hitTarget,
     alignItems: 'center',
   },
-  e2eSwitchText: { color: '#c4b5fd', fontSize: 14, fontWeight: '600' },
-  dangerButton: {
-    borderWidth: 1,
-    borderColor: '#ef4444',
-    borderRadius: 12,
-    paddingVertical: 16,
-    minHeight: 44,
-    alignItems: 'center',
+  e2eSwitchText: {
+    color: color.brandMuted,
+    fontSize: typeRole.secondary.fontSize,
+    fontWeight: '600',
   },
-  dangerButtonText: { color: '#ef4444', fontSize: 16, fontWeight: '600' },
 });

@@ -48,10 +48,17 @@ function liveProofRunnerDeps(): Pick<
 
 let lastE2eReply = '';
 
+function isVrtBuild(): boolean {
+  return process.env.E2E_VRT === '1' || process.env.EXPO_PUBLIC_E2E_VRT === '1';
+}
+
 function writeE2eReply(payload?: string): void {
   lastE2eReply =
     payload != null && payload.length > 0 ? `${E2E_CLIPBOARD_DONE}:${payload}` : E2E_CLIPBOARD_DONE;
-  Clipboard.setString(lastE2eReply);
+  // Skip clipboard in VRT — Android shows a system overlay toast on setString.
+  if (!isVrtBuild()) {
+    Clipboard.setString(lastE2eReply);
+  }
 }
 
 export function takeE2eClipboardReply(): string {
@@ -319,6 +326,17 @@ export async function handleE2eDeepLink(url: string): Promise<boolean> {
 async function handleE2eDeepLinkOnce(url: string): Promise<boolean> {
   try {
     const { path, params } = parseE2eUrl(url);
+
+    if (path === 'e2e/vrt') {
+      const scene = (params.get('scene') ?? '').trim();
+      if (!scene) throw new Error('e2e/vrt requires scene');
+      if (__DEV__) {
+        const { setVrtScene } = await import('../../vrt/VrtCatalogRoot');
+        setVrtScene(scene);
+      }
+      writeE2eReply(scene);
+      return true;
+    }
     if (path === 'e2e/send-dm') {
       const peer = requirePeerOrSlot(params);
       const body = (params.get('body') ?? '').trim();

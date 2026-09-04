@@ -5,6 +5,7 @@ import { COPY, amountSatsApprox } from '../copy/uxCopy';
 import { HIT_SLOP_44 } from '../ui/hitTarget';
 import { PAYMENT_COMPOSE_DEFAULT_AMOUNT } from '../ui/paymentReview';
 import { modalAnimationType, useReduceMotion } from '../ui/reduceMotion';
+import { color, space, radius, typeRole, measure } from '../theme';
 
 export function paymentComposeError(
   amount: string,
@@ -30,19 +31,25 @@ export function PaymentComposeSheet({
   visible,
   busy,
   intent = 'request',
+  initialAmount,
+  initialReference,
+  seedError = null,
   onClose,
   onSubmit,
 }: {
   visible: boolean;
   busy: boolean;
   intent?: 'request' | 'tip';
+  initialAmount?: string;
+  initialReference?: string;
+  seedError?: string | null;
   onClose: () => void;
   onSubmit: (amountBtc: string, reference: string) => void;
 }) {
   const reduceMotion = useReduceMotion();
-  const [amount, setAmount] = useState(PAYMENT_COMPOSE_DEFAULT_AMOUNT);
-  const [reference, setReference] = useState('');
-  const [error, setError] = useState<string | null>(null);
+  const [amount, setAmount] = useState(initialAmount ?? PAYMENT_COMPOSE_DEFAULT_AMOUNT);
+  const [reference, setReference] = useState(initialReference ?? '');
+  const [error, setError] = useState<string | null>(seedError ?? null);
 
   function handleAmountChange(value: string) {
     setAmount(value);
@@ -89,7 +96,7 @@ export function PaymentComposeSheet({
             onChangeText={handleAmountChange}
             keyboardType="decimal-pad"
             placeholder="Amount"
-            placeholderTextColor="#4b5563"
+            placeholderTextColor={color.textSecondary}
             autoCapitalize="none"
           />
           {sats !== null ? (
@@ -107,7 +114,7 @@ export function PaymentComposeSheet({
                 value={reference}
                 onChangeText={handleReferenceChange}
                 placeholder="invoice-2026-0001"
-                placeholderTextColor="#4b5563"
+                placeholderTextColor={color.textSecondary}
                 autoCapitalize="none"
               />
             </>
@@ -159,41 +166,51 @@ export function PaymentComposeSheet({
 const styles = StyleSheet.create({
   backdrop: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.6)',
+    backgroundColor: color.overlay,
     justifyContent: 'center',
-    padding: 24,
+    padding: space.xxl,
   },
-  sheet: { backgroundColor: '#111', borderRadius: 16, padding: 20, gap: 10 },
-  title: { color: '#f9fafb', fontSize: 17, fontWeight: '700', marginBottom: 4 },
-  label: { color: '#9ca3af', fontSize: 12, fontWeight: '600' },
-  satsHint: { color: '#808692', fontSize: 13 },
-  validation: { color: '#f59e0b', fontSize: 13, flex: 1 },
-  errorRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
-  errorIcon: { color: '#f59e0b', fontSize: 14, fontWeight: '700' },
+  sheet: {
+    backgroundColor: color.surface,
+    borderRadius: radius.lg,
+    padding: space.xl,
+    gap: space.md,
+  },
+  title: {
+    color: color.textPrimary,
+    fontSize: typeRole.titleStack.fontSize,
+    fontWeight: '700',
+    marginBottom: space.xs,
+  },
+  label: { color: color.textMuted, fontSize: typeRole.meta.fontSize, fontWeight: '600' },
+  satsHint: { color: color.textSecondary, fontSize: typeRole.caption.fontSize },
+  validation: { color: color.warning, fontSize: typeRole.caption.fontSize, flex: 1 },
+  errorRow: { flexDirection: 'row', alignItems: 'flex-start', gap: space.sm },
+  errorIcon: { color: color.warning, fontSize: typeRole.secondary.fontSize, fontWeight: '700' },
   input: {
-    backgroundColor: '#1a1a1a',
-    borderRadius: 10,
-    color: '#f9fafb',
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    fontSize: 15,
+    backgroundColor: color.surfaceRaised,
+    borderRadius: radius.md,
+    color: color.textPrimary,
+    paddingHorizontal: space.md,
+    paddingVertical: space.md,
+    fontSize: typeRole.callout.fontSize,
   },
-  actions: { flexDirection: 'row', justifyContent: 'flex-end', gap: 10, marginTop: 8 },
+  actions: { flexDirection: 'row', justifyContent: 'flex-end', gap: space.md, marginTop: space.sm },
   secondary: {
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    minHeight: 44,
+    paddingHorizontal: space.md,
+    paddingVertical: space.md,
+    minHeight: measure.hitTarget,
     justifyContent: 'center',
   },
-  secondaryText: { color: '#9ca3af', fontSize: 15 },
+  secondaryText: { color: color.textMuted, fontSize: typeRole.callout.fontSize },
   primary: {
-    backgroundColor: '#7c3aed',
-    borderRadius: 10,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    minHeight: 44,
+    backgroundColor: color.brand,
+    borderRadius: radius.md,
+    paddingHorizontal: space.lg,
+    paddingVertical: space.md,
+    minHeight: measure.hitTarget,
     justifyContent: 'center',
   },
-  primaryText: { color: '#fff', fontSize: 15, fontWeight: '600' },
+  primaryText: { color: color.textOnBrand, fontSize: typeRole.callout.fontSize, fontWeight: '600' },
   disabled: { opacity: 0.4 },
 });

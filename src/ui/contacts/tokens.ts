@@ -1,10 +1,12 @@
-export const CONTACTS_CANVAS = '#0a0a0a';
-export const CONTACTS_BRAND = '#7c3aed';
-export const CONTACTS_BRAND_TEXT = '#8f57f0';
-export const CONTACTS_BODY = '#f9fafb';
-export const CONTACTS_MUTED = '#808692';
-export const CONTACTS_HAIRLINE = '#1a1a1a';
-export const CONTACTS_SURFACE = '#111111';
-export const CONTACTS_ERROR = '#fca5a5';
-export const CONTACTS_RADIUS = 12;
-export const MIN_TARGET = 44;
+import { color, measure, radius } from '../../theme';
+
+export const CONTACTS_CANVAS = color.canvas;
+export const CONTACTS_BRAND = color.brand;
+export const CONTACTS_BRAND_TEXT = color.brandText;
+export const CONTACTS_BODY = color.textPrimary;
+export const CONTACTS_MUTED = color.textSecondary;
+export const CONTACTS_HAIRLINE = color.hairline;
+export const CONTACTS_SURFACE = color.surface;
+export const CONTACTS_ERROR = color.danger;
+export const CONTACTS_RADIUS = radius.md;
+export const MIN_TARGET = measure.hitTarget;

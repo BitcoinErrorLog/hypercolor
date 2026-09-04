@@ -1,0 +1,1380 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <title>Hypercolor VRT report</title>
+  <style>
+    body { font-family: ui-sans-serif, system-ui, sans-serif; background: #0a0a0a; color: #f9fafb; margin: 0; }
+    header, nav, main { padding: 16px 20px; }
+    a { color: #c4b5fd; }
+    .card { border: 1px solid #1a1a1a; margin: 16px 0; padding: 16px; background: #111; }
+    .triple { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
+    img { width: 100%; background: #1a1a1a; }
+    .empty { color: #808692; }
+    nav { display: flex; flex-wrap: wrap; gap: 12px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Hypercolor VRT</h1>
+    <p>baseline 00565b5 · candidate 00565b5 · hypercolor-vrt-catalog@maestro+pixelmatch+headless-resvg</p>
+    <p>2026-09-02T19:00:00.000Z · approval pending-named-human · 123 captures · 1 failed</p>
+  </header>
+  <nav><a href="#design-system/token-swatch/default/headless/catalog.png">design-system/headless/headless/default</a><a href="#bootstrap/app-splash/loading/headless/catalog.png">bootstrap/headless/headless/loading</a><a href="#auth/welcome/idle/headless/catalog.png">auth/headless/headless/idle</a><a href="#auth/welcome/loading/headless/catalog.png">auth/headless/headless/loading</a><a href="#auth/welcome/error/headless/catalog.png">auth/headless/headless/error</a><a href="#auth/welcome/debug-empty/headless/catalog.png">auth/headless/headless/debug-empty</a><a href="#auth/welcome/debug-busy/headless/catalog.png">auth/headless/headless/debug-busy</a><a href="#auth/welcome/debug-error/headless/catalog.png">auth/headless/headless/debug-error</a><a href="#auth/welcome/debug-result/headless/catalog.png">auth/headless/headless/debug-result</a><a href="#auth/awaiting-ring/with-url/headless/catalog.png">auth/headless/headless/with-url</a><a href="#auth/awaiting-ring/waiting/headless/catalog.png">auth/headless/headless/waiting</a><a href="#auth/awaiting-ring/copied/headless/catalog.png">auth/headless/headless/copied</a><a href="#auth/awaiting-ring/fail/headless/catalog.png">auth/headless/headless/fail</a><a href="#auth/enable/checking/headless/catalog.png">auth/headless/headless/checking</a><a href="#auth/enable/native-missing/headless/catalog.png">auth/headless/headless/native-missing</a><a href="#auth/enable/enabled/headless/catalog.png">auth/headless/headless/enabled</a><a href="#auth/enable/session-offline/headless/catalog.png">auth/headless/headless/session-offline</a><a href="#auth/enable/authorizing/headless/catalog.png">auth/headless/headless/authorizing</a><a href="#auth/enable/authorizing-https/headless/catalog.png">auth/headless/headless/authorizing-https</a><a href="#auth/enable/success/headless/catalog.png">auth/headless/headless/success</a><a href="#tabs/chats/messaging-off/headless/catalog.png">tabs/headless/headless/messaging-off</a><a href="#tabs/chats/empty/headless/catalog.png">tabs/headless/headless/empty</a><a href="#tabs/chats/populated/headless/catalog.png">tabs/headless/headless/populated</a><a href="#tabs/chats/unread-99/headless/catalog.png">tabs/headless/headless/unread-99</a><a href="#tabs/chats/pending-badge/headless/catalog.png">tabs/headless/headless/pending-badge</a><a href="#tabs/chats/offline/headless/catalog.png">tabs/headless/headless/offline</a><a href="#tabs/channels/create-private/headless/catalog.png">tabs/headless/headless/create-private</a><a href="#tabs/channels/create-public/headless/catalog.png">tabs/headless/headless/create-public</a><a href="#tabs/channels/join-empty/headless/catalog.png">tabs/headless/headless/join-empty</a><a href="#tabs/channels/join-invalid/headless/catalog.png">tabs/headless/headless/join-invalid</a><a href="#tabs/channels/join-busy/headless/catalog.png">tabs/headless/headless/join-busy</a><a href="#stack/channel/loading/headless/catalog.png">stack/headless/headless/loading</a><a href="#stack/channel/empty/headless/catalog.png">stack/headless/headless/empty</a><a href="#stack/channel/populated/headless/catalog.png">stack/headless/headless/populated</a><a href="#stack/channel/deleted/headless/catalog.png">stack/headless/headless/deleted</a><a href="#stack/channel/reply/headless/catalog.png">stack/headless/headless/reply</a><a href="#stack/channel/reactions/headless/catalog.png">stack/headless/headless/reactions</a><a href="#stack/channel/membership/headless/catalog.png">stack/headless/headless/membership</a><a href="#stack/channel/composer-hidden/headless/catalog.png">stack/headless/headless/composer-hidden</a><a href="#stack/channel/public/headless/catalog.png">stack/headless/headless/public</a><a href="#stack/channel-members/list/headless/catalog.png">stack/headless/headless/list</a><a href="#stack/channel-members/admin-add/headless/catalog.png">stack/headless/headless/admin-add</a><a href="#stack/channel-members/leave/headless/catalog.png">stack/headless/headless/leave</a><a href="#stack/channel-members/left/headless/catalog.png">stack/headless/headless/left</a><a href="#stack/channel-members/public-refresh/headless/catalog.png">stack/headless/headless/public-refresh</a><a href="#tabs/contacts/syncing/headless/catalog.png">tabs/headless/headless/syncing</a><a href="#tabs/contacts/nexus-note/headless/catalog.png">tabs/headless/headless/nexus-note</a><a href="#stack/contact-search/invalid/headless/catalog.png">stack/headless/headless/invalid</a><a href="#stack/contact-search/valid/headless/catalog.png">stack/headless/headless/valid</a><a href="#stack/contact-search/not-found/headless/catalog.png">stack/headless/headless/not-found</a><a href="#stack/contact-search/added/headless/catalog.png">stack/headless/headless/added</a><a href="#stack/contact-search/qr/headless/catalog.png">stack/headless/headless/qr</a><a href="#stack/contact-detail/default/headless/catalog.png">stack/headless/headless/default</a><a href="#tabs/profile/unnamed/headless/catalog.png">tabs/headless/headless/unnamed</a><a href="#tabs/profile/with-pubky/headless/catalog.png">tabs/headless/headless/with-pubky</a><a href="#tabs/profile/settings-visible/headless/catalog.png">tabs/headless/headless/settings-visible</a><a href="#tabs/profile/sign-out/headless/catalog.png">tabs/headless/headless/sign-out</a><a href="#tabs/profile/debug/headless/catalog.png">tabs/headless/headless/debug</a><a href="#stack/thread/send-disabled/headless/catalog.png">stack/headless/headless/send-disabled</a><a href="#stack/thread/sending/headless/catalog.png">stack/headless/headless/sending</a><a href="#stack/thread/failed/headless/catalog.png">stack/headless/headless/failed</a><a href="#stack/thread/delivered-read/headless/catalog.png">stack/headless/headless/delivered-read</a><a href="#stack/thread/messaging-cta/headless/catalog.png">stack/headless/headless/messaging-cta</a><a href="#stack/thread/payment-pending/headless/catalog.png">stack/headless/headless/payment-pending</a><a href="#stack/thread/payment-accepted/headless/catalog.png">stack/headless/headless/payment-accepted</a><a href="#stack/thread/payment-expired/headless/catalog.png">stack/headless/headless/payment-expired</a><a href="#stack/thread/payment-claimed/headless/catalog.png">stack/headless/headless/payment-claimed</a><a href="#stack/thread/payment-verified/headless/catalog.png">stack/headless/headless/payment-verified</a><a href="#stack/thread/attach-uploading/headless/catalog.png">stack/headless/headless/attach-uploading</a><a href="#stack/thread/attach-failed/headless/catalog.png">stack/headless/headless/attach-failed</a><a href="#stack/thread/attach-image/headless/catalog.png">stack/headless/headless/attach-image</a><a href="#stack/thread/attach-backup/headless/catalog.png">stack/headless/headless/attach-backup</a><a href="#stack/composer/sheet/headless/catalog.png">stack/headless/headless/sheet</a><a href="#stack/thread/tip-collapsed/headless/catalog.png">stack/headless/headless/tip-collapsed</a><a href="#stack/thread/tip-empty/headless/catalog.png">stack/headless/headless/tip-empty</a><a href="#stack/thread/tip-expiry/headless/catalog.png">stack/headless/headless/tip-expiry</a><a href="#stack/payment/compose-idle/headless/catalog.png">stack/headless/headless/compose-idle</a><a href="#stack/payment/compose-amount/headless/catalog.png">stack/headless/headless/compose-amount</a><a href="#stack/payment/compose-reference/headless/catalog.png">stack/headless/headless/compose-reference</a><a href="#stack/payment/compose-busy/headless/catalog.png">stack/headless/headless/compose-busy</a><a href="#stack/payment/review/headless/catalog.png">stack/headless/headless/review</a><a href="#tabs/requests/busy/headless/catalog.png">tabs/headless/headless/busy</a><a href="#tabs/settings/default/headless/catalog.png">tabs/headless/headless/default</a><a href="#tabs/settings/mesh-on/headless/catalog.png">tabs/headless/headless/mesh-on</a><a href="#tabs/settings/telemetry-on/headless/catalog.png">tabs/headless/headless/telemetry-on</a><a href="#tabs/settings/backup-busy/headless/catalog.png">tabs/headless/headless/backup-busy</a><a href="#tabs/settings/recovery-shown/headless/catalog.png">tabs/headless/headless/recovery-shown</a><a href="#tabs/settings/restore-ok/headless/catalog.png">tabs/headless/headless/restore-ok</a><a href="#tabs/settings/restore-err/headless/catalog.png">tabs/headless/headless/restore-err</a><a href="#tabs/settings/enable-row/headless/catalog.png">tabs/headless/headless/enable-row</a><a href="#tabs/settings/liveproof-idle/headless/catalog.png">tabs/headless/headless/liveproof-idle</a><a href="#tabs/settings/liveproof-running/headless/catalog.png">tabs/headless/headless/liveproof-running</a><a href="#tabs/settings/liveproof-ok/headless/catalog.png">tabs/headless/headless/liveproof-ok</a><a href="#tabs/settings/liveproof-fail/headless/catalog.png">tabs/headless/headless/liveproof-fail</a><a href="#overlay/attach/alert/headless/catalog.png">overlay/headless/headless/alert</a><a href="#overlay/e2e-hud/success/headless/catalog.png">overlay/headless/headless/success</a><a href="#overlay/e2e-hud/error/headless/catalog.png">overlay/headless/headless/error</a><a href="#chrome/tab-bar/focused/headless/catalog.png">chrome/headless/headless/focused</a><a href="#chrome/tab-bar/unfocused/headless/catalog.png">chrome/headless/headless/unfocused</a><a href="#a11y/font-scale/two/headless/catalog.png">a11y/headless/headless/two</a><a href="#tabs/contacts/content-empty/headless/catalog.png">tabs/headless/headless/content-empty</a><a href="#tabs/contacts/content-populated/headless/catalog.png">tabs/headless/headless/content-populated</a><a href="#tabs/contacts/content-offline/headless/catalog.png">tabs/headless/headless/content-offline</a><a href="#tabs/settings/recovery-gate/headless/catalog.png">tabs/headless/headless/recovery-gate</a></nav>
+  <main>
+    <article class="card" data-status="fail" data-platform="headless" data-journey="design-system" id="design-system/token-swatch/default/headless/catalog.png">
+  <h3>design-system/token-swatch/default/headless/catalog.png</h3>
+  <p>design-system / token-swatch / default · headless · headless · catalog</p>
+  <p>status fail · 100.000% changed (null px)</p>
+  <p>masks: none</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><img src="assets/baseline-design-system__token-swatch__default__headless__catalog.png" alt="baseline design-system/token-swatch/default/headless/catalog.png"/></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-design-system__token-swatch__default__headless__catalog.png" alt="candidate design-system/token-swatch/default/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="bootstrap" id="bootstrap/app-splash/loading/headless/catalog.png">
+  <h3>bootstrap/app-splash/loading/headless/catalog.png</h3>
+  <p>bootstrap / app-splash / loading · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: none</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-bootstrap__app-splash__loading__headless__catalog.png" alt="candidate bootstrap/app-splash/loading/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="bootstrap" id="bootstrap/linking-fallback/loading/headless/catalog.png">
+  <h3>bootstrap/linking-fallback/loading/headless/catalog.png</h3>
+  <p>bootstrap / linking-fallback / loading · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: none</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-bootstrap__linking-fallback__loading__headless__catalog.png" alt="candidate bootstrap/linking-fallback/loading/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="auth" id="auth/welcome/idle/headless/catalog.png">
+  <h3>auth/welcome/idle/headless/catalog.png</h3>
+  <p>auth / welcome / idle · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: none</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-auth__welcome__idle__headless__catalog.png" alt="candidate auth/welcome/idle/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="auth" id="auth/welcome/loading/headless/catalog.png">
+  <h3>auth/welcome/loading/headless/catalog.png</h3>
+  <p>auth / welcome / loading · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: none</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-auth__welcome__loading__headless__catalog.png" alt="candidate auth/welcome/loading/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="auth" id="auth/welcome/error/headless/catalog.png">
+  <h3>auth/welcome/error/headless/catalog.png</h3>
+  <p>auth / welcome / error · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: none</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-auth__welcome__error__headless__catalog.png" alt="candidate auth/welcome/error/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="auth" id="auth/enable/error/headless/catalog.png">
+  <h3>auth/enable/error/headless/catalog.png</h3>
+  <p>auth / enable / error · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: none</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-auth__enable__error__headless__catalog.png" alt="candidate auth/enable/error/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="auth" id="auth/welcome/debug-empty/headless/catalog.png">
+  <h3>auth/welcome/debug-empty/headless/catalog.png</h3>
+  <p>auth / welcome / debug-empty · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: none</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-auth__welcome__debug-empty__headless__catalog.png" alt="candidate auth/welcome/debug-empty/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="auth" id="auth/welcome/debug-busy/headless/catalog.png">
+  <h3>auth/welcome/debug-busy/headless/catalog.png</h3>
+  <p>auth / welcome / debug-busy · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: none</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-auth__welcome__debug-busy__headless__catalog.png" alt="candidate auth/welcome/debug-busy/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="auth" id="auth/welcome/debug-error/headless/catalog.png">
+  <h3>auth/welcome/debug-error/headless/catalog.png</h3>
+  <p>auth / welcome / debug-error · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: none</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-auth__welcome__debug-error__headless__catalog.png" alt="candidate auth/welcome/debug-error/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="auth" id="auth/welcome/debug-result/headless/catalog.png">
+  <h3>auth/welcome/debug-result/headless/catalog.png</h3>
+  <p>auth / welcome / debug-result · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: none</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-auth__welcome__debug-result__headless__catalog.png" alt="candidate auth/welcome/debug-result/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="auth" id="auth/awaiting-ring/with-url/headless/catalog.png">
+  <h3>auth/awaiting-ring/with-url/headless/catalog.png</h3>
+  <p>auth / awaiting-ring / with-url · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: mask-auth-url:secret</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-auth__awaiting-ring__with-url__headless__catalog.png" alt="candidate auth/awaiting-ring/with-url/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="auth" id="auth/awaiting-ring/waiting/headless/catalog.png">
+  <h3>auth/awaiting-ring/waiting/headless/catalog.png</h3>
+  <p>auth / awaiting-ring / waiting · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: none</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-auth__awaiting-ring__waiting__headless__catalog.png" alt="candidate auth/awaiting-ring/waiting/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="auth" id="auth/awaiting-ring/copied/headless/catalog.png">
+  <h3>auth/awaiting-ring/copied/headless/catalog.png</h3>
+  <p>auth / awaiting-ring / copied · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: none</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-auth__awaiting-ring__copied__headless__catalog.png" alt="candidate auth/awaiting-ring/copied/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="auth" id="auth/awaiting-ring/fail/headless/catalog.png">
+  <h3>auth/awaiting-ring/fail/headless/catalog.png</h3>
+  <p>auth / awaiting-ring / fail · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: none</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-auth__awaiting-ring__fail__headless__catalog.png" alt="candidate auth/awaiting-ring/fail/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="auth" id="auth/enable/checking/headless/catalog.png">
+  <h3>auth/enable/checking/headless/catalog.png</h3>
+  <p>auth / enable / checking · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: none</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-auth__enable__checking__headless__catalog.png" alt="candidate auth/enable/checking/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="auth" id="auth/enable/native-missing/headless/catalog.png">
+  <h3>auth/enable/native-missing/headless/catalog.png</h3>
+  <p>auth / enable / native-missing · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: none</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-auth__enable__native-missing__headless__catalog.png" alt="candidate auth/enable/native-missing/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="auth" id="auth/enable/enabled/headless/catalog.png">
+  <h3>auth/enable/enabled/headless/catalog.png</h3>
+  <p>auth / enable / enabled · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: none</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-auth__enable__enabled__headless__catalog.png" alt="candidate auth/enable/enabled/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="auth" id="auth/enable/session-offline/headless/catalog.png">
+  <h3>auth/enable/session-offline/headless/catalog.png</h3>
+  <p>auth / enable / session-offline · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: none</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-auth__enable__session-offline__headless__catalog.png" alt="candidate auth/enable/session-offline/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="auth" id="auth/enable/authorizing/headless/catalog.png">
+  <h3>auth/enable/authorizing/headless/catalog.png</h3>
+  <p>auth / enable / authorizing · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: mask-auth-url:secret</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-auth__enable__authorizing__headless__catalog.png" alt="candidate auth/enable/authorizing/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="auth" id="auth/enable/authorizing-https/headless/catalog.png">
+  <h3>auth/enable/authorizing-https/headless/catalog.png</h3>
+  <p>auth / enable / authorizing-https · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: mask-auth-url:secret</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-auth__enable__authorizing-https__headless__catalog.png" alt="candidate auth/enable/authorizing-https/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="auth" id="auth/enable/success/headless/catalog.png">
+  <h3>auth/enable/success/headless/catalog.png</h3>
+  <p>auth / enable / success · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: none</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-auth__enable__success__headless__catalog.png" alt="candidate auth/enable/success/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="tabs" id="tabs/chats/messaging-off/headless/catalog.png">
+  <h3>tabs/chats/messaging-off/headless/catalog.png</h3>
+  <p>tabs / chats / messaging-off · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: none</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-tabs__chats__messaging-off__headless__catalog.png" alt="candidate tabs/chats/messaging-off/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="tabs" id="tabs/chats/empty/headless/catalog.png">
+  <h3>tabs/chats/empty/headless/catalog.png</h3>
+  <p>tabs / chats / empty · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: none</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-tabs__chats__empty__headless__catalog.png" alt="candidate tabs/chats/empty/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="tabs" id="tabs/channels/empty/headless/catalog.png">
+  <h3>tabs/channels/empty/headless/catalog.png</h3>
+  <p>tabs / channels / empty · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: none</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-tabs__channels__empty__headless__catalog.png" alt="candidate tabs/channels/empty/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="tabs" id="tabs/contacts/empty/headless/catalog.png">
+  <h3>tabs/contacts/empty/headless/catalog.png</h3>
+  <p>tabs / contacts / empty · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: mask-pubky:pubky</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-tabs__contacts__empty__headless__catalog.png" alt="candidate tabs/contacts/empty/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="tabs" id="tabs/requests/empty/headless/catalog.png">
+  <h3>tabs/requests/empty/headless/catalog.png</h3>
+  <p>tabs / requests / empty · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: mask-pubky:pubky</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-tabs__requests__empty__headless__catalog.png" alt="candidate tabs/requests/empty/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="tabs" id="tabs/message-requests/empty/headless/catalog.png">
+  <h3>tabs/message-requests/empty/headless/catalog.png</h3>
+  <p>tabs / message-requests / empty · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: mask-pubky:pubky</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-tabs__message-requests__empty__headless__catalog.png" alt="candidate tabs/message-requests/empty/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="tabs" id="tabs/chats/populated/headless/catalog.png">
+  <h3>tabs/chats/populated/headless/catalog.png</h3>
+  <p>tabs / chats / populated · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: mask-pubky:pubky</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-tabs__chats__populated__headless__catalog.png" alt="candidate tabs/chats/populated/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="tabs" id="tabs/channels/populated/headless/catalog.png">
+  <h3>tabs/channels/populated/headless/catalog.png</h3>
+  <p>tabs / channels / populated · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: mask-pubky:pubky</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-tabs__channels__populated__headless__catalog.png" alt="candidate tabs/channels/populated/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="tabs" id="tabs/contacts/populated/headless/catalog.png">
+  <h3>tabs/contacts/populated/headless/catalog.png</h3>
+  <p>tabs / contacts / populated · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: mask-pubky:pubky</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-tabs__contacts__populated__headless__catalog.png" alt="candidate tabs/contacts/populated/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="tabs" id="tabs/requests/populated/headless/catalog.png">
+  <h3>tabs/requests/populated/headless/catalog.png</h3>
+  <p>tabs / requests / populated · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: mask-pubky:pubky</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-tabs__requests__populated__headless__catalog.png" alt="candidate tabs/requests/populated/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="tabs" id="tabs/message-requests/populated/headless/catalog.png">
+  <h3>tabs/message-requests/populated/headless/catalog.png</h3>
+  <p>tabs / message-requests / populated · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: mask-pubky:pubky</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-tabs__message-requests__populated__headless__catalog.png" alt="candidate tabs/message-requests/populated/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="tabs" id="tabs/chats/unread-99/headless/catalog.png">
+  <h3>tabs/chats/unread-99/headless/catalog.png</h3>
+  <p>tabs / chats / unread-99 · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: none</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-tabs__chats__unread-99__headless__catalog.png" alt="candidate tabs/chats/unread-99/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="tabs" id="tabs/chats/pending-badge/headless/catalog.png">
+  <h3>tabs/chats/pending-badge/headless/catalog.png</h3>
+  <p>tabs / chats / pending-badge · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: none</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-tabs__chats__pending-badge__headless__catalog.png" alt="candidate tabs/chats/pending-badge/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="tabs" id="tabs/chats/offline/headless/catalog.png">
+  <h3>tabs/chats/offline/headless/catalog.png</h3>
+  <p>tabs / chats / offline · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: none</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-tabs__chats__offline__headless__catalog.png" alt="candidate tabs/chats/offline/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="tabs" id="tabs/contacts/offline/headless/catalog.png">
+  <h3>tabs/contacts/offline/headless/catalog.png</h3>
+  <p>tabs / contacts / offline · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: mask-pubky:pubky</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-tabs__contacts__offline__headless__catalog.png" alt="candidate tabs/contacts/offline/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="tabs" id="tabs/channels/create-private/headless/catalog.png">
+  <h3>tabs/channels/create-private/headless/catalog.png</h3>
+  <p>tabs / channels / create-private · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: none</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-tabs__channels__create-private__headless__catalog.png" alt="candidate tabs/channels/create-private/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="tabs" id="tabs/channels/create-public/headless/catalog.png">
+  <h3>tabs/channels/create-public/headless/catalog.png</h3>
+  <p>tabs / channels / create-public · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: none</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-tabs__channels__create-public__headless__catalog.png" alt="candidate tabs/channels/create-public/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="tabs" id="tabs/channels/join-empty/headless/catalog.png">
+  <h3>tabs/channels/join-empty/headless/catalog.png</h3>
+  <p>tabs / channels / join-empty · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: none</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-tabs__channels__join-empty__headless__catalog.png" alt="candidate tabs/channels/join-empty/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="tabs" id="tabs/channels/join-invalid/headless/catalog.png">
+  <h3>tabs/channels/join-invalid/headless/catalog.png</h3>
+  <p>tabs / channels / join-invalid · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: none</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-tabs__channels__join-invalid__headless__catalog.png" alt="candidate tabs/channels/join-invalid/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="tabs" id="tabs/channels/join-busy/headless/catalog.png">
+  <h3>tabs/channels/join-busy/headless/catalog.png</h3>
+  <p>tabs / channels / join-busy · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: none</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-tabs__channels__join-busy__headless__catalog.png" alt="candidate tabs/channels/join-busy/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="stack" id="stack/channel/loading/headless/catalog.png">
+  <h3>stack/channel/loading/headless/catalog.png</h3>
+  <p>stack / channel / loading · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: none</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-stack__channel__loading__headless__catalog.png" alt="candidate stack/channel/loading/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="stack" id="stack/contact-search/loading/headless/catalog.png">
+  <h3>stack/contact-search/loading/headless/catalog.png</h3>
+  <p>stack / contact-search / loading · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: mask-pubky:pubky</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-stack__contact-search__loading__headless__catalog.png" alt="candidate stack/contact-search/loading/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="stack" id="stack/thread/loading/headless/catalog.png">
+  <h3>stack/thread/loading/headless/catalog.png</h3>
+  <p>stack / thread / loading · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: mask-pubky:pubky</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-stack__thread__loading__headless__catalog.png" alt="candidate stack/thread/loading/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="stack" id="stack/channel/empty/headless/catalog.png">
+  <h3>stack/channel/empty/headless/catalog.png</h3>
+  <p>stack / channel / empty · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: none</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-stack__channel__empty__headless__catalog.png" alt="candidate stack/channel/empty/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="stack" id="stack/contact-search/empty/headless/catalog.png">
+  <h3>stack/contact-search/empty/headless/catalog.png</h3>
+  <p>stack / contact-search / empty · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: mask-pubky:pubky</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-stack__contact-search__empty__headless__catalog.png" alt="candidate stack/contact-search/empty/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="stack" id="stack/thread/empty/headless/catalog.png">
+  <h3>stack/thread/empty/headless/catalog.png</h3>
+  <p>stack / thread / empty · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: mask-pubky:pubky</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-stack__thread__empty__headless__catalog.png" alt="candidate stack/thread/empty/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="stack" id="stack/channel/populated/headless/catalog.png">
+  <h3>stack/channel/populated/headless/catalog.png</h3>
+  <p>stack / channel / populated · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: mask-pubky:pubky</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-stack__channel__populated__headless__catalog.png" alt="candidate stack/channel/populated/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="stack" id="stack/thread/populated/headless/catalog.png">
+  <h3>stack/thread/populated/headless/catalog.png</h3>
+  <p>stack / thread / populated · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: mask-pubky:pubky</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-stack__thread__populated__headless__catalog.png" alt="candidate stack/thread/populated/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="stack" id="stack/channel/deleted/headless/catalog.png">
+  <h3>stack/channel/deleted/headless/catalog.png</h3>
+  <p>stack / channel / deleted · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: none</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-stack__channel__deleted__headless__catalog.png" alt="candidate stack/channel/deleted/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="stack" id="stack/channel/reply/headless/catalog.png">
+  <h3>stack/channel/reply/headless/catalog.png</h3>
+  <p>stack / channel / reply · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: none</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-stack__channel__reply__headless__catalog.png" alt="candidate stack/channel/reply/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="stack" id="stack/channel/reactions/headless/catalog.png">
+  <h3>stack/channel/reactions/headless/catalog.png</h3>
+  <p>stack / channel / reactions · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: none</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-stack__channel__reactions__headless__catalog.png" alt="candidate stack/channel/reactions/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="stack" id="stack/channel/membership/headless/catalog.png">
+  <h3>stack/channel/membership/headless/catalog.png</h3>
+  <p>stack / channel / membership · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: none</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-stack__channel__membership__headless__catalog.png" alt="candidate stack/channel/membership/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="stack" id="stack/channel/composer-hidden/headless/catalog.png">
+  <h3>stack/channel/composer-hidden/headless/catalog.png</h3>
+  <p>stack / channel / composer-hidden · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: none</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-stack__channel__composer-hidden__headless__catalog.png" alt="candidate stack/channel/composer-hidden/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="stack" id="stack/channel/public/headless/catalog.png">
+  <h3>stack/channel/public/headless/catalog.png</h3>
+  <p>stack / channel / public · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: none</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-stack__channel__public__headless__catalog.png" alt="candidate stack/channel/public/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="stack" id="stack/channel-members/list/headless/catalog.png">
+  <h3>stack/channel-members/list/headless/catalog.png</h3>
+  <p>stack / channel-members / list · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: mask-pubky:pubky</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-stack__channel-members__list__headless__catalog.png" alt="candidate stack/channel-members/list/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="stack" id="stack/channel-members/admin-add/headless/catalog.png">
+  <h3>stack/channel-members/admin-add/headless/catalog.png</h3>
+  <p>stack / channel-members / admin-add · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: mask-pubky:pubky</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-stack__channel-members__admin-add__headless__catalog.png" alt="candidate stack/channel-members/admin-add/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="stack" id="stack/channel-members/leave/headless/catalog.png">
+  <h3>stack/channel-members/leave/headless/catalog.png</h3>
+  <p>stack / channel-members / leave · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: mask-pubky:pubky</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-stack__channel-members__leave__headless__catalog.png" alt="candidate stack/channel-members/leave/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="stack" id="stack/channel-members/left/headless/catalog.png">
+  <h3>stack/channel-members/left/headless/catalog.png</h3>
+  <p>stack / channel-members / left · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: mask-pubky:pubky</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-stack__channel-members__left__headless__catalog.png" alt="candidate stack/channel-members/left/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="stack" id="stack/channel-members/public-refresh/headless/catalog.png">
+  <h3>stack/channel-members/public-refresh/headless/catalog.png</h3>
+  <p>stack / channel-members / public-refresh · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: mask-pubky:pubky</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-stack__channel-members__public-refresh__headless__catalog.png" alt="candidate stack/channel-members/public-refresh/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="tabs" id="tabs/contacts/syncing/headless/catalog.png">
+  <h3>tabs/contacts/syncing/headless/catalog.png</h3>
+  <p>tabs / contacts / syncing · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: mask-pubky:pubky</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-tabs__contacts__syncing__headless__catalog.png" alt="candidate tabs/contacts/syncing/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="tabs" id="tabs/contacts/nexus-note/headless/catalog.png">
+  <h3>tabs/contacts/nexus-note/headless/catalog.png</h3>
+  <p>tabs / contacts / nexus-note · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: mask-pubky:pubky</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-tabs__contacts__nexus-note__headless__catalog.png" alt="candidate tabs/contacts/nexus-note/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="stack" id="stack/contact-search/invalid/headless/catalog.png">
+  <h3>stack/contact-search/invalid/headless/catalog.png</h3>
+  <p>stack / contact-search / invalid · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: mask-pubky:pubky</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-stack__contact-search__invalid__headless__catalog.png" alt="candidate stack/contact-search/invalid/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="stack" id="stack/contact-search/valid/headless/catalog.png">
+  <h3>stack/contact-search/valid/headless/catalog.png</h3>
+  <p>stack / contact-search / valid · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: mask-pubky:pubky</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-stack__contact-search__valid__headless__catalog.png" alt="candidate stack/contact-search/valid/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="stack" id="stack/contact-search/not-found/headless/catalog.png">
+  <h3>stack/contact-search/not-found/headless/catalog.png</h3>
+  <p>stack / contact-search / not-found · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: mask-pubky:pubky</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-stack__contact-search__not-found__headless__catalog.png" alt="candidate stack/contact-search/not-found/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="stack" id="stack/contact-search/added/headless/catalog.png">
+  <h3>stack/contact-search/added/headless/catalog.png</h3>
+  <p>stack / contact-search / added · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: mask-pubky:pubky</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-stack__contact-search__added__headless__catalog.png" alt="candidate stack/contact-search/added/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="stack" id="stack/contact-search/qr/headless/catalog.png">
+  <h3>stack/contact-search/qr/headless/catalog.png</h3>
+  <p>stack / contact-search / qr · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: mask-pubky:pubky</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-stack__contact-search__qr__headless__catalog.png" alt="candidate stack/contact-search/qr/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="stack" id="stack/contact-detail/default/headless/catalog.png">
+  <h3>stack/contact-detail/default/headless/catalog.png</h3>
+  <p>stack / contact-detail / default · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: mask-pubky:pubky</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-stack__contact-detail__default__headless__catalog.png" alt="candidate stack/contact-detail/default/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="tabs" id="tabs/profile/unnamed/headless/catalog.png">
+  <h3>tabs/profile/unnamed/headless/catalog.png</h3>
+  <p>tabs / profile / unnamed · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: mask-pubky:pubky</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-tabs__profile__unnamed__headless__catalog.png" alt="candidate tabs/profile/unnamed/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="tabs" id="tabs/profile/with-pubky/headless/catalog.png">
+  <h3>tabs/profile/with-pubky/headless/catalog.png</h3>
+  <p>tabs / profile / with-pubky · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: mask-pubky:pubky</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-tabs__profile__with-pubky__headless__catalog.png" alt="candidate tabs/profile/with-pubky/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="tabs" id="tabs/profile/settings-visible/headless/catalog.png">
+  <h3>tabs/profile/settings-visible/headless/catalog.png</h3>
+  <p>tabs / profile / settings-visible · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: mask-pubky:pubky</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-tabs__profile__settings-visible__headless__catalog.png" alt="candidate tabs/profile/settings-visible/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="tabs" id="tabs/profile/sign-out/headless/catalog.png">
+  <h3>tabs/profile/sign-out/headless/catalog.png</h3>
+  <p>tabs / profile / sign-out · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: mask-pubky:pubky</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-tabs__profile__sign-out__headless__catalog.png" alt="candidate tabs/profile/sign-out/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="tabs" id="tabs/profile/debug/headless/catalog.png">
+  <h3>tabs/profile/debug/headless/catalog.png</h3>
+  <p>tabs / profile / debug · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: mask-pubky:pubky</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-tabs__profile__debug__headless__catalog.png" alt="candidate tabs/profile/debug/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="stack" id="stack/thread/send-disabled/headless/catalog.png">
+  <h3>stack/thread/send-disabled/headless/catalog.png</h3>
+  <p>stack / thread / send-disabled · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: mask-pubky:pubky</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-stack__thread__send-disabled__headless__catalog.png" alt="candidate stack/thread/send-disabled/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="stack" id="stack/thread/sending/headless/catalog.png">
+  <h3>stack/thread/sending/headless/catalog.png</h3>
+  <p>stack / thread / sending · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: mask-pubky:pubky</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-stack__thread__sending__headless__catalog.png" alt="candidate stack/thread/sending/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="stack" id="stack/thread/failed/headless/catalog.png">
+  <h3>stack/thread/failed/headless/catalog.png</h3>
+  <p>stack / thread / failed · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: mask-pubky:pubky</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-stack__thread__failed__headless__catalog.png" alt="candidate stack/thread/failed/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="stack" id="stack/thread/delivered-read/headless/catalog.png">
+  <h3>stack/thread/delivered-read/headless/catalog.png</h3>
+  <p>stack / thread / delivered-read · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: mask-pubky:pubky</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-stack__thread__delivered-read__headless__catalog.png" alt="candidate stack/thread/delivered-read/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="stack" id="stack/thread/messaging-cta/headless/catalog.png">
+  <h3>stack/thread/messaging-cta/headless/catalog.png</h3>
+  <p>stack / thread / messaging-cta · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: mask-pubky:pubky</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-stack__thread__messaging-cta__headless__catalog.png" alt="candidate stack/thread/messaging-cta/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="stack" id="stack/thread/payment-pending/headless/catalog.png">
+  <h3>stack/thread/payment-pending/headless/catalog.png</h3>
+  <p>stack / thread / payment-pending · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: mask-pubky:pubky</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-stack__thread__payment-pending__headless__catalog.png" alt="candidate stack/thread/payment-pending/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="stack" id="stack/thread/payment-accepted/headless/catalog.png">
+  <h3>stack/thread/payment-accepted/headless/catalog.png</h3>
+  <p>stack / thread / payment-accepted · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: mask-pubky:pubky</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-stack__thread__payment-accepted__headless__catalog.png" alt="candidate stack/thread/payment-accepted/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="stack" id="stack/thread/payment-expired/headless/catalog.png">
+  <h3>stack/thread/payment-expired/headless/catalog.png</h3>
+  <p>stack / thread / payment-expired · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: mask-pubky:pubky</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-stack__thread__payment-expired__headless__catalog.png" alt="candidate stack/thread/payment-expired/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="stack" id="stack/thread/payment-claimed/headless/catalog.png">
+  <h3>stack/thread/payment-claimed/headless/catalog.png</h3>
+  <p>stack / thread / payment-claimed · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: mask-pubky:pubky</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-stack__thread__payment-claimed__headless__catalog.png" alt="candidate stack/thread/payment-claimed/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="stack" id="stack/thread/payment-verified/headless/catalog.png">
+  <h3>stack/thread/payment-verified/headless/catalog.png</h3>
+  <p>stack / thread / payment-verified · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: mask-pubky:pubky</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-stack__thread__payment-verified__headless__catalog.png" alt="candidate stack/thread/payment-verified/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="stack" id="stack/thread/attach-uploading/headless/catalog.png">
+  <h3>stack/thread/attach-uploading/headless/catalog.png</h3>
+  <p>stack / thread / attach-uploading · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: mask-pubky:pubky</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-stack__thread__attach-uploading__headless__catalog.png" alt="candidate stack/thread/attach-uploading/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="stack" id="stack/thread/attach-failed/headless/catalog.png">
+  <h3>stack/thread/attach-failed/headless/catalog.png</h3>
+  <p>stack / thread / attach-failed · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: mask-pubky:pubky</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-stack__thread__attach-failed__headless__catalog.png" alt="candidate stack/thread/attach-failed/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="stack" id="stack/thread/attach-image/headless/catalog.png">
+  <h3>stack/thread/attach-image/headless/catalog.png</h3>
+  <p>stack / thread / attach-image · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: mask-pubky:pubky</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-stack__thread__attach-image__headless__catalog.png" alt="candidate stack/thread/attach-image/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="stack" id="stack/thread/attach-backup/headless/catalog.png">
+  <h3>stack/thread/attach-backup/headless/catalog.png</h3>
+  <p>stack / thread / attach-backup · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: mask-pubky:pubky</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-stack__thread__attach-backup__headless__catalog.png" alt="candidate stack/thread/attach-backup/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="stack" id="stack/composer/sheet/headless/catalog.png">
+  <h3>stack/composer/sheet/headless/catalog.png</h3>
+  <p>stack / composer / sheet · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: none</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-stack__composer__sheet__headless__catalog.png" alt="candidate stack/composer/sheet/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="stack" id="stack/thread/tip-collapsed/headless/catalog.png">
+  <h3>stack/thread/tip-collapsed/headless/catalog.png</h3>
+  <p>stack / thread / tip-collapsed · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: mask-pubky:pubky</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-stack__thread__tip-collapsed__headless__catalog.png" alt="candidate stack/thread/tip-collapsed/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="stack" id="stack/thread/tip-empty/headless/catalog.png">
+  <h3>stack/thread/tip-empty/headless/catalog.png</h3>
+  <p>stack / thread / tip-empty · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: mask-pubky:pubky</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-stack__thread__tip-empty__headless__catalog.png" alt="candidate stack/thread/tip-empty/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="stack" id="stack/thread/tip-expiry/headless/catalog.png">
+  <h3>stack/thread/tip-expiry/headless/catalog.png</h3>
+  <p>stack / thread / tip-expiry · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: mask-pubky:pubky</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-stack__thread__tip-expiry__headless__catalog.png" alt="candidate stack/thread/tip-expiry/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="stack" id="stack/payment/compose-idle/headless/catalog.png">
+  <h3>stack/payment/compose-idle/headless/catalog.png</h3>
+  <p>stack / payment / compose-idle · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: mask-pubky:pubky</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-stack__payment__compose-idle__headless__catalog.png" alt="candidate stack/payment/compose-idle/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="stack" id="stack/payment/compose-amount/headless/catalog.png">
+  <h3>stack/payment/compose-amount/headless/catalog.png</h3>
+  <p>stack / payment / compose-amount · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: mask-pubky:pubky</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-stack__payment__compose-amount__headless__catalog.png" alt="candidate stack/payment/compose-amount/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="stack" id="stack/payment/compose-reference/headless/catalog.png">
+  <h3>stack/payment/compose-reference/headless/catalog.png</h3>
+  <p>stack / payment / compose-reference · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: mask-pubky:pubky</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-stack__payment__compose-reference__headless__catalog.png" alt="candidate stack/payment/compose-reference/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="stack" id="stack/payment/compose-busy/headless/catalog.png">
+  <h3>stack/payment/compose-busy/headless/catalog.png</h3>
+  <p>stack / payment / compose-busy · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: mask-pubky:pubky</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-stack__payment__compose-busy__headless__catalog.png" alt="candidate stack/payment/compose-busy/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="stack" id="stack/payment/review/headless/catalog.png">
+  <h3>stack/payment/review/headless/catalog.png</h3>
+  <p>stack / payment / review · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: mask-pubky:pubky</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-stack__payment__review__headless__catalog.png" alt="candidate stack/payment/review/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="tabs" id="tabs/requests/busy/headless/catalog.png">
+  <h3>tabs/requests/busy/headless/catalog.png</h3>
+  <p>tabs / requests / busy · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: mask-pubky:pubky</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-tabs__requests__busy__headless__catalog.png" alt="candidate tabs/requests/busy/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="tabs" id="tabs/settings/default/headless/catalog.png">
+  <h3>tabs/settings/default/headless/catalog.png</h3>
+  <p>tabs / settings / default · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: none</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-tabs__settings__default__headless__catalog.png" alt="candidate tabs/settings/default/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="tabs" id="tabs/settings/mesh-on/headless/catalog.png">
+  <h3>tabs/settings/mesh-on/headless/catalog.png</h3>
+  <p>tabs / settings / mesh-on · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: none</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-tabs__settings__mesh-on__headless__catalog.png" alt="candidate tabs/settings/mesh-on/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="tabs" id="tabs/settings/telemetry-on/headless/catalog.png">
+  <h3>tabs/settings/telemetry-on/headless/catalog.png</h3>
+  <p>tabs / settings / telemetry-on · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: none</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-tabs__settings__telemetry-on__headless__catalog.png" alt="candidate tabs/settings/telemetry-on/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="tabs" id="tabs/settings/backup-busy/headless/catalog.png">
+  <h3>tabs/settings/backup-busy/headless/catalog.png</h3>
+  <p>tabs / settings / backup-busy · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: none</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-tabs__settings__backup-busy__headless__catalog.png" alt="candidate tabs/settings/backup-busy/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="tabs" id="tabs/settings/recovery-shown/headless/catalog.png">
+  <h3>tabs/settings/recovery-shown/headless/catalog.png</h3>
+  <p>tabs / settings / recovery-shown · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: mask-auth-url:secret, mask-recovery:recovery</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-tabs__settings__recovery-shown__headless__catalog.png" alt="candidate tabs/settings/recovery-shown/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="tabs" id="tabs/settings/restore-ok/headless/catalog.png">
+  <h3>tabs/settings/restore-ok/headless/catalog.png</h3>
+  <p>tabs / settings / restore-ok · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: none</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-tabs__settings__restore-ok__headless__catalog.png" alt="candidate tabs/settings/restore-ok/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="tabs" id="tabs/settings/restore-err/headless/catalog.png">
+  <h3>tabs/settings/restore-err/headless/catalog.png</h3>
+  <p>tabs / settings / restore-err · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: none</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-tabs__settings__restore-err__headless__catalog.png" alt="candidate tabs/settings/restore-err/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="tabs" id="tabs/settings/enable-row/headless/catalog.png">
+  <h3>tabs/settings/enable-row/headless/catalog.png</h3>
+  <p>tabs / settings / enable-row · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: none</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-tabs__settings__enable-row__headless__catalog.png" alt="candidate tabs/settings/enable-row/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="tabs" id="tabs/settings/liveproof-idle/headless/catalog.png">
+  <h3>tabs/settings/liveproof-idle/headless/catalog.png</h3>
+  <p>tabs / settings / liveproof-idle · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: none</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-tabs__settings__liveproof-idle__headless__catalog.png" alt="candidate tabs/settings/liveproof-idle/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="tabs" id="tabs/settings/liveproof-running/headless/catalog.png">
+  <h3>tabs/settings/liveproof-running/headless/catalog.png</h3>
+  <p>tabs / settings / liveproof-running · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: none</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-tabs__settings__liveproof-running__headless__catalog.png" alt="candidate tabs/settings/liveproof-running/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="tabs" id="tabs/settings/liveproof-ok/headless/catalog.png">
+  <h3>tabs/settings/liveproof-ok/headless/catalog.png</h3>
+  <p>tabs / settings / liveproof-ok · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: none</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-tabs__settings__liveproof-ok__headless__catalog.png" alt="candidate tabs/settings/liveproof-ok/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="tabs" id="tabs/settings/liveproof-fail/headless/catalog.png">
+  <h3>tabs/settings/liveproof-fail/headless/catalog.png</h3>
+  <p>tabs / settings / liveproof-fail · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: none</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-tabs__settings__liveproof-fail__headless__catalog.png" alt="candidate tabs/settings/liveproof-fail/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="overlay" id="overlay/attach/alert/headless/catalog.png">
+  <h3>overlay/attach/alert/headless/catalog.png</h3>
+  <p>overlay / attach / alert · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: none</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-overlay__attach__alert__headless__catalog.png" alt="candidate overlay/attach/alert/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="overlay" id="overlay/permission/alert/headless/catalog.png">
+  <h3>overlay/permission/alert/headless/catalog.png</h3>
+  <p>overlay / permission / alert · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: none</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-overlay__permission__alert__headless__catalog.png" alt="candidate overlay/permission/alert/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="overlay" id="overlay/wallet/alert/headless/catalog.png">
+  <h3>overlay/wallet/alert/headless/catalog.png</h3>
+  <p>overlay / wallet / alert · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: none</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-overlay__wallet__alert__headless__catalog.png" alt="candidate overlay/wallet/alert/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="overlay" id="overlay/sign-out/alert/headless/catalog.png">
+  <h3>overlay/sign-out/alert/headless/catalog.png</h3>
+  <p>overlay / sign-out / alert · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: none</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-overlay__sign-out__alert__headless__catalog.png" alt="candidate overlay/sign-out/alert/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="overlay" id="overlay/e2e-hud/success/headless/catalog.png">
+  <h3>overlay/e2e-hud/success/headless/catalog.png</h3>
+  <p>overlay / e2e-hud / success · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: none</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-overlay__e2e-hud__success__headless__catalog.png" alt="candidate overlay/e2e-hud/success/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="overlay" id="overlay/e2e-hud/error/headless/catalog.png">
+  <h3>overlay/e2e-hud/error/headless/catalog.png</h3>
+  <p>overlay / e2e-hud / error · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: none</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-overlay__e2e-hud__error__headless__catalog.png" alt="candidate overlay/e2e-hud/error/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="chrome" id="chrome/tab-bar/focused/headless/catalog.png">
+  <h3>chrome/tab-bar/focused/headless/catalog.png</h3>
+  <p>chrome / tab-bar / focused · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: none</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-chrome__tab-bar__focused__headless__catalog.png" alt="candidate chrome/tab-bar/focused/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="chrome" id="chrome/tab-bar/unfocused/headless/catalog.png">
+  <h3>chrome/tab-bar/unfocused/headless/catalog.png</h3>
+  <p>chrome / tab-bar / unfocused · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: none</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-chrome__tab-bar__unfocused__headless__catalog.png" alt="candidate chrome/tab-bar/unfocused/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="a11y" id="a11y/font-scale/two/headless/catalog.png">
+  <h3>a11y/font-scale/two/headless/catalog.png</h3>
+  <p>a11y / font-scale / two · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: none</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-a11y__font-scale__two__headless__catalog.png" alt="candidate a11y/font-scale/two/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="tabs" id="tabs/contacts/content-empty/headless/catalog.png">
+  <h3>tabs/contacts/content-empty/headless/catalog.png</h3>
+  <p>tabs / contacts / content-empty · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: mask-pubky:pubky</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-tabs__contacts__content-empty__headless__catalog.png" alt="candidate tabs/contacts/content-empty/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="tabs" id="tabs/contacts/content-populated/headless/catalog.png">
+  <h3>tabs/contacts/content-populated/headless/catalog.png</h3>
+  <p>tabs / contacts / content-populated · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: mask-pubky:pubky</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-tabs__contacts__content-populated__headless__catalog.png" alt="candidate tabs/contacts/content-populated/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="tabs" id="tabs/contacts/content-offline/headless/catalog.png">
+  <h3>tabs/contacts/content-offline/headless/catalog.png</h3>
+  <p>tabs / contacts / content-offline · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: mask-pubky:pubky</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-tabs__contacts__content-offline__headless__catalog.png" alt="candidate tabs/contacts/content-offline/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+<article class="card" data-status="missing-baseline" data-platform="headless" data-journey="tabs" id="tabs/settings/recovery-gate/headless/catalog.png">
+  <h3>tabs/settings/recovery-gate/headless/catalog.png</h3>
+  <p>tabs / settings / recovery-gate · headless · headless · catalog</p>
+  <p>status missing-baseline</p>
+  <p>masks: mask-auth-url:secret, mask-recovery:recovery</p>
+  <div class="triple">
+    <figure><figcaption>Baseline</figcaption><p class="empty">No baseline</p></figure>
+    <figure><figcaption>Candidate</figcaption><img src="assets/candidate-tabs__settings__recovery-gate__headless__catalog.png" alt="candidate tabs/settings/recovery-gate/headless/catalog.png"/></figure>
+    <figure><figcaption>Overlay</figcaption><p class="empty">No overlay</p></figure>
+  </div>
+</article>
+  </main>
+</body>
+</html>

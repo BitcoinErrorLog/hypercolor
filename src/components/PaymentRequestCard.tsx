@@ -11,6 +11,7 @@ import { formatPaymentDisplayText, type PaymentRequestRecord } from '../types/pa
 import { COPY } from '../copy/uxCopy';
 import { HIT_SLOP_44 } from '../ui/hitTarget';
 import { formatPaymentReceipt } from '../ui/paymentReceiptStatus';
+import { color, space, radius, typeRole, measure } from '../theme';
 
 export function PaymentRequestCard({
   record,
@@ -66,7 +67,7 @@ export function PaymentRequestCard({
           accessibilityLabel={COPY.paymentSending}
           style={styles.sendingRow}
         >
-          <ActivityIndicator color="#fff" />
+          <ActivityIndicator color={color.textOnBrand} />
           <Text style={styles.sendingText}>{COPY.paymentSending}</Text>
         </View>
       ) : null}
@@ -87,7 +88,7 @@ export function PaymentRequestCard({
             value={proofDraft}
             onChangeText={onChangeProofDraft}
             placeholder="Preimage (optional)"
-            placeholderTextColor="rgba(255,255,255,0.4)"
+            placeholderTextColor={color.textOnBrandUi}
             autoCapitalize="none"
             autoCorrect={false}
           />
@@ -179,45 +180,55 @@ export function useTickingNow(intervalMs = 1000): number {
 }
 
 const styles = StyleSheet.create({
-  card: { minWidth: 180, gap: 6 },
+  card: { minWidth: 180, gap: space.sm },
   title: {
-    fontSize: 12,
+    fontSize: typeRole.meta.fontSize,
     fontWeight: '600',
-    color: 'rgba(255,255,255,0.7)',
+    color: color.textOnBrandMuted,
     textTransform: 'uppercase',
   },
-  amount: { fontSize: 18, fontWeight: '700', color: '#fff' },
-  reference: { fontSize: 13, color: 'rgba(255,255,255,0.8)' },
-  chipRow: { flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
-  chip: { borderRadius: 999, paddingHorizontal: 8, paddingVertical: 3 },
-  chipPending: { backgroundColor: 'rgba(250,204,21,0.2)' },
-  chipOk: { backgroundColor: 'rgba(74,222,128,0.2)' },
-  chipBad: { backgroundColor: 'rgba(248,113,113,0.2)' },
-  chipText: { fontSize: 11, color: '#fff', fontWeight: '600' },
-  expiry: { fontSize: 11, color: 'rgba(255,255,255,0.6)' },
-  actions: { flexDirection: 'row', gap: 8, marginTop: 4 },
-  actionsColumn: { gap: 8, marginTop: 4 },
+  amount: { fontSize: typeRole.numeric.fontSize, fontWeight: '700', color: color.textOnBrand },
+  reference: { fontSize: typeRole.caption.fontSize, color: color.textOnBrandMuted },
+  chipRow: { flexDirection: 'row', alignItems: 'center', gap: space.sm, flexWrap: 'wrap' },
+  chip: { borderRadius: radius.full, paddingHorizontal: space.sm, paddingVertical: 3 },
+  chipPending: { backgroundColor: color.chipWarning },
+  chipOk: { backgroundColor: color.chipSuccess },
+  chipBad: { backgroundColor: color.chipDanger },
+  chipText: { fontSize: typeRole.meta.fontSize, color: color.textOnBrand, fontWeight: '600' },
+  expiry: { fontSize: typeRole.meta.fontSize, color: color.textOnBrandUi },
+  actions: { flexDirection: 'row', gap: space.sm, marginTop: space.xs },
+  actionsColumn: { gap: space.sm, marginTop: space.xs },
   btn: {
-    borderRadius: 10,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    minHeight: 44,
+    borderRadius: radius.md,
+    paddingHorizontal: space.md,
+    paddingVertical: space.md,
+    minHeight: measure.hitTarget,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  btnPrimary: { backgroundColor: 'rgba(255,255,255,0.18)' },
-  btnGhost: { backgroundColor: 'rgba(0,0,0,0.25)' },
+  btnPrimary: { backgroundColor: color.overlayOnBrand },
+  btnGhost: { backgroundColor: color.overlaySoft },
   btnDisabled: { opacity: 0.4 },
-  btnText: { color: '#fff', fontSize: 13, fontWeight: '600' },
+  btnText: { color: color.textOnBrand, fontSize: typeRole.caption.fontSize, fontWeight: '600' },
   proofInput: {
-    backgroundColor: 'rgba(0,0,0,0.25)',
-    borderRadius: 8,
-    color: '#fff',
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-    fontSize: 12,
+    backgroundColor: color.overlaySoft,
+    borderRadius: radius.sm,
+    color: color.textOnBrand,
+    paddingHorizontal: space.md,
+    paddingVertical: space.sm,
+    fontSize: typeRole.meta.fontSize,
     fontFamily: 'monospace',
   },
-  sendingRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 4, minHeight: 44 },
-  sendingText: { color: 'rgba(255,255,255,0.8)', fontSize: 13, fontWeight: '600' },
+  sendingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.sm,
+    marginTop: space.xs,
+    minHeight: measure.hitTarget,
+  },
+  sendingText: {
+    color: color.textOnBrandMuted,
+    fontSize: typeRole.caption.fontSize,
+    fontWeight: '600',
+  },
 });

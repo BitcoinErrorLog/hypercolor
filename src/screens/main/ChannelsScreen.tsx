@@ -41,6 +41,8 @@ import {
 } from '../../ui/channelList';
 import { modalAnimationType, useReduceMotion } from '../../ui/reduceMotion';
 import { sanitizeError } from '../../ui/sanitizedError';
+import { color, space, radius, typeRole, measure } from '../../theme';
+import { Icon, ListRow } from '../../ui/primitives';
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
 type ChannelsRoute = RouteProp<MainTabParamList, 'Channels'>;
@@ -273,43 +275,21 @@ export function ChannelsScreenContent({
 
   const renderChannel = useCallback(
     ({ item }: { item: ChannelListItem }) => (
-      <TouchableOpacity
+      <ListRow
         testID={item.isPublic ? 'channelRowPublic' : 'channelRowPrivate'}
-        style={styles.row}
-        onPress={() => onOpenChannel(item.channelId)}
-        accessibilityRole="button"
         accessibilityLabel={`${item.name}, ${item.isPublic ? COPY.publicTopic : COPY.privateGroup}${
           item.unreadCount > 0 ? `, ${item.unreadCount} unread` : ''
         }`}
-      >
-        <View style={styles.avatar}>
-          <Text style={styles.avatarLetter}>
-            {item.isPublic ? '#' : item.name.charAt(0).toUpperCase()}
-          </Text>
-        </View>
-        <View style={styles.body}>
-          <View style={styles.rowHeader}>
-            <Text style={styles.name} numberOfLines={1}>
-              {item.name}
-            </Text>
-            {item.lastMessageAt ? (
-              <Text style={styles.time}>{formatRelativeTime(item.lastMessageAt)}</Text>
-            ) : null}
-          </View>
-          <View style={styles.metaRow}>
-            <Text style={styles.meta} numberOfLines={1}>
-              {item.isPublic ? COPY.publicTopic : COPY.privateGroup}
-            </Text>
-            {item.unreadCount > 0 ? (
-              <View testID="channelUnreadBadge" style={styles.badge}>
-                <Text style={styles.badgeText}>
-                  {item.unreadCount > 99 ? '99+' : item.unreadCount}
-                </Text>
-              </View>
-            ) : null}
-          </View>
-        </View>
-      </TouchableOpacity>
+        title={item.name}
+        subtitle={item.isPublic ? COPY.publicTopic : COPY.privateGroup}
+        meta={item.lastMessageAt ? formatRelativeTime(item.lastMessageAt) : undefined}
+        badge={item.unreadCount}
+        unread={item.unreadCount > 0}
+        leading={
+          <Icon name={item.isPublic ? 'radio-outline' : 'people-outline'} tone="secondary" />
+        }
+        onPress={() => onOpenChannel(item.channelId)}
+      />
     ),
     [onOpenChannel],
   );
@@ -377,7 +357,7 @@ export function ChannelsScreenContent({
             onPress={() => onOpenCreate(mode === 'public')}
             style={styles.headerHit}
           >
-            <Text style={styles.add}>+</Text>
+            <Icon name="add" tone="brand" />
           </TouchableOpacity>
         </View>
       </View>
@@ -392,7 +372,9 @@ export function ChannelsScreenContent({
           onPress={() => onModeChange('private')}
           style={[styles.segmentBtn, mode === 'private' && styles.segmentOn]}
         >
-          <Text style={styles.segmentText}>{COPY.channelsPrivate}</Text>
+          <Text style={[styles.segmentText, mode === 'private' && styles.segmentTextOn]}>
+            {COPY.channelsPrivate}
+          </Text>
         </TouchableOpacity>
         <TouchableOpacity
           testID="channelsModePublic"
@@ -403,7 +385,9 @@ export function ChannelsScreenContent({
           onPress={() => onModeChange('public')}
           style={[styles.segmentBtn, mode === 'public' && styles.segmentOn]}
         >
-          <Text style={styles.segmentText}>{COPY.channelsPublic}</Text>
+          <Text style={[styles.segmentText, mode === 'public' && styles.segmentTextOn]}>
+            {COPY.channelsPublic}
+          </Text>
         </TouchableOpacity>
       </View>
 
@@ -497,7 +481,7 @@ export function ChannelsScreenContent({
               value={name}
               onChangeText={setName}
               placeholder="Name"
-              placeholderTextColor="#4b5563"
+              placeholderTextColor={color.textSecondary}
               accessibilityLabel="Channel name"
             />
             <View style={styles.toggleRow}>
@@ -609,7 +593,7 @@ export function ChannelsScreenContent({
               value={joinRef}
               onChangeText={setJoinRef}
               placeholder="hypercolor://join-public?channel=…"
-              placeholderTextColor="#4b5563"
+              placeholderTextColor={color.textSecondary}
               autoCapitalize="none"
               accessibilityLabel="Public topic invite link"
             />
@@ -651,167 +635,203 @@ function formatRelativeTime(ms: number): string {
   if (diff < 60_000) return 'now';
   if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m`;
   if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h`;
-  return new Date(ms).toLocaleDateString();
+  const days = Math.floor(diff / 86_400_000);
+  if (days < 7) return `${days}d`;
+  return new Date(ms).toLocaleDateString([], { month: 'short', day: 'numeric' });
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#0a0a0a' },
+  container: { flex: 1, backgroundColor: color.canvas },
   header: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingVertical: 16,
+    paddingHorizontal: space.xl,
+    paddingVertical: space.lg,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#1a1a1a',
+    borderBottomColor: color.surfaceRaised,
   },
-  title: { fontSize: 24, fontWeight: '700', color: '#f9fafb' },
-  headerActions: { flexDirection: 'row', alignItems: 'center', gap: 16 },
-  headerHit: { minHeight: 44, minWidth: 44, justifyContent: 'center', alignItems: 'center' },
-  action: { color: '#7c3aed', fontSize: 16, fontWeight: '600' },
-  actionPrimary: { color: '#c4b5fd', fontSize: 16, fontWeight: '700' },
-  add: { fontSize: 28, color: '#7c3aed', fontWeight: '600' },
+  title: { fontSize: typeRole.title.fontSize, fontWeight: '700', color: color.textPrimary },
+  headerActions: { flexDirection: 'row', alignItems: 'center', gap: space.lg },
+  headerHit: {
+    minHeight: measure.hitTarget,
+    minWidth: measure.hitTarget,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  action: { color: color.brand, fontSize: typeRole.body.fontSize, fontWeight: '600' },
+  actionPrimary: { color: color.brandMuted, fontSize: typeRole.body.fontSize, fontWeight: '700' },
+  add: { fontSize: typeRole.display.fontSize, color: color.brand, fontWeight: '600' },
   segment: {
     flexDirection: 'row',
-    marginHorizontal: 16,
-    marginTop: 12,
-    backgroundColor: '#111',
-    borderRadius: 12,
-    padding: 4,
-    gap: 4,
+    marginHorizontal: space.lg,
+    marginTop: space.md,
+    backgroundColor: color.surface,
+    borderRadius: radius.md,
+    padding: space.xs,
+    gap: space.xs,
   },
   segmentBtn: {
     flex: 1,
-    minHeight: 44,
-    borderRadius: 10,
+    minHeight: measure.hitTarget,
+    borderRadius: radius.md,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  segmentOn: { backgroundColor: '#4c1d95' },
-  segmentText: { color: '#f9fafb', fontWeight: '600' },
+  segmentOn: { backgroundColor: color.brand },
+  segmentText: { color: color.textMuted, fontWeight: typeRole.body.fontWeight },
+  segmentTextOn: { color: color.textPrimary, fontWeight: typeRole.bodyStrong.fontWeight },
   warning: {
-    marginHorizontal: 16,
-    marginTop: 12,
-    padding: 12,
-    borderRadius: 12,
-    backgroundColor: '#1f1b2e',
-    gap: 6,
+    marginHorizontal: space.lg,
+    marginTop: space.md,
+    padding: space.md,
+    borderRadius: radius.md,
+    backgroundColor: color.surfaceBrand,
+    gap: space.sm,
   },
-  warningTitle: { color: '#c4b5fd', fontSize: 14, fontWeight: '700' },
-  warningBody: { color: '#f9fafb', fontSize: 13, lineHeight: 18 },
-  substrate: { color: '#808692', fontSize: 13, lineHeight: 18 },
+  warningTitle: {
+    color: color.brandMuted,
+    fontSize: typeRole.secondary.fontSize,
+    fontWeight: '700',
+  },
+  warningBody: { color: color.textPrimary, fontSize: typeRole.caption.fontSize, lineHeight: 18 },
+  substrate: { color: color.textSecondary, fontSize: typeRole.caption.fontSize, lineHeight: 18 },
   pendingInvite: {
-    marginHorizontal: 16,
-    marginTop: 12,
-    padding: 12,
-    borderRadius: 12,
-    backgroundColor: '#1f1b2e',
-    gap: 8,
+    marginHorizontal: space.lg,
+    marginTop: space.md,
+    padding: space.md,
+    borderRadius: radius.md,
+    backgroundColor: color.surfaceBrand,
+    gap: space.sm,
   },
-  pendingTitle: { color: '#c4b5fd', fontSize: 14, fontWeight: '700' },
-  pendingBody: { color: '#f9fafb', fontSize: 13, lineHeight: 18 },
+  pendingTitle: {
+    color: color.brandMuted,
+    fontSize: typeRole.secondary.fontSize,
+    fontWeight: '700',
+  },
+  pendingBody: { color: color.textPrimary, fontSize: typeRole.caption.fontSize, lineHeight: 18 },
   pendingActions: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  pendingHit: { minHeight: 44, justifyContent: 'center' },
+  pendingHit: { minHeight: measure.hitTarget, justifyContent: 'center' },
   loadBtn: {
-    minHeight: 44,
-    marginTop: 4,
-    borderRadius: 12,
-    backgroundColor: '#7c3aed',
+    minHeight: measure.hitTarget,
+    marginTop: space.xs,
+    borderRadius: radius.md,
+    backgroundColor: color.brand,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  loadBtnText: { color: '#fff', fontSize: 15, fontWeight: '700' },
-  list: { paddingVertical: 4 },
+  loadBtnText: { color: color.textOnBrand, fontSize: typeRole.callout.fontSize, fontWeight: '700' },
+  list: { paddingVertical: space.xs },
   row: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingVertical: 14,
-    minHeight: 44,
-    gap: 14,
+    paddingHorizontal: space.xl,
+    paddingVertical: space.lg,
+    minHeight: measure.hitTarget,
+    gap: space.lg,
   },
   avatar: {
     width: 48,
     height: 48,
-    borderRadius: 24,
-    backgroundColor: '#1f2937',
+    borderRadius: radius.xxl,
+    backgroundColor: color.well,
     justifyContent: 'center',
     alignItems: 'center',
   },
-  avatarLetter: { fontSize: 20, fontWeight: '600', color: '#7c3aed' },
+  avatarLetter: { fontSize: typeRole.heading.fontSize, fontWeight: '600', color: color.brand },
   body: { flex: 1, gap: 3 },
-  rowHeader: { flexDirection: 'row', justifyContent: 'space-between', gap: 8 },
-  name: { flex: 1, fontSize: 16, fontWeight: '600', color: '#f9fafb' },
-  time: { fontSize: 12, color: '#808692' },
-  metaRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
-  meta: { fontSize: 13, color: '#808692', flex: 1 },
+  rowHeader: { flexDirection: 'row', justifyContent: 'space-between', gap: space.sm },
+  name: { flex: 1, fontSize: typeRole.body.fontSize, fontWeight: '600', color: color.textPrimary },
+  time: { fontSize: typeRole.meta.fontSize, color: color.textSecondary },
+  metaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: space.sm,
+  },
+  meta: { fontSize: typeRole.caption.fontSize, color: color.textSecondary, flex: 1 },
   badge: {
     minWidth: 22,
     height: 22,
-    borderRadius: 11,
-    backgroundColor: '#7c3aed',
+    borderRadius: radius.md,
+    backgroundColor: color.brand,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: 6,
+    paddingHorizontal: space.sm,
   },
-  badgeText: { color: '#fff', fontSize: 11, fontWeight: '700' },
-  empty: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: 8, padding: 24 },
-  emptyText: { color: '#f9fafb', fontSize: 16, fontWeight: '600' },
-  emptyHint: { color: '#808692', fontSize: 14, textAlign: 'center', paddingHorizontal: 12 },
+  badgeText: { color: color.textOnBrand, fontSize: typeRole.meta.fontSize, fontWeight: '700' },
+  empty: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: space.sm,
+    padding: space.xxl,
+  },
+  emptyText: { color: color.textPrimary, fontSize: typeRole.body.fontSize, fontWeight: '600' },
+  emptyHint: {
+    color: color.textSecondary,
+    fontSize: typeRole.secondary.fontSize,
+    textAlign: 'center',
+    paddingHorizontal: space.md,
+  },
   emptyAction: {
-    minHeight: 44,
-    marginTop: 8,
-    paddingHorizontal: 16,
-    borderRadius: 12,
-    backgroundColor: '#7c3aed',
+    minHeight: measure.hitTarget,
+    marginTop: space.sm,
+    paddingHorizontal: space.lg,
+    borderRadius: radius.md,
+    backgroundColor: color.brand,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  emptyActionText: { color: '#fff', fontSize: 15, fontWeight: '700' },
+  emptyActionText: {
+    color: color.textOnBrand,
+    fontSize: typeRole.callout.fontSize,
+    fontWeight: '700',
+  },
   modalBackdrop: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.6)',
+    backgroundColor: color.overlay,
     justifyContent: 'flex-end',
   },
   modalCard: {
-    backgroundColor: '#111',
+    backgroundColor: color.surface,
     borderTopLeftRadius: 16,
     borderTopRightRadius: 16,
-    padding: 20,
-    gap: 12,
+    padding: space.xl,
+    gap: space.md,
     maxHeight: '80%',
   },
-  modalTitle: { fontSize: 18, fontWeight: '700', color: '#f9fafb' },
+  modalTitle: { fontSize: typeRole.numeric.fontSize, fontWeight: '700', color: color.textPrimary },
   input: {
-    backgroundColor: '#1a1a1a',
-    borderRadius: 12,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    minHeight: 44,
-    color: '#f9fafb',
-    fontSize: 15,
+    backgroundColor: color.surfaceRaised,
+    borderRadius: radius.md,
+    paddingHorizontal: space.lg,
+    paddingVertical: space.md,
+    minHeight: measure.hitTarget,
+    color: color.textPrimary,
+    fontSize: typeRole.callout.fontSize,
   },
-  toggleRow: { flexDirection: 'row', gap: 8 },
+  toggleRow: { flexDirection: 'row', gap: space.sm },
   toggle: {
     flex: 1,
-    minHeight: 44,
-    borderRadius: 10,
-    paddingVertical: 8,
+    minHeight: measure.hitTarget,
+    borderRadius: radius.md,
+    paddingVertical: space.sm,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#1a1a1a',
+    backgroundColor: color.surfaceRaised,
   },
-  toggleOn: { backgroundColor: '#4c1d95' },
-  toggleText: { color: '#f9fafb', fontWeight: '600' },
+  toggleOn: { backgroundColor: color.brandDeep },
+  toggleText: { color: color.textPrimary, fontWeight: '600' },
   memberList: { maxHeight: 240 },
-  memberRow: { paddingVertical: 10, minHeight: 44, justifyContent: 'center' },
-  memberName: { color: '#9ca3af', fontSize: 14 },
-  memberOn: { color: '#c4b5fd', fontWeight: '600' },
-  hint: { color: '#808692', fontSize: 13, lineHeight: 18 },
+  memberRow: { paddingVertical: space.md, minHeight: measure.hitTarget, justifyContent: 'center' },
+  memberName: { color: color.textMuted, fontSize: typeRole.secondary.fontSize },
+  memberOn: { color: color.brandMuted, fontWeight: '600' },
+  hint: { color: color.textSecondary, fontSize: typeRole.caption.fontSize, lineHeight: 18 },
   modalActions: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    paddingTop: 8,
+    paddingTop: space.sm,
   },
-  modalHit: { minHeight: 44, justifyContent: 'center' },
+  modalHit: { minHeight: measure.hitTarget, justifyContent: 'center' },
 });

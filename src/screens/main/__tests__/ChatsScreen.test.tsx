@@ -103,9 +103,7 @@ describe('ChatsScreen', () => {
     expect(json).not.toContain('room');
     expect(json).not.toContain('group:');
     expect(tree.root.findByProps({ testID: 'chatsMessageRequests' })).toBeTruthy();
-    expect(tree.root.findByProps({ testID: 'chatsRequestsBadge' }).props.children).toEqual(
-      expect.anything(),
-    );
+    expect(tree.root.findByProps({ testID: 'chatsRequestsBadge' }).props.label).toBe('2');
     expect(JSON.stringify(tree.toJSON())).toContain(COPY.messageRequests);
     await act(async () => {
       tree.unmount();

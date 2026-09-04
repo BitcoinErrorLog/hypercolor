@@ -1,17 +1,11 @@
 import React, { useEffect, useRef } from 'react';
-import {
-  AccessibilityInfo,
-  Modal,
-  View,
-  Text,
-  TouchableOpacity,
-  StyleSheet,
-  findNodeHandle,
-} from 'react-native';
+import { AccessibilityInfo, Modal, View, Text, StyleSheet, findNodeHandle } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { COPY, lastBackupLine } from '../copy/uxCopy';
-import { HIT_SLOP_44 } from './hitTarget';
 import { ErrorDetails } from './ErrorDetails';
 import { modalAnimationType, useReduceMotion } from './reduceMotion';
+import { color, space, radius, typeRole } from '../theme';
+import { Button } from './primitives';
 
 export function SignOutSheet({
   visible,
@@ -30,6 +24,7 @@ export function SignOutSheet({
 }) {
   const cancelRef = useRef<View>(null);
   const reduceMotion = useReduceMotion();
+  const insets = useSafeAreaInsets();
 
   useEffect(() => {
     if (!visible) return;
@@ -51,7 +46,10 @@ export function SignOutSheet({
       accessibilityViewIsModal
     >
       <View style={styles.backdrop}>
-        <View style={styles.card} accessibilityRole="alert">
+        <View
+          style={[styles.card, { paddingBottom: space.lg + insets.bottom }]}
+          accessibilityRole="alert"
+        >
           <Text style={styles.title}>{COPY.signOutTitle}</Text>
           <Text style={styles.body}>{COPY.signOutBodyLocal}</Text>
           <Text style={styles.body}>{COPY.signOutBodyRing}</Text>
@@ -64,30 +62,26 @@ export function SignOutSheet({
               <ErrorDetails details={error.details} />
             </View>
           ) : null}
-          <TouchableOpacity
-            ref={cancelRef}
-            testID="signOutCancel"
-            accessibilityRole="button"
-            accessibilityLabel="Cancel"
-            hitSlop={HIT_SLOP_44}
-            disabled={busy}
-            onPress={onCancel}
-            style={styles.cancel}
-          >
-            <Text style={styles.cancelText}>{COPY.cancel}</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
+          <View ref={cancelRef}>
+            <Button
+              testID="signOutCancel"
+              accessibilityLabel="Cancel"
+              disabled={busy}
+              label={COPY.cancel}
+              variant="secondary"
+              onPress={onCancel}
+            />
+          </View>
+          <Button
             testID="signOutConfirm"
-            accessibilityRole="button"
             accessibilityLabel="Sign out"
             accessibilityState={{ busy, disabled: busy }}
-            hitSlop={HIT_SLOP_44}
             disabled={busy}
+            busy={busy}
+            label={COPY.signOut}
+            variant="destructive"
             onPress={onConfirm}
-            style={styles.destructive}
-          >
-            <Text style={styles.destructiveText}>{COPY.signOut}</Text>
-          </TouchableOpacity>
+          />
         </View>
       </View>
     </Modal>
@@ -97,37 +91,19 @@ export function SignOutSheet({
 const styles = StyleSheet.create({
   backdrop: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.7)',
+    backgroundColor: color.overlayDeep,
     justifyContent: 'center',
-    padding: 24,
+    padding: space.xxl,
   },
   card: {
-    backgroundColor: '#111111',
-    borderRadius: 12,
-    padding: 20,
-    gap: 12,
+    backgroundColor: color.surface,
+    borderRadius: radius.md,
+    padding: space.xl,
+    gap: space.md,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#1a1a1a',
+    borderColor: color.surfaceRaised,
   },
-  title: { color: '#f9fafb', fontSize: 18, fontWeight: '700' },
-  body: { color: '#808692', fontSize: 15, lineHeight: 22 },
-  error: { color: '#fca5a5', fontSize: 14, lineHeight: 20 },
-  cancel: {
-    minHeight: 44,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#374151',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  cancelText: { color: '#f9fafb', fontSize: 16, fontWeight: '600' },
-  destructive: {
-    minHeight: 44,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#ef4444',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  destructiveText: { color: '#ef4444', fontSize: 16, fontWeight: '600' },
+  title: { color: color.textPrimary, fontSize: typeRole.numeric.fontSize, fontWeight: '700' },
+  body: { color: color.textSecondary, fontSize: typeRole.callout.fontSize, lineHeight: 22 },
+  error: { color: color.danger, fontSize: typeRole.secondary.fontSize, lineHeight: 20 },
 });

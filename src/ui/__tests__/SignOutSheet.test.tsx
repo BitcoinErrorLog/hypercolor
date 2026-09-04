@@ -3,6 +3,10 @@ import { act, create } from 'react-test-renderer';
 import { SignOutSheet } from '../SignOutSheet';
 import { COPY, lastBackupLine } from '../../copy/uxCopy';
 
+jest.mock('react-native-safe-area-context', () => ({
+  useSafeAreaInsets: () => ({ top: 0, bottom: 12, left: 0, right: 0 }),
+}));
+
 describe('SignOutSheet', () => {
   it('states what is wiped locally versus what Ring holds', async () => {
     let tree!: ReturnType<typeof create>;

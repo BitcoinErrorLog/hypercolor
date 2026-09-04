@@ -11,6 +11,10 @@ import {
 import { mapPaymentReview } from '../../ui/paymentReview';
 import { PaymentReviewSheet } from '../PaymentReviewSheet';
 
+jest.mock('react-native-safe-area-context', () => ({
+  useSafeAreaInsets: () => ({ top: 0, bottom: 12, left: 0, right: 0 }),
+}));
+
 const PEER = 'b'.repeat(52);
 
 async function render(element: React.ReactElement): Promise<ReactTestRenderer> {
@@ -81,6 +85,50 @@ describe('PaymentReviewSheet', () => {
       MAINNET_BOLT11_20U_BTC,
     );
     expect(tree.root.findByProps({ testID: 'paymentReviewRecipient' }).props.children).toBe('Ada');
+    await unmount(tree);
+  });
+
+  it('copies the recipient pubky from the recipient chip', async () => {
+    const dest = {
+      ownerPubky: 'a'.repeat(52),
+      peerPubky: PEER,
+      identifier: ENDPOINT_LIGHTNING_BOLT11,
+      payload: MAINNET_BOLT11_20U,
+      updatedAt: 1,
+      validationStatus: 'valid' as const,
+      invoiceAmount: MAINNET_BOLT11_20U_BTC,
+      invoiceExpiresAt: Date.now() + 60_000,
+      paymentHash: MAINNET_BOLT11_20U_HASH,
+    };
+    const review = mapPaymentReview({
+      kind: 'request',
+      recipientPubky: PEER,
+      recipientContact: null,
+      requestAmountBtc: MAINNET_BOLT11_20U_BTC,
+      amountAsset: 'btc',
+      reference: null,
+      endpoint: dest,
+      destinations: [dest],
+      nowMs: Date.now(),
+      destinationsEmpty: false,
+      walletUnavailable: false,
+    });
+    const onCopyRecipientPubky = jest.fn();
+    const tree = await render(
+      <PaymentReviewSheet
+        visible
+        review={review}
+        busy={false}
+        onClose={jest.fn()}
+        onContinue={jest.fn()}
+        onCopyUri={jest.fn()}
+        onCopyRecipientPubky={onCopyRecipientPubky}
+      />,
+    );
+    await act(async () => {
+      tree.root.findByProps({ testID: 'paymentReviewShortPubkyCopy' }).props.onPress();
+    });
+    expect(onCopyRecipientPubky).toHaveBeenCalledTimes(1);
     await unmount(tree);
   });
 

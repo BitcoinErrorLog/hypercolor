@@ -2,6 +2,7 @@ import React, { useMemo } from 'react';
 import { Image, StyleSheet, View } from 'react-native';
 import { Buffer } from 'buffer';
 import QRCode from 'qrcode/lib/core/qrcode';
+import { color, space, radius } from '../theme';
 
 /** Display size in points — large enough to scan from a phone ~20–24cm away. */
 export const AUTH_QR_SIZE_PT = 220;
@@ -138,7 +139,14 @@ export function generateAuthQrDataUri(value: string): string {
  * Generated in JS via `qrcode` + PNG data URI — no native QR module.
  */
 export function AuthQr({ value, testID = 'authQr' }: AuthQrProps) {
-  const dataUri = useMemo(() => (value ? generateAuthQrDataUri(value) : null), [value]);
+  const dataUri = useMemo(() => {
+    if (!value) return null;
+    try {
+      return generateAuthQrDataUri(value);
+    } catch {
+      return null;
+    }
+  }, [value]);
 
   if (!value || !dataUri) {
     return null;
@@ -159,9 +167,9 @@ export function AuthQr({ value, testID = 'authQr' }: AuthQrProps) {
 const styles = StyleSheet.create({
   frame: {
     alignSelf: 'center',
-    backgroundColor: '#ffffff',
-    padding: 16,
-    borderRadius: 12,
+    backgroundColor: color.textOnBrand,
+    padding: space.lg,
+    borderRadius: radius.md,
   },
   image: {
     width: AUTH_QR_SIZE_PT,

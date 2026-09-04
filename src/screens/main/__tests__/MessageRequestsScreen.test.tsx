@@ -4,6 +4,7 @@ import MessageRequestsScreen from '../MessageRequestsScreen';
 import { StorageService } from '../../../services/StorageService';
 import { LinkService } from '../../../services/link/LinkService';
 import { useSessionStatusStore } from '../../../stores/sessionStatusStore';
+import { copyText } from '../../../utils/copyText';
 
 const mockOwnerPubky = 'a'.repeat(52);
 const PEER_A = 'b'.repeat(52);
@@ -54,6 +55,7 @@ describe('MessageRequestsScreen', () => {
     (LinkService.declineMessageRequest as jest.Mock).mockResolvedValue(undefined);
     (LinkService.acceptMessageRequest as jest.Mock).mockResolvedValue(undefined);
     (LinkService.acceptDeclinedRequest as jest.Mock).mockResolvedValue(undefined);
+    (copyText as jest.Mock).mockReset();
   });
 
   it('sets the pending request count to the remaining list after decline', async () => {
@@ -83,6 +85,19 @@ describe('MessageRequestsScreen', () => {
 
     const declineButtons = tree.root.findAllByProps({ testID: 'messageRequestDecline' });
     expect(declineButtons.length).toBeGreaterThan(0);
+    const acceptButton = tree.root.findAllByProps({ testID: 'messageRequestAccept' })[0]!;
+    expect(acceptButton.props.accessibilityLabel).toBe('Accept message request from bbbbbb…bbbb');
+    expect(declineButtons[0]!.props.accessibilityLabel).toBe(
+      'Decline message request from bbbbbb…bbbb',
+    );
+    const chip = tree.root
+      .findAllByProps({ testID: 'messageRequestPubkyChip' })
+      .find(node => node.props.accessibilityRole === 'text')!;
+    expect(chip.props.accessibilityLabel).toBe(PEER_A);
+    await act(async () => {
+      chip.props.onLongPress();
+    });
+    expect(copyText).toHaveBeenCalledWith(PEER_A);
     await act(async () => {
       declineButtons[0]!.props.onPress();
       await Promise.resolve();
@@ -120,6 +135,7 @@ describe('MessageRequestsScreen', () => {
       'Declined',
     );
     const accept = tree.root.findByProps({ testID: 'messageRequestAcceptDeclined' });
+    expect(accept.props.accessibilityLabel).toBe('Accept declined request from bbbbbb…bbbb');
     await act(async () => {
       accept.props.onPress();
       await Promise.resolve();

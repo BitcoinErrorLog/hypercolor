@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <title>Alternate A  folded ribbon</title>
+  <rect width="256" height="256" fill="#0A0A0A"/>
+  <g fill="none" stroke-linejoin="round" stroke-linecap="round">
+    <path d="M52 168 L112 72 L156 128" stroke="#4C1D95" stroke-width="28"/>
+    <path d="M112 72 L156 128 L204 88" stroke="#7C3AED" stroke-width="28"/>
+    <path d="M156 128 L204 88 L214 158" stroke="#C4B5FD" stroke-width="22"/>
+  </g>
+</svg>

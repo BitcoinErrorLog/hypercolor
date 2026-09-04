@@ -2,10 +2,8 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   View,
   Text,
-  Switch,
   TouchableOpacity,
   StyleSheet,
-  SafeAreaView,
   ScrollView,
   TextInput,
   ActivityIndicator,
@@ -32,16 +30,14 @@ import {
 import { TipEndpointsSettings } from '../../components/TipEndpointsSettings';
 import { BackupService } from '../../services/backup/BackupService';
 import { COPY } from '../../copy/uxCopy';
-import { CustodyLine } from '../../ui/CustodyLine';
-import { ErrorDetails } from '../../ui/ErrorDetails';
-import { HIT_SLOP_44 } from '../../ui/hitTarget';
 import { sessionUiModel } from '../../ui/sessionUi';
 import { sanitizeError } from '../../ui/sanitizedError';
 import { setLastBackupAt } from '../../stores/backupMetaStore';
-import { shortPubky } from '../../ui/shortPubky';
 import { copyText } from '../../utils/copyText';
 import { useReduceMotion } from '../../ui/reduceMotion';
 import { scrollSettingsToSection, focusSettingsSection } from '../../ui/settingsSectionFocus';
+import { SettingsScreenContent } from './SettingsScreenContent';
+import { color, space, radius, typeRole, measure } from '../../theme';
 
 type Nav = NativeStackNavigationProp<RootStackParamList, 'Settings'>;
 type SettingsRoute = RouteProp<RootStackParamList, 'Settings'>;
@@ -194,359 +190,192 @@ export default function SettingsScreen() {
   }
 
   return (
-    <SafeAreaView style={styles.container} testID="settingsScreen">
-      <View style={styles.header}>
-        <TouchableOpacity
-          testID="settingsBack"
-          accessibilityRole="button"
-          accessibilityLabel="Back"
-          hitSlop={HIT_SLOP_44}
-          onPress={() => requestLeave()}
-          style={styles.backHit}
-        >
-          <Text style={styles.back}>← Back</Text>
-        </TouchableOpacity>
-        <Text style={styles.title}>Settings</Text>
-        <View style={styles.backHit} />
-      </View>
-
-      <ScrollView ref={scrollRef} testID="settingsScroll" contentContainerStyle={styles.content}>
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Identity</Text>
-          <View style={styles.row}>
-            <Text style={styles.rowLabel}>{pubky ? shortPubky(pubky) : COPY.notConnected}</Text>
-          </View>
-          {pubky ? (
-            <View style={styles.row}>
-              <Text style={styles.rowValue} selectable>
-                {pubky}
-              </Text>
-            </View>
-          ) : null}
-          <View style={styles.row}>
-            <CustodyLine />
-          </View>
-        </View>
-
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Homeserver</Text>
-          <View style={styles.row}>
-            <Text style={styles.rowLabel}>Current</Text>
-            <Text style={styles.rowValue} numberOfLines={1} ellipsizeMode="middle">
-              {homeserver ?? 'Not connected'}
-            </Text>
-          </View>
-        </View>
-
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Transport</Text>
-          <View style={styles.row}>
-            <View style={{ flex: 1, paddingRight: 12 }}>
-              <Text style={styles.rowLabel}>BLE Mesh (quarantined)</Text>
-              <Text style={styles.rowHint}>
-                Research-era path. Off for v1. Re-integration over Encrypted Links is future work.
-              </Text>
-            </View>
-            <Switch
-              value={meshEnabled}
-              onValueChange={toggleMesh}
-              trackColor={{ true: '#7c3aed' }}
-              accessibilityRole="switch"
-              accessibilityLabel="BLE Mesh (quarantined)"
-              accessibilityState={{ checked: meshEnabled }}
-            />
-          </View>
-        </View>
-
-        <View
-          ref={backupRef}
-          testID="settingsFocusBackup"
-          accessibilityState={{ selected: markedSection === 'backup' }}
-          onLayout={event => {
-            backupY.current = event.nativeEvent.layout.y;
-            consumeSectionFocus('backup', event.nativeEvent.layout.y, backupRef.current);
-          }}
-          style={styles.section}
-        >
-          <Text style={styles.sectionTitle}>Encrypted backup</Text>
-          <View style={styles.row}>
-            <Text style={styles.rowHint}>{COPY.backupExplanation}</Text>
-          </View>
-          <View style={styles.row}>
-            <Text style={styles.rowHint}>{COPY.backupCustodyLine}</Text>
-          </View>
-          <TouchableOpacity
-            accessibilityRole="button"
-            accessibilityLabel="Backup now"
-            style={[styles.liveButton, backupBusy && styles.liveButtonDisabled]}
-            disabled={backupBusy}
-            onPress={() => {
-              setBackupBusy(true);
-              setRestoreNote(null);
-              setRestoreError(null);
-              void BackupService.exportBackup()
-                .then(result => {
-                  leavingRef.current = false;
-                  alertVisibleRef.current = false;
-                  setRecoveryCode(result.recoveryCode);
-                  setRecoveryConfirmed(false);
-                  setRecoveryCopied(false);
-                  setRecoveryGateActive(true);
-                })
-                .catch(err => {
-                  const sanitized = sanitizeError(err, 'Could not create a backup.');
-                  setRestoreNote(sanitized.message);
-                  setRestoreError(sanitized.details);
-                })
-                .finally(() => setBackupBusy(false));
-            }}
-          >
-            {backupBusy ? (
-              <ActivityIndicator color="#fff" />
-            ) : (
-              <Text style={styles.liveButtonText}>Backup now</Text>
-            )}
-          </TouchableOpacity>
-          {recoveryCode ? (
-            <View style={styles.row}>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.rowLabel}>{COPY.writeRecoveryCodeDown}</Text>
-                <Text style={styles.recoveryCode} selectable>
-                  {recoveryCode}
-                </Text>
-                <TouchableOpacity
-                  testID="settingsRecoveryCopy"
-                  accessibilityRole="button"
-                  accessibilityLabel={COPY.copyRecoveryCode}
-                  style={styles.gateButton}
-                  onPress={() => {
-                    copyText(recoveryCode);
-                    setRecoveryCopied(true);
-                  }}
-                >
-                  <Text style={styles.gateButtonText}>
-                    {recoveryCopied ? COPY.copied : COPY.copyRecoveryCode}
-                  </Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  testID="settingsRecoveryConfirm"
-                  accessibilityRole="checkbox"
-                  accessibilityLabel={COPY.writtenRecoveryCode}
-                  accessibilityState={{ checked: recoveryConfirmed }}
-                  style={styles.checkRow}
-                  onPress={() => setRecoveryConfirmed(value => !value)}
-                >
-                  <Text style={styles.checkMark}>{recoveryConfirmed ? '☑' : '☐'}</Text>
-                  <Text style={styles.checkLabel}>{COPY.writtenRecoveryCode}</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  testID="settingsRecoveryDone"
-                  accessibilityRole="button"
-                  accessibilityLabel={COPY.done}
-                  accessibilityState={{ disabled: !recoveryConfirmed }}
-                  disabled={!recoveryConfirmed}
-                  style={[styles.liveButton, !recoveryConfirmed && styles.liveButtonDisabled]}
-                  onPress={() => {
-                    setLastBackupAt(Date.now());
-                    setRecoveryGateActive(false);
-                  }}
-                >
-                  <Text style={styles.liveButtonText}>{COPY.done}</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-          ) : null}
-          <TextInput
-            style={styles.liveInput}
-            value={restoreCode}
-            onChangeText={setRestoreCode}
-            placeholder="Paste recovery code to restore"
-            placeholderTextColor="#4b5563"
-            autoCapitalize="none"
-            autoCorrect={false}
-          />
-          <TouchableOpacity
-            accessibilityRole="button"
-            accessibilityLabel="Restore from backup"
-            style={[
-              styles.liveButton,
-              (backupBusy || restoreCode.trim().length === 0) && styles.liveButtonDisabled,
-            ]}
-            disabled={backupBusy || restoreCode.trim().length === 0}
-            onPress={() => {
-              setBackupBusy(true);
-              setRestoreNote(null);
-              setRestoreError(null);
-              void BackupService.restoreBackup(restoreCode)
-                .then(() => {
-                  setRestoreNote(
-                    'Restore complete. History is local. Enable messaging again so links re-handshake. Attachments without keys stay unavailable until re-shared.',
-                  );
-                })
-                .catch(err => {
-                  const sanitized = sanitizeError(err, 'That recovery code did not work.');
-                  setRestoreNote(sanitized.message);
-                  setRestoreError(sanitized.details);
-                })
-                .finally(() => setBackupBusy(false));
-            }}
-          >
-            <Text style={styles.liveButtonText}>Restore from backup</Text>
-          </TouchableOpacity>
-          {restoreNote ? (
-            <View style={styles.row}>
-              <View>
-                <Text style={styles.rowHint}>{restoreNote}</Text>
-                <ErrorDetails details={restoreError} />
-              </View>
-            </View>
-          ) : null}
-        </View>
-
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Privacy</Text>
-          <View style={styles.row}>
-            <View>
-              <Text style={styles.rowLabel}>Telemetry</Text>
-              <Text style={styles.rowHint}>Anonymous delivery counters only</Text>
-            </View>
-            <Switch
-              value={telemetryEnabled}
-              onValueChange={toggleTelemetry}
-              trackColor={{ true: '#7c3aed' }}
-              accessibilityRole="switch"
-              accessibilityLabel="Telemetry"
-              accessibilityState={{ checked: telemetryEnabled }}
-            />
-          </View>
-        </View>
-
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Messaging</Text>
-          <TouchableOpacity
-            testID="settingsEnableMessaging"
-            accessibilityRole="button"
-            accessibilityLabel={COPY.enableEncryptedMessaging}
-            style={styles.row}
-            onPress={() => nav.navigate('EnableMessaging')}
-          >
-            <View style={{ flex: 1, paddingRight: 12 }}>
-              <Text style={styles.rowLabel}>{session.label}</Text>
-              <Text style={styles.rowHint}>{COPY.approveScopesBody}</Text>
-            </View>
-            <Text style={styles.chevron}>›</Text>
-          </TouchableOpacity>
-        </View>
-
-        <View
-          ref={paymentsRef}
-          testID="settingsFocusPayments"
-          accessibilityState={{ selected: markedSection === 'payments' }}
-          onLayout={event => {
-            paymentsY.current = event.nativeEvent.layout.y;
-            consumeSectionFocus('payments', event.nativeEvent.layout.y, paymentsRef.current);
-          }}
-        >
-          <TipEndpointsSettings />
-        </View>
-
-        {__DEV__ ? <LiveProofSettingsPanel /> : null}
-      </ScrollView>
-    </SafeAreaView>
+    <SettingsScreenContent
+      pubky={pubky}
+      homeserver={homeserver}
+      session={session}
+      meshEnabled={meshEnabled}
+      telemetryEnabled={telemetryEnabled}
+      backupBusy={backupBusy}
+      recoveryCode={recoveryCode}
+      recoveryConfirmed={recoveryConfirmed}
+      recoveryCopied={recoveryCopied}
+      restoreCode={restoreCode}
+      restoreNote={restoreNote}
+      restoreError={restoreError}
+      markedSection={markedSection}
+      scrollRef={scrollRef}
+      backupSectionRef={backupRef}
+      paymentsSectionRef={paymentsRef}
+      paymentsSlot={<TipEndpointsSettings />}
+      liveProofSlot={__DEV__ ? <LiveProofSettingsPanel /> : null}
+      onBack={() => requestLeave()}
+      onToggleMesh={toggleMesh}
+      onToggleTelemetry={toggleTelemetry}
+      onBackup={() => {
+        setBackupBusy(true);
+        setRestoreNote(null);
+        setRestoreError(null);
+        void BackupService.exportBackup()
+          .then(result => {
+            leavingRef.current = false;
+            alertVisibleRef.current = false;
+            setRecoveryCode(result.recoveryCode);
+            setRecoveryConfirmed(false);
+            setRecoveryCopied(false);
+            setRecoveryGateActive(true);
+          })
+          .catch(err => {
+            const sanitized = sanitizeError(err, 'Could not create a backup.');
+            setRestoreNote(sanitized.message);
+            setRestoreError(sanitized.details);
+          })
+          .finally(() => setBackupBusy(false));
+      }}
+      onCopyRecovery={() => {
+        if (!recoveryCode) return;
+        copyText(recoveryCode);
+        setRecoveryCopied(true);
+      }}
+      onToggleRecoveryConfirmed={() => setRecoveryConfirmed(value => !value)}
+      onRecoveryDone={() => {
+        setLastBackupAt(Date.now());
+        setRecoveryGateActive(false);
+      }}
+      onChangeRestoreCode={setRestoreCode}
+      onRestore={() => {
+        setBackupBusy(true);
+        setRestoreNote(null);
+        setRestoreError(null);
+        void BackupService.restoreBackup(restoreCode)
+          .then(() => {
+            setRestoreNote(
+              'Restore complete. History is local. Enable messaging again so links re-handshake. Attachments without keys stay unavailable until re-shared.',
+            );
+          })
+          .catch(err => {
+            const sanitized = sanitizeError(err, 'That recovery code did not work.');
+            setRestoreNote(sanitized.message);
+            setRestoreError(sanitized.details);
+          })
+          .finally(() => setBackupBusy(false));
+      }}
+      onEnableMessaging={() => nav.navigate('EnableMessaging')}
+      onCopyPubky={() => {
+        if (pubky) copyText(pubky);
+      }}
+      onBackupLayout={y => {
+        backupY.current = y;
+        consumeSectionFocus('backup', y, backupRef.current);
+      }}
+      onPaymentsLayout={y => {
+        paymentsY.current = y;
+        consumeSectionFocus('payments', y, paymentsRef.current);
+      }}
+    />
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#0a0a0a' },
+  container: { flex: 1, backgroundColor: color.canvas },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 20,
-    paddingVertical: 14,
+    paddingHorizontal: space.xl,
+    paddingVertical: space.lg,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#1a1a1a',
+    borderBottomColor: color.surfaceRaised,
   },
-  backHit: { minWidth: 44, minHeight: 44, justifyContent: 'center' },
-  back: { color: '#8f57f0', fontSize: 16 },
-  title: { fontSize: 17, fontWeight: '600', color: '#f9fafb' },
-  content: { paddingVertical: 24 },
-  section: { marginBottom: 32 },
+  backHit: { minWidth: measure.hitTarget, minHeight: measure.hitTarget, justifyContent: 'center' },
+  back: { color: color.brandText, fontSize: typeRole.body.fontSize },
+  title: { fontSize: typeRole.titleStack.fontSize, fontWeight: '600', color: color.textPrimary },
+  content: { paddingVertical: space.xxl },
+  section: { marginBottom: space.xxxl },
   sectionTitle: {
-    fontSize: 12,
+    fontSize: typeRole.meta.fontSize,
     fontWeight: '600',
-    color: '#6b7280',
+    color: color.textSecondary,
     textTransform: 'uppercase',
     letterSpacing: 0.8,
-    paddingHorizontal: 20,
-    marginBottom: 8,
+    paddingHorizontal: space.xl,
+    marginBottom: space.sm,
   },
   row: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 20,
-    paddingVertical: 14,
+    paddingHorizontal: space.xl,
+    paddingVertical: space.lg,
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: '#1a1a1a',
+    borderTopColor: color.surfaceRaised,
   },
-  rowLabel: { fontSize: 16, color: '#f9fafb' },
-  rowValue: { fontSize: 13, color: '#6b7280', maxWidth: 200 },
-  rowHint: { fontSize: 12, color: '#4b5563', marginTop: 2, flexShrink: 1 },
-  chevron: { fontSize: 20, color: '#6b7280' },
+  rowLabel: { fontSize: typeRole.body.fontSize, color: color.textPrimary },
+  rowValue: { fontSize: typeRole.caption.fontSize, color: color.textSecondary, maxWidth: 200 },
+  rowHint: {
+    fontSize: typeRole.meta.fontSize,
+    color: color.textSecondary,
+    marginTop: 2,
+    flexShrink: 1,
+  },
+  chevron: { fontSize: typeRole.heading.fontSize, color: color.textSecondary },
   recoveryCode: {
-    fontSize: 13,
-    color: '#c4b5fd',
+    fontSize: typeRole.caption.fontSize,
+    color: color.brandMuted,
     fontFamily: 'monospace',
-    marginTop: 8,
+    marginTop: space.sm,
   },
   liveInput: {
-    backgroundColor: '#1a1a1a',
+    backgroundColor: color.surfaceRaised,
     borderWidth: 1,
-    borderColor: '#374151',
-    borderRadius: 10,
-    color: '#f9fafb',
-    fontSize: 13,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    marginHorizontal: 20,
-    marginBottom: 10,
+    borderColor: color.hairlineStrong,
+    borderRadius: radius.md,
+    color: color.textPrimary,
+    fontSize: typeRole.caption.fontSize,
+    paddingHorizontal: space.lg,
+    paddingVertical: space.md,
+    marginHorizontal: space.xl,
+    marginBottom: space.md,
     fontFamily: 'monospace',
   },
   liveButton: {
-    backgroundColor: '#7c3aed',
-    borderRadius: 12,
-    paddingVertical: 14,
+    backgroundColor: color.brand,
+    borderRadius: radius.md,
+    paddingVertical: space.lg,
     alignItems: 'center',
-    marginHorizontal: 20,
-    marginTop: 4,
+    marginHorizontal: space.xl,
+    marginTop: space.xs,
   },
   liveButtonDisabled: { opacity: 0.4 },
-  liveButtonText: { color: '#fff', fontSize: 16, fontWeight: '600' },
+  liveButtonText: { color: color.textOnBrand, fontSize: typeRole.body.fontSize, fontWeight: '600' },
   gateButton: {
-    minHeight: 44,
+    minHeight: measure.hitTarget,
     justifyContent: 'center',
-    marginTop: 8,
+    marginTop: space.sm,
   },
-  gateButtonText: { color: '#8f57f0', fontSize: 15, fontWeight: '600' },
+  gateButtonText: {
+    color: color.brandText,
+    fontSize: typeRole.callout.fontSize,
+    fontWeight: '600',
+  },
   checkRow: {
-    minHeight: 44,
+    minHeight: measure.hitTarget,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
-    marginTop: 8,
+    gap: space.md,
+    marginTop: space.sm,
   },
-  checkMark: { color: '#f9fafb', fontSize: 18, width: 24 },
-  checkLabel: { color: '#f9fafb', fontSize: 15, flex: 1 },
+  checkMark: { color: color.textPrimary, fontSize: typeRole.numeric.fontSize, width: 24 },
+  checkLabel: { color: color.textPrimary, fontSize: typeRole.callout.fontSize, flex: 1 },
   liveStep: {
-    paddingHorizontal: 20,
-    paddingVertical: 8,
+    paddingHorizontal: space.xl,
+    paddingVertical: space.sm,
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: '#1a1a1a',
+    borderTopColor: color.surfaceRaised,
   },
-  liveStepOk: { fontSize: 13, color: '#86efac' },
-  liveStepFail: { fontSize: 13, color: '#fca5a5' },
-  liveStepDetail: { fontSize: 12, color: '#6b7280', marginTop: 2 },
+  liveStepOk: { fontSize: typeRole.caption.fontSize, color: color.success },
+  liveStepFail: { fontSize: typeRole.caption.fontSize, color: color.danger },
+  liveStepDetail: { fontSize: typeRole.meta.fontSize, color: color.textSecondary, marginTop: 2 },
 });
 
 function LiveProofSettingsPanel() {
@@ -588,7 +417,7 @@ function LiveProofSettingsPanel() {
         value={homeserverPubky}
         onChangeText={setHomeserverPubky}
         placeholder="Homeserver public key"
-        placeholderTextColor="#4b5563"
+        placeholderTextColor={color.textSecondary}
         autoCapitalize="none"
         autoCorrect={false}
       />
@@ -597,7 +426,7 @@ function LiveProofSettingsPanel() {
         value={tokenA}
         onChangeText={setTokenA}
         placeholder="Signup token A (or A,B)"
-        placeholderTextColor="#4b5563"
+        placeholderTextColor={color.textSecondary}
         autoCapitalize="none"
         autoCorrect={false}
       />
@@ -606,7 +435,7 @@ function LiveProofSettingsPanel() {
         value={tokenB}
         onChangeText={setTokenB}
         placeholder="Signup token B"
-        placeholderTextColor="#4b5563"
+        placeholderTextColor={color.textSecondary}
         autoCapitalize="none"
         autoCorrect={false}
       />
@@ -618,7 +447,7 @@ function LiveProofSettingsPanel() {
         disabled={!canRun || running}
       >
         {running ? (
-          <ActivityIndicator color="#fff" />
+          <ActivityIndicator color={color.textOnBrand} />
         ) : (
           <Text style={styles.liveButtonText}>Run live proof</Text>
         )}

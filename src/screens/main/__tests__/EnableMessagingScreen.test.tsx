@@ -5,6 +5,10 @@ import EnableMessagingScreen from '../EnableMessagingScreen';
 import { LinkService } from '../../../services/link/LinkService';
 import { COPY } from '../../../copy/uxCopy';
 
+jest.mock('react-native-safe-area-context', () => ({
+  useSafeAreaInsets: () => ({ top: 0, bottom: 24, left: 0, right: 0 }),
+}));
+
 beforeEach(() => {
   jest.spyOn(Linking, 'openURL').mockResolvedValue(undefined);
 });
@@ -125,9 +129,9 @@ describe('EnableMessagingScreen', () => {
     const tree = await render(<EnableMessagingScreen />);
     await flushController();
 
-    expect(tree.root.findByProps({ testID: 'enableMessagingStatus' }).props.children).toBe(
-      COPY.messagingUnavailable,
-    );
+    expect(tree.root.findByProps({ testID: 'enableMessagingError' })).toBeTruthy();
+    expect(JSON.stringify(tree.toJSON())).toContain(COPY.messagingUnavailable);
+    expect(tree.root.findAllByProps({ testID: 'enableMessagingStatus' })).toHaveLength(0);
     expect(tree.root.findAllByProps({ children: 'Native module missing' })).toHaveLength(0);
     expect(tree.root.findAllByProps({ testID: 'authQr' })).toHaveLength(0);
     await unmount(tree);
