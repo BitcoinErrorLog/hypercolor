@@ -13,15 +13,6 @@
       "reason": "The controller alias and terminal success phase intentionally use the same success presenter."
     },
     {
-      "a": "auth_welcome_debug-empty_android_pixel-4a.png",
-      "b": "auth_welcome_debug-result_android_pixel-4a.png",
-      "identicalRatio": 1,
-      "contentIdenticalRatio": 1,
-      "platform": "android",
-      "viewport": "pixel-4a",
-      "reason": "Both debug-panel states intentionally render the same inactive debug slot."
-    },
-    {
       "a": "overlay_sign-out_alert_android_pixel-4a.png",
       "b": "tabs_profile_sign-out_android_pixel-4a.png",
       "identicalRatio": 1,
@@ -29,15 +20,6 @@
       "platform": "android",
       "viewport": "pixel-4a",
       "reason": "The overlay row and profile state both exercise the same sign-out sheet."
-    },
-    {
-      "a": "overlay_wallet_alert_android_pixel-4a.png",
-      "b": "stack_payment_review_android_pixel-4a.png",
-      "identicalRatio": 1,
-      "contentIdenticalRatio": 1,
-      "platform": "android",
-      "viewport": "pixel-4a",
-      "reason": "Wallet-unavailable and normal review currently share the same review copy in the presenter."
     },
     {
       "a": "stack_channel-members_leave_android_pixel-4a.png",
@@ -101,15 +83,6 @@
       "platform": "android",
       "viewport": "pixel-4a",
       "reason": "These thread fixtures intentionally share the same visible transcript and collapsed composer."
-    },
-    {
-      "a": "stack_thread_payment-claimed_android_pixel-4a.png",
-      "b": "stack_thread_payment-verified_android_pixel-4a.png",
-      "identicalRatio": 1,
-      "contentIdenticalRatio": 1,
-      "platform": "android",
-      "viewport": "pixel-4a",
-      "reason": "Claimed and verified payment records currently share the same verified receipt rendering."
     },
     {
       "a": "stack_thread_populated_android_pixel-4a.png",
@@ -185,30 +158,12 @@
     },
     {
       "a": "tabs_contacts_content-populated_android_pixel-4a.png",
-      "b": "tabs_contacts_nexus-note_android_pixel-4a.png",
-      "identicalRatio": 1,
-      "contentIdenticalRatio": 1,
-      "platform": "android",
-      "viewport": "pixel-4a",
-      "reason": "Contacts populated aliases render the same list; the Nexus note is below the captured fold."
-    },
-    {
-      "a": "tabs_contacts_content-populated_android_pixel-4a.png",
       "b": "tabs_contacts_populated_android_pixel-4a.png",
       "identicalRatio": 1,
       "contentIdenticalRatio": 1,
       "platform": "android",
       "viewport": "pixel-4a",
-      "reason": "Contacts populated aliases render the same list; the Nexus note is below the captured fold."
-    },
-    {
-      "a": "tabs_contacts_nexus-note_android_pixel-4a.png",
-      "b": "tabs_contacts_populated_android_pixel-4a.png",
-      "identicalRatio": 1,
-      "contentIdenticalRatio": 1,
-      "platform": "android",
-      "viewport": "pixel-4a",
-      "reason": "Contacts populated aliases render the same list; the Nexus note is below the captured fold."
+      "reason": "Contacts populated aliases render the same list."
     },
     {
       "a": "tabs_message-requests_empty_android_pixel-4a.png",
@@ -247,15 +202,6 @@
       "reason": "The controller alias and terminal success phase intentionally use the same success presenter."
     },
     {
-      "a": "auth_welcome_debug-empty_android_pixel-8-pro.png",
-      "b": "auth_welcome_debug-result_android_pixel-8-pro.png",
-      "identicalRatio": 0.9997283950617284,
-      "contentIdenticalRatio": 0.9979871875072404,
-      "platform": "android",
-      "viewport": "pixel-8-pro",
-      "reason": "Both debug-panel states intentionally render the same inactive debug slot."
-    },
-    {
       "a": "overlay_sign-out_alert_android_pixel-8-pro.png",
       "b": "tabs_profile_sign-out_android_pixel-8-pro.png",
       "identicalRatio": 0.9994930555555556,
@@ -263,15 +209,6 @@
       "platform": "android",
       "viewport": "pixel-8-pro",
       "reason": "The overlay row and profile state both exercise the same sign-out sheet."
-    },
-    {
-      "a": "overlay_wallet_alert_android_pixel-8-pro.png",
-      "b": "stack_payment_review_android_pixel-8-pro.png",
-      "identicalRatio": 0.9996277006172839,
-      "contentIdenticalRatio": 0.9982775005939654,
-      "platform": "android",
-      "viewport": "pixel-8-pro",
-      "reason": "Wallet-unavailable and normal review currently share the same review copy in the presenter."
     },
     {
       "a": "stack_channel-members_leave_android_pixel-8-pro.png",
@@ -335,15 +272,6 @@
       "platform": "android",
       "viewport": "pixel-8-pro",
       "reason": "These thread fixtures intentionally share the same visible transcript and collapsed composer."
-    },
-    {
-      "a": "stack_thread_payment-claimed_android_pixel-8-pro.png",
-      "b": "stack_thread_payment-verified_android_pixel-8-pro.png",
-      "identicalRatio": 0.9996936728395062,
-      "contentIdenticalRatio": 0.9981024394115398,
-      "platform": "android",
-      "viewport": "pixel-8-pro",
-      "reason": "Claimed and verified payment records currently share the same verified receipt rendering."
     },
     {
       "a": "stack_thread_populated_android_pixel-8-pro.png",
@@ -419,30 +347,12 @@
     },
     {
       "a": "tabs_contacts_content-populated_android_pixel-8-pro.png",
-      "b": "tabs_contacts_nexus-note_android_pixel-8-pro.png",
-      "identicalRatio": 0.9999552469135803,
-      "contentIdenticalRatio": 0.9983636850940176,
-      "platform": "android",
-      "viewport": "pixel-8-pro",
-      "reason": "Contacts populated aliases render the same list; the Nexus note is below the captured fold."
-    },
-    {
-      "a": "tabs_contacts_content-populated_android_pixel-8-pro.png",
       "b": "tabs_contacts_populated_android_pixel-8-pro.png",
-      "identicalRatio": 0.9995501543209877,
-      "contentIdenticalRatio": 0.9836686423855046,
+      "identicalRatio": 1,
+      "contentIdenticalRatio": 1,
       "platform": "android",
       "viewport": "pixel-8-pro",
-      "reason": "Contacts populated aliases render the same list; the Nexus note is below the captured fold."
-    },
-    {
-      "a": "tabs_contacts_nexus-note_android_pixel-8-pro.png",
-      "b": "tabs_contacts_populated_android_pixel-8-pro.png",
-      "identicalRatio": 0.9995054012345679,
-      "contentIdenticalRatio": 0.9820355066240549,
-      "platform": "android",
-      "viewport": "pixel-8-pro",
-      "reason": "Contacts populated aliases render the same list; the Nexus note is below the captured fold."
+      "reason": "Contacts populated aliases render the same list."
     },
     {
       "a": "tabs_message-requests_empty_android_pixel-8-pro.png",

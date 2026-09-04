@@ -43,13 +43,21 @@ function sceneFromVrtUrl(url: string): string | null {
   }
 }
 
-/**
- * RN Modal + accessibilityViewIsModal hides sibling a11y nodes. Sheet scenes
- * (composer / payment / alerts) therefore hide the in-tree VRT marker from
- * Maestro. Host a transparent, non-modal marker Modal above the scene so the
- * exact `vrt-scene:<id>` id stays assertable without changing product sheets.
- */
-function VrtMarkerHost({ markerId }: { markerId: string }): React.ReactElement | null {
+function markerNeedsModal(sceneId: string): boolean {
+  return (
+    sceneId.startsWith('overlay.') ||
+    sceneId === 'stack.composer.sheet' ||
+    sceneId.startsWith('stack.payment.')
+  );
+}
+
+function VrtMarkerHost({
+  markerId,
+  modal,
+}: {
+  markerId: string;
+  modal: boolean;
+}): React.ReactElement | null {
   const [visibleMarkerId, setVisibleMarkerId] = useState(markerId);
 
   useEffect(() => {
@@ -58,37 +66,38 @@ function VrtMarkerHost({ markerId }: { markerId: string }): React.ReactElement |
   }, [markerId]);
 
   if (Platform.OS !== 'android') return null;
-
-  return (
-    <Modal
+  const marker = (
+    <View
       key={visibleMarkerId}
-      visible
-      transparent
-      animationType="none"
-      accessibilityViewIsModal={false}
-      statusBarTranslucent
-      navigationBarTranslucent
+      testID={visibleMarkerId}
+      accessibilityLabel={visibleMarkerId}
+      accessibilityHint="vrt-scene-marker"
+      accessible
+      collapsable={false}
+      importantForAccessibility="yes"
+      style={styles.markerHost}
     >
-      <View
+      <Text
         testID={visibleMarkerId}
         accessibilityLabel={visibleMarkerId}
         accessibilityHint="vrt-scene-marker"
         accessible
-        collapsable={false}
-        style={styles.markerHost}
+        style={styles.markerText}
       >
-        <Text
-          testID={visibleMarkerId}
-          accessibilityLabel={visibleMarkerId}
-          accessibilityHint="vrt-scene-marker"
-          accessible
-          style={styles.markerText}
-        >
-          {visibleMarkerId}
-        </Text>
-      </View>
-    </Modal>
+        {visibleMarkerId}
+      </Text>
+    </View>
   );
+
+  if (modal) {
+    return (
+      <Modal visible transparent animationType="none" accessibilityViewIsModal={false}>
+        {marker}
+      </Modal>
+    );
+  }
+
+  return marker;
 }
 
 export function VrtCatalogRoot(): React.ReactElement {
@@ -132,14 +141,21 @@ export function VrtCatalogRoot(): React.ReactElement {
       <SafeAreaProvider>
         <SafeAreaView style={styles.root} testID={VRT_SCENE_READY_ID}>
           <Text
-            testID="vrt-scene-missing"
-            accessibilityLabel={`vrt-scene-missing:${resolved.requested}`}
+            {...(Platform.OS === 'android'
+              ? {
+                  accessibilityElementsHidden: true,
+                  importantForAccessibility: 'no-hide-descendants' as const,
+                }
+              : {
+                  testID: 'vrt-scene-missing',
+                  accessibilityLabel: `vrt-scene-missing:${resolved.requested}`,
+                })}
             style={styles.markerText}
           >
             {`vrt-scene-missing:${resolved.requested}`}
           </Text>
           <Text style={styles.meta}>Unknown VRT scene: {resolved.requested}</Text>
-          <VrtMarkerHost markerId={`vrt-scene-missing:${resolved.requested}`} />
+          <VrtMarkerHost markerId={`vrt-scene-missing:${resolved.requested}`} modal={false} />
         </SafeAreaView>
       </SafeAreaProvider>
     );
@@ -152,10 +168,17 @@ export function VrtCatalogRoot(): React.ReactElement {
     <SafeAreaProvider>
       <SafeAreaView style={styles.root} testID={VRT_SCENE_READY_ID}>
         <Text
-          testID={markerId}
-          accessibilityLabel={markerId}
-          accessibilityHint="vrt-scene-marker"
-          accessible
+          {...(Platform.OS === 'android'
+            ? {
+                accessibilityElementsHidden: true,
+                importantForAccessibility: 'no-hide-descendants' as const,
+              }
+            : {
+                testID: markerId,
+                accessibilityLabel: markerId,
+                accessibilityHint: 'vrt-scene-marker',
+                accessible: true,
+              })}
           style={styles.markerText}
         >
           {markerId}
@@ -163,7 +186,7 @@ export function VrtCatalogRoot(): React.ReactElement {
         <View style={styles.body} pointerEvents="box-none">
           {entry.render()}
         </View>
-        <VrtMarkerHost markerId={markerId} />
+        <VrtMarkerHost markerId={markerId} modal={markerNeedsModal(entry.id)} />
       </SafeAreaView>
     </SafeAreaProvider>
   );
@@ -172,7 +195,17 @@ export function VrtCatalogRoot(): React.ReactElement {
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: color.canvas },
   markerHost: {
-    ...StyleSheet.absoluteFillObject,
+    position: 'absolute',
+    zIndex: 9999,
+    top: 0,
+    left: 0,
+    width: 24,
+    height: 24,
+    overflow: 'hidden',
+    fontSize: 1,
+    lineHeight: 1,
+    color: color.brand,
+    backgroundColor: color.brand,
   },
   markerText: {
     position: 'absolute',

@@ -13,15 +13,6 @@
       "reason": "The controller alias and terminal success phase intentionally use the same success presenter."
     },
     {
-      "a": "auth_welcome_debug-empty_ios_iphone-16-pro-max.png",
-      "b": "auth_welcome_debug-result_ios_iphone-16-pro-max.png",
-      "identicalRatio": 1,
-      "contentIdenticalRatio": 1,
-      "platform": "ios",
-      "viewport": "iphone-16-pro-max",
-      "reason": "Both debug-panel states intentionally render the same inactive debug slot."
-    },
-    {
       "a": "bootstrap_app-splash_loading_ios_iphone-16-pro-max.png",
       "b": "bootstrap_linking-fallback_loading_ios_iphone-16-pro-max.png",
       "identicalRatio": 1,
@@ -38,15 +29,6 @@
       "platform": "ios",
       "viewport": "iphone-16-pro-max",
       "reason": "The overlay row and profile state both exercise the same sign-out sheet."
-    },
-    {
-      "a": "overlay_wallet_alert_ios_iphone-16-pro-max.png",
-      "b": "stack_payment_review_ios_iphone-16-pro-max.png",
-      "identicalRatio": 1,
-      "contentIdenticalRatio": 1,
-      "platform": "ios",
-      "viewport": "iphone-16-pro-max",
-      "reason": "Wallet-unavailable and normal review currently share the same review copy in the presenter."
     },
     {
       "a": "stack_channel-members_leave_ios_iphone-16-pro-max.png",
@@ -110,15 +92,6 @@
       "platform": "ios",
       "viewport": "iphone-16-pro-max",
       "reason": "These thread fixtures intentionally share the same visible transcript and collapsed composer."
-    },
-    {
-      "a": "stack_thread_payment-claimed_ios_iphone-16-pro-max.png",
-      "b": "stack_thread_payment-verified_ios_iphone-16-pro-max.png",
-      "identicalRatio": 1,
-      "contentIdenticalRatio": 1,
-      "platform": "ios",
-      "viewport": "iphone-16-pro-max",
-      "reason": "Claimed and verified payment records currently share the same verified receipt rendering."
     },
     {
       "a": "stack_thread_populated_ios_iphone-16-pro-max.png",
@@ -194,30 +167,12 @@
     },
     {
       "a": "tabs_contacts_content-populated_ios_iphone-16-pro-max.png",
-      "b": "tabs_contacts_nexus-note_ios_iphone-16-pro-max.png",
-      "identicalRatio": 1,
-      "contentIdenticalRatio": 1,
-      "platform": "ios",
-      "viewport": "iphone-16-pro-max",
-      "reason": "Contacts populated aliases render the same list; the Nexus note is below the captured fold."
-    },
-    {
-      "a": "tabs_contacts_content-populated_ios_iphone-16-pro-max.png",
       "b": "tabs_contacts_populated_ios_iphone-16-pro-max.png",
       "identicalRatio": 1,
       "contentIdenticalRatio": 1,
       "platform": "ios",
       "viewport": "iphone-16-pro-max",
-      "reason": "Contacts populated aliases render the same list; the Nexus note is below the captured fold."
-    },
-    {
-      "a": "tabs_contacts_nexus-note_ios_iphone-16-pro-max.png",
-      "b": "tabs_contacts_populated_ios_iphone-16-pro-max.png",
-      "identicalRatio": 1,
-      "contentIdenticalRatio": 1,
-      "platform": "ios",
-      "viewport": "iphone-16-pro-max",
-      "reason": "Contacts populated aliases render the same list; the Nexus note is below the captured fold."
+      "reason": "Contacts populated aliases render the same list."
     },
     {
       "a": "tabs_message-requests_empty_ios_iphone-16-pro-max.png",
@@ -265,15 +220,6 @@
       "reason": "The controller alias and terminal success phase intentionally use the same success presenter."
     },
     {
-      "a": "auth_welcome_debug-empty_ios_iphone-se-3.png",
-      "b": "auth_welcome_debug-result_ios_iphone-se-3.png",
-      "identicalRatio": 1,
-      "contentIdenticalRatio": 1,
-      "platform": "ios",
-      "viewport": "iphone-se-3",
-      "reason": "Both debug-panel states intentionally render the same inactive debug slot."
-    },
-    {
       "a": "overlay_sign-out_alert_ios_iphone-se-3.png",
       "b": "tabs_profile_sign-out_ios_iphone-se-3.png",
       "identicalRatio": 1,
@@ -281,15 +227,6 @@
       "platform": "ios",
       "viewport": "iphone-se-3",
       "reason": "The overlay row and profile state both exercise the same sign-out sheet."
-    },
-    {
-      "a": "overlay_wallet_alert_ios_iphone-se-3.png",
-      "b": "stack_payment_review_ios_iphone-se-3.png",
-      "identicalRatio": 1,
-      "contentIdenticalRatio": 1,
-      "platform": "ios",
-      "viewport": "iphone-se-3",
-      "reason": "Wallet-unavailable and normal review currently share the same review copy in the presenter."
     },
     {
       "a": "stack_channel-members_leave_ios_iphone-se-3.png",
@@ -353,15 +290,6 @@
       "platform": "ios",
       "viewport": "iphone-se-3",
       "reason": "These thread fixtures intentionally share the same visible transcript and collapsed composer."
-    },
-    {
-      "a": "stack_thread_payment-claimed_ios_iphone-se-3.png",
-      "b": "stack_thread_payment-verified_ios_iphone-se-3.png",
-      "identicalRatio": 1,
-      "contentIdenticalRatio": 1,
-      "platform": "ios",
-      "viewport": "iphone-se-3",
-      "reason": "Claimed and verified payment records currently share the same verified receipt rendering."
     },
     {
       "a": "stack_thread_populated_ios_iphone-se-3.png",
@@ -437,30 +365,12 @@
     },
     {
       "a": "tabs_contacts_content-populated_ios_iphone-se-3.png",
-      "b": "tabs_contacts_nexus-note_ios_iphone-se-3.png",
-      "identicalRatio": 1,
-      "contentIdenticalRatio": 1,
-      "platform": "ios",
-      "viewport": "iphone-se-3",
-      "reason": "Contacts populated aliases render the same list; the Nexus note is below the captured fold."
-    },
-    {
-      "a": "tabs_contacts_content-populated_ios_iphone-se-3.png",
       "b": "tabs_contacts_populated_ios_iphone-se-3.png",
       "identicalRatio": 1,
       "contentIdenticalRatio": 1,
       "platform": "ios",
       "viewport": "iphone-se-3",
-      "reason": "Contacts populated aliases render the same list; the Nexus note is below the captured fold."
-    },
-    {
-      "a": "tabs_contacts_nexus-note_ios_iphone-se-3.png",
-      "b": "tabs_contacts_populated_ios_iphone-se-3.png",
-      "identicalRatio": 1,
-      "contentIdenticalRatio": 1,
-      "platform": "ios",
-      "viewport": "iphone-se-3",
-      "reason": "Contacts populated aliases render the same list; the Nexus note is below the captured fold."
+      "reason": "Contacts populated aliases render the same list."
     },
     {
       "a": "tabs_message-requests_empty_ios_iphone-se-3.png",

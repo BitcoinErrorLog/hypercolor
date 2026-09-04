@@ -142,6 +142,18 @@ export function maestroFlow(target: CaptureTarget, appId: string): string {
 name: VRT ${scene} ${target.platform} ${target.device}
 ---
 ${readyAssertions}
+${
+  scene === 'a11y.font-scale.two'
+    ? `- scrollUntilVisible:
+    element:
+      id: welcomeConnectRing
+    direction: DOWN
+    timeout: 30000
+- assertVisible:
+    id: welcomeConnectRing
+`
+    : ''
+}
 - takeScreenshot: ${shot}
 `;
 }

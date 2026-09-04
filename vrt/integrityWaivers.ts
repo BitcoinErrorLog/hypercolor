@@ -23,20 +23,12 @@ export const INTEGRITY_WAIVERS: readonly IntegrityWaiver[] = Object.freeze([
     'The controller alias and terminal success phase intentionally use the same success presenter.',
   ),
   ...pairs(
-    ['auth.welcome.debug-empty', 'auth.welcome.debug-result'],
-    'Both debug-panel states intentionally render the same inactive debug slot.',
-  ),
-  ...pairs(
     ['auth.awaiting-ring.copied', 'auth.awaiting-ring.with-url'],
     'Copied is a transient acknowledgement on the same Ring-auth URL surface; the only expected visual delta is the copy control state.',
   ),
   ...pairs(
     ['overlay.sign-out.alert', 'tabs.profile.sign-out'],
     'The overlay row and profile state both exercise the same sign-out sheet.',
-  ),
-  ...pairs(
-    ['overlay.wallet.alert', 'stack.payment.review'],
-    'Wallet-unavailable and normal review currently share the same review copy in the presenter.',
   ),
   ...pairs(
     ['stack.channel-members.leave', 'stack.channel-members.list'],
@@ -64,10 +56,6 @@ export const INTEGRITY_WAIVERS: readonly IntegrityWaiver[] = Object.freeze([
     'These thread fixtures intentionally share the same visible transcript and collapsed composer.',
   ),
   ...pairs(
-    ['stack.thread.payment-claimed', 'stack.thread.payment-verified'],
-    'Claimed and verified payment records currently share the same verified receipt rendering.',
-  ),
-  ...pairs(
     ['tabs.channels.join-empty', 'tabs.channels.join-invalid'],
     'Join invalid has no seeded input prop, so it matches the empty join sheet.',
   ),
@@ -84,8 +72,8 @@ export const INTEGRITY_WAIVERS: readonly IntegrityWaiver[] = Object.freeze([
     'Content aliases preserve HEAD matrix naming while rendering the same contacts offline state.',
   ),
   ...pairs(
-    ['tabs.contacts.content-populated', 'tabs.contacts.nexus-note', 'tabs.contacts.populated'],
-    'Contacts populated aliases render the same list; the Nexus note is below the captured fold.',
+    ['tabs.contacts.content-populated', 'tabs.contacts.populated'],
+    'Contacts populated aliases render the same list.',
   ),
   ...pairs(
     ['tabs.message-requests.empty', 'tabs.requests.empty'],

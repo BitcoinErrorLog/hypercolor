@@ -77,7 +77,6 @@ SERIAL=""
 
 hide_chrome() {
   "$ADB" -s "$SERIAL" shell pm disable-user --user 0 com.google.android.apps.wellbeing >/dev/null 2>&1 || true
-  "$ADB" -s "$SERIAL" shell input keyevent BACK >/dev/null 2>&1 || true
   "$ADB" -s "$SERIAL" shell settings put global policy_control 'immersive.status=*' || true
   "$ADB" -s "$SERIAL" shell cmd statusbar collapse || true
 }
@@ -108,11 +107,11 @@ set_font_scale_for_scene() {
 launch_app_once() {
   "$ADB" -s "$SERIAL" reverse tcp:8081 tcp:8081 || true
   local apk="$ROOT/android/app/build/outputs/apk/debug/app-debug.apk"
-  if [ -f "$apk" ]; then
+  if [ -f "$apk" ] && [ "${VRT_ANDROID_SKIP_INSTALL:-}" != "1" ]; then
     "$ADB" -s "$SERIAL" install -r "$apk" >/dev/null
   fi
   "$ADB" -s "$SERIAL" shell am force-stop "$APP" || true
-  "$ADB" -s "$SERIAL" shell monkey -p "$APP" -c android.intent.category.LAUNCHER 1 >/dev/null || true
+  "$ADB" -s "$SERIAL" shell "run-as $APP rm -f files/BridgelessReactNativeDevBundle.js files/hc_e2e_cmd.txt" >/dev/null 2>&1 || true
   local activity
   activity="$("$ADB" -s "$SERIAL" shell cmd package resolve-activity --brief "$APP" 2>/dev/null | awk '/\//{print; exit}' | tr -d '\r' || true)"
   if [ -n "$activity" ]; then
@@ -164,6 +163,9 @@ fi
 
 for device in $DEVICES; do
   apply_viewport "$device"
+  if [ -n "${VRT_ANDROID_SETTLE_SECONDS:-}" ]; then
+    sleep "$VRT_ANDROID_SETTLE_SECONDS"
+  fi
   record_profile "$device"
   launch_app_once
 

@@ -22,6 +22,7 @@ import { setE2eSignupHud } from '../../src/navigation/e2eSignupResult';
 import { MainTabBarIcon } from '../../src/navigation/tabBarIcons';
 import { TokenSwatchScreen } from './TokenSwatchScreen';
 import { composerActionItems } from '../../src/ui/composerActions';
+import { mapPaymentReview } from '../../src/ui/paymentReview';
 import { sessionUiModel } from '../../src/ui/sessionUi';
 import { ProductSplash } from '../../src/ui/primitives';
 import { COPY } from '../../src/copy/uxCopy';
@@ -40,6 +41,7 @@ import {
   ENABLE_AUTH_URL,
   FIXED_NOW_MS,
   MESSAGE_REQUEST_ROWS,
+  PAYMENT_REVIEW_INPUT,
   OWNER,
   PAYMENT_REVIEW_FIXTURE,
   PEER,
@@ -308,7 +310,10 @@ function profile(patch: Partial<React.ComponentProps<typeof ProfileScreenContent
   );
 }
 
-function paymentRecord(status: PaymentRequestRecord['status']): PaymentRequestRecord {
+function paymentRecord(
+  status: PaymentRequestRecord['status'],
+  patch: Partial<PaymentRequestRecord> = {},
+): PaymentRequestRecord {
   return {
     ownerPubky: OWNER,
     peerPubky: PEER,
@@ -329,6 +334,7 @@ function paymentRecord(status: PaymentRequestRecord['status']): PaymentRequestRe
     displayedPaymentHash: 'aabb',
     proofVerified: status === 'proof_received' ? true : null,
     invoiceReused: false,
+    ...patch,
   };
 }
 
@@ -440,8 +446,10 @@ function fontScaleTwoWelcome() {
     <View style={styles.fill}>
       {welcome()}
       <View pointerEvents="none" style={styles.fontScaleBadge} testID="a11yFontScaleTwoMarker">
-        <Text style={styles.fontScaleTitle}>Font scale 2.0</Text>
-        <Text style={styles.fontScaleBody}>
+        <Text numberOfLines={1} style={styles.fontScaleTitle}>
+          Font scale 2.0
+        </Text>
+        <Text numberOfLines={2} style={styles.fontScaleBody}>
           Device text scale is forced to 200% by the capture runner before this scene is asserted.
         </Text>
       </View>
@@ -466,7 +474,8 @@ export const SCENE_RENDERERS: Record<string, () => React.ReactElement> = {
       debugPanel: debugBusy,
       error: { message: 'Debug signup failed', details: null },
     }),
-  'auth.welcome.debug-result': () => welcome({ showDebugPanel: true, debugPanel: debugBusy }),
+  'auth.welcome.debug-result': () =>
+    welcome({ showDebugPanel: true, debugPanel: debugState('Debug signup result', 'success') }),
   'auth.awaiting-ring.with-url': () => (
     <AwaitingRingAuthScreenContent
       phase="waiting"
@@ -637,7 +646,11 @@ export const SCENE_RENDERERS: Record<string, () => React.ReactElement> = {
   'tabs.contacts.populated': () => contacts({ contacts: CONTACTS_POPULATED }),
   'tabs.contacts.syncing': () => contacts({ contacts: CONTACTS_POPULATED, importing: true }),
   'tabs.contacts.nexus-note': () =>
-    contacts({ contacts: CONTACTS_POPULATED, usedNexusFallback: true }),
+    contacts({
+      contacts: CONTACTS_POPULATED,
+      followsImportEnabled: true,
+      usedNexusFallback: true,
+    }),
   'tabs.contacts.offline': () => contacts({ offline: true, loadError: COPY.couldNotLoadChats }),
   'stack.contact-search.empty': () => (
     <ContactSearchView loading={false} error={null} errorDetails={null} onCancel={n} onAdd={n} />
@@ -770,7 +783,15 @@ export const SCENE_RENDERERS: Record<string, () => React.ReactElement> = {
   ),
   'stack.thread.payment-claimed': () => (
     <ThreadScreenContent
-      {...threadProps({ payments: [paymentRecord('proof_received')], linkMessages: [] })}
+      {...threadProps({
+        payments: [
+          paymentRecord('accepted', {
+            proofJson: '{}',
+            proofVerified: false,
+          }),
+        ],
+        linkMessages: [],
+      })}
     />
   ),
   'stack.thread.payment-verified': () => (
@@ -965,7 +986,7 @@ export const SCENE_RENDERERS: Record<string, () => React.ReactElement> = {
   'overlay.wallet.alert': () => (
     <PaymentReviewSheet
       visible
-      review={{ ...PAYMENT_REVIEW_FIXTURE, walletUnavailable: true }}
+      review={mapPaymentReview({ ...PAYMENT_REVIEW_INPUT, walletUnavailable: true })}
       busy={false}
       onClose={n}
       onContinue={n}
@@ -1065,26 +1086,26 @@ const styles = StyleSheet.create({
   danger: { color: color.danger },
   fontScaleBadge: {
     position: 'absolute',
-    left: space.xl,
-    right: space.xl,
-    bottom: space.xl,
+    top: space.lg,
+    right: space.lg,
+    maxWidth: 168,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: color.brand,
     borderRadius: radius.md,
-    padding: space.lg,
+    padding: space.sm,
     backgroundColor: color.surface,
   },
   fontScaleTitle: {
     color: color.textPrimary,
-    fontSize: typeRole.heading.fontSize,
-    lineHeight: typeRole.heading.lineHeight,
+    fontSize: typeRole.meta.fontSize,
+    lineHeight: typeRole.meta.lineHeight,
     fontWeight: '700',
   },
   fontScaleBody: {
     color: color.textSecondary,
-    fontSize: typeRole.body.fontSize,
-    lineHeight: typeRole.body.lineHeight,
-    marginTop: space.sm,
+    fontSize: typeRole.meta.fontSize,
+    lineHeight: typeRole.meta.lineHeight,
+    marginTop: space.xs,
   },
   tabBar: {
     flexDirection: 'row',

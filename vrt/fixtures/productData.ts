@@ -7,7 +7,12 @@ import {
   type GroupMember,
   type GroupMessage,
 } from '../../src/types/group';
-import type { PaymentReviewView } from '../../src/ui/paymentReview';
+import {
+  ENDPOINT_BITCOIN_P2TR,
+  PAYMENT_ASSET_BTC,
+  type TipEndpointRecord,
+} from '../../src/types/payment';
+import { mapPaymentReview, type PaymentReviewInput } from '../../src/ui/paymentReview';
 import { SYNTHETIC_IDENTITIES } from './identities';
 
 const { aster, bramble, cedar } = SYNTHETIC_IDENTITIES;
@@ -214,35 +219,33 @@ export const AUTH_URL =
 
 export const ENABLE_AUTH_URL = 'pubkyauth://vrt-fixture-authorization';
 
-export const PAYMENT_REVIEW_FIXTURE: PaymentReviewView = {
-  recipientTitle: aster.name,
-  recipientPubky: PEER,
-  amountText: '0.00010000 BTC',
-  invoiceAmountText: null,
-  referenceText: 'fixture-ref',
-  destinationText: 'lightning tip',
-  payloadText: null,
-  networkText: 'Lightning',
-  feeText: null,
-  expiryText: null,
-  warningText: null,
-  errorText: null,
-  emptyDestinations: false,
-  expired: false,
-  amountMismatch: false,
-  requiresDestinationChoice: false,
-  destinations: [],
-  selectedIdentifier: null,
-  primaryEnabled: true,
-  primaryOutline: false,
-  primaryLabel: 'Open wallet',
-  primaryAction: 'open',
-  secondaryLabel: 'Copy URI',
-  secondaryAction: 'copy',
-  uri: 'lightning:vrtfixture',
-  walletUnavailable: false,
+const PAYMENT_REVIEW_ENDPOINT: TipEndpointRecord = {
+  ownerPubky: OWNER,
+  peerPubky: PEER,
+  identifier: ENDPOINT_BITCOIN_P2TR,
+  payload: 'bc1p0xlxvlhemja6c4dqv22uapctqupfhlxm9h8z3k2e72q4k9hcz7vqzk5jj0',
+  updatedAt: FIXED_NOW_MS,
+  validationStatus: 'valid',
+  invoiceAmount: null,
+  invoiceExpiresAt: null,
   paymentHash: null,
 };
+
+export const PAYMENT_REVIEW_INPUT: PaymentReviewInput = {
+  kind: 'request',
+  recipientPubky: PEER,
+  recipientContact: { displayName: aster.name, addedManually: true },
+  requestAmountBtc: '0.00010000',
+  amountAsset: PAYMENT_ASSET_BTC,
+  reference: 'fixture-ref',
+  endpoint: PAYMENT_REVIEW_ENDPOINT,
+  destinations: [PAYMENT_REVIEW_ENDPOINT],
+  nowMs: FIXED_NOW_MS,
+  destinationsEmpty: false,
+  walletUnavailable: false,
+};
+
+export const PAYMENT_REVIEW_FIXTURE = mapPaymentReview(PAYMENT_REVIEW_INPUT);
 
 export const noop = (): void => undefined;
 

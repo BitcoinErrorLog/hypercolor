@@ -1,5 +1,5 @@
 import React from 'react';
-import { Text } from 'react-native';
+import { PixelRatio, StyleSheet, Text } from 'react-native';
 import { act, create } from 'react-test-renderer';
 import { WelcomeScreenContent } from '../WelcomeScreenContent';
 import { COPY } from '../../../copy/uxCopy';
@@ -47,5 +47,67 @@ describe('WelcomeScreenContent wiring', () => {
     });
     expect(onConnect).toHaveBeenCalledTimes(1);
     expect(onOpenReset).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the primary CTA reachable at large text', () => {
+    const fontScaleSpy = jest.spyOn(PixelRatio, 'getFontScale').mockReturnValue(2);
+    let tree!: ReturnType<typeof create>;
+    act(() => {
+      tree = create(
+        <WelcomeScreenContent
+          loading={false}
+          connectPending={false}
+          error={null}
+          resetAvailable={false}
+          resetOpen={false}
+          resetBusy={false}
+          onConnect={jest.fn()}
+          onOpenReset={jest.fn()}
+          onConfirmReset={jest.fn()}
+          onDismissReset={jest.fn()}
+        />,
+      );
+    });
+
+    expect(PixelRatio.getFontScale()).toBe(2);
+    const cta = tree.root.findByProps({ testID: 'welcomeConnectRing' });
+    const label = tree.root
+      .findAllByType(Text)
+      .find(node => node.props.children === COPY.connectWithPubkyRing);
+    expect(StyleSheet.flatten(cta.props.style).minHeight).toBeGreaterThanOrEqual(44);
+    expect(label?.props.numberOfLines).toBeUndefined();
+    expect(label?.props.adjustsFontSizeToFit).toBeUndefined();
+    fontScaleSpy.mockRestore();
+  });
+
+  it('keeps the pending primary CTA reachable at large text', () => {
+    const fontScaleSpy = jest.spyOn(PixelRatio, 'getFontScale').mockReturnValue(2);
+    let tree!: ReturnType<typeof create>;
+    act(() => {
+      tree = create(
+        <WelcomeScreenContent
+          loading={false}
+          connectPending
+          error={null}
+          resetAvailable={false}
+          resetOpen={false}
+          resetBusy={false}
+          onConnect={jest.fn()}
+          onOpenReset={jest.fn()}
+          onConfirmReset={jest.fn()}
+          onDismissReset={jest.fn()}
+        />,
+      );
+    });
+
+    expect(PixelRatio.getFontScale()).toBe(2);
+    const cta = tree.root.findByProps({ testID: 'welcomeConnectRing' });
+    const label = tree.root
+      .findAllByType(Text)
+      .find(node => node.props.children === COPY.connectWithPubkyRing);
+    expect(StyleSheet.flatten(cta.props.style).minHeight).toBeGreaterThanOrEqual(44);
+    expect(label?.props.numberOfLines).toBeUndefined();
+    expect(label?.props.adjustsFontSizeToFit).toBeUndefined();
+    fontScaleSpy.mockRestore();
   });
 });

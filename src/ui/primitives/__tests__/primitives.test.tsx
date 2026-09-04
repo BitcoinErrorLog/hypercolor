@@ -1,5 +1,5 @@
 import React from 'react';
-import { AccessibilityInfo, StyleSheet, Text } from 'react-native';
+import { AccessibilityInfo, PixelRatio, StyleSheet, Text } from 'react-native';
 import renderer, { act } from 'react-test-renderer';
 import {
   Avatar,
@@ -59,13 +59,22 @@ describe('ui primitives', () => {
   });
 
   it('Button keeps 44pt minimum at large text', () => {
+    const fontScaleSpy = jest.spyOn(PixelRatio, 'getFontScale').mockReturnValue(2);
     let tree!: renderer.ReactTestRenderer;
     act(() => {
       tree = renderer.create(<Button label="Start a chat" onPress={() => {}} testID="cta" />);
     });
-    const style = flattenStyle(hostByTestId(tree, 'cta').props.style);
+    expect(PixelRatio.getFontScale()).toBe(2);
+    const button = hostByTestId(tree, 'cta');
+    const style = flattenStyle(button.props.style);
+    const label = tree.root
+      .findAllByType(Text)
+      .find(node => node.props.children === 'Start a chat');
     expect(style.minHeight).toBeGreaterThanOrEqual(44);
     expect(style.minWidth).toBeGreaterThanOrEqual(44);
+    expect(label?.props.numberOfLines).toBeUndefined();
+    expect(label?.props.adjustsFontSizeToFit).toBeUndefined();
+    fontScaleSpy.mockRestore();
   });
 
   it('ListRow and PageHeader are labeled interactive targets', () => {
