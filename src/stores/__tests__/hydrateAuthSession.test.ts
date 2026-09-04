@@ -68,6 +68,7 @@ describe('consumeInterruptedSignOutAtBoot', () => {
     await expect(consumeInterruptedSignOutAtBoot()).resolves.toBe('unreadable');
     expect(mockCompleteInterrupted).not.toHaveBeenCalled();
     expect(mockPaintNeedsSignIn).toHaveBeenCalled();
+    expect(mockRecordBootWipeFailure).toHaveBeenCalledTimes(1);
     expect(warn).toHaveBeenCalledWith('interrupted sign-out marker unreadable');
     warn.mockRestore();
   });

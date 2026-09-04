@@ -45,6 +45,7 @@ const APP_PATH = '/pub/hypercolor.app/v1';
 
 /** Fixed log string when the interrupted-sign-out marker cannot be read. */
 export const INTERRUPTED_SIGN_OUT_MARKER_UNREADABLE = 'interrupted sign-out marker unreadable';
+export const INTERRUPTED_SIGN_OUT_MARKER_UNREADABLE_CODE = 'interrupted-sign-out-marker-unreadable';
 
 /**
  * Fixed opaque string when the marker is present but its owner row is
@@ -52,6 +53,25 @@ export const INTERRUPTED_SIGN_OUT_MARKER_UNREADABLE = 'interrupted sign-out mark
  * would loop Welcome forever with the marker never cleared.
  */
 export const INTERRUPTED_SIGN_OUT_OWNER_MISSING = 'interrupted sign-out owner missing';
+export const INTERRUPTED_SIGN_OUT_OWNER_MISSING_CODE = 'interrupted-sign-out-owner-missing';
+
+export class InterruptedSignOutMarkerUnreadableError extends Error {
+  readonly code = INTERRUPTED_SIGN_OUT_MARKER_UNREADABLE_CODE;
+
+  constructor() {
+    super(INTERRUPTED_SIGN_OUT_MARKER_UNREADABLE);
+    this.name = 'InterruptedSignOutMarkerUnreadableError';
+  }
+}
+
+export class InterruptedSignOutOwnerMissingError extends Error {
+  readonly code = INTERRUPTED_SIGN_OUT_OWNER_MISSING_CODE;
+
+  constructor() {
+    super(INTERRUPTED_SIGN_OUT_OWNER_MISSING);
+    this.name = 'InterruptedSignOutOwnerMissingError';
+  }
+}
 
 /**
  * Typed identity-restore / fail-closed errors. Untyped rejections on the
@@ -65,7 +85,9 @@ export function isTypedSignInRestoreError(err: unknown): boolean {
       code === 'KeyStoreNotReady' ||
       code === 'wipe-wait-timeout' ||
       code === 'reset-app-data-failed' ||
-      code === 'owner-changed'
+      code === 'owner-changed' ||
+      code === INTERRUPTED_SIGN_OUT_MARKER_UNREADABLE_CODE ||
+      code === INTERRUPTED_SIGN_OUT_OWNER_MISSING_CODE
     ) {
       return true;
     }
@@ -200,7 +222,7 @@ export const PubkyService = {
         // the boot path records it (reset hatch after two launches) instead
         // of returning success with the marker stuck.
         console.warn(INTERRUPTED_SIGN_OUT_OWNER_MISSING);
-        throw new Error(INTERRUPTED_SIGN_OUT_OWNER_MISSING);
+        throw new InterruptedSignOutOwnerMissingError();
       }
       const alias = await readInterruptedSignOutAlias(owner);
       ensureSignOutPaint();
@@ -225,7 +247,7 @@ export const PubkyService = {
     try {
       interrupted = await PubkyService.hasInterruptedSignOut();
     } catch {
-      throw new Error(INTERRUPTED_SIGN_OUT_MARKER_UNREADABLE);
+      throw new InterruptedSignOutMarkerUnreadableError();
     }
     if (!interrupted) return;
     let timer: ReturnType<typeof setTimeout> | undefined;

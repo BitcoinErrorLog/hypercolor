@@ -55,7 +55,15 @@ jest.mock('../../stores/authStore', () => ({
   },
 }));
 
-import { PubkyService } from '../PubkyService';
+import {
+  INTERRUPTED_SIGN_OUT_MARKER_UNREADABLE,
+  INTERRUPTED_SIGN_OUT_MARKER_UNREADABLE_CODE,
+  INTERRUPTED_SIGN_OUT_OWNER_MISSING,
+  INTERRUPTED_SIGN_OUT_OWNER_MISSING_CODE,
+  InterruptedSignOutMarkerUnreadableError,
+  InterruptedSignOutOwnerMissingError,
+  PubkyService,
+} from '../PubkyService';
 
 describe('PubkyService owner writes', () => {
   beforeEach(() => {
@@ -92,10 +100,28 @@ describe('PubkyService.isTypedSignInRestoreError', () => {
     expect(PubkyService.isTypedSignInRestoreError({ code: 'owner-changed' })).toBe(true);
     expect(PubkyService.isTypedSignInRestoreError({ code: 'reset-app-data-failed' })).toBe(true);
     expect(
-      PubkyService.isTypedSignInRestoreError(new Error('interrupted sign-out marker unreadable')),
+      PubkyService.isTypedSignInRestoreError(new InterruptedSignOutMarkerUnreadableError()),
+    ).toBe(true);
+    expect(PubkyService.isTypedSignInRestoreError(new InterruptedSignOutOwnerMissingError())).toBe(
+      true,
+    );
+    expect(
+      PubkyService.isTypedSignInRestoreError({
+        code: INTERRUPTED_SIGN_OUT_MARKER_UNREADABLE_CODE,
+        message: 'wrapped',
+      }),
     ).toBe(true);
     expect(
-      PubkyService.isTypedSignInRestoreError(new Error('interrupted sign-out owner missing')),
+      PubkyService.isTypedSignInRestoreError({
+        code: INTERRUPTED_SIGN_OUT_OWNER_MISSING_CODE,
+        message: 'wrapped',
+      }),
+    ).toBe(true);
+    expect(
+      PubkyService.isTypedSignInRestoreError(new Error(INTERRUPTED_SIGN_OUT_MARKER_UNREADABLE)),
+    ).toBe(true);
+    expect(
+      PubkyService.isTypedSignInRestoreError(new Error(INTERRUPTED_SIGN_OUT_OWNER_MISSING)),
     ).toBe(true);
   });
 

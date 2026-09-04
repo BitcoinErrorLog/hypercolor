@@ -2,7 +2,13 @@ import { closeAndDeleteSqliteDatabase } from '../db';
 import type { PubkyKey } from '../types';
 import { KeyStore } from './KeyStore';
 import { PaykitLinkNative } from './link/PaykitLinkNative';
-import { activeOwnerAtCommit, paintNeedsSignIn, SIGNING_OUT } from './paintedOwner';
+import {
+  activeOwnerAtCommit,
+  claimWipeInFlight,
+  paintNeedsSignIn,
+  pendingWipeInFlight,
+  SIGNING_OUT,
+} from './paintedOwner';
 import { readInterruptedSignOutAlias, readInterruptedSignOutOwner } from './signOutMarker';
 import { StorageService } from './StorageService';
 
@@ -40,7 +46,13 @@ async function wipeFailureCount(owner: PubkyKey): Promise<number> {
   } catch {
     journal = 0;
   }
-  return Math.max(KeyStore.getSignOutWipeFailureCount(owner), journal);
+  let mmkv = 0;
+  try {
+    mmkv = KeyStore.getSignOutWipeFailureCount(owner);
+  } catch {
+    mmkv = 0;
+  }
+  return Math.max(mmkv, journal);
 }
 
 /**
@@ -51,7 +63,12 @@ async function wipeFailureCount(owner: PubkyKey): Promise<number> {
  * reset hatch still opens instead of looping Welcome forever.
  */
 export async function recordBootWipeFailure(): Promise<void> {
-  const owner = await readInterruptedSignOutOwner();
+  let owner: PubkyKey | null = null;
+  try {
+    owner = await readInterruptedSignOutOwner();
+  } catch {
+    owner = null;
+  }
   const counterKey = owner ?? UNKNOWN_MARKER_OWNER;
   const next = (await wipeFailureCount(counterKey)) + 1;
   try {
@@ -67,14 +84,20 @@ export async function recordBootWipeFailure(): Promise<void> {
 }
 
 export async function shouldOfferResetAfterFailedWipe(): Promise<boolean> {
+  let markerPresent = false;
   try {
-    if (!KeyStore.isSignOutIncomplete() && !(await StorageService.hasSignOutIncompleteJournal())) {
-      return false;
-    }
+    markerPresent =
+      KeyStore.isSignOutIncomplete() || (await StorageService.hasSignOutIncompleteJournal());
   } catch {
-    return false;
+    return (await wipeFailureCount(UNKNOWN_MARKER_OWNER)) >= BOOT_WIPE_FAILURES_BEFORE_RESET;
   }
-  const owner = await readInterruptedSignOutOwner();
+  if (!markerPresent) return false;
+  let owner: PubkyKey | null = null;
+  try {
+    owner = await readInterruptedSignOutOwner();
+  } catch {
+    return (await wipeFailureCount(UNKNOWN_MARKER_OWNER)) >= BOOT_WIPE_FAILURES_BEFORE_RESET;
+  }
   const counterKey = owner ?? UNKNOWN_MARKER_OWNER;
   return (await wipeFailureCount(counterKey)) >= BOOT_WIPE_FAILURES_BEFORE_RESET;
 }
@@ -99,35 +122,47 @@ export async function resetAppDataAfterFailedWipe(): Promise<void> {
   if (!(await shouldOfferResetAfterFailedWipe())) {
     throw new ResetAppDataError();
   }
-  const owner = await readInterruptedSignOutOwner();
-  const counterKey = owner ?? UNKNOWN_MARKER_OWNER;
-  if (foreignLiveOwner(counterKey)) throw new ResetAppDataError();
-
-  const alias = owner ? await readInterruptedSignOutAlias(owner) : null;
-  // Capture before clearIfPubky removes PUBKY_KEY — otherwise the native
-  // wipe gate can never fire on a successful identity clear.
-  const namedOwner = owner !== null && KeyStore.getPubky() === owner;
-
-  try {
-    closeAndDeleteSqliteDatabase();
-    if (alias) {
-      await PaykitLinkNative.signOutSession(alias);
-    }
-    if (namedOwner) {
-      await PaykitLinkNative.clearAllNativeSecrets();
-    }
-    if (owner) {
-      await KeyStore.clearIfPubky(owner);
-    }
-  } catch {
+  // Never wait on an in-flight wipe: claiming would steal the gate, and
+  // waiting can hang until WIPE_WAIT_TIMEOUT_MS. Fail closed instead.
+  if (pendingWipeInFlight()) {
     throw new ResetAppDataError();
   }
+  const release = claimWipeInFlight();
+  try {
+    const owner = await readInterruptedSignOutOwner();
+    const counterKey = owner ?? UNKNOWN_MARKER_OWNER;
+    if (foreignLiveOwner(counterKey)) throw new ResetAppDataError();
 
-  if (owner === null || KeyStore.getSignOutIncompleteOwner() === owner) {
-    // Ownerless journal marker: MMKV can hold at most a stale invalid
-    // literal (a valid MMKV owner would have been read above) — clear it.
-    KeyStore.clearSignOutIncomplete();
+    const alias = owner ? await readInterruptedSignOutAlias(owner) : null;
+    // Capture before clearIfPubky removes PUBKY_KEY — otherwise the native
+    // wipe gate can never fire on a successful identity clear.
+    const namedOwner = owner !== null && KeyStore.getPubky() === owner;
+
+    if (foreignLiveOwner(counterKey)) throw new ResetAppDataError();
+
+    try {
+      closeAndDeleteSqliteDatabase();
+      if (alias) {
+        await PaykitLinkNative.signOutSession(alias);
+      }
+      if (namedOwner) {
+        await PaykitLinkNative.clearAllNativeSecrets();
+      }
+      if (owner) {
+        await KeyStore.clearIfPubky(owner);
+      }
+    } catch {
+      throw new ResetAppDataError();
+    }
+
+    if (owner === null || KeyStore.getSignOutIncompleteOwner() === owner) {
+      // Ownerless journal marker: MMKV can hold at most a stale invalid
+      // literal (a valid MMKV owner would have been read above) — clear it.
+      KeyStore.clearSignOutIncomplete();
+    }
+    KeyStore.clearSignOutWipeFailures(counterKey);
+    paintNeedsSignIn();
+  } finally {
+    release();
   }
-  KeyStore.clearSignOutWipeFailures(counterKey);
-  paintNeedsSignIn();
 }

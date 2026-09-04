@@ -28,6 +28,52 @@ jest.mock('@react-navigation/native', () => ({
   },
 }));
 
+jest.mock('@synonymdev/react-native-pubky', () => ({
+  signOut: jest.fn(),
+  put: jest.fn(),
+  get: jest.fn(),
+  deleteFile: jest.fn(),
+  list: jest.fn(),
+  getHomeserver: jest.fn(),
+}));
+
+jest.mock('../../../services/KeyStore', () => ({
+  KeyStore: {
+    getPubky: jest.fn(() => null),
+    getSessionSecret: jest.fn(),
+    isSignOutIncomplete: jest.fn(() => false),
+    getSignOutIncompleteOwner: jest.fn(() => null),
+    markSignOutIncomplete: jest.fn(),
+    clearSignOutIncomplete: jest.fn(),
+    clearIfPubky: jest.fn(),
+  },
+}));
+
+jest.mock('../../../services/link/LinkService', () => ({
+  LinkService: { clearSession: jest.fn() },
+}));
+
+jest.mock('../../../services/StorageService', () => ({
+  StorageService: {
+    hasSignOutIncompleteJournal: jest.fn().mockResolvedValue(false),
+    persistSignOutIncompleteJournal: jest.fn().mockResolvedValue(undefined),
+    getSignOutIncompleteJournalOwner: jest.fn().mockResolvedValue(null),
+    clearSignOutIncompleteJournal: jest.fn().mockResolvedValue(undefined),
+  },
+}));
+
+jest.mock('../../../services/resetAfterFailedWipe', () => ({
+  shouldOfferResetAfterFailedWipe: jest.fn(),
+  resetAppDataAfterFailedWipe: jest.fn(),
+  recordBootWipeFailure: jest.fn(),
+}));
+
+jest.mock('../../../stores/authStore', () => ({
+  useAuthStore: {
+    getState: () => ({ clearSession: jest.fn() }),
+  },
+}));
+
 jest.mock('../../../services/PubkyRingAuthService', () => ({
   PubkyRingAuthService: {
     requestDelegation: jest.fn(),
@@ -44,19 +90,8 @@ jest.mock('../../../services/PubkyService', () => ({
     awaitSignOutWipe: jest.fn().mockResolvedValue(undefined),
     shouldOfferResetAfterFailedWipe: jest.fn().mockResolvedValue(false),
     resetAppDataAfterFailedWipe: jest.fn().mockResolvedValue(undefined),
-    isTypedSignInRestoreError: (err: unknown) => {
-      const code =
-        typeof err === 'object' && err !== null ? (err as { code?: unknown }).code : undefined;
-      const message = err instanceof Error ? err.message : '';
-      return (
-        code === 'wipe-wait-timeout' ||
-        code === 'KeyStoreNotReady' ||
-        code === 'reset-app-data-failed' ||
-        code === 'owner-changed' ||
-        message === 'interrupted sign-out marker unreadable' ||
-        message === 'interrupted sign-out owner missing'
-      );
-    },
+    isTypedSignInRestoreError: jest.requireActual('../../../services/PubkyService')
+      .isTypedSignInRestoreError,
   },
 }));
 
@@ -310,6 +345,7 @@ describe('WelcomeScreen', () => {
   });
 
   it('shows a generic error and the reset hatch when identity restore fails untyped', async () => {
+    jest.mocked(PubkyService.shouldOfferResetAfterFailedWipe).mockResolvedValue(true);
     jest
       .mocked(PubkyService.awaitSignOutWipe)
       .mockRejectedValueOnce(new Error('sqlite disk I/O error'));
@@ -325,6 +361,26 @@ describe('WelcomeScreen', () => {
     expect(serialized).not.toContain('sqlite disk I/O');
     expect(() => tree.root.findByProps({ testID: 'welcomeResetAppData' })).not.toThrow();
     expect(PubkyService.resetAppDataAfterFailedWipe).not.toHaveBeenCalled();
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('does not show the reset hatch when the boot-failure gate is not met', async () => {
+    jest.mocked(PubkyService.shouldOfferResetAfterFailedWipe).mockResolvedValue(false);
+    jest
+      .mocked(PubkyService.awaitSignOutWipe)
+      .mockRejectedValueOnce(new Error('sqlite disk I/O error'));
+    let tree!: ReactTestRenderer;
+    await act(async () => {
+      tree = create(<WelcomeScreen />);
+    });
+    await act(async () => {
+      tree.root.findByProps({ testID: 'welcomeConnectRing' }).props.onPress();
+    });
+    const serialized = JSON.stringify(tree.toJSON());
+    expect(serialized).toContain(COPY.couldNotStartAuthorization);
+    expect(() => tree.root.findByProps({ testID: 'welcomeResetAppData' })).toThrow();
     await act(async () => {
       tree.unmount();
     });

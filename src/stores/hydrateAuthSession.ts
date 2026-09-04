@@ -21,6 +21,7 @@ export async function consumeInterruptedSignOutAtBoot(): Promise<InterruptedSign
   } catch {
     console.warn(INTERRUPTED_SIGN_OUT_MARKER_UNREADABLE);
     paintNeedsSignIn();
+    await recordBootWipeFailure();
     return 'unreadable';
   }
   if (!interrupted) return 'none';

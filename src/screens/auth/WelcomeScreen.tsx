@@ -66,7 +66,13 @@ export default function WelcomeScreen() {
         await PubkyService.awaitSignOutWipe();
       } catch (wipeErr) {
         if (!PubkyService.isTypedSignInRestoreError(wipeErr)) {
-          setResetAvailable(true);
+          try {
+            if (await PubkyService.shouldOfferResetAfterFailedWipe()) {
+              setResetAvailable(true);
+            }
+          } catch {
+            // Confirm still re-checks the gate; do not reveal on a failed read.
+          }
         }
         throw wipeErr;
       }
