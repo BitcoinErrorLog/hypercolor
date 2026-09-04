@@ -87,6 +87,10 @@ export const INTEGRITY_WAIVERS: readonly IntegrityWaiver[] = Object.freeze([
     ['tabs.profile.settings-visible', 'tabs.profile.with-pubky'],
     'Settings-visible is a navigation affordance state with no open sheet in the presenter.',
   ),
+  ...pairs(
+    ['tabs.settings.liveproof-idle', 'tabs.settings.liveproof-ok'],
+    'Idle vs ok differ only by the Live proof title/body glyphs (idle vs ok) and success vs neutral title color on the same scrolled Settings fixture.',
+  ),
 ]);
 
 export function integrityWaiverKey(a: string, b: string): string {

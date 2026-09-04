@@ -475,7 +475,9 @@ export function ChannelsScreenContent({
       >
         <View style={styles.modalBackdrop}>
           <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>{COPY.newChannelSheetTitle}</Text>
+            <Text testID="channelsCreateSheet" style={styles.modalTitle}>
+              {COPY.newChannelSheetTitle}
+            </Text>
             <TextInput
               style={styles.input}
               value={name}

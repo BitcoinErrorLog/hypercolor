@@ -47,7 +47,9 @@ function markerNeedsModal(sceneId: string): boolean {
   return (
     sceneId.startsWith('overlay.') ||
     sceneId === 'stack.composer.sheet' ||
-    sceneId.startsWith('stack.payment.')
+    sceneId.startsWith('stack.payment.') ||
+    sceneId.startsWith('tabs.channels.create-') ||
+    sceneId.startsWith('tabs.channels.join-')
   );
 }
 

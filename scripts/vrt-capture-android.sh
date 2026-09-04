@@ -215,7 +215,7 @@ for device in $DEVICES; do
       set_font_scale_for_scene "$scene"
       "$ROOT/scripts/e2e-android-cmd.sh" "$SERIAL" "$APP" "hypercolor://e2e/vrt?scene=${scene}"
       sleep 1
-      if maestro --device "$SERIAL" test "$flow"; then
+      if python3 "$ROOT/scripts/maestro-bounded.py" "${MAESTRO_SCENE_TIMEOUT_SEC:-60}" --device "$SERIAL" test "$flow"; then
         scene_ok=1
         break
       fi

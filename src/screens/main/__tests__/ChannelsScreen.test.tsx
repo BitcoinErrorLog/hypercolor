@@ -172,4 +172,10 @@ describe('ChannelsScreenContent', () => {
     expect(onDismissPendingJoin).toHaveBeenCalledTimes(1);
     await unmount(opted);
   });
+
+  it('exposes channelsCreateSheet when the create modal is open', async () => {
+    const tree = await render(<ChannelsScreenContent {...props({ createOpen: true })} />);
+    expect(tree.root.findByProps({ testID: 'channelsCreateSheet' })).toBeTruthy();
+    await unmount(tree);
+  });
 });

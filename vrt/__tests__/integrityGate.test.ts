@@ -70,4 +70,18 @@ describe('integrityGate', () => {
     expect(result.waivedPairs[0]?.reason).toContain('success presenter');
     await rm(tmp, { recursive: true, force: true });
   });
+
+  it('waives liveproof idle vs ok when those captures are near-identical', async () => {
+    const tmp = path.join(os.tmpdir(), `vrt-liveproof-${process.pid}-${Date.now()}`);
+    await mkdir(tmp, { recursive: true });
+    const buf = solidPng(20, 20, [10, 20, 30]);
+    await writeFile(path.join(tmp, 'tabs_settings_liveproof-idle_ios_iphone-16-pro-max.png'), buf);
+    await writeFile(path.join(tmp, 'tabs_settings_liveproof-ok_ios_iphone-16-pro-max.png'), buf);
+
+    const result = await runIntegrityGate({ baselineDir: tmp });
+    expect(result.ok).toBe(true);
+    expect(result.failures).toHaveLength(0);
+    expect(result.waivedPairs[0]?.reason).toContain('idle vs ok');
+    await rm(tmp, { recursive: true, force: true });
+  });
 });

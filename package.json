@@ -16,7 +16,7 @@
     "vrt:catalog": "E2E_VRT=1 tsx vrt/runCatalog.ts",
     "icons:generate": "node scripts/generate-app-icons.mjs",
     "prepare": "husky",
-    "vrt:integrity": "tsx vrt/integrityGate.ts",
+    "vrt:integrity": "tsx vrt/integrityGate.ts vrt/baselines/ios vrt/output/report/marker-ledger-ios.json vrt/output/report/integrity-ios.json",
     "vrt:capture:android": "bash scripts/vrt-capture-android.sh",
     "vrt:capture:ios": "bash scripts/vrt-capture-ios.sh"
   },
