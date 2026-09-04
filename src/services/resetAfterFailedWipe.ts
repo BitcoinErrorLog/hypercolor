@@ -103,7 +103,12 @@ export async function shouldOfferResetAfterFailedWipe(): Promise<boolean> {
 }
 
 function foreignLiveOwner(markerOwner: PubkyKey): boolean {
-  const live = KeyStore.getPubky();
+  let live: string | null;
+  try {
+    live = KeyStore.getPubky();
+  } catch {
+    return true;
+  }
   if (typeof live === 'string' && live.length > 0 && live !== markerOwner) return true;
   const painted = activeOwnerAtCommit();
   return painted !== SIGNING_OUT && painted !== null && painted !== markerOwner;
@@ -129,11 +134,23 @@ export async function resetAppDataAfterFailedWipe(): Promise<void> {
   }
   const release = claimWipeInFlight();
   try {
-    const owner = await readInterruptedSignOutOwner();
+    let owner: PubkyKey | null;
+    try {
+      owner = await readInterruptedSignOutOwner();
+    } catch {
+      throw new ResetAppDataError();
+    }
     const counterKey = owner ?? UNKNOWN_MARKER_OWNER;
     if (foreignLiveOwner(counterKey)) throw new ResetAppDataError();
 
-    const alias = owner ? await readInterruptedSignOutAlias(owner) : null;
+    let alias: string | null = null;
+    if (owner) {
+      try {
+        alias = await readInterruptedSignOutAlias(owner);
+      } catch {
+        throw new ResetAppDataError();
+      }
+    }
     // Capture before clearIfPubky removes PUBKY_KEY — otherwise the native
     // wipe gate can never fire on a successful identity clear.
     const namedOwner = owner !== null && KeyStore.getPubky() === owner;
