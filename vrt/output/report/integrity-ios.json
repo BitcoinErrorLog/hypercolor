@@ -1,7 +1,16 @@
 {
-  "ok": true,
+  "ok": false,
   "comparedPairs": 15006,
-  "failures": [],
+  "failures": [
+    {
+      "a": "tabs_settings_liveproof-idle_ios_iphone-16-pro-max.png",
+      "b": "tabs_settings_liveproof-ok_ios_iphone-16-pro-max.png",
+      "identicalRatio": 0.9983356050040151,
+      "contentIdenticalRatio": 0.9901133334274771,
+      "platform": "ios",
+      "viewport": "iphone-16-pro-max"
+    }
+  ],
   "waivedPairs": [
     {
       "a": "auth_enable_enabled_ios_iphone-16-pro-max.png",
@@ -11,15 +20,6 @@
       "platform": "ios",
       "viewport": "iphone-16-pro-max",
       "reason": "The controller alias and terminal success phase intentionally use the same success presenter."
-    },
-    {
-      "a": "bootstrap_app-splash_loading_ios_iphone-16-pro-max.png",
-      "b": "bootstrap_linking-fallback_loading_ios_iphone-16-pro-max.png",
-      "identicalRatio": 1,
-      "contentIdenticalRatio": 1,
-      "platform": "ios",
-      "viewport": "iphone-16-pro-max",
-      "reason": "Both loading fallbacks intentionally render the same centered activity indicator."
     },
     {
       "a": "overlay_sign-out_alert_ios_iphone-16-pro-max.png",
@@ -42,8 +42,8 @@
     {
       "a": "stack_contact-search_added_ios_iphone-16-pro-max.png",
       "b": "stack_contact-search_valid_ios_iphone-16-pro-max.png",
-      "identicalRatio": 0.9999220764126622,
-      "contentIdenticalRatio": 0.999220671490578,
+      "identicalRatio": 1,
+      "contentIdenticalRatio": 1,
       "platform": "ios",
       "viewport": "iphone-16-pro-max",
       "reason": "Added and valid contact-search fixtures intentionally render the same entered pubky."
@@ -51,8 +51,8 @@
     {
       "a": "stack_contact-search_empty_ios_iphone-16-pro-max.png",
       "b": "stack_contact-search_qr_ios_iphone-16-pro-max.png",
-      "identicalRatio": 1,
-      "contentIdenticalRatio": 1,
+      "identicalRatio": 0.9999191707873716,
+      "contentIdenticalRatio": 0.9991915370307745,
       "platform": "ios",
       "viewport": "iphone-16-pro-max",
       "reason": "The QR fallback has no distinct production card in this wave, so it matches empty search."
@@ -204,8 +204,8 @@
     {
       "a": "auth_awaiting-ring_copied_ios_iphone-se-3.png",
       "b": "auth_awaiting-ring_with-url_ios_iphone-se-3.png",
-      "identicalRatio": 0.9985967016491755,
-      "contentIdenticalRatio": 0.993545836512913,
+      "identicalRatio": 0.9986136931534233,
+      "contentIdenticalRatio": 0.9936237507240514,
       "platform": "ios",
       "viewport": "iphone-se-3",
       "reason": "Copied is a transient acknowledgement on the same Ring-auth URL surface; the only expected visual delta is the copy control state."

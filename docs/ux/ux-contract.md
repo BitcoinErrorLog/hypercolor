@@ -3,8 +3,8 @@
 Binding specification for the Hypercolor UX/UI sweep. Implementation waves execute this
 document; where it conflicts with current code, this document wins.
 
-**Repo pins.** Mobile: `/Users/johncarvalho/work/hypercolor`, `main @ b12e8d6` (React Native).
-Web: `/Volumes/vibedrive/vibes-dev/hypercolor-web`, `main @ 89048ad` (Next.js static export).
+**Repo pins.** Mobile: this repository, `main @ b12e8d6` (React Native).
+Web: sibling `hypercolor-web` checkout, `main @ 89048ad` (Next.js static export).
 
 **Boundaries that are not redesigned.** Pubky Ring holds keys and authorizes via
 `pubkyauth://` / `paykit-connect`. Bitkit (and any other wallet) is reached only through a

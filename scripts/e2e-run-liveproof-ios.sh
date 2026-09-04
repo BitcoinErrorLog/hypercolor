@@ -8,7 +8,7 @@ UDID="${1:?udid}"
 ROWS="${2:-p0}"
 BUNDLE="${3:-org.name.hypercolor}"
 HS="${HOMESERVER_PUBKY:-ufibwbmed6jeq9k4p583go95wofakh9fwpp4k734trq79pd9u1uy}"
-GEN="${GENERATE_SCRIPT:-/Users/johncarvalho/.cursor/skills/pubky-staging-invite/scripts/generate.sh}"
+GEN="${GENERATE_SCRIPT:-$HOME/.cursor/skills/pubky-staging-invite/scripts/generate.sh}"
 need=2
 case ",$ROWS," in
   *",p1,"*|*",p2,"*) need=3 ;;

@@ -2,7 +2,8 @@
 # Dump Android VRT scenes and check 44dp + content-desc on clickable product nodes.
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$REPO_ROOT"
 APP="${APP_ID:-com.hypercolor}"
 ANDROID_HOME="${ANDROID_HOME:-$HOME/Library/Android/sdk}"
 ADB="${ANDROID_HOME}/platform-tools/adb"

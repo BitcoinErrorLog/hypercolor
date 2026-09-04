@@ -4,7 +4,8 @@
 # Scene switch: launch once per viewport, inject HC_E2E AFTER launch, Maestro asserts
 # exact `vrt-scene:<id>` BEFORE takeScreenshot.
 set -euo pipefail
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$REPO_ROOT"
 APP="${APP_ID:-com.hypercolor}"
 ANDROID_HOME="${ANDROID_HOME:-$HOME/Library/Android/sdk}"
 ADB="${ANDROID_HOME}/platform-tools/adb"
@@ -245,14 +246,15 @@ done
 
 # Do not reset wm on the dedicated Pixel AVDs.
 
-python3 - "$CAPTURE_START" "$DEVICES" "$SCENE_FILTER" <<'PY'
+python3 - "$ROOT" "$CAPTURE_START" "$DEVICES" "$SCENE_FILTER" <<'PY'
 from pathlib import Path
 import shutil, sys
-start = int(sys.argv[1])
-devices = sys.argv[2].split()
-scenes = set(sys.argv[3].replace(",", " ").split())
+repo = Path(sys.argv[1])
+start = int(sys.argv[2])
+devices = sys.argv[3].split()
+scenes = set(sys.argv[4].replace(",", " ").split())
 root = Path.home() / ".maestro" / "tests"
-dest = Path("/Users/johncarvalho/work/hypercolor-ux-w3/vrt/baselines/android")
+dest = repo / "vrt/baselines/android"
 dest.mkdir(parents=True, exist_ok=True)
 for device in devices:
     if scenes:
@@ -279,12 +281,12 @@ for name, png in newest.items():
 print("android_baselines", len(list(dest.glob("*.png"))), "updated", len(newest))
 PY
 
-python3 - "$DEVICES" "$SCENE_FILTER" <<'PY'
+python3 - "$ROOT" "$DEVICES" "$SCENE_FILTER" <<'PY'
 import json, sys
 from pathlib import Path
-root = Path("/Users/johncarvalho/work/hypercolor-ux-w3")
-devices = set(sys.argv[1].split())
-scenes = set(sys.argv[2].replace(",", " ").split())
+root = Path(sys.argv[1])
+devices = set(sys.argv[2].split())
+scenes = set(sys.argv[3].replace(",", " ").split())
 asserted = [ln.strip() for ln in Path("/tmp/hc-vrt-android-asserted.txt").read_text().splitlines() if ln.strip()]
 ledger_path = root / "vrt/output/report/marker-ledger-android.json"
 prior = []

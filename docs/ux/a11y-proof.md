@@ -1,7 +1,7 @@
 # Accessibility proof (measured)
 
 Date: 2026-09-04
-Tree: `ux/w3-design-system`
+Tree: `ux/mobile-integrated` @ `a93e520`
 
 ## Method
 
@@ -12,16 +12,21 @@ Tree: `ux/w3-design-system`
 
 ## Android dump results
 
-`bash scripts/a11y-android-dump.sh` ran against Pixel 4a and Pixel 8 Pro critical VRT scenes after `hypercolor://e2e/vrt?scene=...`.
+Prior measured counts (same date, tree `ux/w3-design-system`, product UI dumps): Pixel 4a 5 scenes / status ok 3 / fail 2 / clickable 15 / passing 12 / failing 3; Pixel 8 Pro 5 / 2 / 3 / 19 / 13 / 6.
 
-Critical journeys checked: Welcome idle, Enable authorizing, Chats populated, Thread populated, Settings default.
+This run (`a93e520`, 2026-09-04): `bash scripts/a11y-android-dump.sh` after the four-profile recapture. Critical journeys: Welcome idle, Enable authorizing, Chats populated, Thread populated, Settings default.
 
 | Profile                                       | Scenes | Status ok | Status fail | Clickable nodes | Passing nodes | Failing nodes |
 | --------------------------------------------- | -----: | --------: | ----------: | --------------: | ------------: | ------------: |
-| Pixel 4a (`Hypercolor_Pixel_4a_API_36`)       |      5 |         3 |           2 |              15 |            12 |             3 |
-| Pixel 8 Pro (`Hypercolor_Pixel_8_Pro_API_36`) |      5 |         2 |           3 |              19 |            13 |             6 |
+| Pixel 4a (`Hypercolor_Pixel_4a_API_36`)       |      5 |         0 |           5 |              10 |             0 |            15 |
+| Pixel 8 Pro (`Hypercolor_Pixel_8_Pro_API_36`) |      5 |         0 |           5 |              10 |             0 |            15 |
 
-The repaired script no longer reports empty dumps as clean: missing XML, zero clickable controls on known-control scenes, and React Native redbox dumps are `status: "fail"`. This run reached product nodes on both Android profiles. Remaining failures are product hit-target findings recorded for follow-up: `auth.enable.authorizing` on Pixel 8 Pro (`Open Pubky Ring`, `Copy authorization URL`), `stack.thread.populated` on both profiles (`Copy Aster Example`), and `tabs.settings.default` on both profiles (long pubky identity chip, `BLE Mesh (quarantined)`, plus one empty-desc bottom control on Pixel 8 Pro).
+Every scene on both profiles was `status: "fail"` because the dump XML contained a React Native redbox (`Unable to load script` / `loadScriptFromAssets`), not product UI. This run did **not** re-measure the previous product hit-target findings. Per scene the only clickable nodes were redbox chrome (empty `content-desc`):
+
+- Pixel 4a, all five scenes: `com.hypercolor:id/rn_redbox_dismiss_button` text `DISMISS (ESC)` bounds `[11,2191][529,2323]` (188.4×48.0 dp); `com.hypercolor:id/rn_redbox_reload_button` text `RELOAD (R, R)` bounds `[551,2191][1069,2323]` (188.4×48.0 dp). Hierarchy root bounds `[0,0][1080,2400]`.
+- Pixel 8 Pro labeled dumps, all five scenes: same two resource-ids, text `DISMISS (ESC)` bounds `[12,2172][528,2316]` (172.0×48.0 dp) and `RELOAD (R, R)` bounds `[552,2172][1068,2316]` (172.0×48.0 dp). Hierarchy root bounds were also `[0,0][1080,2400]` (same physical size as the 4a dump).
+
+Each scene JSONL row therefore has `fail` length 3: `react-native-redbox` plus two `clickable-a11y` nodes. Product controls on `auth.enable.authorizing`, `stack.thread.populated`, and `tabs.settings.default` were not present in these dumps.
 
 ## Contrast (captured PNGs)
 

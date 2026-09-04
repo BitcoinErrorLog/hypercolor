@@ -12,10 +12,11 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SCRIPT = os.path.join(ROOT, "scripts", "e2e-android-cmd.sh")
-ADB = "/Users/johncarvalho/Library/Android/sdk/platform-tools/adb"
+ANDROID_HOME = os.environ.get("ANDROID_HOME") or os.path.join(os.environ.get("HOME", ""), "Library/Android/sdk")
+ADB = os.path.join(ANDROID_HOME, "platform-tools", "adb")
 ENV = os.environ.copy()
-ENV["PATH"] = "/Users/johncarvalho/Library/Android/sdk/platform-tools:" + ENV.get("PATH", "")
-ENV["ANDROID_HOME"] = "/Users/johncarvalho/Library/Android/sdk"
+ENV["PATH"] = os.path.join(ANDROID_HOME, "platform-tools") + ":" + ENV.get("PATH", "")
+ENV["ANDROID_HOME"] = ANDROID_HOME
 PORT = int(os.environ.get("HC_E2E_BRIDGE_PORT", "18765"))
 DONE_TIMEOUT_SEC = int(os.environ.get("HC_E2E_DONE_TIMEOUT", "180"))
 

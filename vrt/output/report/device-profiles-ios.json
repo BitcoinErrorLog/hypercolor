@@ -1,8 +1,4 @@
 {
-  "iphone-se-3": {
-    "udid": "E10B5481-92B7-46F1-B206-2DC46C12515B",
-    "simulator": "iPhone SE (3rd generation)"
-  },
   "iphone-16-pro-max": {
     "udid": "CA777964-D27B-437A-90F5-ED8EF72BB730",
     "simulator": "iPhone 16 Pro Max"

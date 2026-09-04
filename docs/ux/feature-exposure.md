@@ -54,7 +54,7 @@ Every shipped service/capability vs how (or whether) the UI exposes it. Entry cl
 
 ## Dead-code candidates
 
-Nothing was deleted. Each row is a symbol or file with **zero product callers** outside its definition (tests may still import it). Greps were run from `/Users/johncarvalho/work/hypercolor` excluding `node_modules`, `.ai/`, and `modules/*/android/build/`.
+Nothing was deleted. Each row is a symbol or file with **zero product callers** outside its definition (tests may still import it). Greps were run from this repository excluding `node_modules`, `.ai/`, and `modules/*/android/build/`.
 
 | Candidate | Kind | Proof grep | Result |
 |---|---|---|---|

@@ -1,6 +1,6 @@
 # Hypercolor mobile screen inventory
 
-Repo: `/Users/johncarvalho/work/hypercolor` @ `f28d8c3` (`main`).
+Repo: this checkout @ `f28d8c3` (`main`).
 Scope: every navigator, stack, tab, screen, sheet, modal, and `Alert` reachable from `src/` plus the `App.tsx` bootstrap surface. Build noise (`.ai/`, `modules/*/android/build/`) ignored.
 
 **Global chrome facts (apply unless a row says otherwise):**

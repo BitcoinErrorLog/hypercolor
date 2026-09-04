@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Capture every iOS VRT scene. Asserts exact `vrt-scene:<id>` before screenshot.
 set -euo pipefail
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$REPO_ROOT"
 APP="${APP_ID:-org.name.hypercolor}"
 GEN="$ROOT/.maestro/vrt/generated"
 OUT="$ROOT/vrt/baselines/ios"
@@ -175,13 +176,14 @@ PY
     if [ "$scene_ok" -eq 1 ]; then
       ok=$((ok + 1))
       echo "${scene}|ios|${device}" >> /tmp/hc-vrt-ios-asserted.txt
-      python3 - "$scene" "$device" <<'PY'
+      python3 - "$ROOT" "$scene" "$device" <<'PY'
 from pathlib import Path
 import shutil, sys
-scene, device = sys.argv[1], sys.argv[2]
+repo = Path(sys.argv[1])
+scene, device = sys.argv[2], sys.argv[3]
 needle = scene.replace(".", "_") + f"_ios_{device}.png"
 root = Path.home() / ".maestro" / "tests"
-dest = Path("/Users/johncarvalho/work/hypercolor-ux-w3/vrt/baselines/ios")
+dest = repo / "vrt/baselines/ios"
 dest.mkdir(parents=True, exist_ok=True)
 newest = None
 for png in root.rglob(needle):
@@ -203,14 +205,15 @@ PY
   fi
 done
 
-python3 - "$CAPTURE_START" "$DEVICES" "$SCENE_FILTER" <<'PY'
+python3 - "$ROOT" "$CAPTURE_START" "$DEVICES" "$SCENE_FILTER" <<'PY'
 from pathlib import Path
 import shutil, sys
-start = int(sys.argv[1])
-devices = sys.argv[2].split()
-scenes = set(sys.argv[3].replace(",", " ").split())
+repo = Path(sys.argv[1])
+start = int(sys.argv[2])
+devices = sys.argv[3].split()
+scenes = set(sys.argv[4].replace(",", " ").split())
 root = Path.home() / ".maestro" / "tests"
-dest = Path("/Users/johncarvalho/work/hypercolor-ux-w3/vrt/baselines/ios")
+dest = repo / "vrt/baselines/ios"
 dest.mkdir(parents=True, exist_ok=True)
 newest = {}
 for png in root.rglob("*ios_*.png"):
@@ -228,12 +231,12 @@ for name, png in newest.items():
 print("ios_baselines", len(list(dest.glob("*.png"))), "updated", len(newest))
 PY
 
-python3 - "$DEVICES" "$SCENE_FILTER" <<'PY'
+python3 - "$ROOT" "$DEVICES" "$SCENE_FILTER" <<'PY'
 import json, sys
 from pathlib import Path
-root = Path("/Users/johncarvalho/work/hypercolor-ux-w3")
-devices = set(sys.argv[1].split())
-scenes = set(sys.argv[2].replace(",", " ").split())
+root = Path(sys.argv[1])
+devices = set(sys.argv[2].split())
+scenes = set(sys.argv[3].replace(",", " ").split())
 asserted = [ln.strip() for ln in Path("/tmp/hc-vrt-ios-asserted.txt").read_text().splitlines() if ln.strip()]
 ledger_path = root / "vrt/output/report/marker-ledger-ios.json"
 prior = []
