@@ -120,14 +120,14 @@ export function maestroFlow(target: CaptureTarget, appId: string): string {
     .map(id => {
       const exactSceneMarker = id.startsWith('vrt-scene:');
       const selector = exactSceneMarker
-        ? `text: ${JSON.stringify(id)}`
+        ? `id: ${JSON.stringify(id)}`
         : id.startsWith('text:')
           ? `text: ${JSON.stringify(id.slice('text:'.length))}`
-          : `id: ${id}`;
+          : `id: ${JSON.stringify(id)}`;
       return `- extendedWaitUntil:
     visible:
       ${selector}
-    timeout: 45000
+    timeout: 20000
 - assertVisible:
     ${selector}`;
     })

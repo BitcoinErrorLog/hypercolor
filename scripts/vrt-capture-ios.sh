@@ -162,7 +162,7 @@ PY
       set_font_scale_for_scene "$udid" "$scene"
       "$ROOT/scripts/e2e-ios-cmd.sh" "$udid" "$APP" "hypercolor://e2e/vrt?scene=${scene}" || true
       sleep 2
-      if maestro --device "$udid" test "$flow"; then
+      if python3 "$ROOT/scripts/maestro-bounded.py" "${MAESTRO_SCENE_TIMEOUT_SEC:-60}" --device "$udid" test "$flow"; then
         scene_ok=1
         break
       fi

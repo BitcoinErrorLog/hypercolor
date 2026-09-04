@@ -55,6 +55,30 @@ switch_scene() {
   sleep "${A11Y_SCENE_SETTLE_SECONDS:-2}"
 }
 
+ensure_metro_bundle() {
+  python3 - <<'PY'
+import sys
+import urllib.request
+
+url = "http://127.0.0.1:8081/index.bundle?platform=android&dev=true&minify=false"
+try:
+    data = urllib.request.urlopen(url, timeout=90).read()
+except Exception as exc:
+    print(
+        "a11y dump: Metro is not serving a bundle at 127.0.0.1:8081 "
+        f"({exc}). Start EXPO_PUBLIC_E2E_VRT=1 npm start the same way as "
+        "scripts/vrt-capture-android.sh.",
+        file=sys.stderr,
+    )
+    raise SystemExit(2)
+if b"vrt-scene" not in data:
+    print("a11y dump: Metro bundle does not contain vrt-scene", file=sys.stderr)
+    raise SystemExit(2)
+open("/tmp/hc-android-vrt-bundle.js", "wb").write(data)
+print("bundle_bytes", len(data), "contains_vrt_scene", True)
+PY
+}
+
 launch_app_once() {
   local bundle="/tmp/hc-android-vrt-bundle.js"
   local apk="$ROOT/android/app/build/outputs/apk/debug/app-debug.apk"
@@ -73,19 +97,8 @@ XML
   "$ADB" -s "$SERIAL" push /tmp/hc-vrt-devsettings.xml /data/local/tmp/hc-vrt-devsettings.xml >/dev/null
   "$ADB" -s "$SERIAL" shell "run-as $APP mkdir -p shared_prefs && cat /data/local/tmp/hc-vrt-devsettings.xml | run-as $APP sh -c 'cat > shared_prefs/com.facebook.react.devsupport.DevSettingsActivity.xml'"
   "$ADB" -s "$SERIAL" shell rm -f /data/local/tmp/hc-vrt-devsettings.xml
-  if [ "${A11Y_INJECT_BUNDLE:-}" = "1" ]; then
-    python3 - "$bundle" <<'PY'
-import sys
-import urllib.request
-
-bundle_path = sys.argv[1]
-url = "http://127.0.0.1:8081/index.bundle?platform=android&dev=true&minify=false"
-data = urllib.request.urlopen(url, timeout=90).read()
-if b"vrt-scene" not in data:
-    raise SystemExit("Metro bundle does not contain vrt-scene")
-open(bundle_path, "wb").write(data)
-print("bundle_bytes", len(data), "contains_vrt_scene", True)
-PY
+  ensure_metro_bundle
+  if [ "${A11Y_INJECT_BUNDLE:-1}" = "1" ]; then
     "$ADB" -s "$SERIAL" push "$bundle" /data/local/tmp/BridgelessReactNativeDevBundle.js >/dev/null
     "$ADB" -s "$SERIAL" shell "run-as $APP mkdir -p files && cat /data/local/tmp/BridgelessReactNativeDevBundle.js | run-as $APP sh -c 'cat > files/BridgelessReactNativeDevBundle.js'"
     "$ADB" -s "$SERIAL" shell rm -f /data/local/tmp/BridgelessReactNativeDevBundle.js
@@ -123,6 +136,11 @@ dump_scene() {
     status=1
   fi
 
+  if grep -q 'rn_redbox\|Unable to load script\|loadScriptFromAssets' "$path" 2>/dev/null; then
+    echo "a11y dump: React Native redbox in hierarchy for $scene (loadScriptFromAssets / rn_redbox). Refusing to record this as a scene result. Start/verify Metro with EXPO_PUBLIC_E2E_VRT=1 the same way as scripts/vrt-capture-android.sh." >&2
+    exit 3
+  fi
+
   python3 - "$scene" "$path" "$JSONL" "$status" "$raw" "$(is_known_control_scene "$scene" && echo 1 || echo 0)" "$density" <<'PY'
 import html
 import json
@@ -144,9 +162,9 @@ clickable = [n for n in nodes if 'clickable="true"' in n]
 if int(dump_status) != 0 or not path.exists() or not xml.lstrip().startswith("<?xml"):
     status = "fail"
     fail.append({"reason": "missing-or-invalid-dump", "raw": raw.strip()[:240] or xml.strip()[:240]})
-elif "rn_redbox" in xml or "Unable to load script" in xml:
-    status = "fail"
-    fail.append({"reason": "react-native-redbox"})
+elif "rn_redbox" in xml or "Unable to load script" in xml or "loadScriptFromAssets" in xml:
+    print("a11y dump: React Native redbox in hierarchy; refusing to record as a scene result.", file=sys.stderr)
+    raise SystemExit(3)
 
 for node in clickable:
     desc = html.unescape((re.search(r'content-desc="([^"]*)"', node) or ["", ""])[1])
