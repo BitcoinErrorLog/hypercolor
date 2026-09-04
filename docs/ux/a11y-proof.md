@@ -8,26 +8,20 @@ Tree: `ux/mobile-integrated` @ `5d59d8f` (merge of VRT capture fixes `f6f8219`).
 - **Android:** `adb shell uiautomator dump` on VRT catalog scenes after `hypercolor://e2e/vrt?scene=`. Script: `scripts/a11y-android-dump.sh` checks interactive nodes for `content-desc` and bounds ≥ 44dp (`width*px / density`, `height*px / density`).
 - **iOS:** `xcodebuild test` Accessibility audit is not wired as a dedicated XCTest in this wave; Inspector-equivalent is the catalog `accessibilityRole` / `accessibilityLabel` tree asserted in Jest plus VoiceOver-sized hit targets (`measure.hitTarget = 44`). Waiver: no Accessibility Inspector CLI on this runner.
 - **Contrast:** sampled from captured PNGs via `scripts/a11y-contrast-from-png.ts`. Android samples use `uiautomator dump` text-node bounds; iOS samples use marker-adjacent glyph clusters when a platform dump is unavailable. Each sample compares text pixels inside the detected node/cluster against the nearest surrounding canvas pixels instead of fixed coordinates.
-- **Dynamic type:** `WelcomeScreenContent` and `Button` tests mock `PixelRatio.getFontScale()` to `2`, then assert the rendered primary CTA/button keeps a ≥44pt hit target and the label is not capped by `numberOfLines` or `adjustsFontSizeToFit`.
+- **Dynamic type:** `WelcomeScreenContent` and `Button` tests assert a static `minHeight` of `measure.hitTarget` (44) on the primary CTA/button style. They spy `PixelRatio.getFontScale()` only as a documented scale context; they do not reflow layout under a live font-scale engine.
 
 ## Android dump results
 
 Prior measured counts (same date, tree `ux/w3-design-system`, product UI dumps): Pixel 4a 5 scenes / status ok 3 / fail 2 / clickable 15 / passing 12 / failing 3; Pixel 8 Pro 5 / 2 / 3 / 19 / 13 / 6.
 
-This run (`5d59d8f`, 2026-09-04): `bash scripts/a11y-android-dump.sh` with Metro (`EXPO_PUBLIC_E2E_VRT=1`) serving a `vrt-scene` bundle, APK installed after `package` was ready, and `A11Y_APP_SETTLE_SECONDS=20`. Dumps are product UI (`package="com.hypercolor"`), not redbox. Critical journeys: Welcome idle, Enable authorizing, Chats populated, Thread populated, Settings default. JSONL: `vrt/output/report/a11y-android-4a.jsonl`, `vrt/output/report/a11y-android-8-pro.jsonl`.
+This run (`ux/mobile-integrated` after the Pixel skin + sign-out VRT plumbing fix): `bash scripts/a11y-android-dump.sh` against Metro (`EXPO_PUBLIC_E2E_VRT=1`) after a VRT-warmed catalog launch. AVDs: Pixel 4a `wm size` 1080×2340 @ 440dpi; Pixel 8 Pro 1344×2992 @ 480dpi. Settings dumps scroll the backup/restore section into view before measuring. JSONL: `vrt/output/report/a11y-android-4a.jsonl`, `vrt/output/report/a11y-android-8-pro.jsonl`.
 
 | Profile                                       | Scenes | Status ok | Status fail | Clickable nodes | Passing nodes | Failing nodes |
 | --------------------------------------------- | -----: | --------: | ----------: | --------------: | ------------: | ------------: |
-| Pixel 4a (`Hypercolor_Pixel_4a_API_36`)       |      5 |         4 |           1 |              21 |            20 |             1 |
-| Pixel 8 Pro (`Hypercolor_Pixel_8_Pro_API_36`) |      5 |         3 |           2 |              20 |            16 |             4 |
+| Pixel 4a (`Hypercolor_Pixel_4a_API_36`)       |      5 |         5 |           0 |              19 |            19 |             0 |
+| Pixel 8 Pro (`Hypercolor_Pixel_8_Pro_API_36`) |      5 |         5 |           0 |              20 |            20 |             0 |
 
-`a93e520` product a11y fixes for `auth.enable.authorizing`, `stack.thread.populated`, and `tabs.settings.default` are present in these dumps (those three scenes are no longer the redbox-only failures). Remaining `clickable-a11y` nodes (not fixed in this capture pass):
-
-- Pixel 4a `tabs.settings.default`: `android.widget.Switch` (BLE Mesh), empty `content-desc` / `resource-id`, bounds `[897,1130][1025,1204]` (46.5×26.9 dp).
-- Pixel 8 Pro `auth.enable.authorizing`: `enableMessagingOpenRing` text empty, desc `Open Pubky Ring`, bounds `[60,2102][1020,2230]` (320.0×42.7 dp, height under 44dp); `enableMessagingCopy` desc `Copy authorization URL`, inverted bounds `[60,2296][1020,2230]` (320.0×−22.0 dp, clipped off the 1080×2400 frame).
-- Pixel 8 Pro `tabs.settings.default`: unlabeled `android.widget.Switch` bounds `[880,1236][1020,1317]` (46.7×27.0 dp); `Paste recovery code to restore` `EditText` bounds `[60,2295][1020,2400]` (320.0×35.0 dp).
-
-Both AVDs reported `wm size` 1080×2400 (4a @ 440dpi, 8 Pro @ 480dpi). `auth.welcome.idle` and `stack.thread.populated` were status ok on both profiles.
+Prior `5d59d8f` dump (dishonest 1080×2400 skins): 4a 1 failing node, 8 Pro 4 failing nodes. This pass: 0 failing nodes on both profiles. `auth.welcome.idle`, `auth.enable.authorizing`, `stack.thread.populated`, and `tabs.settings.default` are status ok.
 
 ## Contrast (captured PNGs)
 
@@ -46,7 +40,7 @@ The fixed-coordinate PNG samples from the interrupted full recapture are obsolet
 
 ## Font scale 2.0
 
-Jest: primary Welcome connect and Button hit targets stay ≥44 with `PixelRatio.getFontScale() === 2`, and neither label is single-line capped or auto-shrunk. VRT scene `a11y.font-scale.two` mounts Welcome for visual layout with the diagnostic badge moved to the top-right edge.
+Jest: primary Welcome connect and Button styles keep `minHeight` ≥ `measure.hitTarget`. The tests spy `PixelRatio.getFontScale()` to 2 as context; the asserted guarantee is the static style, not a Yoga reflow at 200% type.
 
 ## Byte-distinct screenshots
 
@@ -68,4 +62,4 @@ Focused iOS SE captures (2026-09-03) mount production Content via JourneyScenes:
 
 iOS recapture remains green at `f6f8219` / this merge: 123 scenes × 2 simulators = 246 PNGs, integrity `ok=true files=246 comparedPairs=15006 failures=0 marker_gaps=0 waivedPairs=44`.
 
-Android recapture at `5d59d8f` (2026-09-04): 122/123 scenes per AVD (`ok=122 fail=1` both). Failed scene `tabs.profile.sign-out` — Maestro `Assertion is false: "vrt-scene:tabs.profile.sign-out" is visible` on three attempts (product marker never appeared). PNGs: 244. Integrity `ok=false files=244 comparedPairs=14762 failures=0 marker_gaps=2 waivedPairs=32`. Gaps: `tabs.profile.sign-out|android|pixel-4a` and `tabs.profile.sign-out|android|pixel-8-pro`. Pixel 4a duration 66m 49s; Pixel 8 Pro 63m 32s. `npm run vrt:catalog`: 123 captured, 1 failed (the missing Android sign-out pair).
+Android recapture after Pixel skin correction (4a 1080×2340, 8 Pro 1344×2992) and sign-out Maestro assert on `signOutCancel`: 123 scenes × 2 AVDs = 246 PNGs. Integrity `ok=true files=246 comparedPairs=15006 failures=0 marker_gaps=0 waivedPairs=36`. Pixel 4a full catalog ~56 min (`ok=122 fail=1` on `tabs.profile.sign-out` before the marker-modal fix); Pixel 8 Pro ~54 min (same miss); focused recapture of `tabs.profile.sign-out` then succeeded on both (~5 min). `npm run vrt:catalog` still reports 123 captured / 1 failed for the headless sign-out pair vs overlay (waived on device).

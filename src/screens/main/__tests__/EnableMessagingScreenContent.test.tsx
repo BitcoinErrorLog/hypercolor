@@ -53,7 +53,9 @@ describe('EnableMessagingScreenContent wiring', () => {
 
     const countdown = tree.root.findByProps({ testID: 'enableMessagingCountdown' });
     expect(countdown.props.accessibilityLabel).toBe('Remaining: 00:42');
-    expect(JSON.stringify(countdown.props.style)).toContain('34');
+    const scroll = tree.root.findByProps({ testID: 'enableMessagingScroll' });
+    const extraPad = (scroll.props.contentContainerStyle as { paddingBottom?: number }[])[1];
+    expect(extraPad?.paddingBottom).toBeGreaterThanOrEqual(34);
     const openRing = tree.root
       .findAllByProps({ testID: 'enableMessagingOpenRing' })
       .find(node => node.props.accessibilityRole === 'button');

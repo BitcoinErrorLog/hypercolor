@@ -185,7 +185,7 @@ export function VrtCatalogRoot(): React.ReactElement {
         >
           {markerId}
         </Text>
-        <View style={styles.body} pointerEvents="box-none">
+        <View key={entry.id} style={styles.body} pointerEvents="box-none">
           {entry.render()}
         </View>
         <VrtMarkerHost markerId={markerId} modal={markerNeedsModal(entry.id)} />

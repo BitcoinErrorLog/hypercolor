@@ -56,10 +56,6 @@ export const INTEGRITY_WAIVERS: readonly IntegrityWaiver[] = Object.freeze([
     'These thread fixtures intentionally share the same visible transcript and collapsed composer.',
   ),
   ...pairs(
-    ['tabs.channels.join-empty', 'tabs.channels.join-invalid'],
-    'Join invalid has no seeded input prop, so it matches the empty join sheet.',
-  ),
-  ...pairs(
     ['tabs.channels.join-busy', 'tabs.channels.join-empty', 'tabs.channels.join-invalid'],
     'The busy join state is visually identical until a valid public channel reference exists.',
   ),

@@ -113,7 +113,8 @@ changed pixels, and no dimension mismatch.
 `vrt/output/report/index.html` is a static file. Open it from disk. Images are
 copied into `report/assets/` so the folder zips. Grouping is journey → platform
 → viewport → state. Each card shows baseline, candidate, overlay, changed-pixel
-count, masks, and SHAs in the header.
+count, masks, and SHAs in the header. `generatedAt` is the wall-clock ISO time
+of that `npm run vrt:catalog` run (not a pinned fixture clock).
 
 ### The report must never contain
 
@@ -172,7 +173,9 @@ cmd file and leave every capture on token-swatch). iOS:
 `scripts/vrt-capture-ios.sh` launches once per simulator and writes the
 Documents `hc_e2e_cmd.txt` sidecar — **never** Maestro `openLink` (that shows a
 sticky “Open in hypercolor?” sheet and blocks markers). Both platforms then
-assert the exact catalog-id marker.
+assert the exact catalog-id marker except for Android sign-out scenes
+(`tabs.profile.sign-out`, `overlay.sign-out.alert`), which assert `signOutCancel`
+because the RN modal hides the catalog marker from Maestro.
 
 ### Integrity gate
 

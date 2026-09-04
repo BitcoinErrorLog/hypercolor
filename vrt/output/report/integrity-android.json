@@ -1,22 +1,31 @@
 {
-  "ok": false,
-  "comparedPairs": 14762,
+  "ok": true,
+  "comparedPairs": 15006,
   "failures": [],
   "waivedPairs": [
     {
       "a": "auth_enable_enabled_android_pixel-4a.png",
       "b": "auth_enable_success_android_pixel-4a.png",
-      "identicalRatio": 0.9995922067901235,
-      "contentIdenticalRatio": 0.9979446054316329,
+      "identicalRatio": 0.9995817505539728,
+      "contentIdenticalRatio": 0.9981049184402218,
       "platform": "android",
       "viewport": "pixel-4a",
       "reason": "The controller alias and terminal success phase intentionally use the same success presenter."
     },
     {
+      "a": "overlay_sign-out_alert_android_pixel-4a.png",
+      "b": "tabs_profile_sign-out_android_pixel-4a.png",
+      "identicalRatio": 0.9989707977207978,
+      "contentIdenticalRatio": 0.9941143255383332,
+      "platform": "android",
+      "viewport": "pixel-4a",
+      "reason": "The overlay row and profile state both exercise the same sign-out sheet."
+    },
+    {
       "a": "stack_channel-members_leave_android_pixel-4a.png",
       "b": "stack_channel-members_list_android_pixel-4a.png",
-      "identicalRatio": 0.9997808641975309,
-      "contentIdenticalRatio": 0.9968593283015045,
+      "identicalRatio": 0.9997752453308009,
+      "contentIdenticalRatio": 0.9969539988318203,
       "platform": "android",
       "viewport": "pixel-4a",
       "reason": "The member-list and leave affordance states render the same members sheet before interaction."
@@ -24,7 +33,7 @@
     {
       "a": "stack_contact-search_added_android_pixel-4a.png",
       "b": "stack_contact-search_valid_android_pixel-4a.png",
-      "identicalRatio": 0.9996454475308642,
+      "identicalRatio": 0.999636356441912,
       "contentIdenticalRatio": 0.9992394018420763,
       "platform": "android",
       "viewport": "pixel-4a",
@@ -33,7 +42,7 @@
     {
       "a": "stack_contact-search_empty_android_pixel-4a.png",
       "b": "stack_contact-search_qr_android_pixel-4a.png",
-      "identicalRatio": 0.9996369598765432,
+      "identicalRatio": 0.999627651155429,
       "contentIdenticalRatio": 0.9992165657672865,
       "platform": "android",
       "viewport": "pixel-4a",
@@ -42,7 +51,7 @@
     {
       "a": "stack_payment_compose-busy_android_pixel-4a.png",
       "b": "stack_payment_compose-idle_android_pixel-4a.png",
-      "identicalRatio": 0.9997700617283951,
+      "identicalRatio": 0.9997641658752769,
       "contentIdenticalRatio": 0.9977620841774428,
       "platform": "android",
       "viewport": "pixel-4a",
@@ -51,7 +60,7 @@
     {
       "a": "stack_thread_delivered-read_android_pixel-4a.png",
       "b": "stack_thread_populated_android_pixel-4a.png",
-      "identicalRatio": 0.9992573302469135,
+      "identicalRatio": 0.9992382874327319,
       "contentIdenticalRatio": 0.9944463829649981,
       "platform": "android",
       "viewport": "pixel-4a",
@@ -60,7 +69,7 @@
     {
       "a": "stack_thread_delivered-read_android_pixel-4a.png",
       "b": "stack_thread_send-disabled_android_pixel-4a.png",
-      "identicalRatio": 0.9992025462962963,
+      "identicalRatio": 0.9991820987654321,
       "contentIdenticalRatio": 0.9940237350630013,
       "platform": "android",
       "viewport": "pixel-4a",
@@ -69,7 +78,7 @@
     {
       "a": "stack_thread_delivered-read_android_pixel-4a.png",
       "b": "stack_thread_tip-collapsed_android_pixel-4a.png",
-      "identicalRatio": 0.9992839506172839,
+      "identicalRatio": 0.9992655903767015,
       "contentIdenticalRatio": 0.9946370241788401,
       "platform": "android",
       "viewport": "pixel-4a",
@@ -78,7 +87,7 @@
     {
       "a": "stack_thread_populated_android_pixel-4a.png",
       "b": "stack_thread_send-disabled_android_pixel-4a.png",
-      "identicalRatio": 0.9992164351851852,
+      "identicalRatio": 0.9991963437796771,
       "contentIdenticalRatio": 0.9941361526711291,
       "platform": "android",
       "viewport": "pixel-4a",
@@ -87,7 +96,7 @@
     {
       "a": "stack_thread_populated_android_pixel-4a.png",
       "b": "stack_thread_tip-collapsed_android_pixel-4a.png",
-      "identicalRatio": 0.9993414351851851,
+      "identicalRatio": 0.9993245489078822,
       "contentIdenticalRatio": 0.9950887919425676,
       "platform": "android",
       "viewport": "pixel-4a",
@@ -96,7 +105,7 @@
     {
       "a": "stack_thread_send-disabled_android_pixel-4a.png",
       "b": "stack_thread_tip-collapsed_android_pixel-4a.png",
-      "identicalRatio": 0.9991732253086419,
+      "identicalRatio": 0.9991520259575815,
       "contentIdenticalRatio": 0.993810281614602,
       "platform": "android",
       "viewport": "pixel-4a",
@@ -105,7 +114,7 @@
     {
       "a": "tabs_channels_join-busy_android_pixel-4a.png",
       "b": "tabs_channels_join-empty_android_pixel-4a.png",
-      "identicalRatio": 0.9991770833333333,
+      "identicalRatio": 0.999155982905983,
       "contentIdenticalRatio": 0.9929077540330259,
       "platform": "android",
       "viewport": "pixel-4a",
@@ -114,7 +123,7 @@
     {
       "a": "tabs_channels_join-busy_android_pixel-4a.png",
       "b": "tabs_channels_join-invalid_android_pixel-4a.png",
-      "identicalRatio": 0.9991628086419753,
+      "identicalRatio": 0.9991413421968978,
       "contentIdenticalRatio": 0.9927811702454603,
       "platform": "android",
       "viewport": "pixel-4a",
@@ -123,7 +132,7 @@
     {
       "a": "tabs_channels_join-empty_android_pixel-4a.png",
       "b": "tabs_channels_join-invalid_android_pixel-4a.png",
-      "identicalRatio": 0.9996458333333333,
+      "identicalRatio": 0.9996367521367522,
       "contentIdenticalRatio": 0.9969535109783839,
       "platform": "android",
       "viewport": "pixel-4a",
@@ -132,8 +141,8 @@
     {
       "a": "tabs_message-requests_empty_android_pixel-4a.png",
       "b": "tabs_requests_empty_android_pixel-4a.png",
-      "identicalRatio": 0.9988387345679013,
-      "contentIdenticalRatio": 0.9953912742705967,
+      "identicalRatio": 0.9988089585311808,
+      "contentIdenticalRatio": 0.9956291872179585,
       "platform": "android",
       "viewport": "pixel-4a",
       "reason": "Message request aliases preserve HEAD matrix naming while rendering the same empty list."
@@ -141,8 +150,8 @@
     {
       "a": "tabs_message-requests_populated_android_pixel-4a.png",
       "b": "tabs_requests_populated_android_pixel-4a.png",
-      "identicalRatio": 0.998684799382716,
-      "contentIdenticalRatio": 0.9960623709142977,
+      "identicalRatio": 0.9986510762899652,
+      "contentIdenticalRatio": 0.9963354870383195,
       "platform": "android",
       "viewport": "pixel-4a",
       "reason": "Message request aliases preserve HEAD matrix naming while rendering the same populated list."
@@ -150,17 +159,26 @@
     {
       "a": "auth_enable_enabled_android_pixel-8-pro.png",
       "b": "auth_enable_success_android_pixel-8-pro.png",
-      "identicalRatio": 0.9995451388888889,
-      "contentIdenticalRatio": 0.9978826211075185,
+      "identicalRatio": 0.9991433007862236,
+      "contentIdenticalRatio": 0.997179791017622,
       "platform": "android",
       "viewport": "pixel-8-pro",
       "reason": "The controller alias and terminal success phase intentionally use the same success presenter."
     },
     {
+      "a": "overlay_sign-out_alert_android_pixel-8-pro.png",
+      "b": "tabs_profile_sign-out_android_pixel-8-pro.png",
+      "identicalRatio": 0.9992452591832187,
+      "contentIdenticalRatio": 0.994774494201497,
+      "platform": "android",
+      "viewport": "pixel-8-pro",
+      "reason": "The overlay row and profile state both exercise the same sign-out sheet."
+    },
+    {
       "a": "stack_channel-members_leave_android_pixel-8-pro.png",
       "b": "stack_channel-members_list_android_pixel-8-pro.png",
-      "identicalRatio": 0.9997554012345679,
-      "contentIdenticalRatio": 0.9968723015442698,
+      "identicalRatio": 0.9998423375031831,
+      "contentIdenticalRatio": 0.9973347365538956,
       "platform": "android",
       "viewport": "pixel-8-pro",
       "reason": "The member-list and leave affordance states render the same members sheet before interaction."
@@ -168,8 +186,8 @@
     {
       "a": "stack_contact-search_added_android_pixel-8-pro.png",
       "b": "stack_contact-search_valid_android_pixel-8-pro.png",
-      "identicalRatio": 0.9996018518518518,
-      "contentIdenticalRatio": 0.9992055719218839,
+      "identicalRatio": 0.9995593407817672,
+      "contentIdenticalRatio": 0.9989965163477077,
       "platform": "android",
       "viewport": "pixel-8-pro",
       "reason": "Added and valid contact-search fixtures intentionally render the same entered pubky."
@@ -177,8 +195,8 @@
     {
       "a": "stack_contact-search_empty_android_pixel-8-pro.png",
       "b": "stack_contact-search_qr_android_pixel-8-pro.png",
-      "identicalRatio": 0.9997145061728395,
-      "contentIdenticalRatio": 0.9994309706516674,
+      "identicalRatio": 0.9998159775273746,
+      "contentIdenticalRatio": 0.9995838093264391,
       "platform": "android",
       "viewport": "pixel-8-pro",
       "reason": "The QR fallback has no distinct production card in this wave, so it matches empty search."
@@ -186,8 +204,8 @@
     {
       "a": "stack_payment_compose-busy_android_pixel-8-pro.png",
       "b": "stack_payment_compose-idle_android_pixel-8-pro.png",
-      "identicalRatio": 0.9997264660493828,
-      "contentIdenticalRatio": 0.997551201353876,
+      "identicalRatio": 0.9998236865769035,
+      "contentIdenticalRatio": 0.9980363667141587,
       "platform": "android",
       "viewport": "pixel-8-pro",
       "reason": "The busy flag only changes disabled accessibility state for the default empty form."
@@ -195,8 +213,8 @@
     {
       "a": "stack_thread_delivered-read_android_pixel-8-pro.png",
       "b": "stack_thread_populated_android_pixel-8-pro.png",
-      "identicalRatio": 0.9991959876543209,
-      "contentIdenticalRatio": 0.9947144242074215,
+      "identicalRatio": 0.9994817529284441,
+      "contentIdenticalRatio": 0.9951532059769246,
       "platform": "android",
       "viewport": "pixel-8-pro",
       "reason": "These thread fixtures intentionally share the same visible transcript and collapsed composer."
@@ -204,8 +222,8 @@
     {
       "a": "stack_thread_delivered-read_android_pixel-8-pro.png",
       "b": "stack_thread_send-disabled_android_pixel-8-pro.png",
-      "identicalRatio": 0.999141975308642,
-      "contentIdenticalRatio": 0.994358596375482,
+      "identicalRatio": 0.9994469378660555,
+      "contentIdenticalRatio": 0.9948267223776752,
       "platform": "android",
       "viewport": "pixel-8-pro",
       "reason": "These thread fixtures intentionally share the same visible transcript and collapsed composer."
@@ -213,8 +231,8 @@
     {
       "a": "stack_thread_delivered-read_android_pixel-8-pro.png",
       "b": "stack_thread_tip-collapsed_android_pixel-8-pro.png",
-      "identicalRatio": 0.999204475308642,
-      "contentIdenticalRatio": 0.9947844021914276,
+      "identicalRatio": 0.9994872238668194,
+      "contentIdenticalRatio": 0.9952173471052301,
       "platform": "android",
       "viewport": "pixel-8-pro",
       "reason": "These thread fixtures intentionally share the same visible transcript and collapsed composer."
@@ -222,8 +240,8 @@
     {
       "a": "stack_thread_populated_android_pixel-8-pro.png",
       "b": "stack_thread_send-disabled_android_pixel-8-pro.png",
-      "identicalRatio": 0.9991388888888889,
-      "contentIdenticalRatio": 0.9943386449355879,
+      "identicalRatio": 0.9994449484339191,
+      "contentIdenticalRatio": 0.994808572002695,
       "platform": "android",
       "viewport": "pixel-8-pro",
       "reason": "These thread fixtures intentionally share the same visible transcript and collapsed composer."
@@ -231,8 +249,8 @@
     {
       "a": "stack_thread_populated_android_pixel-8-pro.png",
       "b": "stack_thread_tip-collapsed_android_pixel-8-pro.png",
-      "identicalRatio": 0.9992704475308642,
-      "contentIdenticalRatio": 0.995191737217089,
+      "identicalRatio": 0.999529747978737,
+      "contentIdenticalRatio": 0.9955910667064038,
       "platform": "android",
       "viewport": "pixel-8-pro",
       "reason": "These thread fixtures intentionally share the same visible transcript and collapsed composer."
@@ -240,8 +258,8 @@
     {
       "a": "stack_thread_send-disabled_android_pixel-8-pro.png",
       "b": "stack_thread_tip-collapsed_android_pixel-8-pro.png",
-      "identicalRatio": 0.9991508487654321,
-      "contentIdenticalRatio": 0.9944454611298267,
+      "identicalRatio": 0.9994526574834479,
+      "contentIdenticalRatio": 0.9949064367984533,
       "platform": "android",
       "viewport": "pixel-8-pro",
       "reason": "These thread fixtures intentionally share the same visible transcript and collapsed composer."
@@ -249,8 +267,8 @@
     {
       "a": "tabs_channels_join-busy_android_pixel-8-pro.png",
       "b": "tabs_channels_join-empty_android_pixel-8-pro.png",
-      "identicalRatio": 0.999065200617284,
-      "contentIdenticalRatio": 0.9927234833038829,
+      "identicalRatio": 0.9993974507416603,
+      "contentIdenticalRatio": 0.9937470636636653,
       "platform": "android",
       "viewport": "pixel-8-pro",
       "reason": "The busy join state is visually identical until a valid public channel reference exists."
@@ -258,8 +276,8 @@
     {
       "a": "tabs_channels_join-busy_android_pixel-8-pro.png",
       "b": "tabs_channels_join-invalid_android_pixel-8-pro.png",
-      "identicalRatio": 0.9990316358024691,
-      "contentIdenticalRatio": 0.9924500951288013,
+      "identicalRatio": 0.9993758156671759,
+      "contentIdenticalRatio": 0.9935119535767303,
       "platform": "android",
       "viewport": "pixel-8-pro",
       "reason": "The busy join state is visually identical until a valid public channel reference exists."
@@ -267,17 +285,26 @@
     {
       "a": "tabs_channels_join-empty_android_pixel-8-pro.png",
       "b": "tabs_channels_join-invalid_android_pixel-8-pro.png",
-      "identicalRatio": 0.9995933641975309,
-      "contentIdenticalRatio": 0.9968445685815657,
+      "identicalRatio": 0.9997378923160173,
+      "contentIdenticalRatio": 0.9972883132789612,
       "platform": "android",
       "viewport": "pixel-8-pro",
       "reason": "The busy join state is visually identical until a valid public channel reference exists."
     },
     {
+      "a": "tabs_contacts_content-empty_android_pixel-8-pro.png",
+      "b": "tabs_contacts_empty_android_pixel-8-pro.png",
+      "identicalRatio": 0.9995730181277056,
+      "contentIdenticalRatio": 0.9877268849039955,
+      "platform": "android",
+      "viewport": "pixel-8-pro",
+      "reason": "Content aliases preserve HEAD matrix naming while rendering the same contacts empty state."
+    },
+    {
       "a": "tabs_message-requests_empty_android_pixel-8-pro.png",
       "b": "tabs_requests_empty_android_pixel-8-pro.png",
-      "identicalRatio": 0.9986442901234568,
-      "contentIdenticalRatio": 0.9950271182839538,
+      "identicalRatio": 0.9991261419340464,
+      "contentIdenticalRatio": 0.9958815248820575,
       "platform": "android",
       "viewport": "pixel-8-pro",
       "reason": "Message request aliases preserve HEAD matrix naming while rendering the same empty list."
@@ -285,16 +312,22 @@
     {
       "a": "tabs_message-requests_populated_android_pixel-8-pro.png",
       "b": "tabs_requests_populated_android_pixel-8-pro.png",
-      "identicalRatio": 0.9983244598765432,
-      "contentIdenticalRatio": 0.9953844412219749,
+      "identicalRatio": 0.9989199870289025,
+      "contentIdenticalRatio": 0.9962716951028658,
       "platform": "android",
       "viewport": "pixel-8-pro",
       "reason": "Message request aliases preserve HEAD matrix naming while rendering the same populated list."
+    },
+    {
+      "a": "tabs_settings_liveproof-idle_android_pixel-8-pro.png",
+      "b": "tabs_settings_liveproof-ok_android_pixel-8-pro.png",
+      "identicalRatio": 0.9983694116851286,
+      "contentIdenticalRatio": 0.9903995494563997,
+      "platform": "android",
+      "viewport": "pixel-8-pro",
+      "reason": "Idle vs ok differ only by the Live proof title/body glyphs (idle vs ok) and success vs neutral title color on the same scrolled Settings fixture."
     }
   ],
-  "markerAssertMissing": [
-    "tabs.profile.sign-out|android|pixel-4a",
-    "tabs.profile.sign-out|android|pixel-8-pro"
-  ],
-  "fileCount": 244
+  "markerAssertMissing": [],
+  "fileCount": 246
 }

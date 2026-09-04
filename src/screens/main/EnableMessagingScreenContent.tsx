@@ -98,10 +98,16 @@ export function EnableMessagingScreenContent({
       <PageHeader title={COPY.enableEncryptedMessaging} onBack={onBack} testID="enableMessaging" />
 
       <ScrollView
+        testID="enableMessagingScroll"
+        style={styles.scroll}
         contentContainerStyle={[
           styles.content,
-          { paddingBottom: space.xl + Math.max(insets.bottom, 0) },
+          {
+            paddingBottom:
+              space.xl + Math.max(insets.bottom, 0) + (countdown ? space.xxxl + space.xl : 0),
+          },
         ]}
+        keyboardShouldPersistTaps="handled"
       >
         <Text style={styles.heading}>{COPY.enableEncryptedMessaging}</Text>
         <Text style={styles.explanation}>{COPY.approveScopesBody}</Text>
@@ -199,25 +205,25 @@ export function EnableMessagingScreenContent({
         <View style={styles.custodyWrap}>
           <CustodyLine />
         </View>
+        {countdown ? (
+          <View
+            testID="enableMessagingCountdown"
+            accessibilityRole="text"
+            accessibilityLabel={countdown}
+            style={styles.countdownBar}
+          >
+            <Text style={styles.countdownText}>{countdown}</Text>
+          </View>
+        ) : null}
       </ScrollView>
-
-      {countdown ? (
-        <View
-          testID="enableMessagingCountdown"
-          accessibilityRole="text"
-          accessibilityLabel={countdown}
-          style={[styles.countdownBar, { paddingBottom: Math.max(insets.bottom, space.lg) }]}
-        >
-          <Text style={styles.countdownText}>{countdown}</Text>
-        </View>
-      ) : null}
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: color.canvas },
-  content: { paddingHorizontal: space.xl, paddingVertical: space.xxl, gap: space.lg, flexGrow: 1 },
+  scroll: { flex: 1 },
+  content: { paddingHorizontal: space.xl, paddingVertical: space.xxl, gap: space.lg },
   heading: { fontSize: typeRole.heading.fontSize, fontWeight: '700', color: color.textPrimary },
   explanation: { fontSize: typeRole.callout.fontSize, color: color.textSecondary, lineHeight: 22 },
   scopeDetail: {
@@ -244,7 +250,7 @@ const styles = StyleSheet.create({
   statusMessage: { fontSize: typeRole.secondary.fontSize, color: color.textMuted, lineHeight: 20 },
   urlBlock: { gap: space.md },
   scanHint: { fontSize: typeRole.secondary.fontSize, color: color.textMuted, lineHeight: 20 },
-  custodyWrap: { marginTop: 'auto', paddingTop: space.xxl, paddingBottom: space.sm },
+  custodyWrap: { paddingTop: space.xxl, paddingBottom: space.sm },
   countdownBar: {
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: color.surfaceRaised,

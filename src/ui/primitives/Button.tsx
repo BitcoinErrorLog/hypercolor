@@ -146,7 +146,7 @@ const styles = StyleSheet.create({
     minHeight: measure.hitTarget,
     minWidth: measure.hitTarget,
     paddingHorizontal: space.lg,
-    paddingVertical: space.md,
+    paddingVertical: space.lg,
     borderRadius: radius.md,
     borderWidth: StyleSheet.hairlineWidth,
     alignItems: 'center',

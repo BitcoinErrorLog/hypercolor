@@ -45,7 +45,7 @@ is_known_control_scene() {
 }
 
 hide_chrome() {
-  "$ADB" -s "$SERIAL" shell settings put global policy_control 'immersive.full=*' >/dev/null 2>&1 || true
+  "$ADB" -s "$SERIAL" shell settings put global policy_control 'immersive.status=*' >/dev/null 2>&1 || true
   "$ADB" -s "$SERIAL" shell cmd statusbar collapse >/dev/null 2>&1 || true
 }
 
@@ -53,6 +53,13 @@ switch_scene() {
   local scene="$1"
   "$ROOT/scripts/e2e-android-cmd.sh" "$SERIAL" "$APP" "hypercolor://e2e/vrt?scene=${scene}" >/dev/null
   sleep "${A11Y_SCENE_SETTLE_SECONDS:-2}"
+  if [ "$scene" = "tabs.settings.default" ]; then
+    local i
+    for i in 1 2 3 4; do
+      "$ADB" -s "$SERIAL" shell input swipe 540 1700 540 400 400 >/dev/null 2>&1 || true
+      sleep 0.4
+    done
+  fi
 }
 
 ensure_metro_bundle() {
@@ -108,6 +115,7 @@ XML
   if [ -n "$activity" ]; then
     "$ADB" -s "$SERIAL" shell am start -n "$activity" >/dev/null
   fi
+  "$ADB" -s "$SERIAL" reverse tcp:8081 tcp:8081 >/dev/null 2>&1 || true
   for _ in $(seq 1 30); do
     local focus
     focus="$("$ADB" -s "$SERIAL" shell dumpsys window 2>/dev/null | awk '/mCurrentFocus|mFocusedApp|topResumedActivity/{print; exit}' || true)"
@@ -208,9 +216,11 @@ PY
 }
 
 failures=0
-launch_app_once
-if [ -n "${A11Y_APP_SETTLE_SECONDS:-}" ]; then
-  sleep "$A11Y_APP_SETTLE_SECONDS"
+if [ "${A11Y_SKIP_LAUNCH:-0}" != "1" ]; then
+  launch_app_once
+  if [ -n "${A11Y_APP_SETTLE_SECONDS:-}" ]; then
+    sleep "$A11Y_APP_SETTLE_SECONDS"
+  fi
 fi
 hide_chrome
 for scene in ${SCENES//,/ }; do

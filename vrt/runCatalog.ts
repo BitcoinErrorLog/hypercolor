@@ -157,7 +157,7 @@ async function main(): Promise<void> {
         baselineSha: gitSha('HEAD'),
         candidateSha,
         runner: 'hypercolor-vrt-catalog@maestro+pixelmatch+headless-resvg',
-        generatedAt: '2026-09-02T19:00:00.000Z',
+        generatedAt: new Date().toISOString(),
         approvalStatus: 'pending-named-human',
       },
       rows,

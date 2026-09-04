@@ -1,6 +1,6 @@
 import { maestroFlow } from '../report/buildReport';
 import type { CaptureTarget } from '../types';
-import { vrtSceneReadyTestIds } from '../sceneReady';
+import { vrtMaestroAssertIds, vrtSceneReadyTestIds } from '../sceneReady';
 
 const entry = {
   id: 'tabs.channels.create-private',
@@ -36,5 +36,19 @@ describe('maestroFlow', () => {
     const yaml = maestroFlow(target('ios', 'iphone-16-pro-max'), 'org.name.hypercolor');
     expect(yaml).toContain('id: "channelsCreateSheet"');
     expect(yaml).not.toContain('text: "New"');
+  });
+
+  it('asserts sign-out scenes on the sheet cancel control on Android', () => {
+    expect(vrtMaestroAssertIds('tabs.profile.sign-out', 'android')).toEqual(['signOutCancel']);
+    const yaml = maestroFlow(
+      {
+        ...target('android', 'pixel-8-pro'),
+        entry: { ...entry, id: 'tabs.profile.sign-out', screen: 'profile', state: 'sign-out' },
+        captureName: 'tabs/profile/sign-out/android/pixel-8-pro.png',
+      },
+      'com.hypercolor',
+    );
+    expect(yaml).toContain('id: "signOutCancel"');
+    expect(yaml).not.toContain('id: "vrt-scene:tabs.profile.sign-out"');
   });
 });

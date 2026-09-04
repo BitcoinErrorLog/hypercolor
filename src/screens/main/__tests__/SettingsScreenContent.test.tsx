@@ -2,6 +2,11 @@ import React from 'react';
 import { act, create } from 'react-test-renderer';
 import { SettingsScreenContent } from '../SettingsScreenContent';
 import { sessionUiModel } from '../../../ui/sessionUi';
+import { measure } from '../../../theme';
+
+jest.mock('react-native-safe-area-context', () => ({
+  useSafeAreaInsets: () => ({ top: 0, bottom: 24, left: 0, right: 0 }),
+}));
 
 describe('SettingsScreenContent wiring', () => {
   it('forwards back and enable-messaging handlers', () => {
@@ -87,16 +92,18 @@ describe('SettingsScreenContent wiring', () => {
     expect(chip?.props.accessibilityLabel).toBe('a'.repeat(52));
     expect(copy.props.accessibilityRole).toBe('button');
     expect(copy.props.style.minHeight).toBeGreaterThanOrEqual(44);
-    const mesh = tree.root.findByProps({ accessibilityLabel: 'BLE Mesh (quarantined)' });
+    const mesh = tree.root.findByProps({ testID: 'settingsBleMesh' });
     expect(mesh.props.accessibilityRole).toBe('switch');
-    expect(mesh.props.style.minHeight).toBeGreaterThanOrEqual(44);
+    expect(mesh.props.accessibilityLabel).toBe('BLE Mesh (quarantined)');
+    expect(mesh.props.style.minHeight).toBeGreaterThanOrEqual(measure.hitTarget);
     act(() => {
       mesh.props.onPress();
     });
     expect(onToggleMesh).toHaveBeenCalledWith(true);
     const restore = tree.root.findByProps({
-      accessibilityLabel: 'Paste recovery code to restore',
+      testID: 'settingsRestoreCode',
     });
-    expect(restore.props.style.minHeight).toBeGreaterThanOrEqual(44);
+    expect(restore.props.accessibilityLabel).toBe('Paste recovery code to restore');
+    expect(restore.props.style.minHeight).toBeGreaterThanOrEqual(measure.hitTarget);
   });
 });

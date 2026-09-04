@@ -296,22 +296,29 @@ if ledger_path.exists():
     except Exception:
         prior = []
 kept = [a for a in prior if a.split("|")[-1] not in devices]
+if scenes:
+    kept = [
+        a
+        for a in prior
+        if not (a.split("|")[-1] in devices and a.split("|")[0] in scenes)
+    ]
 asserted = kept + asserted
 expected = []
+run_expected = []
 for flow in sorted((root / ".maestro/vrt/generated").glob("*_android_*.yaml")):
     for line in flow.read_text().splitlines():
         if line.startswith("name: VRT "):
             parts = line.split()
             scene = parts[2]
             device = flow.name.split("_android_")[-1].replace(".yaml", "")
-            if scenes and scene not in scenes:
-                continue
-            expected.append(f"{scene}|android|{device}")
+            key = f"{scene}|android|{device}"
+            expected.append(key)
+            if (not scenes or scene in scenes) and device in devices:
+                run_expected.append(key)
             break
 ledger_path.write_text(
     json.dumps({"asserted": asserted, "expected": expected, "okCount": len(asserted)}, indent=2) + "\n"
 )
-run_expected = [e for e in expected if e.split("|")[-1] in devices]
 missing = [e for e in run_expected if e not in set(asserted)]
 print("ledger asserted", len(asserted), "expected", len(expected), "this_run", len(run_expected), "missing", len(missing))
 if missing:

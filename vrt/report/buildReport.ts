@@ -1,7 +1,7 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { CaptureTarget } from '../types';
-import { vrtSceneReadyTestIds } from '../sceneReady';
+import { vrtMaestroAssertIds } from '../sceneReady';
 
 export type ReportRow = {
   readonly captureName: string;
@@ -109,13 +109,7 @@ export async function writeReport(
 export function maestroFlow(target: CaptureTarget, appId: string): string {
   const scene = target.entry.id;
   const shot = `${scene.replace(/\./g, '_')}_${target.platform}_${target.device}`;
-  const sceneReadyIds = vrtSceneReadyTestIds(scene);
-  const assertedIds =
-    target.platform === 'android'
-      ? sceneReadyIds.slice(0, 1)
-      : sceneReadyIds.length > 1
-        ? sceneReadyIds.slice(1)
-        : sceneReadyIds;
+  const assertedIds = vrtMaestroAssertIds(scene, target.platform);
   const readyAssertions = assertedIds
     .map(id => {
       const exactSceneMarker = id.startsWith('vrt-scene:');

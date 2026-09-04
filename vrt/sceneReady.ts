@@ -38,3 +38,22 @@ const SCENE_READY_TEST_IDS: Readonly<Record<string, readonly string[]>> = Object
 export function vrtSceneReadyTestIds(catalogId: string): readonly string[] {
   return [vrtSceneMarkerId(catalogId), ...(SCENE_READY_TEST_IDS[catalogId] ?? [])];
 }
+
+/**
+ * Maestro selectors for a platform. Android RN `Modal` with
+ * `accessibilityViewIsModal` hides the catalog `vrt-scene:` marker, so
+ * sign-out scenes assert the sheet control instead.
+ */
+export function vrtMaestroAssertIds(
+  catalogId: string,
+  platform: 'android' | 'ios' | 'headless',
+): readonly string[] {
+  const extras = SCENE_READY_TEST_IDS[catalogId] ?? [];
+  if (platform === 'ios' || platform === 'headless') {
+    return extras.length > 0 ? extras : [vrtSceneMarkerId(catalogId)];
+  }
+  if (catalogId === 'tabs.profile.sign-out' || catalogId === 'overlay.sign-out.alert') {
+    return extras.length > 0 ? extras : [vrtSceneMarkerId(catalogId)];
+  }
+  return [vrtSceneMarkerId(catalogId)];
+}

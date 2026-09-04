@@ -18,7 +18,6 @@
     "auth.welcome.debug-error|android|pixel-4a",
     "auth.welcome.debug-result|android|pixel-4a",
     "auth.welcome.error|android|pixel-4a",
-    "auth.welcome.idle|android|pixel-4a",
     "auth.welcome.loading|android|pixel-4a",
     "bootstrap.app-splash.loading|android|pixel-4a",
     "bootstrap.linking-fallback.loading|android|pixel-4a",
@@ -140,7 +139,6 @@
     "auth.welcome.debug-error|android|pixel-8-pro",
     "auth.welcome.debug-result|android|pixel-8-pro",
     "auth.welcome.error|android|pixel-8-pro",
-    "auth.welcome.idle|android|pixel-8-pro",
     "auth.welcome.loading|android|pixel-8-pro",
     "bootstrap.app-splash.loading|android|pixel-8-pro",
     "bootstrap.linking-fallback.loading|android|pixel-8-pro",
@@ -243,7 +241,11 @@
     "tabs.settings.recovery-shown|android|pixel-8-pro",
     "tabs.settings.restore-err|android|pixel-8-pro",
     "tabs.settings.restore-ok|android|pixel-8-pro",
-    "tabs.settings.telemetry-on|android|pixel-8-pro"
+    "tabs.settings.telemetry-on|android|pixel-8-pro",
+    "tabs.profile.sign-out|android|pixel-4a",
+    "tabs.profile.sign-out|android|pixel-8-pro",
+    "auth.welcome.idle|android|pixel-8-pro",
+    "auth.welcome.idle|android|pixel-4a"
   ],
   "expected": [
     "a11y.font-scale.two|android|pixel-4a",
@@ -493,5 +495,5 @@
     "tabs.settings.telemetry-on|android|pixel-4a",
     "tabs.settings.telemetry-on|android|pixel-8-pro"
   ],
-  "okCount": 244
+  "okCount": 246
 }

@@ -2,7 +2,6 @@ import React from 'react';
 import {
   View,
   Text,
-  Switch,
   TouchableOpacity,
   Pressable,
   StyleSheet,
@@ -15,6 +14,7 @@ import { COPY } from '../../copy/uxCopy';
 import { CustodyLine } from '../../ui/CustodyLine';
 import { ErrorDetails } from '../../ui/ErrorDetails';
 import type { SessionUiModel } from '../../ui/sessionUi';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { color, space, radius, typeRole, measure } from '../../theme';
 import { ListRow, PageHeader, PubkyChip } from '../../ui/primitives';
 
@@ -85,11 +85,21 @@ export function SettingsScreenContent({
   onBackupLayout,
   onPaymentsLayout,
 }: SettingsScreenContentProps): React.ReactElement {
+  const insets = useSafeAreaInsets();
   return (
     <SafeAreaView style={styles.container} testID="settingsScreen">
       <PageHeader title="Settings" onBack={onBack} testID="settings" />
 
-      <ScrollView ref={scrollRef} testID="settingsScroll" contentContainerStyle={styles.content}>
+      <ScrollView
+        ref={scrollRef}
+        testID="settingsScroll"
+        style={styles.scroll}
+        contentContainerStyle={[
+          styles.content,
+          { paddingBottom: space.xxxl + space.xl + Math.max(insets.bottom, 0) + measure.hitTarget },
+        ]}
+        keyboardShouldPersistTaps="handled"
+      >
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Identity</Text>
           {pubky ? (
@@ -124,21 +134,21 @@ export function SettingsScreenContent({
               <Text style={styles.rowLabel}>BLE Mesh (quarantined)</Text>
             </View>
             <Pressable
+              testID="settingsBleMesh"
               style={styles.switchHit}
               accessibilityRole="switch"
               accessibilityLabel="BLE Mesh (quarantined)"
               accessibilityState={{ checked: meshEnabled }}
               onPress={() => onToggleMesh(!meshEnabled)}
             >
-              <Switch
-                value={meshEnabled}
-                onValueChange={onToggleMesh}
-                trackColor={{ false: color.surfaceRaised, true: color.brand }}
-                thumbColor={color.textPrimary}
-                pointerEvents="none"
-                accessible={false}
+              <View
+                testID="settingsBleMeshSwitch"
+                accessibilityElementsHidden
                 importantForAccessibility="no"
-              />
+                style={[styles.switchTrack, meshEnabled && styles.switchTrackOn]}
+              >
+                <View style={[styles.switchThumb, meshEnabled && styles.switchThumbOn]} />
+              </View>
             </Pressable>
           </View>
           <Text style={styles.sectionFooterText}>
@@ -217,6 +227,7 @@ export function SettingsScreenContent({
             </View>
           ) : null}
           <TextInput
+            testID="settingsRestoreCode"
             style={styles.liveInput}
             value={restoreCode}
             onChangeText={onChangeRestoreCode}
@@ -256,21 +267,21 @@ export function SettingsScreenContent({
               <Text style={styles.rowHint}>Anonymous delivery counters only</Text>
             </View>
             <Pressable
+              testID="settingsTelemetry"
               style={styles.switchHit}
               accessibilityRole="switch"
               accessibilityLabel="Telemetry"
               accessibilityState={{ checked: telemetryEnabled }}
               onPress={() => onToggleTelemetry(!telemetryEnabled)}
             >
-              <Switch
-                value={telemetryEnabled}
-                onValueChange={onToggleTelemetry}
-                trackColor={{ false: color.surfaceRaised, true: color.brand }}
-                thumbColor={color.textPrimary}
-                pointerEvents="none"
-                accessible={false}
+              <View
+                testID="settingsTelemetrySwitch"
+                accessibilityElementsHidden
                 importantForAccessibility="no"
-              />
+                style={[styles.switchTrack, telemetryEnabled && styles.switchTrackOn]}
+              >
+                <View style={[styles.switchThumb, telemetryEnabled && styles.switchThumbOn]} />
+              </View>
             </Pressable>
           </View>
         </View>
@@ -309,7 +320,31 @@ export function SettingsScreenContent({
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: color.canvas },
-  content: { paddingTop: space.xxl, paddingBottom: space.xxxl + space.xl },
+  scroll: { flex: 1 },
+  content: { paddingTop: space.xxl, flexGrow: 0 },
+  switchHit: {
+    minWidth: measure.hitTarget,
+    minHeight: measure.hitTarget,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  switchTrack: {
+    width: measure.hitTarget + space.lg,
+    height: measure.hitTarget,
+    borderRadius: measure.hitTarget / 2,
+    backgroundColor: color.surfaceRaised,
+    justifyContent: 'center',
+    paddingHorizontal: space.xs,
+  },
+  switchTrackOn: { backgroundColor: color.brand },
+  switchThumb: {
+    width: space.xxl,
+    height: space.xxl,
+    borderRadius: space.lg,
+    backgroundColor: color.textPrimary,
+    alignSelf: 'flex-start',
+  },
+  switchThumbOn: { alignSelf: 'flex-end' },
   section: { marginBottom: space.xxxl },
   sectionTitle: {
     fontSize: typeRole.meta.fontSize,
@@ -369,12 +404,6 @@ const styles = StyleSheet.create({
     marginHorizontal: space.xl,
     marginBottom: space.md,
     fontFamily: 'monospace',
-  },
-  switchHit: {
-    minWidth: measure.hitTarget,
-    minHeight: measure.hitTarget,
-    alignItems: 'center',
-    justifyContent: 'center',
   },
   liveButton: {
     backgroundColor: color.brand,
