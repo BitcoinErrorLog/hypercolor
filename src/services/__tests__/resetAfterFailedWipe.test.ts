@@ -57,6 +57,7 @@ import { PaykitLinkNative } from '../link/PaykitLinkNative';
 import { claimWipeInFlight, paintOwner, resetPaintedOwnerModuleForTests } from '../paintedOwner';
 import {
   BOOT_WIPE_FAILURES_BEFORE_RESET,
+  isResetAppDataError,
   recordBootWipeFailure,
   resetAppDataAfterFailedWipe,
   shouldOfferResetAfterFailedWipe,
@@ -152,5 +153,41 @@ describe('resetAppDataAfterFailedWipe TOCTOU claim', () => {
     } finally {
       release();
     }
+  });
+
+  it('rejects with ResetAppDataError when the marker owner read throws inside the claim', async () => {
+    mockGetSignOutIncompleteOwner.mockImplementation(() => {
+      throw new Error('mmkv sealed');
+    });
+    mockGetSignOutIncompleteJournalOwner.mockRejectedValue(new Error('mmkv sealed'));
+    mockGetSignOutWipeFailureCountSql.mockResolvedValue(BOOT_WIPE_FAILURES_BEFORE_RESET);
+    try {
+      await resetAppDataAfterFailedWipe();
+      throw new Error('expected resetAppDataAfterFailedWipe to reject');
+    } catch (err) {
+      expect(isResetAppDataError(err)).toBe(true);
+    }
+    expect(closeAndDeleteSqliteDatabase).not.toHaveBeenCalled();
+    expect(PaykitLinkNative.signOutSession).not.toHaveBeenCalled();
+    expect(PaykitLinkNative.clearAllNativeSecrets).not.toHaveBeenCalled();
+    expect(mockClearIfPubky).not.toHaveBeenCalled();
+    const release = claimWipeInFlight();
+    release();
+  });
+
+  it('rejects with ResetAppDataError when KeyStore.getPubky throws', async () => {
+    mockGetPubky.mockImplementation(() => {
+      throw new Error('mmkv sealed');
+    });
+    try {
+      await resetAppDataAfterFailedWipe();
+      throw new Error('expected resetAppDataAfterFailedWipe to reject');
+    } catch (err) {
+      expect(isResetAppDataError(err)).toBe(true);
+    }
+    expect(closeAndDeleteSqliteDatabase).not.toHaveBeenCalled();
+    expect(PaykitLinkNative.signOutSession).not.toHaveBeenCalled();
+    expect(PaykitLinkNative.clearAllNativeSecrets).not.toHaveBeenCalled();
+    expect(mockClearIfPubky).not.toHaveBeenCalled();
   });
 });
