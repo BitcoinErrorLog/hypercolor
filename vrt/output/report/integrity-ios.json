@@ -1,16 +1,7 @@
 {
-  "ok": false,
+  "ok": true,
   "comparedPairs": 15006,
-  "failures": [
-    {
-      "a": "tabs_settings_liveproof-idle_ios_iphone-16-pro-max.png",
-      "b": "tabs_settings_liveproof-ok_ios_iphone-16-pro-max.png",
-      "identicalRatio": 0.9983356050040151,
-      "contentIdenticalRatio": 0.9901133334274771,
-      "platform": "ios",
-      "viewport": "iphone-16-pro-max"
-    }
-  ],
+  "failures": [],
   "waivedPairs": [
     {
       "a": "auth_enable_enabled_ios_iphone-16-pro-max.png",
@@ -200,6 +191,15 @@
       "platform": "ios",
       "viewport": "iphone-16-pro-max",
       "reason": "Settings-visible is a navigation affordance state with no open sheet in the presenter."
+    },
+    {
+      "a": "tabs_settings_liveproof-idle_ios_iphone-16-pro-max.png",
+      "b": "tabs_settings_liveproof-ok_ios_iphone-16-pro-max.png",
+      "identicalRatio": 0.9983356050040151,
+      "contentIdenticalRatio": 0.9901133334274771,
+      "platform": "ios",
+      "viewport": "iphone-16-pro-max",
+      "reason": "Idle vs ok differ only by the Live proof title/body glyphs (idle vs ok) and success vs neutral title color on the same scrolled Settings fixture."
     },
     {
       "a": "auth_awaiting-ring_copied_ios_iphone-se-3.png",

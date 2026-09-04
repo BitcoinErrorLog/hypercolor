@@ -1,7 +1,7 @@
 # Accessibility proof (measured)
 
 Date: 2026-09-04
-Tree: `ux/mobile-integrated` @ `a93e520`
+Tree: `ux/mobile-integrated` @ `5d59d8f` (merge of VRT capture fixes `f6f8219`). Android on-device recapture and a11y dumps were measured on this tree, not `a93e520` / `ed0d39d`.
 
 ## Method
 
@@ -14,25 +14,26 @@ Tree: `ux/mobile-integrated` @ `a93e520`
 
 Prior measured counts (same date, tree `ux/w3-design-system`, product UI dumps): Pixel 4a 5 scenes / status ok 3 / fail 2 / clickable 15 / passing 12 / failing 3; Pixel 8 Pro 5 / 2 / 3 / 19 / 13 / 6.
 
-This run (`a93e520`, 2026-09-04): `bash scripts/a11y-android-dump.sh` after the four-profile recapture. Critical journeys: Welcome idle, Enable authorizing, Chats populated, Thread populated, Settings default.
+This run (`5d59d8f`, 2026-09-04): `bash scripts/a11y-android-dump.sh` with Metro (`EXPO_PUBLIC_E2E_VRT=1`) serving a `vrt-scene` bundle, APK installed after `package` was ready, and `A11Y_APP_SETTLE_SECONDS=20`. Dumps are product UI (`package="com.hypercolor"`), not redbox. Critical journeys: Welcome idle, Enable authorizing, Chats populated, Thread populated, Settings default. JSONL: `vrt/output/report/a11y-android-4a.jsonl`, `vrt/output/report/a11y-android-8-pro.jsonl`.
 
 | Profile                                       | Scenes | Status ok | Status fail | Clickable nodes | Passing nodes | Failing nodes |
 | --------------------------------------------- | -----: | --------: | ----------: | --------------: | ------------: | ------------: |
-| Pixel 4a (`Hypercolor_Pixel_4a_API_36`)       |      5 |         0 |           5 |              10 |             0 |            15 |
-| Pixel 8 Pro (`Hypercolor_Pixel_8_Pro_API_36`) |      5 |         0 |           5 |              10 |             0 |            15 |
+| Pixel 4a (`Hypercolor_Pixel_4a_API_36`)       |      5 |         4 |           1 |              21 |            20 |             1 |
+| Pixel 8 Pro (`Hypercolor_Pixel_8_Pro_API_36`) |      5 |         3 |           2 |              20 |            16 |             4 |
 
-Every scene on both profiles was `status: "fail"` because the dump XML contained a React Native redbox (`Unable to load script` / `loadScriptFromAssets`), not product UI. This run did **not** re-measure the previous product hit-target findings. Per scene the only clickable nodes were redbox chrome (empty `content-desc`):
+`a93e520` product a11y fixes for `auth.enable.authorizing`, `stack.thread.populated`, and `tabs.settings.default` are present in these dumps (those three scenes are no longer the redbox-only failures). Remaining `clickable-a11y` nodes (not fixed in this capture pass):
 
-- Pixel 4a, all five scenes: `com.hypercolor:id/rn_redbox_dismiss_button` text `DISMISS (ESC)` bounds `[11,2191][529,2323]` (188.4×48.0 dp); `com.hypercolor:id/rn_redbox_reload_button` text `RELOAD (R, R)` bounds `[551,2191][1069,2323]` (188.4×48.0 dp). Hierarchy root bounds `[0,0][1080,2400]`.
-- Pixel 8 Pro labeled dumps, all five scenes: same two resource-ids, text `DISMISS (ESC)` bounds `[12,2172][528,2316]` (172.0×48.0 dp) and `RELOAD (R, R)` bounds `[552,2172][1068,2316]` (172.0×48.0 dp). Hierarchy root bounds were also `[0,0][1080,2400]` (same physical size as the 4a dump).
+- Pixel 4a `tabs.settings.default`: `android.widget.Switch` (BLE Mesh), empty `content-desc` / `resource-id`, bounds `[897,1130][1025,1204]` (46.5×26.9 dp).
+- Pixel 8 Pro `auth.enable.authorizing`: `enableMessagingOpenRing` text empty, desc `Open Pubky Ring`, bounds `[60,2102][1020,2230]` (320.0×42.7 dp, height under 44dp); `enableMessagingCopy` desc `Copy authorization URL`, inverted bounds `[60,2296][1020,2230]` (320.0×−22.0 dp, clipped off the 1080×2400 frame).
+- Pixel 8 Pro `tabs.settings.default`: unlabeled `android.widget.Switch` bounds `[880,1236][1020,1317]` (46.7×27.0 dp); `Paste recovery code to restore` `EditText` bounds `[60,2295][1020,2400]` (320.0×35.0 dp).
 
-Each scene JSONL row therefore has `fail` length 3: `react-native-redbox` plus two `clickable-a11y` nodes. Product controls on `auth.enable.authorizing`, `stack.thread.populated`, and `tabs.settings.default` were not present in these dumps.
+Both AVDs reported `wm size` 1080×2400 (4a @ 440dpi, 8 Pro @ 480dpi). `auth.welcome.idle` and `stack.thread.populated` were status ok on both profiles.
 
 ## Contrast (captured PNGs)
 
 Token pairs in `textOnSurfacePairs` remain the source of truth for brand/canvas. Tab inactive tint uses `color.textSecondary` (`#727986` replacement already bound in `MainTabs`). Measured PNG sampling is recorded in `vrt/output/report/a11y-contrast.json` after recapture.
 
-Android/iOS final recapture samples from `scripts/a11y-contrast-from-png.ts`. The sampler read 488 final baseline PNGs with detectable samples, derives text bounds from Android dump XML when available and otherwise discovers bright glyph clusters, then compares actual text pixels against the adjacent local dark background. Critical-scene samples are from Welcome idle, Enable authorizing, Chats populated, Thread populated, and Settings default.
+Android/iOS contrast numbers below were measured from the older `a93e520`/`ed0d39d` PNG archive (123 files per profile). This tree’s Android recapture at `5d59d8f` has 122 files per AVD; contrast was not re-sampled. iOS PNG counts (123) are still current. The sampler derives text bounds from Android dump XML when available and otherwise discovers bright glyph clusters, then compares actual text pixels against the adjacent local dark background. Critical-scene samples are from Welcome idle, Enable authorizing, Chats populated, Thread populated, and Settings default.
 
 | Profile           | PNG count |  Min |   Max | Average | Critical-scene samples                      |
 | ----------------- | --------: | ---: | ----: | ------: | ------------------------------------------- |
@@ -65,4 +66,6 @@ Focused iOS SE captures (2026-09-03) mount production Content via JourneyScenes:
 - `auth_welcome_idle_ios_iphone-se-3.png` — brand + Connect CTA.
 - `tabs_settings_default_ios_iphone-se-3.png` — identity/homeserver/BLE/backup sections.
 
-Full final recapture is complete: 123 scenes × 4 profiles = 492 PNGs. Integrity is green with `files=246 failures=0 marker_gaps=0` per platform; waivers are limited to `vrt/integrityWaivers.ts`.
+iOS recapture remains green at `f6f8219` / this merge: 123 scenes × 2 simulators = 246 PNGs, integrity `ok=true files=246 comparedPairs=15006 failures=0 marker_gaps=0 waivedPairs=44`.
+
+Android recapture at `5d59d8f` (2026-09-04): 122/123 scenes per AVD (`ok=122 fail=1` both). Failed scene `tabs.profile.sign-out` — Maestro `Assertion is false: "vrt-scene:tabs.profile.sign-out" is visible` on three attempts (product marker never appeared). PNGs: 244. Integrity `ok=false files=244 comparedPairs=14762 failures=0 marker_gaps=2 waivedPairs=32`. Gaps: `tabs.profile.sign-out|android|pixel-4a` and `tabs.profile.sign-out|android|pixel-8-pro`. Pixel 4a duration 66m 49s; Pixel 8 Pro 63m 32s. `npm run vrt:catalog`: 123 captured, 1 failed (the missing Android sign-out pair).
