@@ -61,6 +61,9 @@ const styles = StyleSheet.create({
   },
   chip: {
     flexShrink: 1,
+    minHeight: measure.hitTarget,
+    minWidth: measure.hitTarget,
+    justifyContent: 'center',
     backgroundColor: color.surfaceRaised,
     borderRadius: radius.sm,
     paddingHorizontal: space.md,

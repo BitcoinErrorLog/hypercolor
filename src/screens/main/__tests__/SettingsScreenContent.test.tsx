@@ -45,4 +45,58 @@ describe('SettingsScreenContent wiring', () => {
     expect(onBack).toHaveBeenCalledTimes(1);
     expect(onEnableMessaging).toHaveBeenCalledTimes(1);
   });
+
+  it('keeps identity chip, BLE switch, and restore field at the hit target with names', () => {
+    const onCopyPubky = jest.fn();
+    const onToggleMesh = jest.fn();
+    let tree!: ReturnType<typeof create>;
+    act(() => {
+      tree = create(
+        <SettingsScreenContent
+          pubky={'a'.repeat(52)}
+          homeserver={null}
+          session={sessionUiModel('needs-enable')}
+          meshEnabled={false}
+          telemetryEnabled={false}
+          backupBusy={false}
+          recoveryCode={null}
+          recoveryConfirmed={false}
+          recoveryCopied={false}
+          restoreCode=""
+          restoreNote={null}
+          restoreError={null}
+          markedSection={null}
+          onBack={jest.fn()}
+          onToggleMesh={onToggleMesh}
+          onToggleTelemetry={jest.fn()}
+          onBackup={jest.fn()}
+          onCopyRecovery={jest.fn()}
+          onToggleRecoveryConfirmed={jest.fn()}
+          onRecoveryDone={jest.fn()}
+          onChangeRestoreCode={jest.fn()}
+          onRestore={jest.fn()}
+          onEnableMessaging={jest.fn()}
+          onCopyPubky={onCopyPubky}
+        />,
+      );
+    });
+    const chip = tree.root
+      .findAllByProps({ testID: 'mask-pubky' })
+      .find(node => node.props.accessibilityRole === 'text');
+    const copy = tree.root.findByProps({ testID: 'mask-pubkyCopy' });
+    expect(chip?.props.accessibilityLabel).toBe('a'.repeat(52));
+    expect(copy.props.accessibilityRole).toBe('button');
+    expect(copy.props.style.minHeight).toBeGreaterThanOrEqual(44);
+    const mesh = tree.root.findByProps({ accessibilityLabel: 'BLE Mesh (quarantined)' });
+    expect(mesh.props.accessibilityRole).toBe('switch');
+    expect(mesh.props.style.minHeight).toBeGreaterThanOrEqual(44);
+    act(() => {
+      mesh.props.onPress();
+    });
+    expect(onToggleMesh).toHaveBeenCalledWith(true);
+    const restore = tree.root.findByProps({
+      accessibilityLabel: 'Paste recovery code to restore',
+    });
+    expect(restore.props.style.minHeight).toBeGreaterThanOrEqual(44);
+  });
 });

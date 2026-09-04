@@ -678,6 +678,7 @@ export function ThreadScreenContent({
           onPress={onCopyPubky}
           accessibilityRole="button"
           accessibilityLabel={`Copy ${identity.title}`}
+          hitSlop={HIT_SLOP_44}
         >
           <Text
             testID="threadTitle"
@@ -1001,7 +1002,13 @@ const styles = StyleSheet.create({
   },
   backBtn: { ...minHitStyle },
   backText: { fontSize: typeRole.heading.fontSize, color: color.brand },
-  titleWrap: { flex: 1, alignItems: 'center', paddingHorizontal: space.sm },
+  titleWrap: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: space.sm,
+    minHeight: measure.hitTarget,
+  },
   title: {
     fontSize: typeRole.callout.fontSize,
     fontWeight: '600',

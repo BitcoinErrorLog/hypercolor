@@ -4,6 +4,7 @@ import {
   Text,
   Switch,
   TouchableOpacity,
+  Pressable,
   StyleSheet,
   SafeAreaView,
   ScrollView,
@@ -122,15 +123,23 @@ export function SettingsScreenContent({
             <View style={styles.rowCopy}>
               <Text style={styles.rowLabel}>BLE Mesh (quarantined)</Text>
             </View>
-            <Switch
-              value={meshEnabled}
-              onValueChange={onToggleMesh}
-              trackColor={{ false: color.surfaceRaised, true: color.brand }}
-              thumbColor={color.textPrimary}
+            <Pressable
+              style={styles.switchHit}
               accessibilityRole="switch"
               accessibilityLabel="BLE Mesh (quarantined)"
               accessibilityState={{ checked: meshEnabled }}
-            />
+              onPress={() => onToggleMesh(!meshEnabled)}
+            >
+              <Switch
+                value={meshEnabled}
+                onValueChange={onToggleMesh}
+                trackColor={{ false: color.surfaceRaised, true: color.brand }}
+                thumbColor={color.textPrimary}
+                pointerEvents="none"
+                accessible={false}
+                importantForAccessibility="no"
+              />
+            </Pressable>
           </View>
           <Text style={styles.sectionFooterText}>
             Research-era path. Off for v1. Re-integration over Encrypted Links is future work.
@@ -213,6 +222,7 @@ export function SettingsScreenContent({
             onChangeText={onChangeRestoreCode}
             placeholder="Paste recovery code to restore"
             placeholderTextColor={color.textSecondary}
+            accessibilityLabel="Paste recovery code to restore"
             autoCapitalize="none"
             autoCorrect={false}
           />
@@ -245,15 +255,23 @@ export function SettingsScreenContent({
               <Text style={styles.rowLabel}>Telemetry</Text>
               <Text style={styles.rowHint}>Anonymous delivery counters only</Text>
             </View>
-            <Switch
-              value={telemetryEnabled}
-              onValueChange={onToggleTelemetry}
-              trackColor={{ false: color.surfaceRaised, true: color.brand }}
-              thumbColor={color.textPrimary}
+            <Pressable
+              style={styles.switchHit}
               accessibilityRole="switch"
               accessibilityLabel="Telemetry"
               accessibilityState={{ checked: telemetryEnabled }}
-            />
+              onPress={() => onToggleTelemetry(!telemetryEnabled)}
+            >
+              <Switch
+                value={telemetryEnabled}
+                onValueChange={onToggleTelemetry}
+                trackColor={{ false: color.surfaceRaised, true: color.brand }}
+                thumbColor={color.textPrimary}
+                pointerEvents="none"
+                accessible={false}
+                importantForAccessibility="no"
+              />
+            </Pressable>
           </View>
         </View>
 
@@ -347,15 +365,24 @@ const styles = StyleSheet.create({
     fontSize: typeRole.caption.fontSize,
     paddingHorizontal: space.lg,
     paddingVertical: space.md,
+    minHeight: measure.hitTarget,
     marginHorizontal: space.xl,
     marginBottom: space.md,
     fontFamily: 'monospace',
+  },
+  switchHit: {
+    minWidth: measure.hitTarget,
+    minHeight: measure.hitTarget,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   liveButton: {
     backgroundColor: color.brand,
     borderRadius: radius.md,
     paddingVertical: space.lg,
+    minHeight: measure.hitTarget,
     alignItems: 'center',
+    justifyContent: 'center',
     marginHorizontal: space.xl,
     marginTop: space.xs,
   },

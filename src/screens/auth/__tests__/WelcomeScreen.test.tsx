@@ -44,6 +44,19 @@ jest.mock('../../../services/PubkyService', () => ({
     awaitSignOutWipe: jest.fn().mockResolvedValue(undefined),
     shouldOfferResetAfterFailedWipe: jest.fn().mockResolvedValue(false),
     resetAppDataAfterFailedWipe: jest.fn().mockResolvedValue(undefined),
+    isTypedSignInRestoreError: (err: unknown) => {
+      const code =
+        typeof err === 'object' && err !== null ? (err as { code?: unknown }).code : undefined;
+      const message = err instanceof Error ? err.message : '';
+      return (
+        code === 'wipe-wait-timeout' ||
+        code === 'KeyStoreNotReady' ||
+        code === 'reset-app-data-failed' ||
+        code === 'owner-changed' ||
+        message === 'interrupted sign-out marker unreadable' ||
+        message === 'interrupted sign-out owner missing'
+      );
+    },
   },
 }));
 
@@ -296,7 +309,28 @@ describe('WelcomeScreen', () => {
     });
   });
 
-  it('shows sign-out-incomplete copy when connect waits on a hung wipe', async () => {
+  it('shows a generic error and the reset hatch when identity restore fails untyped', async () => {
+    jest
+      .mocked(PubkyService.awaitSignOutWipe)
+      .mockRejectedValueOnce(new Error('sqlite disk I/O error'));
+    let tree!: ReactTestRenderer;
+    await act(async () => {
+      tree = create(<WelcomeScreen />);
+    });
+    await act(async () => {
+      tree.root.findByProps({ testID: 'welcomeConnectRing' }).props.onPress();
+    });
+    const serialized = JSON.stringify(tree.toJSON());
+    expect(serialized).toContain(COPY.couldNotStartAuthorization);
+    expect(serialized).not.toContain('sqlite disk I/O');
+    expect(() => tree.root.findByProps({ testID: 'welcomeResetAppData' })).not.toThrow();
+    expect(PubkyService.resetAppDataAfterFailedWipe).not.toHaveBeenCalled();
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('does not open the reset hatch for a typed wipe-wait timeout', async () => {
     jest
       .mocked(PubkyService.awaitSignOutWipe)
       .mockRejectedValueOnce({ code: 'wipe-wait-timeout', message: 'wipe-wait-timeout' });
@@ -310,6 +344,7 @@ describe('WelcomeScreen', () => {
     const serialized = JSON.stringify(tree.toJSON());
     expect(serialized).toContain(COPY.signOutIncompleteTryAgain);
     expect(serialized).not.toContain('wipe-wait-timeout');
+    expect(() => tree.root.findByProps({ testID: 'welcomeResetAppData' })).toThrow();
     await act(async () => {
       tree.unmount();
     });

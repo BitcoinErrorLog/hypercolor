@@ -53,6 +53,30 @@ export const INTERRUPTED_SIGN_OUT_MARKER_UNREADABLE = 'interrupted sign-out mark
  */
 export const INTERRUPTED_SIGN_OUT_OWNER_MISSING = 'interrupted sign-out owner missing';
 
+/**
+ * Typed identity-restore / fail-closed errors. Untyped rejections on the
+ * Welcome sign-in path should steer to the existing reset hatch instead of
+ * a generic-only error.
+ */
+export function isTypedSignInRestoreError(err: unknown): boolean {
+  if (typeof err === 'object' && err !== null) {
+    const code = (err as { code?: unknown }).code;
+    if (
+      code === 'KeyStoreNotReady' ||
+      code === 'wipe-wait-timeout' ||
+      code === 'reset-app-data-failed' ||
+      code === 'owner-changed'
+    ) {
+      return true;
+    }
+  }
+  const message = err instanceof Error ? err.message : typeof err === 'string' ? err : '';
+  return (
+    message === INTERRUPTED_SIGN_OUT_MARKER_UNREADABLE ||
+    message === INTERRUPTED_SIGN_OUT_OWNER_MISSING
+  );
+}
+
 // ─── Path builders ────────────────────────────────────────────────────────────
 
 function profilePath(pubky: PubkyKey): string {
@@ -108,6 +132,8 @@ async function finishIdentityClear(owner: PubkyKey): Promise<void> {
 // ─── PubkyService ─────────────────────────────────────────────────────────────
 
 export const PubkyService = {
+  isTypedSignInRestoreError,
+
   // ── Auth ──────────────────────────────────────────────────────────────────
 
   async signOut(): Promise<void> {

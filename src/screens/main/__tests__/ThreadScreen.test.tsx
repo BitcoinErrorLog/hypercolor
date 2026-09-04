@@ -1,9 +1,10 @@
 import React from 'react';
 import { StyleSheet, Text } from 'react-native';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
-import { color, radius } from '../../../theme';
+import { color, radius, space, measure } from '../../../theme';
 import { CONTACTS_COPY } from '../../../ui/contacts/contactsCopy';
 import { ThreadScreenContent } from '../ThreadScreen';
+import type { Contact } from '../../../types';
 
 jest.mock('react-native-safe-area-context', () => ({
   useSafeAreaInsets: () => ({ top: 0, bottom: 12, left: 0, right: 0 }),
@@ -234,6 +235,34 @@ describe('ThreadScreenContent blocked send', () => {
     expect(theirsStyles.some(style => style.borderBottomLeftRadius === radius.bubbleTail)).toBe(
       true,
     );
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('exposes a 44pt named copy target for the peer title', async () => {
+    const peerContact: Contact = {
+      pubky: PEER,
+      ownerPubky: OWNER,
+      displayName: 'Aster Example',
+      trustScore: 50,
+      isFollowing: true,
+      isFollower: true,
+      isMutual: true,
+      addedManually: true,
+      firstSeenAt: 1,
+    };
+    const tree = await render(<ThreadScreenContent {...contentProps({ peerContact })} />);
+    const copyTitle = tree.root.findByProps({ accessibilityLabel: 'Copy Aster Example' });
+    expect(copyTitle).toBeDefined();
+    expect(copyTitle.props.accessibilityRole).toBe('button');
+    expect(copyTitle.props.hitSlop).toEqual({
+      top: space.md,
+      bottom: space.md,
+      left: space.md,
+      right: space.md,
+    });
+    expect(copyTitle.props.style.minHeight).toBe(measure.hitTarget);
     await act(async () => {
       tree.unmount();
     });

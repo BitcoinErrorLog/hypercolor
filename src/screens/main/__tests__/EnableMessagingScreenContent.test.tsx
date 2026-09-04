@@ -6,6 +6,7 @@ import {
 } from '../EnableMessagingScreenContent';
 import { INITIAL_ENABLE_MESSAGING_STATE } from '../enableMessagingController';
 import { COPY } from '../../../copy/uxCopy';
+import { measure } from '../../../theme';
 
 jest.mock('react-native-safe-area-context', () => ({
   useSafeAreaInsets: () => ({ top: 0, bottom: 34, left: 0, right: 0 }),
@@ -53,6 +54,24 @@ describe('EnableMessagingScreenContent wiring', () => {
     const countdown = tree.root.findByProps({ testID: 'enableMessagingCountdown' });
     expect(countdown.props.accessibilityLabel).toBe('Remaining: 00:42');
     expect(JSON.stringify(countdown.props.style)).toContain('34');
+    const openRing = tree.root
+      .findAllByProps({ testID: 'enableMessagingOpenRing' })
+      .find(node => node.props.accessibilityRole === 'button');
+    const copyAuth = tree.root
+      .findAllByProps({ testID: 'enableMessagingCopy' })
+      .find(node => node.props.accessibilityRole === 'button');
+    expect(openRing?.props.accessibilityLabel).toBe(COPY.openPubkyRing);
+    expect(copyAuth?.props.accessibilityLabel).toBe(COPY.copyAuthorizationUrl);
+    const openStyle =
+      typeof openRing?.props.style === 'function'
+        ? openRing.props.style({ pressed: false })
+        : openRing?.props.style;
+    const copyStyle =
+      typeof copyAuth?.props.style === 'function'
+        ? copyAuth.props.style({ pressed: false })
+        : copyAuth?.props.style;
+    expect(JSON.stringify(openStyle)).toContain(String(measure.hitTarget));
+    expect(JSON.stringify(copyStyle)).toContain(String(measure.hitTarget));
     act(() => {
       tree.root.findByProps({ testID: 'enableMessagingOpenRing' }).props.onPress();
     });

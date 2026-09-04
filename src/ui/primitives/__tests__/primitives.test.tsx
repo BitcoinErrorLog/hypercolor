@@ -164,6 +164,10 @@ describe('ui primitives', () => {
     expect(chip.props.accessibilityLabel).toBe(pubky);
     expect(chip.props.accessibilityValue).toEqual({ text: pubky });
     expect(hostByTestId(tree, 'pubkyChipCopy').props.accessibilityRole).toBe('button');
+    expect(flattenStyle(chip.props.style).minHeight).toBe(measure.hitTarget);
+    expect(flattenStyle(hostByTestId(tree, 'pubkyChipCopy').props.style).minHeight).toBe(
+      measure.hitTarget,
+    );
   });
 
   it('DetailRow and MessageBubble expose structured details and accessible status ticks', () => {

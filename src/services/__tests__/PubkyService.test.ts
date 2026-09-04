@@ -84,3 +84,23 @@ describe('PubkyService owner writes', () => {
     expect(mockIsAppCertValid).not.toHaveBeenCalled();
   });
 });
+
+describe('PubkyService.isTypedSignInRestoreError', () => {
+  it('treats KeyStore, wipe-wait, owner, and marker errors as typed', () => {
+    expect(PubkyService.isTypedSignInRestoreError({ code: 'KeyStoreNotReady' })).toBe(true);
+    expect(PubkyService.isTypedSignInRestoreError({ code: 'wipe-wait-timeout' })).toBe(true);
+    expect(PubkyService.isTypedSignInRestoreError({ code: 'owner-changed' })).toBe(true);
+    expect(PubkyService.isTypedSignInRestoreError({ code: 'reset-app-data-failed' })).toBe(true);
+    expect(
+      PubkyService.isTypedSignInRestoreError(new Error('interrupted sign-out marker unreadable')),
+    ).toBe(true);
+    expect(
+      PubkyService.isTypedSignInRestoreError(new Error('interrupted sign-out owner missing')),
+    ).toBe(true);
+  });
+
+  it('treats untyped fail-closed rejections as hatch-steering', () => {
+    expect(PubkyService.isTypedSignInRestoreError(new Error('sqlite disk I/O error'))).toBe(false);
+    expect(PubkyService.isTypedSignInRestoreError({ message: 'sealed' })).toBe(false);
+  });
+});

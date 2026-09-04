@@ -120,5 +120,8 @@ describe('invoice reuse decided inside create transaction', () => {
     expect(source).toMatch(
       /const invoiceReused =\s*displayed !== null && hasDisplayedPaymentHashSync/,
     );
+    // PaymentService no longer decides reuse; the negative
+    // `hasDisplayedPaymentHash(` pin was superseded by this StorageService
+    // source-text guard (invoice reuse inside ownedTransact).
   });
 });

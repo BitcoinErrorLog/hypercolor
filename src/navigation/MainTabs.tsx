@@ -106,12 +106,20 @@ export function MainTabs() {
         <Tab.Screen
           name="Contacts"
           component={ContactsScreen as React.ComponentType}
-          options={{ tabBarLabel: 'Contacts', tabBarButtonTestID: 'tabContacts' }}
+          options={{
+            tabBarLabel: 'Contacts',
+            tabBarButtonTestID: 'tabContacts',
+            tabBarAccessibilityLabel: 'Contacts',
+          }}
         />
         <Tab.Screen
           name="Profile"
           component={ProfileScreen as React.ComponentType}
-          options={{ tabBarLabel: 'Profile', tabBarButtonTestID: 'tabProfile' }}
+          options={{
+            tabBarLabel: 'Profile',
+            tabBarButtonTestID: 'tabProfile',
+            tabBarAccessibilityLabel: 'Profile',
+          }}
         />
       </Tab.Navigator>
     </View>

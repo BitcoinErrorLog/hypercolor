@@ -83,9 +83,10 @@ export function Button({
   };
 
   return (
-    <View style={style}>
+    <View style={[styles.wrap, style]}>
       <Pressable
         {...(testID ? { testID } : {})}
+        accessible
         accessibilityRole="button"
         accessibilityLabel={accessibilityLabel ?? label}
         accessibilityHint={accessibilityHint ?? reason}
@@ -116,7 +117,10 @@ export function Button({
             <ActivityIndicator color={blocked ? palette.disabledLabel : palette.label} />
           </View>
         ) : (
-          <Text style={[styles.label, { color: blocked ? palette.disabledLabel : palette.label }]}>
+          <Text
+            accessible={false}
+            style={[styles.label, { color: blocked ? palette.disabledLabel : palette.label }]}
+          >
             {label}
           </Text>
         )}
@@ -135,6 +139,9 @@ export function Button({
 }
 
 const styles = StyleSheet.create({
+  wrap: {
+    alignSelf: 'stretch',
+  },
   base: {
     minHeight: measure.hitTarget,
     minWidth: measure.hitTarget,

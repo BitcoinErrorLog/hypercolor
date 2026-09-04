@@ -62,7 +62,14 @@ export default function WelcomeScreen() {
     setLoading(true);
     setError(null);
     try {
-      await PubkyService.awaitSignOutWipe();
+      try {
+        await PubkyService.awaitSignOutWipe();
+      } catch (wipeErr) {
+        if (!PubkyService.isTypedSignInRestoreError(wipeErr)) {
+          setResetAvailable(true);
+        }
+        throw wipeErr;
+      }
       const deviceId = `hypercolor-${Date.now().toString(16)}`;
       const { url, expiresAt, generation } = await PubkyRingAuthService.requestDelegation(deviceId);
       nav.navigate('AwaitingRingAuth', { ringAuthUrl: url, expiresAt, generation });
