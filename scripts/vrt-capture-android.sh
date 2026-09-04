@@ -105,13 +105,42 @@ set_font_scale_for_scene() {
 }
 
 launch_app_once() {
+  local bundle="/tmp/hc-android-vrt-bundle.js"
   "$ADB" -s "$SERIAL" reverse tcp:8081 tcp:8081 || true
   local apk="$ROOT/android/app/build/outputs/apk/debug/app-debug.apk"
   if [ -f "$apk" ] && [ "${VRT_ANDROID_SKIP_INSTALL:-}" != "1" ]; then
     "$ADB" -s "$SERIAL" install -r "$apk" >/dev/null
   fi
   "$ADB" -s "$SERIAL" shell am force-stop "$APP" || true
-  "$ADB" -s "$SERIAL" shell "run-as $APP rm -f files/BridgelessReactNativeDevBundle.js files/hc_e2e_cmd.txt" >/dev/null 2>&1 || true
+  "$ADB" -s "$SERIAL" shell "run-as $APP rm -f files/hc_e2e_cmd.txt" >/dev/null 2>&1 || true
+  cat >/tmp/hc-vrt-devsettings.xml <<'XML'
+<?xml version='1.0' encoding='utf-8' standalone='yes' ?>
+<map>
+    <string name="debug_http_host">localhost:8081</string>
+</map>
+XML
+  "$ADB" -s "$SERIAL" push /tmp/hc-vrt-devsettings.xml /data/local/tmp/hc-vrt-devsettings.xml >/dev/null
+  "$ADB" -s "$SERIAL" shell "run-as $APP mkdir -p shared_prefs && cat /data/local/tmp/hc-vrt-devsettings.xml | run-as $APP sh -c 'cat > shared_prefs/com.facebook.react.devsupport.DevSettingsActivity.xml'"
+  "$ADB" -s "$SERIAL" shell rm -f /data/local/tmp/hc-vrt-devsettings.xml
+  if [ "${VRT_ANDROID_INJECT_BUNDLE:-}" = "1" ]; then
+    python3 - "$bundle" <<'PY'
+import sys
+import urllib.request
+
+bundle_path = sys.argv[1]
+url = "http://127.0.0.1:8081/index.bundle?platform=android&dev=true&minify=false"
+data = urllib.request.urlopen(url, timeout=90).read()
+if b"vrt-scene" not in data:
+    raise SystemExit("Metro bundle does not contain vrt-scene")
+open(bundle_path, "wb").write(data)
+print("bundle_bytes", len(data), "contains_vrt_scene", True)
+PY
+    "$ADB" -s "$SERIAL" push "$bundle" /data/local/tmp/BridgelessReactNativeDevBundle.js >/dev/null
+    "$ADB" -s "$SERIAL" shell "run-as $APP mkdir -p files && cat /data/local/tmp/BridgelessReactNativeDevBundle.js | run-as $APP sh -c 'cat > files/BridgelessReactNativeDevBundle.js'"
+    "$ADB" -s "$SERIAL" shell rm -f /data/local/tmp/BridgelessReactNativeDevBundle.js
+  else
+    "$ADB" -s "$SERIAL" shell "run-as $APP rm -f files/BridgelessReactNativeDevBundle.js" >/dev/null 2>&1 || true
+  fi
   local activity
   activity="$("$ADB" -s "$SERIAL" shell cmd package resolve-activity --brief "$APP" 2>/dev/null | awk '/\//{print; exit}' | tr -d '\r' || true)"
   if [ -n "$activity" ]; then
@@ -168,6 +197,9 @@ for device in $DEVICES; do
   fi
   record_profile "$device"
   launch_app_once
+  if [ -n "${VRT_ANDROID_APP_SETTLE_SECONDS:-}" ]; then
+    sleep "$VRT_ANDROID_APP_SETTLE_SECONDS"
+  fi
 
   shopt -s nullglob
   for flow in "$GEN"/*_android_"${device}".yaml; do

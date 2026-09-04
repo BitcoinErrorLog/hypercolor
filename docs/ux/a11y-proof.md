@@ -12,16 +12,16 @@ Tree: `ux/w3-design-system`
 
 ## Android dump results
 
-`bash scripts/a11y-android-dump.sh` ran against Pixel 4a critical VRT scenes after `hypercolor://e2e/vrt?scene=...`.
+`bash scripts/a11y-android-dump.sh` ran against Pixel 4a and Pixel 8 Pro critical VRT scenes after `hypercolor://e2e/vrt?scene=...`.
 
 Critical journeys checked: Welcome idle, Enable authorizing, Chats populated, Thread populated, Settings default.
 
-| Profile                                       |                                                                            Scenes |    Clickable nodes | Failures |
-| --------------------------------------------- | --------------------------------------------------------------------------------: | -----------------: | -------: |
-| Pixel 4a (`Hypercolor_Pixel_4a_API_36`)       | 5 failed dumps against React Native redbox / emulator transport, 0 product passes |  8 redbox controls |       10 |
-| Pixel 8 Pro (`Hypercolor_Pixel_8_Pro_API_36`) |                      5 failed dumps against React Native redbox, 0 product passes | 10 redbox controls |       10 |
+| Profile                                       | Scenes | Status ok | Status fail | Clickable nodes | Passing nodes | Failing nodes |
+| --------------------------------------------- | -----: | --------: | ----------: | --------------: | ------------: | ------------: |
+| Pixel 4a (`Hypercolor_Pixel_4a_API_36`)       |      5 |         3 |           2 |              15 |            12 |             3 |
+| Pixel 8 Pro (`Hypercolor_Pixel_8_Pro_API_36`) |      5 |         2 |           3 |              19 |            13 |             6 |
 
-The repaired script no longer reports empty dumps as clean: missing XML, zero clickable controls on known-control scenes, and React Native redbox dumps are `status: "fail"`. This run did not produce product-node Android counts because both Pixel profiles hit Metro/emulator launch instability; no product 44dp/content-desc finding is claimed from these redbox rows.
+The repaired script no longer reports empty dumps as clean: missing XML, zero clickable controls on known-control scenes, and React Native redbox dumps are `status: "fail"`. This run reached product nodes on both Android profiles. Remaining failures are product hit-target findings recorded for follow-up: `auth.enable.authorizing` on Pixel 8 Pro (`Open Pubky Ring`, `Copy authorization URL`), `stack.thread.populated` on both profiles (`Copy Aster Example`), and `tabs.settings.default` on both profiles (long pubky identity chip, `BLE Mesh (quarantined)`, plus one empty-desc bottom control on Pixel 8 Pro).
 
 ## Contrast (captured PNGs)
 

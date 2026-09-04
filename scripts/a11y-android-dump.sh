@@ -55,6 +55,7 @@ switch_scene() {
 }
 
 launch_app_once() {
+  local bundle="/tmp/hc-android-vrt-bundle.js"
   local apk="$ROOT/android/app/build/outputs/apk/debug/app-debug.apk"
   if [ "${A11Y_INSTALL:-0}" = "1" ] && [ -f "$apk" ]; then
     "$ADB" -s "$SERIAL" install -r "$apk" >/dev/null
@@ -62,6 +63,32 @@ launch_app_once() {
   "$ADB" -s "$SERIAL" reverse tcp:8081 tcp:8081 >/dev/null 2>&1 || true
   "$ADB" -s "$SERIAL" shell am force-stop "$APP" >/dev/null 2>&1 || true
   "$ADB" -s "$SERIAL" shell "run-as $APP rm -f files/hc_e2e_cmd.txt" >/dev/null 2>&1 || true
+  cat >/tmp/hc-vrt-devsettings.xml <<'XML'
+<?xml version='1.0' encoding='utf-8' standalone='yes' ?>
+<map>
+    <string name="debug_http_host">localhost:8081</string>
+</map>
+XML
+  "$ADB" -s "$SERIAL" push /tmp/hc-vrt-devsettings.xml /data/local/tmp/hc-vrt-devsettings.xml >/dev/null
+  "$ADB" -s "$SERIAL" shell "run-as $APP mkdir -p shared_prefs && cat /data/local/tmp/hc-vrt-devsettings.xml | run-as $APP sh -c 'cat > shared_prefs/com.facebook.react.devsupport.DevSettingsActivity.xml'"
+  "$ADB" -s "$SERIAL" shell rm -f /data/local/tmp/hc-vrt-devsettings.xml
+  if [ "${A11Y_INJECT_BUNDLE:-}" = "1" ]; then
+    python3 - "$bundle" <<'PY'
+import sys
+import urllib.request
+
+bundle_path = sys.argv[1]
+url = "http://127.0.0.1:8081/index.bundle?platform=android&dev=true&minify=false"
+data = urllib.request.urlopen(url, timeout=90).read()
+if b"vrt-scene" not in data:
+    raise SystemExit("Metro bundle does not contain vrt-scene")
+open(bundle_path, "wb").write(data)
+print("bundle_bytes", len(data), "contains_vrt_scene", True)
+PY
+    "$ADB" -s "$SERIAL" push "$bundle" /data/local/tmp/BridgelessReactNativeDevBundle.js >/dev/null
+    "$ADB" -s "$SERIAL" shell "run-as $APP mkdir -p files && cat /data/local/tmp/BridgelessReactNativeDevBundle.js | run-as $APP sh -c 'cat > files/BridgelessReactNativeDevBundle.js'"
+    "$ADB" -s "$SERIAL" shell rm -f /data/local/tmp/BridgelessReactNativeDevBundle.js
+  fi
   local activity
   activity="$("$ADB" -s "$SERIAL" shell cmd package resolve-activity --brief "$APP" 2>/dev/null | awk '/\//{print; exit}' | tr -d '\r' || true)"
   if [ -n "$activity" ]; then
@@ -163,6 +190,9 @@ PY
 
 failures=0
 launch_app_once
+if [ -n "${A11Y_APP_SETTLE_SECONDS:-}" ]; then
+  sleep "$A11Y_APP_SETTLE_SECONDS"
+fi
 hide_chrome
 for scene in ${SCENES//,/ }; do
   echo "==> a11y $scene ($PROFILE / $SERIAL)"

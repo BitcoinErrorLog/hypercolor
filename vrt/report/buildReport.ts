@@ -119,12 +119,11 @@ export function maestroFlow(target: CaptureTarget, appId: string): string {
   const readyAssertions = assertedIds
     .map(id => {
       const exactSceneMarker = id.startsWith('vrt-scene:');
-      const selector =
-        target.platform === 'ios' && exactSceneMarker
-          ? `text: ${JSON.stringify(id)}`
-          : id.startsWith('text:')
-            ? `text: ${JSON.stringify(id.slice('text:'.length))}`
-            : `id: ${id}`;
+      const selector = exactSceneMarker
+        ? `text: ${JSON.stringify(id)}`
+        : id.startsWith('text:')
+          ? `text: ${JSON.stringify(id.slice('text:'.length))}`
+          : `id: ${id}`;
       return `- extendedWaitUntil:
     visible:
       ${selector}

@@ -82,7 +82,7 @@ function VrtMarkerHost({
         accessibilityLabel={visibleMarkerId}
         accessibilityHint="vrt-scene-marker"
         accessible
-        style={styles.markerText}
+        style={styles.markerReadableText}
       >
         {visibleMarkerId}
       </Text>
@@ -199,13 +199,15 @@ const styles = StyleSheet.create({
     zIndex: 9999,
     top: 0,
     left: 0,
-    width: 24,
-    height: 24,
+    right: 0,
+    height: 18,
     overflow: 'hidden',
-    fontSize: 1,
-    lineHeight: 1,
+    backgroundColor: color.canvas,
+  },
+  markerReadableText: {
     color: color.brand,
-    backgroundColor: color.brand,
+    fontSize: 10,
+    lineHeight: 12,
   },
   markerText: {
     position: 'absolute',
