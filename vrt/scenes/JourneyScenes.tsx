@@ -406,7 +406,11 @@ const debugBusy = (
   </View>
 );
 
-function debugState(label: string, tone: 'neutral' | 'success' | 'danger' = 'neutral') {
+function debugState(
+  label: string,
+  tone: 'neutral' | 'success' | 'danger' = 'neutral',
+  detail?: string,
+) {
   return (
     <View testID={`debugSignup${label.replace(/[^A-Za-z0-9]/g, '')}`} style={styles.debugState}>
       <Text
@@ -419,6 +423,14 @@ function debugState(label: string, tone: 'neutral' | 'success' | 'danger' = 'neu
         {label}
       </Text>
       <Text style={styles.debugStateBody}>VRT fixture state: {label.toLowerCase()}</Text>
+      {detail ? (
+        <View style={styles.debugProgress}>
+          <Text style={styles.debugStateBody}>{detail}</Text>
+          <View style={styles.debugProgressTrack}>
+            <View style={styles.debugProgressFill} />
+          </View>
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -550,7 +562,7 @@ export const SCENE_RENDERERS: Record<string, () => React.ReactElement> = {
   'tabs.chats.populated': () =>
     chats({ conversations: CHAT_ROWS.map(row => ({ ...row, unreadCount: 0 })) }),
   'tabs.chats.unread-99': () => chats({ conversations: CHAT_ROWS }),
-  'tabs.chats.pending-badge': () => chats({ pendingRequests: 4 }),
+  'tabs.chats.pending-badge': () => chats({ pendingRequests: 120 }),
   'tabs.chats.offline': () =>
     chats({ listError: COPY.couldNotLoadChats, conversations: CHAT_ROWS }),
   'tabs.channels.empty': () => channels(),
@@ -562,14 +574,29 @@ export const SCENE_RENDERERS: Record<string, () => React.ReactElement> = {
   'tabs.channels.join-empty': () => channels({ joinOpen: true }),
   'tabs.channels.join-invalid': () => channels({ joinOpen: true }),
   'tabs.channels.join-busy': () => channels({ joinOpen: true, busy: true }),
-  'stack.channel.loading': () => channel({ loading: true, messages: [] }),
+  'stack.channel.loading': () =>
+    channel({ channel: null, loading: true, messages: [], members: [], selfActive: false }),
   'stack.channel.empty': () => channel({ messages: [] }),
   'stack.channel.populated': () => channel(),
   'stack.channel.deleted': () =>
     channel({
       messages: CHANNEL_MESSAGES.map((m, i) => (i === 0 ? { ...m, deleted: true, body: '' } : m)),
     }),
-  'stack.channel.reply': () => channel({ replyTo: CHANNEL_MESSAGES[0] ?? null }),
+  'stack.channel.reply': () => {
+    const [parent, child] = CHANNEL_MESSAGES;
+    if (!parent || !child) return channel();
+    return channel({
+      messages: [
+        parent,
+        {
+          ...child,
+          replyToEventId: parent.eventId,
+          replyToAuthorPubky: parent.senderPubky,
+        },
+      ],
+      replyTo: parent,
+    });
+  },
   'stack.channel.reactions': () => {
     const base = CHANNEL_MESSAGES[0];
     if (!base) return channel();
@@ -904,7 +931,16 @@ export const SCENE_RENDERERS: Record<string, () => React.ReactElement> = {
   'tabs.settings.liveproof-idle': () =>
     settingsScrolled({ liveProofSlot: debugState('Live proof idle') }, 760),
   'tabs.settings.liveproof-running': () =>
-    settingsScrolled({ liveProofSlot: debugState('Live proof running') }, 760),
+    settingsScrolled(
+      {
+        liveProofSlot: debugState(
+          'Live proof running',
+          'neutral',
+          'Authorizing through the VRT relay fixture.',
+        ),
+      },
+      760,
+    ),
   'tabs.settings.liveproof-ok': () =>
     settingsScrolled({ liveProofSlot: debugState('Live proof ok', 'success') }, 760),
   'tabs.settings.liveproof-fail': () =>
@@ -1010,6 +1046,21 @@ const styles = StyleSheet.create({
     fontSize: typeRole.caption.fontSize,
     marginTop: space.xs,
   },
+  debugProgress: {
+    marginTop: space.md,
+    gap: space.sm,
+  },
+  debugProgressTrack: {
+    height: 6,
+    borderRadius: radius.sm,
+    backgroundColor: color.surfaceRaised,
+    overflow: 'hidden',
+  },
+  debugProgressFill: {
+    width: '62%',
+    height: '100%',
+    backgroundColor: color.brand,
+  },
   success: { color: color.success },
   danger: { color: color.danger },
   fontScaleBadge: {
@@ -1025,14 +1076,14 @@ const styles = StyleSheet.create({
   },
   fontScaleTitle: {
     color: color.textPrimary,
-    fontSize: typeRole.heading.fontSize * 2,
-    lineHeight: typeRole.heading.lineHeight * 2,
+    fontSize: typeRole.heading.fontSize,
+    lineHeight: typeRole.heading.lineHeight,
     fontWeight: '700',
   },
   fontScaleBody: {
     color: color.textSecondary,
-    fontSize: typeRole.body.fontSize * 2,
-    lineHeight: typeRole.body.lineHeight * 2,
+    fontSize: typeRole.body.fontSize,
+    lineHeight: typeRole.body.lineHeight,
     marginTop: space.sm,
   },
   tabBar: {

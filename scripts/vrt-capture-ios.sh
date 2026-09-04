@@ -109,7 +109,13 @@ fi
 
 if [ -z "${VRT_IOS_KEEP_BOOTED:-}" ] || [ ! -s /tmp/hc-vrt-ios-asserted.txt ]; then
   for device in $DEVICES; do
-    rm -f "$OUT"/*_ios_"${device}".png
+    if [ -n "$SCENE_FILTER" ]; then
+      for scene in ${SCENE_FILTER//,/ }; do
+        rm -f "$OUT"/"${scene//./_}"_ios_"${device}".png
+      done
+    else
+      rm -f "$OUT"/*_ios_"${device}".png
+    fi
   done
 fi
 

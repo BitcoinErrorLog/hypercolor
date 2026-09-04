@@ -1,18 +1,10 @@
 {
   "pixel-4a": {
     "profileAvd": "Hypercolor_Pixel_4a_API_36",
-    "baseAvd": "Medium_Phone_API_36.1",
+    "baseAvd": "Hypercolor_Pixel_4a_API_36",
     "serial": "emulator-5554",
-    "wmSize": "Physical size: 1080x2400\nOverride size: 1080x2340",
-    "wmDensity": "Physical density: 420\nOverride density: 440",
-    "note": "Live wm size/density match Hypercolor_* AVD lcd specs on shared base AVD"
-  },
-  "pixel-8-pro": {
-    "profileAvd": "Hypercolor_Pixel_8_Pro_API_36",
-    "baseAvd": "Medium_Phone_API_36.1",
-    "serial": "emulator-5554",
-    "wmSize": "Physical size: 1080x2400\nOverride size: 1344x2992",
-    "wmDensity": "Physical density: 420\nOverride density: 480",
-    "note": "Live wm size/density match Hypercolor_* AVD lcd specs on shared base AVD"
+    "wmSize": "Physical size: 1080x2400",
+    "wmDensity": "Physical density: 440",
+    "note": "Distinct Hypercolor_* AVD (not wm override on Medium Phone)"
   }
 }

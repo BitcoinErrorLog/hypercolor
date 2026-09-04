@@ -1,7 +1,495 @@
 {
   "ok": true,
-  "comparedPairs": 870,
+  "comparedPairs": 15006,
   "failures": [],
+  "waivedPairs": [
+    {
+      "a": "auth_enable_enabled_ios_iphone-16-pro-max.png",
+      "b": "auth_enable_success_ios_iphone-16-pro-max.png",
+      "identicalRatio": 1,
+      "contentIdenticalRatio": 1,
+      "platform": "ios",
+      "viewport": "iphone-16-pro-max",
+      "reason": "The controller alias and terminal success phase intentionally use the same success presenter."
+    },
+    {
+      "a": "auth_welcome_debug-empty_ios_iphone-16-pro-max.png",
+      "b": "auth_welcome_debug-result_ios_iphone-16-pro-max.png",
+      "identicalRatio": 1,
+      "contentIdenticalRatio": 1,
+      "platform": "ios",
+      "viewport": "iphone-16-pro-max",
+      "reason": "Both debug-panel states intentionally render the same inactive debug slot."
+    },
+    {
+      "a": "bootstrap_app-splash_loading_ios_iphone-16-pro-max.png",
+      "b": "bootstrap_linking-fallback_loading_ios_iphone-16-pro-max.png",
+      "identicalRatio": 1,
+      "contentIdenticalRatio": 1,
+      "platform": "ios",
+      "viewport": "iphone-16-pro-max",
+      "reason": "Both loading fallbacks intentionally render the same centered activity indicator."
+    },
+    {
+      "a": "overlay_sign-out_alert_ios_iphone-16-pro-max.png",
+      "b": "tabs_profile_sign-out_ios_iphone-16-pro-max.png",
+      "identicalRatio": 1,
+      "contentIdenticalRatio": 1,
+      "platform": "ios",
+      "viewport": "iphone-16-pro-max",
+      "reason": "The overlay row and profile state both exercise the same sign-out sheet."
+    },
+    {
+      "a": "overlay_wallet_alert_ios_iphone-16-pro-max.png",
+      "b": "stack_payment_review_ios_iphone-16-pro-max.png",
+      "identicalRatio": 1,
+      "contentIdenticalRatio": 1,
+      "platform": "ios",
+      "viewport": "iphone-16-pro-max",
+      "reason": "Wallet-unavailable and normal review currently share the same review copy in the presenter."
+    },
+    {
+      "a": "stack_channel-members_leave_ios_iphone-16-pro-max.png",
+      "b": "stack_channel-members_list_ios_iphone-16-pro-max.png",
+      "identicalRatio": 1,
+      "contentIdenticalRatio": 1,
+      "platform": "ios",
+      "viewport": "iphone-16-pro-max",
+      "reason": "The member-list and leave affordance states render the same members sheet before interaction."
+    },
+    {
+      "a": "stack_contact-search_added_ios_iphone-16-pro-max.png",
+      "b": "stack_contact-search_valid_ios_iphone-16-pro-max.png",
+      "identicalRatio": 0.9999220764126622,
+      "contentIdenticalRatio": 0.999220671490578,
+      "platform": "ios",
+      "viewport": "iphone-16-pro-max",
+      "reason": "Added and valid contact-search fixtures intentionally render the same entered pubky."
+    },
+    {
+      "a": "stack_contact-search_empty_ios_iphone-16-pro-max.png",
+      "b": "stack_contact-search_qr_ios_iphone-16-pro-max.png",
+      "identicalRatio": 1,
+      "contentIdenticalRatio": 1,
+      "platform": "ios",
+      "viewport": "iphone-16-pro-max",
+      "reason": "The QR fallback has no distinct production card in this wave, so it matches empty search."
+    },
+    {
+      "a": "stack_payment_compose-busy_ios_iphone-16-pro-max.png",
+      "b": "stack_payment_compose-idle_ios_iphone-16-pro-max.png",
+      "identicalRatio": 1,
+      "contentIdenticalRatio": 1,
+      "platform": "ios",
+      "viewport": "iphone-16-pro-max",
+      "reason": "The busy flag only changes disabled accessibility state for the default empty form."
+    },
+    {
+      "a": "stack_thread_delivered-read_ios_iphone-16-pro-max.png",
+      "b": "stack_thread_populated_ios_iphone-16-pro-max.png",
+      "identicalRatio": 1,
+      "contentIdenticalRatio": 1,
+      "platform": "ios",
+      "viewport": "iphone-16-pro-max",
+      "reason": "These thread fixtures intentionally share the same visible transcript and collapsed composer."
+    },
+    {
+      "a": "stack_thread_delivered-read_ios_iphone-16-pro-max.png",
+      "b": "stack_thread_send-disabled_ios_iphone-16-pro-max.png",
+      "identicalRatio": 1,
+      "contentIdenticalRatio": 1,
+      "platform": "ios",
+      "viewport": "iphone-16-pro-max",
+      "reason": "These thread fixtures intentionally share the same visible transcript and collapsed composer."
+    },
+    {
+      "a": "stack_thread_delivered-read_ios_iphone-16-pro-max.png",
+      "b": "stack_thread_tip-collapsed_ios_iphone-16-pro-max.png",
+      "identicalRatio": 1,
+      "contentIdenticalRatio": 1,
+      "platform": "ios",
+      "viewport": "iphone-16-pro-max",
+      "reason": "These thread fixtures intentionally share the same visible transcript and collapsed composer."
+    },
+    {
+      "a": "stack_thread_payment-claimed_ios_iphone-16-pro-max.png",
+      "b": "stack_thread_payment-verified_ios_iphone-16-pro-max.png",
+      "identicalRatio": 1,
+      "contentIdenticalRatio": 1,
+      "platform": "ios",
+      "viewport": "iphone-16-pro-max",
+      "reason": "Claimed and verified payment records currently share the same verified receipt rendering."
+    },
+    {
+      "a": "stack_thread_populated_ios_iphone-16-pro-max.png",
+      "b": "stack_thread_send-disabled_ios_iphone-16-pro-max.png",
+      "identicalRatio": 1,
+      "contentIdenticalRatio": 1,
+      "platform": "ios",
+      "viewport": "iphone-16-pro-max",
+      "reason": "These thread fixtures intentionally share the same visible transcript and collapsed composer."
+    },
+    {
+      "a": "stack_thread_populated_ios_iphone-16-pro-max.png",
+      "b": "stack_thread_tip-collapsed_ios_iphone-16-pro-max.png",
+      "identicalRatio": 1,
+      "contentIdenticalRatio": 1,
+      "platform": "ios",
+      "viewport": "iphone-16-pro-max",
+      "reason": "These thread fixtures intentionally share the same visible transcript and collapsed composer."
+    },
+    {
+      "a": "stack_thread_send-disabled_ios_iphone-16-pro-max.png",
+      "b": "stack_thread_tip-collapsed_ios_iphone-16-pro-max.png",
+      "identicalRatio": 1,
+      "contentIdenticalRatio": 1,
+      "platform": "ios",
+      "viewport": "iphone-16-pro-max",
+      "reason": "These thread fixtures intentionally share the same visible transcript and collapsed composer."
+    },
+    {
+      "a": "tabs_channels_join-busy_ios_iphone-16-pro-max.png",
+      "b": "tabs_channels_join-empty_ios_iphone-16-pro-max.png",
+      "identicalRatio": 0.9996040425172225,
+      "contentIdenticalRatio": 0.9960730686911713,
+      "platform": "ios",
+      "viewport": "iphone-16-pro-max",
+      "reason": "The busy join state is visually identical until a valid public channel reference exists."
+    },
+    {
+      "a": "tabs_channels_join-busy_ios_iphone-16-pro-max.png",
+      "b": "tabs_channels_join-invalid_ios_iphone-16-pro-max.png",
+      "identicalRatio": 0.9996040425172225,
+      "contentIdenticalRatio": 0.9960730686911713,
+      "platform": "ios",
+      "viewport": "iphone-16-pro-max",
+      "reason": "The busy join state is visually identical until a valid public channel reference exists."
+    },
+    {
+      "a": "tabs_channels_join-empty_ios_iphone-16-pro-max.png",
+      "b": "tabs_channels_join-invalid_ios_iphone-16-pro-max.png",
+      "identicalRatio": 1,
+      "contentIdenticalRatio": 1,
+      "platform": "ios",
+      "viewport": "iphone-16-pro-max",
+      "reason": "The busy join state is visually identical until a valid public channel reference exists."
+    },
+    {
+      "a": "tabs_contacts_content-empty_ios_iphone-16-pro-max.png",
+      "b": "tabs_contacts_empty_ios_iphone-16-pro-max.png",
+      "identicalRatio": 1,
+      "contentIdenticalRatio": 1,
+      "platform": "ios",
+      "viewport": "iphone-16-pro-max",
+      "reason": "Content aliases preserve HEAD matrix naming while rendering the same contacts empty state."
+    },
+    {
+      "a": "tabs_contacts_content-offline_ios_iphone-16-pro-max.png",
+      "b": "tabs_contacts_offline_ios_iphone-16-pro-max.png",
+      "identicalRatio": 1,
+      "contentIdenticalRatio": 1,
+      "platform": "ios",
+      "viewport": "iphone-16-pro-max",
+      "reason": "Content aliases preserve HEAD matrix naming while rendering the same contacts offline state."
+    },
+    {
+      "a": "tabs_contacts_content-populated_ios_iphone-16-pro-max.png",
+      "b": "tabs_contacts_nexus-note_ios_iphone-16-pro-max.png",
+      "identicalRatio": 1,
+      "contentIdenticalRatio": 1,
+      "platform": "ios",
+      "viewport": "iphone-16-pro-max",
+      "reason": "Contacts populated aliases render the same list; the Nexus note is below the captured fold."
+    },
+    {
+      "a": "tabs_contacts_content-populated_ios_iphone-16-pro-max.png",
+      "b": "tabs_contacts_populated_ios_iphone-16-pro-max.png",
+      "identicalRatio": 1,
+      "contentIdenticalRatio": 1,
+      "platform": "ios",
+      "viewport": "iphone-16-pro-max",
+      "reason": "Contacts populated aliases render the same list; the Nexus note is below the captured fold."
+    },
+    {
+      "a": "tabs_contacts_nexus-note_ios_iphone-16-pro-max.png",
+      "b": "tabs_contacts_populated_ios_iphone-16-pro-max.png",
+      "identicalRatio": 1,
+      "contentIdenticalRatio": 1,
+      "platform": "ios",
+      "viewport": "iphone-16-pro-max",
+      "reason": "Contacts populated aliases render the same list; the Nexus note is below the captured fold."
+    },
+    {
+      "a": "tabs_message-requests_empty_ios_iphone-16-pro-max.png",
+      "b": "tabs_requests_empty_ios_iphone-16-pro-max.png",
+      "identicalRatio": 1,
+      "contentIdenticalRatio": 1,
+      "platform": "ios",
+      "viewport": "iphone-16-pro-max",
+      "reason": "Message request aliases preserve HEAD matrix naming while rendering the same empty list."
+    },
+    {
+      "a": "tabs_message-requests_populated_ios_iphone-16-pro-max.png",
+      "b": "tabs_requests_populated_ios_iphone-16-pro-max.png",
+      "identicalRatio": 1,
+      "contentIdenticalRatio": 1,
+      "platform": "ios",
+      "viewport": "iphone-16-pro-max",
+      "reason": "Message request aliases preserve HEAD matrix naming while rendering the same populated list."
+    },
+    {
+      "a": "tabs_profile_settings-visible_ios_iphone-16-pro-max.png",
+      "b": "tabs_profile_with-pubky_ios_iphone-16-pro-max.png",
+      "identicalRatio": 1,
+      "contentIdenticalRatio": 1,
+      "platform": "ios",
+      "viewport": "iphone-16-pro-max",
+      "reason": "Settings-visible is a navigation affordance state with no open sheet in the presenter."
+    },
+    {
+      "a": "auth_awaiting-ring_copied_ios_iphone-se-3.png",
+      "b": "auth_awaiting-ring_with-url_ios_iphone-se-3.png",
+      "identicalRatio": 0.9985967016491755,
+      "contentIdenticalRatio": 0.993545836512913,
+      "platform": "ios",
+      "viewport": "iphone-se-3",
+      "reason": "Copied is a transient acknowledgement on the same Ring-auth URL surface; the only expected visual delta is the copy control state."
+    },
+    {
+      "a": "auth_enable_enabled_ios_iphone-se-3.png",
+      "b": "auth_enable_success_ios_iphone-se-3.png",
+      "identicalRatio": 1,
+      "contentIdenticalRatio": 1,
+      "platform": "ios",
+      "viewport": "iphone-se-3",
+      "reason": "The controller alias and terminal success phase intentionally use the same success presenter."
+    },
+    {
+      "a": "auth_welcome_debug-empty_ios_iphone-se-3.png",
+      "b": "auth_welcome_debug-result_ios_iphone-se-3.png",
+      "identicalRatio": 1,
+      "contentIdenticalRatio": 1,
+      "platform": "ios",
+      "viewport": "iphone-se-3",
+      "reason": "Both debug-panel states intentionally render the same inactive debug slot."
+    },
+    {
+      "a": "overlay_sign-out_alert_ios_iphone-se-3.png",
+      "b": "tabs_profile_sign-out_ios_iphone-se-3.png",
+      "identicalRatio": 1,
+      "contentIdenticalRatio": 1,
+      "platform": "ios",
+      "viewport": "iphone-se-3",
+      "reason": "The overlay row and profile state both exercise the same sign-out sheet."
+    },
+    {
+      "a": "overlay_wallet_alert_ios_iphone-se-3.png",
+      "b": "stack_payment_review_ios_iphone-se-3.png",
+      "identicalRatio": 1,
+      "contentIdenticalRatio": 1,
+      "platform": "ios",
+      "viewport": "iphone-se-3",
+      "reason": "Wallet-unavailable and normal review currently share the same review copy in the presenter."
+    },
+    {
+      "a": "stack_channel-members_leave_ios_iphone-se-3.png",
+      "b": "stack_channel-members_list_ios_iphone-se-3.png",
+      "identicalRatio": 1,
+      "contentIdenticalRatio": 1,
+      "platform": "ios",
+      "viewport": "iphone-se-3",
+      "reason": "The member-list and leave affordance states render the same members sheet before interaction."
+    },
+    {
+      "a": "stack_contact-search_added_ios_iphone-se-3.png",
+      "b": "stack_contact-search_valid_ios_iphone-se-3.png",
+      "identicalRatio": 1,
+      "contentIdenticalRatio": 1,
+      "platform": "ios",
+      "viewport": "iphone-se-3",
+      "reason": "Added and valid contact-search fixtures intentionally render the same entered pubky."
+    },
+    {
+      "a": "stack_contact-search_empty_ios_iphone-se-3.png",
+      "b": "stack_contact-search_qr_ios_iphone-se-3.png",
+      "identicalRatio": 0.999864067966017,
+      "contentIdenticalRatio": 0.9990239141044412,
+      "platform": "ios",
+      "viewport": "iphone-se-3",
+      "reason": "The QR fallback has no distinct production card in this wave, so it matches empty search."
+    },
+    {
+      "a": "stack_payment_compose-busy_ios_iphone-se-3.png",
+      "b": "stack_payment_compose-idle_ios_iphone-se-3.png",
+      "identicalRatio": 1,
+      "contentIdenticalRatio": 1,
+      "platform": "ios",
+      "viewport": "iphone-se-3",
+      "reason": "The busy flag only changes disabled accessibility state for the default empty form."
+    },
+    {
+      "a": "stack_thread_delivered-read_ios_iphone-se-3.png",
+      "b": "stack_thread_populated_ios_iphone-se-3.png",
+      "identicalRatio": 1,
+      "contentIdenticalRatio": 1,
+      "platform": "ios",
+      "viewport": "iphone-se-3",
+      "reason": "These thread fixtures intentionally share the same visible transcript and collapsed composer."
+    },
+    {
+      "a": "stack_thread_delivered-read_ios_iphone-se-3.png",
+      "b": "stack_thread_send-disabled_ios_iphone-se-3.png",
+      "identicalRatio": 1,
+      "contentIdenticalRatio": 1,
+      "platform": "ios",
+      "viewport": "iphone-se-3",
+      "reason": "These thread fixtures intentionally share the same visible transcript and collapsed composer."
+    },
+    {
+      "a": "stack_thread_delivered-read_ios_iphone-se-3.png",
+      "b": "stack_thread_tip-collapsed_ios_iphone-se-3.png",
+      "identicalRatio": 1,
+      "contentIdenticalRatio": 1,
+      "platform": "ios",
+      "viewport": "iphone-se-3",
+      "reason": "These thread fixtures intentionally share the same visible transcript and collapsed composer."
+    },
+    {
+      "a": "stack_thread_payment-claimed_ios_iphone-se-3.png",
+      "b": "stack_thread_payment-verified_ios_iphone-se-3.png",
+      "identicalRatio": 1,
+      "contentIdenticalRatio": 1,
+      "platform": "ios",
+      "viewport": "iphone-se-3",
+      "reason": "Claimed and verified payment records currently share the same verified receipt rendering."
+    },
+    {
+      "a": "stack_thread_populated_ios_iphone-se-3.png",
+      "b": "stack_thread_send-disabled_ios_iphone-se-3.png",
+      "identicalRatio": 1,
+      "contentIdenticalRatio": 1,
+      "platform": "ios",
+      "viewport": "iphone-se-3",
+      "reason": "These thread fixtures intentionally share the same visible transcript and collapsed composer."
+    },
+    {
+      "a": "stack_thread_populated_ios_iphone-se-3.png",
+      "b": "stack_thread_tip-collapsed_ios_iphone-se-3.png",
+      "identicalRatio": 1,
+      "contentIdenticalRatio": 1,
+      "platform": "ios",
+      "viewport": "iphone-se-3",
+      "reason": "These thread fixtures intentionally share the same visible transcript and collapsed composer."
+    },
+    {
+      "a": "stack_thread_send-disabled_ios_iphone-se-3.png",
+      "b": "stack_thread_tip-collapsed_ios_iphone-se-3.png",
+      "identicalRatio": 1,
+      "contentIdenticalRatio": 1,
+      "platform": "ios",
+      "viewport": "iphone-se-3",
+      "reason": "These thread fixtures intentionally share the same visible transcript and collapsed composer."
+    },
+    {
+      "a": "tabs_channels_join-busy_ios_iphone-se-3.png",
+      "b": "tabs_channels_join-empty_ios_iphone-se-3.png",
+      "identicalRatio": 0.9992593703148426,
+      "contentIdenticalRatio": 0.9939951377633711,
+      "platform": "ios",
+      "viewport": "iphone-se-3",
+      "reason": "The busy join state is visually identical until a valid public channel reference exists."
+    },
+    {
+      "a": "tabs_channels_join-busy_ios_iphone-se-3.png",
+      "b": "tabs_channels_join-invalid_ios_iphone-se-3.png",
+      "identicalRatio": 0.9992593703148426,
+      "contentIdenticalRatio": 0.9939951377633711,
+      "platform": "ios",
+      "viewport": "iphone-se-3",
+      "reason": "The busy join state is visually identical until a valid public channel reference exists."
+    },
+    {
+      "a": "tabs_channels_join-empty_ios_iphone-se-3.png",
+      "b": "tabs_channels_join-invalid_ios_iphone-se-3.png",
+      "identicalRatio": 1,
+      "contentIdenticalRatio": 1,
+      "platform": "ios",
+      "viewport": "iphone-se-3",
+      "reason": "The busy join state is visually identical until a valid public channel reference exists."
+    },
+    {
+      "a": "tabs_contacts_content-empty_ios_iphone-se-3.png",
+      "b": "tabs_contacts_empty_ios_iphone-se-3.png",
+      "identicalRatio": 1,
+      "contentIdenticalRatio": 1,
+      "platform": "ios",
+      "viewport": "iphone-se-3",
+      "reason": "Content aliases preserve HEAD matrix naming while rendering the same contacts empty state."
+    },
+    {
+      "a": "tabs_contacts_content-offline_ios_iphone-se-3.png",
+      "b": "tabs_contacts_offline_ios_iphone-se-3.png",
+      "identicalRatio": 1,
+      "contentIdenticalRatio": 1,
+      "platform": "ios",
+      "viewport": "iphone-se-3",
+      "reason": "Content aliases preserve HEAD matrix naming while rendering the same contacts offline state."
+    },
+    {
+      "a": "tabs_contacts_content-populated_ios_iphone-se-3.png",
+      "b": "tabs_contacts_nexus-note_ios_iphone-se-3.png",
+      "identicalRatio": 1,
+      "contentIdenticalRatio": 1,
+      "platform": "ios",
+      "viewport": "iphone-se-3",
+      "reason": "Contacts populated aliases render the same list; the Nexus note is below the captured fold."
+    },
+    {
+      "a": "tabs_contacts_content-populated_ios_iphone-se-3.png",
+      "b": "tabs_contacts_populated_ios_iphone-se-3.png",
+      "identicalRatio": 1,
+      "contentIdenticalRatio": 1,
+      "platform": "ios",
+      "viewport": "iphone-se-3",
+      "reason": "Contacts populated aliases render the same list; the Nexus note is below the captured fold."
+    },
+    {
+      "a": "tabs_contacts_nexus-note_ios_iphone-se-3.png",
+      "b": "tabs_contacts_populated_ios_iphone-se-3.png",
+      "identicalRatio": 1,
+      "contentIdenticalRatio": 1,
+      "platform": "ios",
+      "viewport": "iphone-se-3",
+      "reason": "Contacts populated aliases render the same list; the Nexus note is below the captured fold."
+    },
+    {
+      "a": "tabs_message-requests_empty_ios_iphone-se-3.png",
+      "b": "tabs_requests_empty_ios_iphone-se-3.png",
+      "identicalRatio": 1,
+      "contentIdenticalRatio": 1,
+      "platform": "ios",
+      "viewport": "iphone-se-3",
+      "reason": "Message request aliases preserve HEAD matrix naming while rendering the same empty list."
+    },
+    {
+      "a": "tabs_message-requests_populated_ios_iphone-se-3.png",
+      "b": "tabs_requests_populated_ios_iphone-se-3.png",
+      "identicalRatio": 1,
+      "contentIdenticalRatio": 1,
+      "platform": "ios",
+      "viewport": "iphone-se-3",
+      "reason": "Message request aliases preserve HEAD matrix naming while rendering the same populated list."
+    },
+    {
+      "a": "tabs_profile_settings-visible_ios_iphone-se-3.png",
+      "b": "tabs_profile_with-pubky_ios_iphone-se-3.png",
+      "identicalRatio": 1,
+      "contentIdenticalRatio": 1,
+      "platform": "ios",
+      "viewport": "iphone-se-3",
+      "reason": "Settings-visible is a navigation affordance state with no open sheet in the presenter."
+    }
+  ],
   "markerAssertMissing": [],
-  "fileCount": 60
+  "fileCount": 246
 }

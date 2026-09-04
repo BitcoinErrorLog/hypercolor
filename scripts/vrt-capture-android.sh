@@ -100,6 +100,9 @@ set_font_scale_for_scene() {
   else
     "$ADB" -s "$SERIAL" shell settings put system font_scale 1.0 || true
   fi
+  "$ADB" -s "$SERIAL" shell am broadcast -a android.intent.action.CLOSE_SYSTEM_DIALOGS >/dev/null 2>&1 || true
+  sleep 5
+  hide_chrome
 }
 
 launch_app_once() {
@@ -218,8 +221,14 @@ root = Path.home() / ".maestro" / "tests"
 dest = Path("/Users/johncarvalho/work/hypercolor-ux-w3/vrt/baselines/android")
 dest.mkdir(parents=True, exist_ok=True)
 for device in devices:
-    for old in dest.glob(f"*_android_{device}.png"):
-        old.unlink()
+    if scenes:
+        for scene in scenes:
+            old = dest / f"{scene.replace('.', '_')}_android_{device}.png"
+            if old.exists():
+                old.unlink()
+    else:
+        for old in dest.glob(f"*_android_{device}.png"):
+            old.unlink()
 newest = {}
 for png in root.rglob("*android_*.png"):
     if png.stat().st_mtime < start - 5:
