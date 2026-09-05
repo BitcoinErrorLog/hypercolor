@@ -138,6 +138,16 @@ export const LINK_RETRY_DRAIN_INTERVAL_MS = 30_000;
  */
 export const LINK_RETRY_TICK_PHASE_TIMEOUT_MS = 20_000;
 
+/**
+ * How long inbox sync may wait on one counterparty before moving on to the
+ * next. Marker fetch and native probe have no JS timeout of their own; a
+ * hung `getReceiverMarker` for peer N otherwise blocks `probeInboundLink`
+ * for every later candidate for the rest of the call (and, on App foreground
+ * recover, for the rest of that recover). The abandoned peer's `withQueue`
+ * work is left running so a late marker+probe can still adopt.
+ */
+export const LINK_INBOX_PEER_TIMEOUT_MS = 8_000;
+
 export type LinkEnableFlow = {
   authorizationUrl: string;
   awaitEnabled: () => Promise<{ pubky: string; receiverPath: string; noisePublicKey: string }>;
@@ -900,18 +910,31 @@ export const LinkService = {
     const received: LinkMessage[] = [];
     for (const peerPubky of new Set(candidates)) {
       if (!isCurrentOwner(ownerAtStart)) break;
-      try {
-        const batch = await withQueue(peerPubky, () => syncPeerLocked(peerPubky, ownerAtStart));
-        received.push(...batch);
-      } catch (err) {
+      const peerWork = withQueue(peerPubky, () => syncPeerLocked(peerPubky, ownerAtStart));
+      const raced = await raceWithin(peerWork, LINK_INBOX_PEER_TIMEOUT_MS);
+      if (raced.status === 'timeout') {
+        console.warn(
+          `[LinkService] inbox-sync-timeout peer=${opaquePeerId(ownerAtStart, peerPubky)} after ${LINK_INBOX_PEER_TIMEOUT_MS}ms; continuing`,
+        );
+        continue;
+      }
+      if (raced.status === 'error') {
         console.warn(
           `[LinkService] inbox-sync-failed peer=${opaquePeerId(ownerAtStart, peerPubky)}:`,
-          errorMessage(err),
+          errorMessage(raced.error),
         );
+        continue;
       }
+      received.push(...raced.value);
     }
     try {
-      await LinkService.drainRetries();
+      await settleWithin(
+        LinkService.drainRetries().catch(err => {
+          console.warn('[LinkService] drainRetries after syncInbox failed:', errorMessage(err));
+        }),
+        LINK_INBOX_PEER_TIMEOUT_MS,
+        'Inbox drain',
+      );
     } catch (err) {
       console.warn('[LinkService] drainRetries after syncInbox failed:', errorMessage(err));
     }
@@ -1108,6 +1131,35 @@ async function runTickPhase(phase: (typeof tickPhases)[number]): Promise<void> {
     if (phase.inFlight === started) phase.inFlight = null;
   });
   await settleWithin(started, LINK_RETRY_TICK_PHASE_TIMEOUT_MS, phase.label);
+}
+
+/**
+ * Races `work` against `budgetMs`. Does not cancel `work` — a timeout only
+ * stops waiting. Used so one hung homeserver GET cannot stall inbox sync.
+ */
+async function raceWithin<T>(
+  work: Promise<T>,
+  budgetMs: number,
+): Promise<
+  { status: 'ok'; value: T } | { status: 'timeout' } | { status: 'error'; error: unknown }
+> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expiry = new Promise<'timeout'>(resolve => {
+    timer = setTimeout(() => resolve('timeout'), budgetMs);
+  });
+  const settled = work.then(
+    value => ({ status: 'ok' as const, value }),
+    error => ({ status: 'error' as const, error }),
+  );
+  try {
+    const outcome = await Promise.race([
+      settled,
+      expiry.then(() => ({ status: 'timeout' as const })),
+    ]);
+    return outcome;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /** Waits for `work`, giving up on WAITING (never on the work) after `budgetMs`. */
@@ -2003,7 +2055,7 @@ async function initiateHandshake(
 async function probeInbound(
   activeSession: ActiveSession,
   receiver: LinkReceiver,
-  _ownerPubky: PubkyKey,
+  ownerPubky: PubkyKey,
   peerPubky: PubkyKey,
   marker: ReceiverMarker,
   localPath: string,
@@ -2017,9 +2069,18 @@ async function probeInbound(
       localPath,
       LINK_RECEIVER_PATH,
     );
-    if (probed.result === 'none') return null;
+    if (probed.result === 'none') {
+      console.warn(
+        `[LinkService] inbound-probe result=none peer=${opaquePeerId(ownerPubky, peerPubky)} local=${localPath} remote=${LINK_RECEIVER_PATH}`,
+      );
+      return null;
+    }
     return probed;
   } catch (err) {
+    console.warn(
+      `[LinkService] inbound-probe-failed peer=${opaquePeerId(ownerPubky, peerPubky)}:`,
+      errorMessage(err),
+    );
     if (isLinkNativeError(err) && err.code === 'protocol') throw err;
     return null;
   }

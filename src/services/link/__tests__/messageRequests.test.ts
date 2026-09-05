@@ -1,4 +1,4 @@
-import { LinkService } from '../LinkService';
+import { LINK_INBOX_PEER_TIMEOUT_MS, LinkService } from '../LinkService';
 import { PaykitLinkNative } from '../PaykitLinkNative';
 import { StorageService } from '../../StorageService';
 import { KeyStore } from '../../KeyStore';
@@ -267,6 +267,63 @@ describe('LinkService message requests', () => {
     );
     expect(mockedStorage.saveLinkMessage).not.toHaveBeenCalled();
     expect(mockedNative.initiateLink).not.toHaveBeenCalled();
+  });
+
+  it('probes a later peer when an earlier marker fetch never settles', async () => {
+    jest.useFakeTimers();
+    const slowPeer = 'b'.repeat(52);
+    mockedNative.getReceiverMarker.mockImplementation(async peer => {
+      if (peer === slowPeer) {
+        return new Promise(() => {});
+      }
+      return { noisePublicKey: PEER_NOISE, capabilitiesJson: '{}' };
+    });
+    mockedNative.probeInboundLink.mockImplementation(async (_session, _receiver, peer) => {
+      if (peer === PEER) {
+        return { result: 'pending', linkId: 'from-web', snapshot: 'msg1' };
+      }
+      return { result: 'none' };
+    });
+
+    try {
+      const done = LinkService.syncInbox([slowPeer, PEER]);
+      await jest.advanceTimersByTimeAsync(LINK_INBOX_PEER_TIMEOUT_MS);
+      await expect(done).resolves.toEqual([]);
+      expect(mockedNative.probeInboundLink).toHaveBeenCalledWith(
+        SESSION_ALIAS,
+        RECEIVER_ALIAS,
+        PEER,
+        PEER_NOISE,
+        LINK_RECEIVER_PATH,
+        LINK_RECEIVER_PATH,
+      );
+      expect(mockedStorage.upsertMessageRequest).toHaveBeenCalledWith(
+        expect.objectContaining({
+          ownerPubky: OWNER,
+          peerPubky: PEER,
+          status: 'pending',
+        }),
+      );
+      expect(mockedStorage.upsertMessageRequest).not.toHaveBeenCalledWith(
+        expect.objectContaining({ peerPubky: slowPeer }),
+      );
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('finishes inbox sync when a peer marker fetch never settles', async () => {
+    jest.useFakeTimers();
+    mockedNative.getReceiverMarker.mockImplementation(() => new Promise(() => {}));
+    try {
+      const done = LinkService.syncInbox([PEER]);
+      await jest.advanceTimersByTimeAsync(LINK_INBOX_PEER_TIMEOUT_MS);
+      await expect(done).resolves.toEqual([]);
+      expect(mockedNative.probeInboundLink).not.toHaveBeenCalled();
+      expect(mockedStorage.upsertMessageRequest).not.toHaveBeenCalled();
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   // Previously asserted that a held stranger's membership `create` was
