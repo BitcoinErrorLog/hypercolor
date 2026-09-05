@@ -1,4 +1,9 @@
-export type LinkSendErrorCode = 'denied' | 'deny-unavailable' | 'not-sendable' | 'owner-changed';
+export type LinkSendErrorCode =
+  | 'denied'
+  | 'deny-unavailable'
+  | 'not-sendable'
+  | 'owner-changed'
+  | 'standby-not-receiving';
 
 /**
  * Typed send failure. UI maps this through {@link sanitizeError}; never

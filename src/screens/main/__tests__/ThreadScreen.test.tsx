@@ -1,10 +1,13 @@
 import React from 'react';
-import { StyleSheet, Text } from 'react-native';
+import { Alert, StyleSheet, Text } from 'react-native';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import { color, radius, space, measure } from '../../../theme';
 import { CONTACTS_COPY } from '../../../ui/contacts/contactsCopy';
+import { COPY } from '../../../copy/uxCopy';
 import { ThreadScreenContent } from '../ThreadScreen';
 import type { Contact } from '../../../types';
+import { useReceiverRoleStore } from '../../../stores/receiverRoleStore';
+import { LinkService } from '../../../services/link/LinkService';
 
 jest.mock('react-native-safe-area-context', () => ({
   useSafeAreaInsets: () => ({ top: 0, bottom: 12, left: 0, right: 0 }),
@@ -149,6 +152,10 @@ async function render(element: React.ReactElement): Promise<ReactTestRenderer> {
 }
 
 describe('ThreadScreenContent blocked send', () => {
+  beforeEach(() => {
+    useReceiverRoleStore.getState().reset();
+  });
+
   it('shows the blocked copy, Unblock, and a terminal Failed bubble', async () => {
     const onUnblock = jest.fn();
     const tree = await render(
@@ -265,6 +272,56 @@ describe('ThreadScreenContent blocked send', () => {
       right: space.md,
     });
     expect(copyTitle.props.style.minHeight).toBe(measure.hitTarget);
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('blocks the composer on standby without an established link and offers takeover', async () => {
+    useReceiverRoleStore.getState().setRole('standby');
+    const onTakeoverSuccess = jest.fn();
+    const takeover = LinkService.takeoverReceiver as jest.Mock;
+    takeover.mockResolvedValue({ receiverRole: 'active' });
+    const alert = jest.spyOn(Alert, 'alert').mockImplementation((_title, _message, buttons) => {
+      const primary = (buttons ?? []).find(button => button.text === COPY.standbyPrimary);
+      primary?.onPress?.();
+    });
+    const tree = await render(
+      <ThreadScreenContent {...contentProps({ linkStatus: null, onTakeoverSuccess })} />,
+    );
+    expect(tree.root.findByProps({ testID: 'threadSend' }).props.disabled).toBe(true);
+    expect(tree.root.findByProps({ testID: 'threadSend' }).props.accessibilityHint).toBe(
+      COPY.standbyComposerNotice,
+    );
+    expect(JSON.stringify(tree.toJSON())).toContain(COPY.standbyComposerNotice);
+    await act(async () => {
+      tree.root.findByProps({ testID: 'threadStandbyTakeover' }).props.onPress();
+    });
+    expect(takeover).toHaveBeenCalledWith('takeover');
+    expect(onTakeoverSuccess).toHaveBeenCalled();
+    alert.mockRestore();
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('keeps the composer enabled on standby when the link is established', async () => {
+    useReceiverRoleStore.getState().setRole('standby');
+    const tree = await render(<ThreadScreenContent {...contentProps({ linkStatus: 'ready' })} />);
+    expect(tree.root.findByProps({ testID: 'threadSend' }).props.disabled).toBe(false);
+    expect(tree.root.findAllByProps({ testID: 'threadStandbyTakeover' })).toHaveLength(0);
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('shows the standby queued subtitle for a non-established initiator link', async () => {
+    useReceiverRoleStore.getState().setRole('standby');
+    const tree = await render(
+      <ThreadScreenContent {...contentProps({ linkStatus: 'handshaking-initiator' })} />,
+    );
+    expect(JSON.stringify(tree.toJSON())).toContain(COPY.queuedStandbySubtitle);
+    expect(JSON.stringify(tree.toJSON())).not.toContain(COPY.queuedWaitingSubtitle);
     await act(async () => {
       tree.unmount();
     });

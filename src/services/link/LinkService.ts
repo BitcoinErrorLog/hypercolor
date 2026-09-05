@@ -225,7 +225,7 @@ type LiveHandle =
   | { status: 'established'; linkId: string }
   | { status: 'handshaking'; linkId: string; role: LinkRole };
 type SessionLookup = ActiveSession | { status: 'offline' } | null;
-type EnsureOutcome = LinkStatus | 'idle' | 'denied' | 'deny-unavailable';
+type EnsureOutcome = LinkStatus | 'idle' | 'denied' | 'deny-unavailable' | 'standby-blocked';
 
 /**
  * Why we are touching a link. Two independent policies hang off this, and
@@ -567,7 +567,10 @@ export const LinkService = {
       try {
         abortIfOwnerChanged(expectedOwner);
         const outcome = await ensureLinkLocked(peerPubky, 'user', false, expectedOwner);
-        return outcome === 'idle' || outcome === 'denied' || outcome === 'deny-unavailable'
+        return outcome === 'idle' ||
+          outcome === 'denied' ||
+          outcome === 'deny-unavailable' ||
+          outcome === 'standby-blocked'
           ? 'error'
           : outcome;
       } catch (err) {
@@ -1514,7 +1517,49 @@ async function publishTakeoverReceiver(
     noisePublicKey,
   );
   setReceiverRoleState('active', reason === 'reenable' ? COPY.reenableToast : COPY.takeoverToast);
+  await restartUnestablishedLinksAfterTakeover(pubky);
   return { pubky, receiverPath, noisePublicKey, receiverRole: 'active' };
+}
+
+/**
+ * After this device publishes its receiver pk, any handshake started while
+ * standby was answered against the previously published (often dead) key.
+ * Wipe those unestablished rows and their outbox slots, then re-initiate.
+ * The wipe charges the handshake budget once; the follow-up uses `user`
+ * intent so re-initiate does not charge again.
+ */
+async function restartUnestablishedLinksAfterTakeover(ownerPubky: PubkyKey): Promise<void> {
+  const links = await StorageService.getAllLinks(ownerPubky);
+  abortIfOwnerChanged(ownerPubky);
+  for (const link of links) {
+    if (link.status === 'established') continue;
+    try {
+      await withQueue(link.peerPubky, async () => {
+        abortIfOwnerChanged(ownerPubky);
+        const latest = await StorageService.getLink(ownerPubky, link.peerPubky);
+        abortIfOwnerChanged(ownerPubky);
+        if (!latest || latest.status === 'established') return;
+        const budget = await chargeHandshakeBudget(
+          ownerPubky,
+          link.peerPubky,
+          { reason: 'unestablished-wipe' },
+          ownerPubky,
+        );
+        if (budget.exhausted) {
+          await abandonUnestablishedLink(latest, ownerPubky);
+          return;
+        }
+        await wipeLinkState(latest, ownerPubky);
+        await ensureLinkLocked(link.peerPubky, 'user', true, ownerPubky);
+      });
+    } catch (err) {
+      if (err instanceof LinkSendError && err.code === 'owner-changed') return;
+      console.warn(
+        `[LinkService] takeover-restart-failed peer=${opaquePeerId(ownerPubky, link.peerPubky)}:`,
+        errorMessage(err),
+      );
+    }
+  }
 }
 
 async function syncOwnReceiverRole(ownerPubky: PubkyKey): Promise<ReceiverRole | null> {
@@ -1629,6 +1674,9 @@ function assertLinkSendable(
   }
   if (outcome === 'deny-unavailable') {
     throw new LinkSendError('deny-unavailable', CONTACTS_COPY.couldNotSendMessage);
+  }
+  if (outcome === 'standby-blocked') {
+    throw new LinkSendError('standby-not-receiving', COPY.standbyComposerNotice);
   }
   throw new LinkSendError(
     'not-sendable',
@@ -1843,6 +1891,10 @@ async function ensureLinkLocked(
   if (marker === null) return mayInitiate(intent) ? 'not-enrolled' : 'idle';
 
   if (!mayInitiate(intent)) return 'idle';
+
+  const latestReceiver = await StorageService.getLinkReceiver(ownerPubky);
+  abortIfOwnerChanged(expectedOwner);
+  if (latestReceiver?.receiverRole === 'standby') return 'standby-blocked';
 
   abortIfOwnerChanged(expectedOwner);
   return initiateHandshake(
@@ -2324,6 +2376,15 @@ async function completeEstablished(
   return 'ready';
 }
 
+/**
+ * Orphan-marker case (J3/J5/J19): a session that published `receiver.json`
+ * then signed out leaves that pk live. Standby siblings never published, so
+ * their local receiver secret ≠ the published pk. A peer answering XX msg1
+ * derives the inbound slot from the published key; this device never sees
+ * msg2. Initiator recovery (C) re-GETs the *peer* marker and cannot unstick
+ * our own marker. Recovery is explicit takeover: publish this device's pk,
+ * wipe unestablished handshakes + outbox slots, then re-initiate.
+ */
 async function initiateHandshake(
   activeSession: ActiveSession,
   receiver: LinkReceiver,
@@ -2336,6 +2397,7 @@ async function initiateHandshake(
   expectedOwner: PubkyKey,
 ): Promise<EnsureOutcome> {
   abortIfOwnerChanged(expectedOwner);
+  if (receiver.receiverRole === 'standby') return 'standby-blocked';
   const remotePath = LINK_RECEIVER_PATH;
   const initiated = await PaykitLinkNative.initiateLink(
     activeSession.alias,
@@ -2637,6 +2699,12 @@ async function recoverWedgedLink(
   return ensureLinkLocked(stored.peerPubky, intent, true, expectedOwner);
 }
 
+/**
+ * C: re-GET the *peer's* receiver.json after N polls / T seconds and
+ * restart if that pk rotated. Does not help the orphan-marker case — a
+ * standby initiator's own published (or leftover) marker is what the peer
+ * answered, and takeover is the recovery.
+ */
 async function maybeRecoverInitiatorMarkerRotation(
   activeSession: ActiveSession,
   receiver: LinkReceiver,

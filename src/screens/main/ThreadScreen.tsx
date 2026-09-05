@@ -56,6 +56,8 @@ import {
 } from '../../types/payment';
 import type { TipEndpointRecord } from '../../types/payment';
 import { COPY, messageByteCountLabel } from '../../copy/uxCopy';
+import { confirmReceiverTakeover } from '../../components/confirmReceiverTakeover';
+import { useReceiverRoleStore } from '../../stores/receiverRoleStore';
 import { HIT_SLOP_44, minHitStyle } from '../../ui/hitTarget';
 import { formatDeliveryState, formatLinkStatus } from '../../ui/messageStatus';
 import { peerIdentity } from '../../ui/peerIdentity';
@@ -237,6 +239,8 @@ export default function ThreadScreen({ route }: Props) {
   const handleSend = useCallback(async () => {
     const text = draft.trim();
     if (!text || sending || peerBlocked || draftExceedsByteCap(text, { surface: 'dm' })) return;
+    const role = useReceiverRoleStore.getState().role;
+    if (role === 'standby' && linkStatus !== 'ready') return;
     setSending(true);
     try {
       await LinkService.sendDm(participantPubky, text);
@@ -247,7 +251,7 @@ export default function ThreadScreen({ route }: Props) {
     } finally {
       setSending(false);
     }
-  }, [draft, sending, peerBlocked, participantPubky, reloadEncrypted]);
+  }, [draft, sending, peerBlocked, participantPubky, reloadEncrypted, linkStatus]);
 
   return (
     <ThreadScreenContent
@@ -444,6 +448,9 @@ export default function ThreadScreen({ route }: Props) {
         })();
       }}
       onCopyPubky={() => copyText(participantPubky)}
+      onTakeoverSuccess={() => {
+        void handleSend();
+      }}
     />
   );
 }
@@ -494,6 +501,7 @@ export function ThreadScreenContent({
   onEnableMessaging,
   onRetryFailed,
   onCopyPubky,
+  onTakeoverSuccess,
 }: {
   participantPubky: string;
   localPubky: string | null;
@@ -542,6 +550,7 @@ export function ThreadScreenContent({
   onEnableMessaging: () => void;
   onRetryFailed: (eventId: string) => void;
   onCopyPubky: () => void;
+  onTakeoverSuccess?: () => void;
 }) {
   const flatListRef = useRef<FlatList<ThreadItem>>(null);
   const plusRef = useRef<View>(null);
@@ -573,6 +582,8 @@ export function ThreadScreenContent({
 
   const identity = peerIdentity(participantPubky, peerContact);
   const linkLabel = formatLinkStatus(linkStatus);
+  const receiverRole = useReceiverRoleStore(s => s.role);
+  const standbyBlocksNewChat = receiverRole === 'standby' && linkStatus !== 'ready';
 
   const renderItem = useCallback(
     ({ item, index }: { item: ThreadItem; index: number }) => {
@@ -697,11 +708,13 @@ export function ThreadScreenContent({
 
   const needsEnable =
     sessionKind === 'needs-enable' || sessionKind === 'revoked' || sessionKind === 'unavailable';
-  const composerEnabled = !needsEnable && !peerBlocked;
+  const messagingOpen = !needsEnable && !peerBlocked;
+  const composerEnabled = messagingOpen && !standbyBlocksNewChat;
   const inboxClosed = linkStatus === 'not-enrolled';
   const actions = composerActionItems('dm', {
-    messagingEnabled: composerEnabled,
+    messagingEnabled: messagingOpen,
     inboxClosed,
+    standbyNewChat: standbyBlocksNewChat,
     hasTipEndpoints: tipEndpoints.some(row => row.validationStatus !== 'rejected'),
   });
   const byteSize = draftEnvelopeByteSize(draft, { surface: 'dm' });
@@ -768,7 +781,7 @@ export function ThreadScreenContent({
           ) : null}
           {linkStatus === 'handshaking-initiator' ? (
             <Text testID="threadQueuedWaiting" style={styles.linkStatus}>
-              {COPY.queuedWaitingSubtitle}
+              {standbyBlocksNewChat ? COPY.queuedStandbySubtitle : COPY.queuedWaitingSubtitle}
             </Text>
           ) : null}
         </TouchableOpacity>
@@ -818,10 +831,28 @@ export function ThreadScreenContent({
         keyboardVerticalOffset={0}
       >
         <View style={[styles.composerColumn, { paddingBottom: space.lg + bottomInset }]}>
-          {composerNotice ? (
+          {standbyBlocksNewChat || composerNotice ? (
             <View testID="composerNotice" accessibilityRole="alert" style={styles.notice}>
-              <Text style={styles.noticeText}>{composerNotice.message}</Text>
-              {composerNotice.actionLabel && composerNotice.onAction ? (
+              <Text style={styles.noticeText}>
+                {standbyBlocksNewChat ? COPY.standbyComposerNotice : composerNotice?.message}
+              </Text>
+              {standbyBlocksNewChat ? (
+                <TouchableOpacity
+                  testID="threadStandbyTakeover"
+                  accessibilityRole="button"
+                  accessibilityLabel={COPY.standbyPrimary}
+                  hitSlop={HIT_SLOP_44}
+                  onPress={() =>
+                    confirmReceiverTakeover({
+                      mode: 'takeover',
+                      onSuccess: onTakeoverSuccess,
+                    })
+                  }
+                  style={styles.noticeAction}
+                >
+                  <Text style={styles.noticeActionText}>{COPY.standbyPrimary}</Text>
+                </TouchableOpacity>
+              ) : composerNotice?.actionLabel && composerNotice.onAction ? (
                 <TouchableOpacity
                   accessibilityRole="button"
                   accessibilityLabel={composerNotice.actionLabel}
@@ -922,6 +953,7 @@ export function ThreadScreenContent({
               accessibilityState={{
                 disabled: !draft.trim() || sending || !composerEnabled || overCap,
               }}
+              accessibilityHint={standbyBlocksNewChat ? COPY.standbyComposerNotice : undefined}
               style={[
                 styles.sendBtn,
                 (!draft.trim() || sending || !composerEnabled || overCap) && styles.sendBtnDisabled,

@@ -67,6 +67,9 @@ export const COPY = {
   reenablePrimary: 'Re-enable receiving',
   reenableSecondary: 'Not now',
   queuedWaitingSubtitle: 'Waiting for the other person — retrying if they switched devices.',
+  queuedStandbySubtitle: 'Not receiving on this device — tap Receive on this device to continue.',
+  standbyComposerNotice:
+    "This device isn't receiving new chats. Receive on this device to start this conversation.",
   messagingUnavailable: 'Encrypted messaging is unavailable in this build.',
   keystoreUnavailable: 'Encrypted storage is not ready on this device.',
   keystoreUnavailableBody: 'Messaging is paused. Local history is untouched.',

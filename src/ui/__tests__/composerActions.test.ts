@@ -58,6 +58,12 @@ describe('composerActionItems', () => {
     expect(items.find(item => item.id === 'send-tip')?.reason).toBe(COPY.noTipDestinations);
     expect(items.find(item => item.id === 'send-tip-list')?.disabled).toBe(false);
   });
+
+  it('disables DM actions on standby until this device is receiving', () => {
+    const items = composerActionItems('dm', { ...OPEN, standbyNewChat: true });
+    expect(items.every(item => item.disabled)).toBe(true);
+    expect(items.map(item => item.reason)).toEqual(items.map(() => COPY.standbyComposerNotice));
+  });
 });
 
 describe('draft envelope byte cap', () => {

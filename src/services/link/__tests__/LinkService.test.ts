@@ -1466,6 +1466,56 @@ describe('LinkService', () => {
       expect(useReceiverRoleStore.getState().toast).toBe(COPY.reenableToast);
     });
 
+    it('wipes unestablished handshakes on takeover, re-initiates once, then send proceeds', async () => {
+      let receiver: LinkReceiver = {
+        ...receiverRow,
+        receiverRole: 'standby',
+        lastSeenOwnMarkerPk: 'foreign-noise-pk',
+      };
+      mockedStorage.getLinkReceiver.mockImplementation(async () => receiver);
+      mockedStorage.upsertLinkReceiver.mockImplementation(async row => {
+        receiver = { ...receiver, ...row };
+      });
+      let link: LinkRecord | null = storedLink({ status: 'handshaking', snapshot: 'hs-dead' });
+      mockedStorage.getAllLinks.mockImplementation(async owner =>
+        owner === OWNER && link ? [link] : [],
+      );
+      mockedStorage.getLink.mockImplementation(async (owner, peer) =>
+        owner === OWNER && peer === PEER ? link : null,
+      );
+      mockedStorage.upsertLink.mockImplementation(async record => {
+        link = storedLink(record);
+      });
+      mockedStorage.updateLinkSnapshot.mockImplementation(async (_o, _p, snapshot, status) => {
+        if (link) link = storedLink({ ...link, snapshot, status });
+      });
+      mockedStorage.deleteLink.mockImplementation(async () => {
+        link = null;
+      });
+      mockedNative.clearLinkOutbox.mockResolvedValue(0);
+      mockedNative.publishReceiverMarker.mockResolvedValue(undefined);
+      mockedNative.getReceiverPublicKey.mockResolvedValue('local-noise-pk');
+      mockedNative.initiateLink.mockResolvedValue({ linkId: 'hs-new', snapshot: 'hs-new-1' });
+      mockedNative.advanceHandshake.mockResolvedValue({
+        status: 'established',
+        snapshot: 'est-after-takeover',
+      });
+      mockedNative.restoreLink.mockResolvedValue({ linkId: 'handle-ready' });
+      mockedNative.sendPrivateMessageJson.mockResolvedValue({ snapshot: 'est-sent' });
+
+      await LinkService.takeoverReceiver();
+
+      expect(mockedNative.clearLinkOutbox).toHaveBeenCalledTimes(1);
+      expect(mockedStorage.deleteLink).toHaveBeenCalledWith(OWNER, PEER);
+      expect(mockedNative.initiateLink).toHaveBeenCalledTimes(1);
+      expect(mockedStorage.upsertHandshakeBudget).toHaveBeenCalledTimes(1);
+      expect(receiver.receiverRole).toBe('active');
+
+      const message = await LinkService.sendDm(PEER, 'hello');
+      expect(message.deliveryState).toBe('sent');
+      expect(mockedNative.sendPrivateMessageJson).toHaveBeenCalled();
+    });
+
     it('skips own-marker GET when the last success was under 60s', async () => {
       mockedNative.probeInboundLink.mockResolvedValue({ result: 'none' });
       await LinkService.syncInbox([PEER]);
@@ -1898,6 +1948,34 @@ describe('LinkService', () => {
       const finalizeOrder = mockedStorage.finalizeLinkSend.mock.invocationCallOrder[0]!;
       expect(persistOrder).toBeLessThan(sendOrder);
       expect(sendOrder).toBeLessThan(finalizeOrder);
+    });
+
+    it('blocks sendDm on standby when no link is established, without queuing', async () => {
+      mockedStorage.getLinkReceiver.mockResolvedValue({
+        ...receiverRow,
+        receiverRole: 'standby',
+      });
+      mockedStorage.getLink.mockResolvedValue(null);
+
+      await expect(LinkService.sendDm(PEER, 'hello')).rejects.toMatchObject({
+        code: 'standby-not-receiving',
+        message: COPY.standbyComposerNotice,
+      });
+      expect(mockedNative.initiateLink).not.toHaveBeenCalled();
+      expect(mockedStorage.persistLinkSendIntent).not.toHaveBeenCalled();
+    });
+
+    it('allows sendDm on standby when the link is already established', async () => {
+      mockedStorage.getLinkReceiver.mockResolvedValue({
+        ...receiverRow,
+        receiverRole: 'standby',
+      });
+      givenEstablishedLink();
+      mockedNative.sendPrivateMessageJson.mockResolvedValue({ snapshot: 'est-2' });
+
+      const message = await LinkService.sendDm(PEER, 'hello');
+      expect(message.deliveryState).toBe('sent');
+      expect(mockedNative.initiateLink).not.toHaveBeenCalled();
     });
 
     it('marks failed and throws when the native send fails (retry item kept)', async () => {

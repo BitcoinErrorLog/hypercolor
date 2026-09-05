@@ -19,6 +19,7 @@ export type ComposerGate = {
   messagingEnabled: boolean;
   inboxClosed: boolean;
   hasTipEndpoints: boolean;
+  standbyNewChat?: boolean;
 };
 
 export type DraftEnvelopeContext = {
@@ -97,6 +98,7 @@ export function draftExceedsByteCap(text: string, ctx: DraftEnvelopeContext): bo
 
 function messagingReason(gate: ComposerGate): string | null {
   if (!gate.messagingEnabled) return COPY.enableMessagingReason;
+  if (gate.standbyNewChat) return COPY.standbyComposerNotice;
   if (gate.inboxClosed) return COPY.inboxClosed;
   return null;
 }

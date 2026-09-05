@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, Alert } from 'react-native';
+import { View, Text, StyleSheet } from 'react-native';
 import { COPY } from '../copy/uxCopy';
-import { LinkService } from '../services/link/LinkService';
+import { confirmReceiverTakeover } from './confirmReceiverTakeover';
 import { useReceiverRoleStore } from '../stores/receiverRoleStore';
 import { color, space, typeRole } from '../theme';
 import { Button } from '../ui/primitives';
@@ -42,28 +42,10 @@ export function StandbyBanner(): React.ReactElement | null {
   const testID = showReenable ? 'reenableBanner' : 'standbyBanner';
 
   const onTakeover = () => {
-    Alert.alert(title, body, [
-      {
-        text: secondary,
-        style: 'cancel',
-        onPress: snoozeCurrentBanner,
-      },
-      {
-        text: primary,
-        onPress: () => {
-          void (async () => {
-            setBusy(true);
-            try {
-              await LinkService.takeoverReceiver(showReenable ? 'reenable' : 'takeover');
-            } catch {
-              Alert.alert(title, COPY.couldNotStartAuthorization);
-            } finally {
-              setBusy(false);
-            }
-          })();
-        },
-      },
-    ]);
+    confirmReceiverTakeover({
+      mode: showReenable ? 'reenable' : 'takeover',
+      onBusy: setBusy,
+    });
   };
 
   return (
