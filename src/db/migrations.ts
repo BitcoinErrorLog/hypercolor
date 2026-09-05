@@ -306,7 +306,13 @@ function applyStatement(db: SqlExecutor, statement: string): void {
       if (/duplicate column name/i.test(message)) return;
       // Dual-v16 union fixtures may stamp a later version without `links` /
       // `link_receivers`. Skip the W1e ALTERs until those tables exist.
-      if (/no such table/i.test(message)) return;
+      if (/no such table/i.test(message)) {
+        console.warn(
+          '[migrations] skipping ALTER ADD COLUMN: no such table',
+          statement.split('\n')[0],
+        );
+        return;
+      }
     }
     throw err;
   }

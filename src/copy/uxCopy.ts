@@ -60,6 +60,7 @@ export const COPY = {
   standbySecondary: 'Keep using this device for existing chats',
   takeoverToast:
     'This device now receives new messages. Other signed-in devices will stop accepting new chats until they take over.',
+  reenableToast: 'This device now receives new messages again.',
   reenableBannerTitle: 'This device stopped receiving new chats',
   reenableBannerBody:
     'The published receiver marker is gone. Conversations already on this device still work. Re-enable receiving if you want new message requests and new handshakes to land here.',

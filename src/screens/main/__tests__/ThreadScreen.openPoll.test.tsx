@@ -1,5 +1,6 @@
 import React from 'react';
 import { act, create } from 'react-test-renderer';
+import { AppState } from 'react-native';
 import { LinkService, THREAD_INBOX_POLL_MS } from '../../../services/link/LinkService';
 
 jest.mock('react-native-safe-area-context', () => ({
@@ -31,7 +32,7 @@ jest.mock('../../../services/link/LinkService', () => ({
     recoverPendingSends: jest.fn(),
     drainRetries: jest.fn(),
   },
-  THREAD_INBOX_POLL_MS: 10_000,
+  THREAD_INBOX_POLL_MS: 5_000,
 }));
 
 const PEER = 'pxnu33x7jtpx9ar1ytsi4yxbp6a5o36gwhffs8zoxmbuptici1jy';
@@ -111,16 +112,30 @@ jest.mock('../../../stores/sessionStatusStore', () => ({
 import ThreadScreen from '../ThreadScreen';
 
 describe('open thread inbox poll', () => {
+  let appState: string = 'active';
+  let onAppState: ((state: string) => void) | undefined;
+
   beforeEach(() => {
     jest.useFakeTimers();
+    appState = 'active';
+    onAppState = undefined;
     (LinkService.syncInbox as jest.Mock).mockClear();
+    Object.defineProperty(AppState, 'currentState', {
+      configurable: true,
+      get: () => appState,
+    });
+    jest.spyOn(AppState, 'addEventListener').mockImplementation((_event, handler) => {
+      onAppState = handler as (state: string) => void;
+      return { remove: jest.fn() };
+    });
   });
   afterEach(() => {
     jest.useRealTimers();
+    jest.restoreAllMocks();
   });
 
   it('polls the focused peer at THREAD_INBOX_POLL_MS and pull-to-refresh syncs', async () => {
-    expect(THREAD_INBOX_POLL_MS).toBe(10_000);
+    expect(THREAD_INBOX_POLL_MS).toBe(5_000);
     let tree: ReturnType<typeof create>;
     await act(async () => {
       tree = create(
@@ -150,5 +165,35 @@ describe('open thread inbox poll', () => {
     await act(async () => {
       tree!.unmount();
     });
+  });
+
+  it('does not poll while backgrounded and resumes on active', async () => {
+    await act(async () => {
+      create(
+        <ThreadScreen
+          navigation={{} as never}
+          route={{ key: 't', name: 'Thread', params: { participantPubky: PEER } } as never}
+        />,
+      );
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    const afterMount = (LinkService.syncInbox as jest.Mock).mock.calls.length;
+    appState = 'background';
+    await act(async () => {
+      onAppState?.('background');
+    });
+    await act(async () => {
+      jest.advanceTimersByTime(THREAD_INBOX_POLL_MS * 3);
+      await Promise.resolve();
+    });
+    expect((LinkService.syncInbox as jest.Mock).mock.calls.length).toBe(afterMount);
+    appState = 'active';
+    await act(async () => {
+      onAppState?.('active');
+      await Promise.resolve();
+    });
+    expect((LinkService.syncInbox as jest.Mock).mock.calls.length).toBeGreaterThan(afterMount);
   });
 });

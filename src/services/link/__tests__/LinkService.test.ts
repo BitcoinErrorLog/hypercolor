@@ -4,6 +4,7 @@ import {
   HANDSHAKE_FAILURE_LIMIT,
   HANDSHAKE_PENDING_ADVANCE_LIMIT,
   HANDSHAKE_STALE_MS,
+  LINK_INBOX_PEER_TIMEOUT_MS,
   LINK_RETRY_DRAIN_INTERVAL_MS,
   LINK_RETRY_PAYLOAD_TYPE,
   LINK_GROUP_FANOUT_PAYLOAD_TYPE,
@@ -19,6 +20,8 @@ import { StorageService } from '../../StorageService';
 import { KeyStore } from '../../KeyStore';
 import { RetryQueue } from '../../RetryQueue';
 import { paintOwner, resetPaintOverlayForBoot } from '../../paintedOwner';
+import { COPY } from '../../../copy/uxCopy';
+import { useReceiverRoleStore } from '../../../stores/receiverRoleStore';
 import { wireSignOutMarkerMocks } from '../../__tests__/wireSignOutMarkerMocks';
 import {
   CHAT_MESSAGE_KIND,
@@ -1452,7 +1455,56 @@ describe('LinkService', () => {
         expect.objectContaining({ receiverRole: 'active', noisePublicKey: 'local-noise-pk' }),
       );
       expect(mockedNative.publishReceiverMarker).toHaveBeenCalledTimes(1);
+      expect(useReceiverRoleStore.getState().toast).toBe(COPY.takeoverToast);
     });
+
+    it('re-enable confirm uses the re-enable toast', async () => {
+      await LinkService.signinWithSecret('ab'.repeat(32));
+      mockedNative.publishReceiverMarker.mockResolvedValue(undefined);
+      mockedNative.getReceiverPublicKey.mockResolvedValue('local-noise-pk');
+      await LinkService.takeoverReceiver('reenable');
+      expect(useReceiverRoleStore.getState().toast).toBe(COPY.reenableToast);
+    });
+
+    it('skips own-marker GET when the last success was under 60s', async () => {
+      mockedNative.probeInboundLink.mockResolvedValue({ result: 'none' });
+      await LinkService.syncInbox([PEER]);
+      const ownGets = mockedNative.getReceiverMarker.mock.calls.filter(c => c[0] === OWNER).length;
+      expect(ownGets).toBe(1);
+      await LinkService.syncInbox([PEER]);
+      const ownGetsAfter = mockedNative.getReceiverMarker.mock.calls.filter(
+        c => c[0] === OWNER,
+      ).length;
+      expect(ownGetsAfter).toBe(1);
+    });
+
+    it('does not stamp a later owner when a hung own-marker GET settles after sign-out', async () => {
+      jest.useFakeTimers({ doNotFake: ['Date'] });
+      const hung = deferred<{ noisePublicKey: string; capabilitiesJson: string }>();
+      mockedNative.getReceiverMarker.mockImplementation(async (who: string) => {
+        if (who === OWNER) return hung.promise;
+        return { noisePublicKey: PEER_NOISE, capabilitiesJson: '{}' };
+      });
+      mockedNative.probeInboundLink.mockResolvedValue({ result: 'none' });
+      try {
+        const done = LinkService.syncInbox([PEER]);
+        await jest.advanceTimersByTimeAsync(LINK_INBOX_PEER_TIMEOUT_MS);
+        await jest.advanceTimersByTimeAsync(LINK_INBOX_PEER_TIMEOUT_MS);
+        await expect(done).resolves.toEqual([]);
+        paintOwner(OTHER_OWNER);
+        mockedKeyStore.getPubky.mockReturnValue(OTHER_OWNER);
+        useReceiverRoleStore.getState().reset();
+        hung.resolve({ noisePublicKey: 'foreign-noise-pk', capabilitiesJson: '{}' });
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(useReceiverRoleStore.getState().role).not.toBe('standby');
+        expect(mockedStorage.upsertLinkReceiver).not.toHaveBeenCalledWith(
+          expect.objectContaining({ receiverRole: 'standby' }),
+        );
+      } finally {
+        jest.useRealTimers();
+      }
+    }, 15_000);
 
     it('replaces a non-ready handshake when a valid new msg1 is probed', async () => {
       mockedStorage.getLink.mockResolvedValue(
@@ -1651,15 +1703,18 @@ describe('LinkService', () => {
     });
 
     it('ages out unaccepted established-with-no-messages so a later probe can adopt', async () => {
-      mockedStorage.getLink.mockResolvedValue(
-        storedLink({
-          role: 'responder',
-          status: 'established',
-          snapshot: 'zombie-est',
-          createdAt: NOW - HANDSHAKE_STALE_MS - 1,
-          updatedAt: NOW - HANDSHAKE_STALE_MS - 1,
-        }),
-      );
+      const zombie = storedLink({
+        role: 'responder',
+        status: 'established',
+        snapshot: 'zombie-est',
+        createdAt: NOW - HANDSHAKE_STALE_MS - 1,
+        updatedAt: NOW - HANDSHAKE_STALE_MS - 1,
+      });
+      let row: LinkRecord | null = zombie;
+      mockedStorage.getLink.mockImplementation(async () => row);
+      mockedStorage.deleteLink.mockImplementation(async () => {
+        row = null;
+      });
       mockedStorage.getMessageRequest.mockResolvedValue({
         ownerPubky: OWNER,
         peerPubky: PEER,

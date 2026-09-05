@@ -158,6 +158,20 @@ const mockedStorage = jest.mocked(StorageService);
 const mockedKeyStore = jest.mocked(KeyStore);
 const mockedRetryQueue = jest.mocked(RetryQueue);
 
+function deferred<T>(): {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+  reject: (reason?: unknown) => void;
+} {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
 const NOW = 1_700_000_000_000;
 const OWNER = 'a'.repeat(52);
 const PEER = 'z'.repeat(52);
@@ -331,6 +345,77 @@ describe('LinkService message requests', () => {
       expect(mockedNative.probeInboundLink).not.toHaveBeenCalled();
       expect(mockedStorage.upsertMessageRequest).not.toHaveBeenCalled();
       expect(linkQueueEntryCountForTests()).toBe(0);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('does not adopt when deny flips between probe and persist', async () => {
+    let deny: 'clear' | 'denied' = 'clear';
+    jest.spyOn(FollowsImportSettings, 'resolveDenyState').mockImplementation(async () => deny);
+    mockedNative.probeInboundLink.mockImplementation(async () => {
+      deny = 'denied';
+      return { result: 'pending', linkId: 'probed-denied', snapshot: 'snap' };
+    });
+
+    await expect(LinkService.syncInbox([PEER])).resolves.toEqual([]);
+
+    expect(mockedStorage.upsertLink).not.toHaveBeenCalled();
+    expect(mockedStorage.upsertMessageRequest).not.toHaveBeenCalled();
+    expect(mockedNative.closeLink).toHaveBeenCalledWith('probed-denied');
+  });
+
+  it('abandoned probe after queue reset cannot clobber a fresh adoption', async () => {
+    jest.useFakeTimers();
+    const hung = deferred<{ result: 'pending'; linkId: string; snapshot: string }>();
+    let probes = 0;
+    let adoptedSnapshot: string | null = null;
+    mockedStorage.getLink.mockImplementation(async () =>
+      adoptedSnapshot
+        ? {
+            ownerPubky: OWNER,
+            peerPubky: PEER,
+            role: 'responder',
+            status: 'handshaking',
+            snapshot: adoptedSnapshot,
+            remoteNoisePublicKey: PEER_NOISE,
+            localReceiverPath: LINK_RECEIVER_PATH,
+            remoteReceiverPath: LINK_RECEIVER_PATH,
+            consecutiveFailures: 0,
+            lastSeenPeerMarkerPk: PEER_NOISE,
+            createdAt: NOW,
+            updatedAt: NOW,
+          }
+        : null,
+    );
+    mockedStorage.upsertLink.mockImplementation(async record => {
+      adoptedSnapshot = (record as { snapshot: string }).snapshot;
+    });
+    mockedNative.probeInboundLink.mockImplementation(() => {
+      probes += 1;
+      if (probes === 1) return hung.promise;
+      return Promise.resolve({ result: 'pending', linkId: 'fresh-handle', snapshot: 'fresh' });
+    });
+
+    try {
+      const first = LinkService.syncInbox([PEER]);
+      await jest.advanceTimersByTimeAsync(LINK_INBOX_PEER_TIMEOUT_MS);
+      await expect(first).resolves.toEqual([]);
+      expect(linkQueueEntryCountForTests()).toBe(0);
+
+      await LinkService.syncInbox([PEER]);
+      expect(adoptedSnapshot).toBe('fresh');
+      const upserts = mockedStorage.upsertLink.mock.calls.length;
+
+      hung.resolve({ result: 'pending', linkId: 'stale-handle', snapshot: 'stale' });
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(adoptedSnapshot).toBe('fresh');
+      expect(mockedStorage.upsertLink.mock.calls.length).toBe(upserts);
+      expect(mockedNative.closeLink).toHaveBeenCalledWith('stale-handle');
+      expect(mockedNative.closeLink).not.toHaveBeenCalledWith('fresh-handle');
     } finally {
       jest.useRealTimers();
     }

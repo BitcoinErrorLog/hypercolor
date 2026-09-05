@@ -15,6 +15,8 @@ import {
   AccessibilityInfo,
   findNodeHandle,
   RefreshControl,
+  AppState,
+  type AppStateStatus,
 } from 'react-native';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
@@ -159,7 +161,10 @@ export default function ThreadScreen({ route }: Props) {
   useFocusEffect(
     useCallback(() => {
       let stopped = false;
+      let timer: ReturnType<typeof setInterval> | null = null;
       const syncOpenThread = async () => {
+        if (stopped || AppState.currentState !== 'active') return;
+        console.log('[ThreadScreen] open-thread-poll sync');
         if (LinkService.hasSession()) {
           try {
             await LinkService.syncInbox([participantPubky]);
@@ -167,15 +172,41 @@ export default function ThreadScreen({ route }: Props) {
             // Inbox drain is best-effort; local history still renders.
           }
         }
-        if (!stopped) await reloadEncrypted();
+        if (!stopped && AppState.currentState === 'active') await reloadEncrypted();
       };
-      void syncOpenThread();
-      const timer = setInterval(() => {
+      const stopPoll = () => {
+        if (timer) {
+          clearInterval(timer);
+          timer = null;
+          console.log('[ThreadScreen] open-thread-poll stop');
+        }
+      };
+      const startPoll = () => {
+        stopPoll();
+        if (stopped) return;
+        timer = setInterval(() => {
+          void syncOpenThread();
+        }, THREAD_INBOX_POLL_MS);
+        console.log('[ThreadScreen] open-thread-poll start');
+      };
+      const onAppState = (next: AppStateStatus) => {
+        if (stopped) return;
+        if (next === 'active') {
+          void syncOpenThread();
+          startPoll();
+        } else {
+          stopPoll();
+        }
+      };
+      if (AppState.currentState === 'active') {
         void syncOpenThread();
-      }, THREAD_INBOX_POLL_MS);
+        startPoll();
+      }
+      const sub = AppState.addEventListener('change', onAppState);
       return () => {
         stopped = true;
-        clearInterval(timer);
+        stopPoll();
+        sub.remove();
       };
     }, [participantPubky, reloadEncrypted]),
   );

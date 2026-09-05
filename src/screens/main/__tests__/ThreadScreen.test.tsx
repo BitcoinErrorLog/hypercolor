@@ -20,7 +20,7 @@ jest.mock('../../../services/link/LinkService', () => ({
     releaseDeclinedRequest: jest.fn(),
     takeoverReceiver: jest.fn(),
   },
-  THREAD_INBOX_POLL_MS: 10_000,
+  THREAD_INBOX_POLL_MS: 5_000,
 }));
 
 jest.mock('../../../services/StorageService', () => ({

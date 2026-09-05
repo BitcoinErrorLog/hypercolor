@@ -54,7 +54,7 @@ export function StandbyBanner(): React.ReactElement | null {
           void (async () => {
             setBusy(true);
             try {
-              await LinkService.takeoverReceiver();
+              await LinkService.takeoverReceiver(showReenable ? 'reenable' : 'takeover');
             } catch {
               Alert.alert(title, COPY.couldNotStartAuthorization);
             } finally {
