@@ -409,15 +409,25 @@ export type LinkDeliveryState = 'sending' | 'sent' | 'delivered' | 'read' | 'fai
  * One messaging receiver per account. `receiverAlias` is an opaque handle
  * the native layer minted — the Noise secret NEVER enters JS.
  */
+export type ReceiverRole = 'active' | 'standby';
+
 export interface LinkReceiver {
   ownerPubky: PubkyKey;
   receiverAlias: string;
   receiverPath: string;
   markerPublished: boolean;
+  receiverRole: ReceiverRole;
+  lastSeenOwnMarkerPk: string | null;
   updatedAt: number;
 }
 
-export type LinkReceiverInput = Omit<LinkReceiver, 'updatedAt'>;
+export type LinkReceiverInput = Omit<
+  LinkReceiver,
+  'updatedAt' | 'receiverRole' | 'lastSeenOwnMarkerPk'
+> & {
+  receiverRole?: ReceiverRole;
+  lastSeenOwnMarkerPk?: string | null;
+};
 
 /**
  * One Encrypted Link (or in-progress handshake) per (owner, counterparty).
@@ -434,6 +444,7 @@ export interface LinkRecord {
   localReceiverPath: string;
   remoteReceiverPath: string;
   consecutiveFailures: number;
+  lastSeenPeerMarkerPk?: string | null;
   /** Row insert time. Not updated on snapshot/status writes. */
   createdAt: number;
   updatedAt: number;

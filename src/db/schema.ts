@@ -137,6 +137,21 @@ export const SCHEMA_V17_STATEMENTS: readonly string[] = [
 ];
 
 /**
+ * Schema v18 — W1e single-active receiver role + last-seen marker pks.
+ *
+ * `receiver_role` is this device's inbox role (`active` | `standby`).
+ * `last_seen_own_marker_pk` is the last successfully GETed own marker pk.
+ * `last_seen_peer_marker_pk` is the last GETed peer marker pk. Recording the
+ * peer pk must not bump `links.updated_at` (age-out clock). Idempotent ALTER.
+ * Web's equivalent bump is schema v14; mobile keeps its own numbering.
+ */
+export const SCHEMA_V18_STATEMENTS: readonly string[] = [
+  `ALTER TABLE link_receivers ADD COLUMN receiver_role TEXT NOT NULL DEFAULT 'active'`,
+  `ALTER TABLE link_receivers ADD COLUMN last_seen_own_marker_pk TEXT`,
+  `ALTER TABLE links ADD COLUMN last_seen_peer_marker_pk TEXT`,
+];
+
+/**
  * Schema v15 — move the handshake advance budget off the `links` row.
  *
  * v14 put `pending_advances` / `next_advance_at` on `links`, which is deleted

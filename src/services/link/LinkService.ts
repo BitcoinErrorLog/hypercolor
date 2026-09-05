@@ -30,6 +30,7 @@ import {
   type LinkStatus,
   type LinkStreamItem,
   type LinkStreamItemInput,
+  type ReceiverRole,
 } from '../../types/link';
 import type { DeliveryQueueItem, PubkyKey } from '../../types';
 import {
@@ -57,6 +58,8 @@ import { shouldDropOversizedKnownInbound } from './inboundEnvelope';
 import { LinkSendError } from './LinkSendError';
 import { FollowsImportSettings } from '../contacts/followsImportSettings';
 import { opaquePeerId } from '../contacts/opaquePeerId';
+import { setReceiverRoleState, useReceiverRoleStore } from '../../stores/receiverRoleStore';
+import { COPY } from '../../copy/uxCopy';
 import { CONTACTS_COPY } from '../../ui/contacts/contactsCopy';
 import { stripSensitive } from '../../ui/sanitizedError';
 import {
@@ -155,6 +158,15 @@ export const LINK_RETRY_TICK_PHASE_TIMEOUT_MS = 20_000;
  */
 export const LINK_INBOX_PEER_TIMEOUT_MS = 8_000;
 
+/** Initiator C: re-GET the peer marker after this many no-advance polls. */
+export const MARKER_RECOVERY_POLL_LIMIT = 3;
+
+/** Initiator C: re-GET the peer marker after this much wall time without advance. */
+export const MARKER_RECOVERY_TIMEOUT_MS = 120_000;
+
+/** Open-thread inbox poll while the conversation is focused. */
+export const THREAD_INBOX_POLL_MS = 10_000;
+
 export type LinkEnableFlow = {
   authorizationUrl: string;
   awaitEnabled: () => Promise<{ pubky: string; receiverPath: string; noisePublicKey: string }>;
@@ -243,6 +255,8 @@ let drainTimer: ReturnType<typeof setInterval> | null = null;
 let tickInFlight = false;
 let drainInFlight: Promise<void> | null = null;
 const inboxSyncListeners = new Set<(ownerPubky: PubkyKey) => void>();
+const handshakeWatch = new Map<string, { polls: number; firstAt: number; snapshot: string }>();
+let inboxOwnMarkerSyncedFor: PubkyKey | null = null;
 /** In-flight enable / persistThenAdopt / Connect generations. */
 let authCommitGenerations = 0;
 /** Latch: native boot reconcile runs at most once per JS process. */
@@ -415,6 +429,28 @@ export const LinkService = {
       throw new Error('LinkService.provisionHarnessReceiver: no adopted session');
     }
     return provisionReceiver(session.alias, session.pubky);
+  },
+
+  /**
+   * Confirmed takeover: PUT this device's current receiver pk (exactly one).
+   */
+  async takeoverReceiver(): Promise<{
+    pubky: string;
+    receiverPath: string;
+    noisePublicKey: string;
+    receiverRole: ReceiverRole;
+  }> {
+    const lookup = await sessionOrRestore();
+    if (!isActiveSession(lookup)) {
+      throw new Error('LinkService.takeoverReceiver: no live session');
+    }
+    return publishTakeoverReceiver(lookup.alias, lookup.pubky);
+  },
+
+  async syncOwnReceiverRole(): Promise<ReceiverRole | null> {
+    const owner = KeyStore.getPubky();
+    if (!owner) return null;
+    return syncOwnReceiverRole(owner);
   },
 
   // ── Enable flow ───────────────────────────────────────────────────────────
@@ -913,6 +949,11 @@ export const LinkService = {
    */
   async syncInbox(peers?: PubkyKey[]): Promise<LinkMessage[]> {
     const ownerAtStart = requireOwner();
+    inboxOwnMarkerSyncedFor = null;
+    const ownRole = await raceWithin(syncOwnReceiverRole(ownerAtStart), LINK_INBOX_PEER_TIMEOUT_MS);
+    if (ownRole.status === 'ok' || ownRole.status === 'timeout' || ownRole.status === 'error') {
+      inboxOwnMarkerSyncedFor = ownerAtStart;
+    }
     const candidates = peers !== undefined ? peers : await collectInboxCandidates(ownerAtStart);
     const received: LinkMessage[] = [];
     for (const peerPubky of new Set(candidates)) {
@@ -920,6 +961,7 @@ export const LinkService = {
       const peerWork = withQueue(peerPubky, () => syncPeerLocked(peerPubky, ownerAtStart));
       const raced = await raceWithin(peerWork, LINK_INBOX_PEER_TIMEOUT_MS);
       if (raced.status === 'timeout') {
+        resetPeerQueue(ownerAtStart, peerPubky);
         console.warn(
           `[LinkService] inbox-sync-timeout peer=${opaquePeerId(ownerAtStart, peerPubky)} after ${LINK_INBOX_PEER_TIMEOUT_MS}ms; continuing`,
         );
@@ -1208,6 +1250,8 @@ export function resetLinkServiceHarnessState(): void {
   restoreInFlight = null;
   liveHandles.clear();
   queues.clear();
+  handshakeWatch.clear();
+  inboxOwnMarkerSyncedFor = null;
   bootReconcileDone = false;
   authCommitGenerations = 0;
 }
@@ -1318,15 +1362,22 @@ async function reconcileNativeSessions(): Promise<void> {
 async function provisionReceiver(
   sessionAlias: string,
   pubky: PubkyKey,
-): Promise<{ pubky: string; receiverPath: string; noisePublicKey: string }> {
+): Promise<{
+  pubky: string;
+  receiverPath: string;
+  noisePublicKey: string;
+  receiverRole: ReceiverRole;
+}> {
   const receiverPath = assertValidReceiverPath(LINK_RECEIVER_PATH);
   const existing = await StorageService.getLinkReceiver(pubky);
   let receiverAlias: string;
   let noisePublicKey: string;
+  let rollbackOnFailure = true;
   if (existing) {
     try {
       receiverAlias = existing.receiverAlias;
       noisePublicKey = await PaykitLinkNative.getReceiverPublicKey(receiverAlias);
+      rollbackOnFailure = !existing.markerPublished;
     } catch (err) {
       if (!isUnusableReceiverAliasError(err)) throw err;
       await StorageService.deleteLinkReceiver(pubky);
@@ -1339,14 +1390,156 @@ async function provisionReceiver(
     receiverAlias = minted.receiverAlias;
     noisePublicKey = minted.noisePublicKey;
   }
-  await PaykitLinkNative.publishReceiverMarker(sessionAlias, receiverAlias, receiverPath);
+
+  let published: Awaited<ReturnType<typeof inspectOwnPublishedMarker>>;
+  try {
+    published = await inspectOwnPublishedMarker(pubky, receiverPath);
+  } catch (error) {
+    if (rollbackOnFailure) await rollbackUnpublishedReceiver(pubky);
+    throw error;
+  }
+
+  if (published.kind === 'present' && published.noisePublicKey !== noisePublicKey) {
+    await persistReceiverRow(
+      pubky,
+      receiverAlias,
+      receiverPath,
+      true,
+      'standby',
+      published.noisePublicKey,
+    );
+    setReceiverRoleState('standby', null);
+    return { pubky, receiverPath, noisePublicKey, receiverRole: 'standby' };
+  }
+
+  if (published.kind === 'present' && published.noisePublicKey === noisePublicKey) {
+    await persistReceiverRow(
+      pubky,
+      receiverAlias,
+      receiverPath,
+      true,
+      'active',
+      published.noisePublicKey,
+    );
+    setReceiverRoleState('active', null);
+    return { pubky, receiverPath, noisePublicKey, receiverRole: 'active' };
+  }
+
+  try {
+    await PaykitLinkNative.publishReceiverMarker(sessionAlias, receiverAlias, receiverPath);
+  } catch (error) {
+    if (rollbackOnFailure) await rollbackUnpublishedReceiver(pubky);
+    throw error;
+  }
+  await persistReceiverRow(pubky, receiverAlias, receiverPath, true, 'active', noisePublicKey);
+  setReceiverRoleState('active', null);
+  return { pubky, receiverPath, noisePublicKey, receiverRole: 'active' };
+}
+
+async function inspectOwnPublishedMarker(
+  ownerPubky: PubkyKey,
+  receiverPath: string,
+): Promise<{ kind: 'absent' } | { kind: 'present'; noisePublicKey: string }> {
+  const marker = await PaykitLinkNative.getReceiverMarker(ownerPubky, receiverPath);
+  if (
+    marker === null ||
+    typeof marker.noisePublicKey !== 'string' ||
+    marker.noisePublicKey === ''
+  ) {
+    return { kind: 'absent' };
+  }
+  return { kind: 'present', noisePublicKey: marker.noisePublicKey };
+}
+
+async function persistReceiverRow(
+  ownerPubky: PubkyKey,
+  receiverAlias: string,
+  receiverPath: string,
+  markerPublished: boolean,
+  receiverRole: ReceiverRole,
+  lastSeenOwnMarkerPk: string | null,
+): Promise<void> {
   await StorageService.upsertLinkReceiver({
-    ownerPubky: pubky,
+    ownerPubky,
     receiverAlias,
     receiverPath,
-    markerPublished: true,
+    markerPublished,
+    receiverRole,
+    lastSeenOwnMarkerPk,
   });
-  return { pubky, receiverPath, noisePublicKey };
+}
+
+async function rollbackUnpublishedReceiver(ownerPubky: PubkyKey): Promise<void> {
+  try {
+    await StorageService.deleteLinkReceiver(ownerPubky);
+  } catch {
+    // Best effort.
+  }
+}
+
+async function publishTakeoverReceiver(
+  sessionAlias: string,
+  pubky: PubkyKey,
+): Promise<{
+  pubky: string;
+  receiverPath: string;
+  noisePublicKey: string;
+  receiverRole: ReceiverRole;
+}> {
+  const receiverPath = assertValidReceiverPath(LINK_RECEIVER_PATH);
+  const existing = await StorageService.getLinkReceiver(pubky);
+  if (!existing) {
+    throw new Error('takeoverReceiver: this device has no receiver secret');
+  }
+  const noisePublicKey = await PaykitLinkNative.getReceiverPublicKey(existing.receiverAlias);
+  await PaykitLinkNative.publishReceiverMarker(sessionAlias, existing.receiverAlias, receiverPath);
+  await persistReceiverRow(
+    pubky,
+    existing.receiverAlias,
+    receiverPath,
+    true,
+    'active',
+    noisePublicKey,
+  );
+  setReceiverRoleState('active', COPY.takeoverToast);
+  return { pubky, receiverPath, noisePublicKey, receiverRole: 'active' };
+}
+
+async function syncOwnReceiverRole(ownerPubky: PubkyKey): Promise<ReceiverRole | null> {
+  const receiver = await StorageService.getLinkReceiver(ownerPubky);
+  if (!receiver) return null;
+  let localPk: string;
+  try {
+    localPk = await PaykitLinkNative.getReceiverPublicKey(receiver.receiverAlias);
+  } catch {
+    return receiver.receiverRole;
+  }
+  let published: Awaited<ReturnType<typeof inspectOwnPublishedMarker>>;
+  try {
+    published = await inspectOwnPublishedMarker(
+      ownerPubky,
+      coerceReceiverPath(receiver.receiverPath),
+    );
+  } catch {
+    return receiver.receiverRole;
+  }
+  if (published.kind === 'absent') {
+    if (receiver.receiverRole === 'active') {
+      setReceiverRoleState('active', null, { needsReenable: true });
+    }
+    return receiver.receiverRole;
+  }
+  const role: ReceiverRole = published.noisePublicKey === localPk ? 'active' : 'standby';
+  await persistReceiverRow(
+    ownerPubky,
+    receiver.receiverAlias,
+    receiver.receiverPath,
+    true,
+    role,
+    published.noisePublicKey,
+  );
+  setReceiverRoleState(role, null);
+  return role;
 }
 
 async function mintReceiver(
@@ -1354,12 +1547,7 @@ async function mintReceiver(
   receiverPath: string,
 ): Promise<{ receiverAlias: string; noisePublicKey: string }> {
   const generated = await PaykitLinkNative.generateReceiverKey();
-  await StorageService.upsertLinkReceiver({
-    ownerPubky: pubky,
-    receiverAlias: generated.receiverAlias,
-    receiverPath,
-    markerPublished: false,
-  });
+  await persistReceiverRow(pubky, generated.receiverAlias, receiverPath, false, 'active', null);
   return generated;
 }
 
@@ -1471,7 +1659,8 @@ async function ensureLinkLocked(
   if (deny === 'unavailable') return 'deny-unavailable';
   const receiver = await StorageService.getLinkReceiver(ownerPubky);
   abortIfOwnerChanged(expectedOwner);
-  if (!receiver?.markerPublished) return 'needs-enable';
+  if (!receiver) return 'needs-enable';
+  if (!receiver.markerPublished && receiver.receiverRole !== 'standby') return 'needs-enable';
   const localPath = assertValidReceiverPath(coerceReceiverPath(receiver.receiverPath));
 
   const key = linkKey(ownerPubky, peerPubky);
@@ -1501,20 +1690,6 @@ async function ensureLinkLocked(
 
   if (live?.status === 'established') return 'ready';
 
-  if (live?.status === 'handshaking') {
-    abortIfOwnerChanged(expectedOwner);
-    return advanceLiveHandshake(
-      activeSession,
-      receiver,
-      ownerPubky,
-      peerPubky,
-      live,
-      intent,
-      alreadyRecovered,
-      expectedOwner,
-    );
-  }
-
   if (!replaceable && stored?.status === 'established') {
     const restored = await restoreEstablished(
       activeSession,
@@ -1533,6 +1708,97 @@ async function ensureLinkLocked(
     return 'idle';
   }
 
+  await ensureOwnReceiverMarkerMatches(
+    activeSession,
+    receiver,
+    ownerPubky,
+    localPath,
+    expectedOwner,
+  );
+  abortIfOwnerChanged(expectedOwner);
+
+  let marker: ReceiverMarker | null | undefined;
+  try {
+    marker = await PaykitLinkNative.getReceiverMarker(peerPubky, localPath);
+    abortIfOwnerChanged(expectedOwner);
+    if (marker && stored) {
+      await StorageService.recordLastSeenPeerMarkerPk(ownerPubky, peerPubky, marker.noisePublicKey);
+      stored = { ...stored, lastSeenPeerMarkerPk: marker.noisePublicKey };
+    }
+  } catch (err) {
+    if (err instanceof LinkSendError && err.code === 'owner-changed') throw err;
+    marker = undefined;
+  }
+
+  if (marker) {
+    let inbound: Extract<LinkProbeResult, { result: 'pending' | 'established' }> | null;
+    try {
+      inbound = await probeInbound(
+        activeSession,
+        receiver,
+        ownerPubky,
+        peerPubky,
+        marker,
+        localPath,
+      );
+      abortIfOwnerChanged(expectedOwner);
+    } catch (err) {
+      if (isLinkNativeError(err) && err.code === 'protocol') {
+        abortIfOwnerChanged(expectedOwner);
+        await clearPeerOutboxBestEffort(
+          activeSession,
+          receiver,
+          peerPubky,
+          marker.noisePublicKey,
+          localPath,
+          LINK_RECEIVER_PATH,
+        );
+        abortIfOwnerChanged(expectedOwner);
+        inbound = null;
+      } else {
+        throw err;
+      }
+    }
+    if (inbound !== null) {
+      const canReplace = stored === null || stored.status !== 'established';
+      if (canReplace && (stored?.status === 'handshaking' || live?.status === 'handshaking')) {
+        if (stored) await wipeNonReadyHandshakeOnly(stored, expectedOwner);
+        else if (live) {
+          await closeQuietly(live.linkId);
+          liveHandles.delete(key);
+        }
+      }
+      if (canReplace) {
+        abortIfOwnerChanged(expectedOwner);
+        return adoptInboundHandshake(
+          ownerPubky,
+          peerPubky,
+          marker,
+          localPath,
+          inbound,
+          expectedOwner,
+        );
+      }
+    }
+  }
+
+  live = liveHandles.get(key);
+  stored = await StorageService.getLink(ownerPubky, peerPubky);
+  abortIfOwnerChanged(expectedOwner);
+
+  if (live?.status === 'handshaking') {
+    return advanceLiveHandshake(
+      activeSession,
+      receiver,
+      ownerPubky,
+      peerPubky,
+      live,
+      intent,
+      alreadyRecovered,
+      expectedOwner,
+    );
+  }
+
   if (stored?.status === 'handshaking') {
     const restored = await restoreAndAdvanceHandshake(
       activeSession,
@@ -1546,54 +1812,8 @@ async function ensureLinkLocked(
     return restored;
   }
 
-  await ensureOwnReceiverMarkerMatches(
-    activeSession,
-    receiver,
-    ownerPubky,
-    localPath,
-    expectedOwner,
-  );
-  abortIfOwnerChanged(expectedOwner);
-
-  const marker = await PaykitLinkNative.getReceiverMarker(peerPubky, localPath);
-  abortIfOwnerChanged(expectedOwner);
+  if (marker === undefined) return 'idle';
   if (marker === null) return mayInitiate(intent) ? 'not-enrolled' : 'idle';
-
-  let inbound: Extract<LinkProbeResult, { result: 'pending' | 'established' }> | null;
-  try {
-    inbound = await probeInbound(activeSession, receiver, ownerPubky, peerPubky, marker, localPath);
-    abortIfOwnerChanged(expectedOwner);
-  } catch (err) {
-    if (isLinkNativeError(err) && err.code === 'protocol') {
-      abortIfOwnerChanged(expectedOwner);
-      await clearPeerOutboxBestEffort(
-        activeSession,
-        receiver,
-        peerPubky,
-        marker.noisePublicKey,
-        localPath,
-        LINK_RECEIVER_PATH,
-      );
-      abortIfOwnerChanged(expectedOwner);
-      if (!mayInitiate(intent)) return 'idle';
-      return initiateHandshake(
-        activeSession,
-        receiver,
-        ownerPubky,
-        peerPubky,
-        marker,
-        localPath,
-        intent,
-        alreadyRecovered,
-        expectedOwner,
-      );
-    }
-    throw err;
-  }
-  if (inbound !== null) {
-    abortIfOwnerChanged(expectedOwner);
-    return adoptInboundHandshake(ownerPubky, peerPubky, marker, localPath, inbound, expectedOwner);
-  }
 
   if (!mayInitiate(intent)) return 'idle';
 
@@ -1634,6 +1854,14 @@ async function shouldAgeOutNonReadyLink(
   );
   abortIfOwnerChanged(expectedOwner);
   return messages === 0;
+}
+
+async function wipeNonReadyHandshakeOnly(
+  stored: LinkRecord,
+  expectedOwner: PubkyKey,
+): Promise<void> {
+  if (stored.status === 'established') return;
+  await wipeLinkState(stored, expectedOwner);
 }
 
 async function restoreEstablished(
@@ -1796,6 +2024,22 @@ async function advanceLiveHandshake(
       );
     }
 
+    if (live.role === 'initiator') {
+      const recovered = await maybeRecoverInitiatorMarkerRotation(
+        activeSession,
+        receiver,
+        ownerPubky,
+        peerPubky,
+        live,
+        stored,
+        result.snapshot,
+        alreadyRecovered,
+        intent,
+        expectedOwner,
+      );
+      if (recovered !== null) return recovered;
+    }
+
     if (live.role === 'initiator' && ownerPubky < peerPubky) {
       const marker = await PaykitLinkNative.getReceiverMarker(peerPubky, LINK_RECEIVER_PATH);
       abortIfOwnerChanged(expectedOwner);
@@ -1853,6 +2097,7 @@ function fallbackLinkRecord(
     localReceiverPath: receiver.receiverPath,
     remoteReceiverPath: LINK_RECEIVER_PATH,
     consecutiveFailures: 0,
+    lastSeenPeerMarkerPk: null,
     createdAt: Date.now(),
     updatedAt: Date.now(),
   };
@@ -2083,6 +2328,7 @@ async function initiateHandshake(
     localReceiverPath: localPath,
     remoteReceiverPath: remotePath,
     consecutiveFailures: 0,
+    lastSeenPeerMarkerPk: marker.noisePublicKey,
   });
   liveHandles.set(linkKey(ownerPubky, peerPubky), {
     status: 'handshaking',
@@ -2103,36 +2349,20 @@ async function initiateHandshake(
 }
 
 /**
- * Encrypted Link paths DH against the Noise key advertised in the owner's
- * Receiver Marker. If the device minted a new receiver secret without
- * republishing, peers write msg1 to a slot this device will never GET.
+ * GET-only. Never PUTs. Fetch failure is not absence. Foreign pk → standby.
  */
 async function ensureOwnReceiverMarkerMatches(
-  activeSession: ActiveSession,
-  receiver: LinkReceiver,
+  _activeSession: ActiveSession,
+  _receiver: LinkReceiver,
   ownerPubky: PubkyKey,
-  localPath: string,
+  _localPath: string,
   expectedOwner: PubkyKey,
 ): Promise<void> {
-  const localNoisePk = await PaykitLinkNative.getReceiverPublicKey(receiver.receiverAlias);
+  if (inboxOwnMarkerSyncedFor === ownerPubky) return;
   abortIfOwnerChanged(expectedOwner);
-  let published: ReceiverMarker | null = null;
-  try {
-    published = await PaykitLinkNative.getReceiverMarker(ownerPubky, localPath);
-  } catch (err) {
-    console.warn(`[LinkService] own-marker-fetch-failed:`, errorMessage(err));
-  }
+  await syncOwnReceiverRole(ownerPubky);
   abortIfOwnerChanged(expectedOwner);
-  if (published?.noisePublicKey === localNoisePk) return;
-  console.warn(
-    `[LinkService] own-marker-mismatch published=${published?.noisePublicKey.slice(0, 8) ?? 'none'} local=${localNoisePk.slice(0, 8)}; republishing`,
-  );
-  await PaykitLinkNative.publishReceiverMarker(
-    activeSession.alias,
-    receiver.receiverAlias,
-    localPath,
-  );
-  abortIfOwnerChanged(expectedOwner);
+  inboxOwnMarkerSyncedFor = ownerPubky;
 }
 
 /**
@@ -2148,7 +2378,6 @@ async function probeInbound(
   localPath: string,
 ): Promise<Extract<LinkProbeResult, { result: 'pending' | 'established' }> | null> {
   try {
-    const localNoisePk = await PaykitLinkNative.getReceiverPublicKey(receiver.receiverAlias);
     const startedAt = Date.now();
     const probed = await PaykitLinkNative.probeInboundLink(
       activeSession.alias,
@@ -2161,7 +2390,7 @@ async function probeInbound(
     const durationMs = Date.now() - startedAt;
     if (probed.result === 'none') {
       console.warn(
-        `[LinkService] inbound-probe result=none durationMs=${durationMs} peer=${opaquePeerId(ownerPubky, peerPubky)} peerPubky=${peerPubky} remoteNoisePk=${marker.noisePublicKey.slice(0, 8)} localNoisePk=${localNoisePk.slice(0, 8)} local=${localPath} remote=${LINK_RECEIVER_PATH}`,
+        `[LinkService] inbound-probe result=none durationMs=${durationMs} peer=${opaquePeerId(ownerPubky, peerPubky)}`,
       );
       return null;
     }
@@ -2186,8 +2415,12 @@ async function adoptInboundHandshake(
   localPath: string,
   inbound: Extract<LinkProbeResult, { result: 'pending' | 'established' }>,
   expectedOwner: PubkyKey,
-): Promise<LinkStatus> {
+): Promise<EnsureOutcome> {
   abortIfOwnerChanged(expectedOwner);
+  if (!(await inboundStillAllowed(ownerPubky, peerPubky, expectedOwner))) {
+    await closeQuietly(inbound.linkId);
+    return 'denied';
+  }
   const remotePath = LINK_RECEIVER_PATH;
   const key = linkKey(ownerPubky, peerPubky);
   if (inbound.result === 'established') {
@@ -2203,6 +2436,7 @@ async function adoptInboundHandshake(
       localReceiverPath: localPath,
       remoteReceiverPath: remotePath,
       consecutiveFailures: 0,
+      lastSeenPeerMarkerPk: marker.noisePublicKey,
     });
     liveHandles.set(key, { status: 'established', linkId: inbound.linkId });
     return 'ready';
@@ -2218,6 +2452,7 @@ async function adoptInboundHandshake(
     localReceiverPath: localPath,
     remoteReceiverPath: remotePath,
     consecutiveFailures: 0,
+    lastSeenPeerMarkerPk: marker.noisePublicKey,
   });
   liveHandles.set(key, { status: 'handshaking', linkId: inbound.linkId, role: 'responder' });
   return 'handshaking-responder';
@@ -2353,6 +2588,73 @@ async function recoverWedgedLink(
   return ensureLinkLocked(stored.peerPubky, intent, true, expectedOwner);
 }
 
+async function maybeRecoverInitiatorMarkerRotation(
+  activeSession: ActiveSession,
+  receiver: LinkReceiver,
+  ownerPubky: PubkyKey,
+  peerPubky: PubkyKey,
+  live: Extract<LiveHandle, { status: 'handshaking' }>,
+  stored: LinkRecord | null,
+  snapshot: string,
+  alreadyRecovered: boolean,
+  intent: LinkIntent,
+  expectedOwner: PubkyKey,
+): Promise<EnsureOutcome | null> {
+  abortIfOwnerChanged(expectedOwner);
+  const key = linkKey(ownerPubky, peerPubky);
+  const watch = handshakeWatch.get(key);
+  const now = Date.now();
+  if (!watch || watch.snapshot !== snapshot) {
+    handshakeWatch.set(key, { polls: 1, firstAt: now, snapshot });
+  } else {
+    handshakeWatch.set(key, { polls: watch.polls + 1, firstAt: watch.firstAt, snapshot });
+  }
+  const current = handshakeWatch.get(key)!;
+  const due =
+    current.polls >= MARKER_RECOVERY_POLL_LIMIT ||
+    now - current.firstAt >= MARKER_RECOVERY_TIMEOUT_MS;
+  if (!due) return null;
+
+  let marker: ReceiverMarker | null;
+  try {
+    marker = await PaykitLinkNative.getReceiverMarker(peerPubky, LINK_RECEIVER_PATH);
+    abortIfOwnerChanged(expectedOwner);
+  } catch (err) {
+    if (err instanceof LinkSendError && err.code === 'owner-changed') throw err;
+    return null;
+  }
+  const recorded = stored?.remoteNoisePublicKey ?? stored?.lastSeenPeerMarkerPk ?? '';
+  if (!marker || !recorded || marker.noisePublicKey === recorded) {
+    handshakeWatch.set(key, { polls: 0, firstAt: now, snapshot });
+    return null;
+  }
+
+  const row = stored ?? fallbackLinkRecord(ownerPubky, peerPubky, receiver, live.role);
+  const budget = await chargeHandshakeBudget(
+    ownerPubky,
+    peerPubky,
+    { reason: 'unestablished-wipe' },
+    expectedOwner,
+  );
+  if (budget.exhausted) return abandonUnestablishedLink(row, expectedOwner);
+
+  await wipeLinkState(row, expectedOwner);
+  handshakeWatch.delete(key);
+  if (alreadyRecovered) return 'error';
+  if (!mayInitiate(intent)) return 'idle';
+  return initiateHandshake(
+    activeSession,
+    receiver,
+    ownerPubky,
+    peerPubky,
+    marker,
+    coerceReceiverPath(receiver.receiverPath),
+    intent,
+    true,
+    expectedOwner,
+  );
+}
+
 async function wipeLinkState(stored: LinkRecord, expectedOwner: PubkyKey): Promise<void> {
   abortIfOwnerChanged(expectedOwner);
   const key = linkKey(stored.ownerPubky, stored.peerPubky);
@@ -2422,6 +2724,7 @@ async function persistInboundWithoutRouting(
   ownerPubky: PubkyKey,
   peerPubky: PubkyKey,
 ): Promise<void> {
+  if (!(await inboundStillAllowed(ownerPubky, peerPubky, ownerPubky))) return;
   const handle = requireEstablishedHandle(ownerPubky, peerPubky);
   const { messages, snapshot } = await PaykitLinkNative.receivePrivateMessages(handle);
   if (messages.length === 0) return;
@@ -2523,6 +2826,7 @@ async function routeGroupStreamItem(input: {
 }
 
 async function holdAsMessageRequest(ownerPubky: PubkyKey, peerPubky: PubkyKey): Promise<void> {
+  if (!(await inboundStillAllowed(ownerPubky, peerPubky, ownerPubky))) return;
   const existing = await StorageService.getMessageRequest(ownerPubky, peerPubky);
   if (existing?.status === 'declined') return;
   const ts = Date.now();
@@ -3453,9 +3757,27 @@ async function commitSignOutWipe(input: {
     }
   };
 
+  let localPk: string | null = null;
+  try {
+    const receiver = await StorageService.getLinkReceiver(input.owner);
+    if (receiver) localPk = await PaykitLinkNative.getReceiverPublicKey(receiver.receiverAlias);
+  } catch {
+    localPk = null;
+  }
+
   await capture(() => StorageService.clearAccountData(input.owner));
   if (input.alias) {
-    await capture(() => PaykitLinkNative.removeReceiverMarker(input.alias!, input.markerPath));
+    await capture(async () => {
+      if (!localPk) return;
+      try {
+        const marker = await PaykitLinkNative.getReceiverMarker(input.owner, input.markerPath);
+        if (marker && marker.noisePublicKey === localPk) {
+          await PaykitLinkNative.removeReceiverMarker(input.alias!, input.markerPath);
+        }
+      } catch {
+        // GET failure or foreign pk: leave the published marker.
+      }
+    });
     await capture(() => PaykitLinkNative.signOutSession(input.alias!));
   }
   const current = KeyStore.getPubky();
@@ -3465,6 +3787,7 @@ async function commitSignOutWipe(input: {
   if (session?.pubky === input.owner) {
     session = null;
   }
+  useReceiverRoleStore.getState().reset();
   const ownerPrefix = `${input.owner}:`;
   for (const key of [...liveHandles.keys()]) {
     if (key.startsWith(ownerPrefix)) liveHandles.delete(key);
@@ -3503,6 +3826,22 @@ async function withQueue<T>(peerPubky: PubkyKey, operation: () => Promise<T>): P
       queues.delete(key);
     }
   }
+}
+
+function resetPeerQueue(ownerPubky: PubkyKey, peerPubky: PubkyKey): void {
+  queues.delete(`${ownerPubky}:${peerPubky}`);
+}
+
+async function inboundStillAllowed(
+  ownerPubky: PubkyKey,
+  peerPubky: PubkyKey,
+  expectedOwner: PubkyKey,
+): Promise<boolean> {
+  abortIfOwnerChanged(expectedOwner);
+  if (!isCurrentOwner(ownerPubky)) return false;
+  const deny = await FollowsImportSettings.resolveDenyState(ownerPubky, peerPubky);
+  abortIfOwnerChanged(expectedOwner);
+  return deny === 'clear';
 }
 
 export type { LinkNativeError };

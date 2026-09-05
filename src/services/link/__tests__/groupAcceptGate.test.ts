@@ -230,6 +230,8 @@ const receiverRow: LinkReceiver = {
   receiverAlias: RECEIVER_ALIAS,
   receiverPath: LINK_RECEIVER_PATH,
   markerPublished: true,
+  receiverRole: 'active' as const,
+  lastSeenOwnMarkerPk: null,
   updatedAt: NOW,
 };
 

@@ -267,6 +267,8 @@ describe('link schema v4 (real SQL via better-sqlite3)', () => {
       receiverAlias: 'recv-1',
       receiverPath: 'hypercolor/wallet',
       markerPublished: true,
+      receiverRole: 'active',
+      lastSeenOwnMarkerPk: null,
     });
 
     const sameEvent = EVENT;
@@ -2487,6 +2489,48 @@ describe('schema v16 — own invoice history and verified-hash unique index', ()
     );
     expect(restored?.invoiceAmountMsat).toBeNull();
     expect(restored?.invoiceExpiresAt).toBeNull();
+  });
+
+  it('adds W1e receiver role columns on v17→v18 and is idempotent on replay', async () => {
+    const db = openMemoryDb();
+    for (const statement of [
+      ...SCHEMA_V1_STATEMENTS,
+      ...SCHEMA_V2_STATEMENTS,
+      ...SCHEMA_V3_STATEMENTS,
+      ...SCHEMA_V4_STATEMENTS,
+      ...SCHEMA_V5_STATEMENTS,
+      ...SCHEMA_V6_STATEMENTS,
+      ...SCHEMA_V7_STATEMENTS,
+      ...SCHEMA_V8_STATEMENTS,
+      ...SCHEMA_V9_STATEMENTS,
+      ...SCHEMA_V10_STATEMENTS,
+      ...SCHEMA_V11_STATEMENTS,
+      ...SCHEMA_V12_STATEMENTS,
+      ...SCHEMA_V13_STATEMENTS,
+      ...SCHEMA_V14_STATEMENTS,
+      ...SCHEMA_V15_STATEMENTS,
+      ...SCHEMA_V16_STATEMENTS,
+      ...SCHEMA_V17_STATEMENTS,
+    ]) {
+      try {
+        db.executeSync(statement);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        if (!/duplicate column name/i.test(message) && !/already exists/i.test(message)) throw err;
+      }
+    }
+    db.executeSync('PRAGMA user_version = 17');
+    setDbForTests(db);
+    await expect(runMigrations(db)).resolves.toBeUndefined();
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(
+      CURRENT_SCHEMA_VERSION,
+    );
+    const cols = db.executeSync('PRAGMA table_info(link_receivers)').rows ?? [];
+    expect(cols.some(row => row.name === 'receiver_role')).toBe(true);
+    expect(cols.some(row => row.name === 'last_seen_own_marker_pk')).toBe(true);
+    const linkCols = db.executeSync('PRAGMA table_info(links)').rows ?? [];
+    expect(linkCols.some(row => row.name === 'last_seen_peer_marker_pk')).toBe(true);
+    await expect(runMigrations(db)).resolves.toBeUndefined();
   });
 
   it('creates own_invoice_hashes when upgrading a W2b-shaped or bare v16 stamp', async () => {

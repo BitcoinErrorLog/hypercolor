@@ -65,6 +65,7 @@ jest.mock('../../StorageService', () => ({
     upsertLink: jest.fn(),
     getLink: jest.fn(),
     getAllLinks: jest.fn(),
+    recordLastSeenPeerMarkerPk: jest.fn(),
     updateLinkSnapshot: jest.fn(),
     getHandshakeBudget: jest.fn(),
     upsertHandshakeBudget: jest.fn(),
@@ -186,6 +187,8 @@ const receiverRow: LinkReceiver = {
   receiverAlias: RECEIVER_ALIAS,
   receiverPath: LINK_RECEIVER_PATH,
   markerPublished: true,
+  receiverRole: 'active' as const,
+  lastSeenOwnMarkerPk: null,
   updatedAt: NOW,
 };
 
@@ -200,6 +203,7 @@ function storedLink(): LinkRecord {
     localReceiverPath: LINK_RECEIVER_PATH,
     remoteReceiverPath: LINK_RECEIVER_PATH,
     consecutiveFailures: 0,
+    lastSeenPeerMarkerPk: null,
     createdAt: NOW,
     updatedAt: NOW,
   };

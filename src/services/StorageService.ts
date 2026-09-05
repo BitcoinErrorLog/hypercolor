@@ -558,18 +558,23 @@ export const StorageService = {
     await ownedWrite(receiver.ownerPubky, db => {
       db.executeSync(
         `INSERT INTO link_receivers
-        (owner_pubky, receiver_alias, receiver_path, marker_published, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?)
+        (owner_pubky, receiver_alias, receiver_path, marker_published,
+         receiver_role, last_seen_own_marker_pk, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(owner_pubky) DO UPDATE SET
          receiver_alias   = excluded.receiver_alias,
          receiver_path    = excluded.receiver_path,
          marker_published = excluded.marker_published,
+         receiver_role    = excluded.receiver_role,
+         last_seen_own_marker_pk = excluded.last_seen_own_marker_pk,
          updated_at       = excluded.updated_at`,
         [
           receiver.ownerPubky,
           receiver.receiverAlias,
           receiver.receiverPath,
           receiver.markerPublished ? 1 : 0,
+          receiver.receiverRole ?? 'active',
+          receiver.lastSeenOwnMarkerPk ?? null,
           now(),
           now(),
         ],
@@ -601,8 +606,8 @@ export const StorageService = {
         `INSERT INTO links
           (owner_pubky, peer_pubky, role, status, snapshot,
            remote_noise_public_key, local_receiver_path, remote_receiver_path,
-           consecutive_failures, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           consecutive_failures, last_seen_peer_marker_pk, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(owner_pubky, peer_pubky) DO UPDATE SET
            role                    = excluded.role,
            status                  = excluded.status,
@@ -611,6 +616,7 @@ export const StorageService = {
            local_receiver_path     = excluded.local_receiver_path,
            remote_receiver_path    = excluded.remote_receiver_path,
            consecutive_failures    = excluded.consecutive_failures,
+           last_seen_peer_marker_pk = COALESCE(excluded.last_seen_peer_marker_pk, last_seen_peer_marker_pk),
            updated_at              = excluded.updated_at`,
         [
           link.ownerPubky,
@@ -622,9 +628,29 @@ export const StorageService = {
           link.localReceiverPath,
           link.remoteReceiverPath,
           link.consecutiveFailures,
+          link.lastSeenPeerMarkerPk ?? null,
           now(),
           now(),
         ],
+      );
+    });
+  },
+
+  /**
+   * Records the last GETed peer marker pk without bumping `links.updated_at`.
+   * Age-out of non-ready handshakes must use real inactivity, not poll traffic.
+   */
+  async recordLastSeenPeerMarkerPk(
+    ownerPubky: PubkyKey,
+    peerPubky: PubkyKey,
+    noisePublicKey: string,
+  ): Promise<void> {
+    await ownedWrite(ownerPubky, db => {
+      db.executeSync(
+        `UPDATE links
+         SET last_seen_peer_marker_pk = ?
+         WHERE owner_pubky = ? AND peer_pubky = ?`,
+        [noisePublicKey, ownerPubky, peerPubky],
       );
     });
   },
@@ -3245,11 +3271,15 @@ function insertLinkMessage(db: SqlExecutor, message: LinkMessage): void {
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function rowToLinkReceiver(row: any): LinkReceiver {
+  const role = row.receiver_role === 'standby' ? 'standby' : 'active';
   return {
     ownerPubky: row.owner_pubky,
     receiverAlias: row.receiver_alias,
     receiverPath: row.receiver_path,
     markerPublished: row.marker_published === 1,
+    receiverRole: role,
+    lastSeenOwnMarkerPk:
+      typeof row.last_seen_own_marker_pk === 'string' ? row.last_seen_own_marker_pk : null,
     updatedAt: row.updated_at,
   };
 }
@@ -3266,6 +3296,8 @@ function rowToLink(row: any): LinkRecord {
     localReceiverPath: row.local_receiver_path,
     remoteReceiverPath: row.remote_receiver_path,
     consecutiveFailures: row.consecutive_failures,
+    lastSeenPeerMarkerPk:
+      typeof row.last_seen_peer_marker_pk === 'string' ? row.last_seen_peer_marker_pk : null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };

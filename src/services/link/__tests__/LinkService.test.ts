@@ -111,6 +111,7 @@ jest.mock('../../StorageService', () => ({
     upsertLink: jest.fn(),
     getLink: jest.fn(),
     getAllLinks: jest.fn(),
+    recordLastSeenPeerMarkerPk: jest.fn(),
     getDueHandshakingLinks: jest.fn(),
     updateLinkSnapshot: jest.fn(),
     getHandshakeBudget: jest.fn(),
@@ -260,6 +261,8 @@ const receiverRow: LinkReceiver = {
   receiverAlias: RECEIVER_ALIAS,
   receiverPath: LINK_RECEIVER_PATH,
   markerPublished: true,
+  receiverRole: 'active',
+  lastSeenOwnMarkerPk: null,
   updatedAt: NOW,
 };
 
@@ -274,6 +277,7 @@ function storedLink(overrides: Partial<LinkRecord> = {}): LinkRecord {
     localReceiverPath: LINK_RECEIVER_PATH,
     remoteReceiverPath: LINK_RECEIVER_PATH,
     consecutiveFailures: 0,
+    lastSeenPeerMarkerPk: null,
     createdAt: Date.now(),
     updatedAt: Date.now(),
     ...overrides,
@@ -451,9 +455,9 @@ describe('LinkService', () => {
     mockedNative.closeLink.mockResolvedValue(undefined);
     mockedNative.probeInboundLink.mockResolvedValue({ result: 'none' });
     mockedNative.getReceiverPublicKey.mockResolvedValue(PEER_NOISE);
-    mockedNative.getReceiverMarker.mockResolvedValue({
-      noisePublicKey: PEER_NOISE,
-      capabilitiesJson: '{}',
+    mockedNative.getReceiverMarker.mockImplementation(async (who: string) => {
+      if (who === OWNER) return null;
+      return { noisePublicKey: PEER_NOISE, capabilitiesJson: '{}' };
     });
     mockedKeyStore.getPubky.mockReturnValue(OWNER);
     mockedKeyStore.isInitialized.mockReturnValue(true);
@@ -476,6 +480,7 @@ describe('LinkService', () => {
     wireSignOutMarkerMocks(mockedKeyStore, mockedStorage);
     mockedStorage.getLinkReceiver.mockResolvedValue(receiverRow);
     mockedStorage.getLink.mockResolvedValue(null);
+    mockedStorage.recordLastSeenPeerMarkerPk.mockResolvedValue(undefined);
     mockedStorage.getAllLinks.mockResolvedValue([]);
     mockedStorage.getDueHandshakingLinks.mockResolvedValue([]);
     mockedStorage.getHandshakeBudget.mockResolvedValue(null);
@@ -537,6 +542,19 @@ describe('LinkService', () => {
   });
 
   describe('session', () => {
+    it('does not delete a foreign receiver marker on sign-out', async () => {
+      mockedNative.getReceiverPublicKey.mockResolvedValue('local-noise-pk');
+      mockedNative.getReceiverMarker.mockResolvedValue({
+        noisePublicKey: 'foreign-noise-pk',
+        capabilitiesJson: '{}',
+      });
+      mockedNative.removeReceiverMarker.mockClear();
+
+      await LinkService.clearSession();
+
+      expect(mockedNative.removeReceiverMarker).not.toHaveBeenCalled();
+    });
+
     it('persists the session alias on signinWithSecret (dev/e2e path)', () => {
       expect(mockedNative.signinWithSecret).toHaveBeenCalledWith('signin-secret-hex');
       expect(mockedNative.adoptAuthSession).toHaveBeenCalledWith(SESSION_ALIAS);
@@ -812,6 +830,7 @@ describe('LinkService', () => {
         pubky: OWNER,
         receiverPath: LINK_RECEIVER_PATH,
         noisePublicKey: 'noise-pk',
+        receiverRole: 'active',
       });
     });
 
@@ -969,6 +988,7 @@ describe('LinkService', () => {
         pubky: OWNER,
         receiverPath: LINK_RECEIVER_PATH,
         noisePublicKey: 'noise-healed',
+        receiverRole: 'active',
       });
     });
 
@@ -1086,6 +1106,7 @@ describe('LinkService', () => {
         pubky: OWNER,
         receiverPath: LINK_RECEIVER_PATH,
         noisePublicKey: 'existing-noise',
+        receiverRole: 'active',
       });
       expect(mockedNative.stopAuthKeepalive).toHaveBeenCalledWith('flow-1');
     });
@@ -1140,6 +1161,7 @@ describe('LinkService', () => {
         pubky: OWNER,
         receiverPath: LINK_RECEIVER_PATH,
         noisePublicKey: 'existing-noise',
+        receiverRole: 'active',
       });
       expect(mockedNative.signOutSession).not.toHaveBeenCalled();
       expect(mockedKeyStore.setPubky).toHaveBeenCalledWith(OWNER);
@@ -1254,6 +1276,7 @@ describe('LinkService', () => {
         localReceiverPath: LINK_RECEIVER_PATH,
         remoteReceiverPath: LINK_RECEIVER_PATH,
         consecutiveFailures: 0,
+        lastSeenPeerMarkerPk: PEER_NOISE,
       });
       expect(mockedStorage.updateLinkSnapshot).toHaveBeenCalledWith(
         OWNER,
@@ -1327,6 +1350,7 @@ describe('LinkService', () => {
         localReceiverPath: LINK_RECEIVER_PATH,
         remoteReceiverPath: LINK_RECEIVER_PATH,
         consecutiveFailures: 0,
+        lastSeenPeerMarkerPk: PEER_NOISE,
       });
     });
 
@@ -1387,26 +1411,82 @@ describe('LinkService', () => {
       expect(mockedNative.initiateLink).not.toHaveBeenCalled();
     });
 
-    it('republishes the local receiver marker when it no longer matches homeserver', async () => {
-      const stalePublished = 'stale-noise-pk';
+    it('does not publish when own marker GET succeeds with a foreign pk', async () => {
       mockedNative.getReceiverPublicKey.mockResolvedValue('local-noise-pk');
       mockedNative.getReceiverMarker.mockImplementation(async (who: string) => {
         if (who === OWNER) {
-          return { noisePublicKey: stalePublished, capabilitiesJson: '{}' };
+          return { noisePublicKey: 'foreign-noise-pk', capabilitiesJson: '{}' };
         }
         return { noisePublicKey: PEER_NOISE, capabilitiesJson: '{}' };
       });
-      mockedNative.publishReceiverMarker.mockResolvedValue(undefined);
       mockedNative.probeInboundLink.mockResolvedValue({ result: 'none' });
 
       await expect(LinkService.syncInbox([PEER])).resolves.toEqual([]);
 
-      expect(mockedNative.publishReceiverMarker).toHaveBeenCalledWith(
-        SESSION_ALIAS,
-        RECEIVER_ALIAS,
-        LINK_RECEIVER_PATH,
+      expect(mockedNative.publishReceiverMarker).not.toHaveBeenCalled();
+      expect(mockedStorage.upsertLinkReceiver).toHaveBeenCalledWith(
+        expect.objectContaining({ receiverRole: 'standby' }),
       );
-      expect(mockedNative.probeInboundLink).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not publish when own marker GET fails', async () => {
+      mockedNative.getReceiverPublicKey.mockResolvedValue('local-noise-pk');
+      mockedNative.getReceiverMarker.mockImplementation(async (who: string) => {
+        if (who === OWNER) {
+          throw { code: 'network', message: 'offline' };
+        }
+        return { noisePublicKey: PEER_NOISE, capabilitiesJson: '{}' };
+      });
+      mockedNative.probeInboundLink.mockResolvedValue({ result: 'none' });
+
+      await expect(LinkService.syncInbox([PEER])).resolves.toEqual([]);
+
+      expect(mockedNative.publishReceiverMarker).not.toHaveBeenCalled();
+    });
+
+    it('takeover publishes exactly once', async () => {
+      await LinkService.signinWithSecret('ab'.repeat(32));
+      mockedNative.publishReceiverMarker.mockResolvedValue(undefined);
+      mockedNative.getReceiverPublicKey.mockResolvedValue('local-noise-pk');
+      await expect(LinkService.takeoverReceiver()).resolves.toEqual(
+        expect.objectContaining({ receiverRole: 'active', noisePublicKey: 'local-noise-pk' }),
+      );
+      expect(mockedNative.publishReceiverMarker).toHaveBeenCalledTimes(1);
+    });
+
+    it('replaces a non-ready handshake when a valid new msg1 is probed', async () => {
+      mockedStorage.getLink.mockResolvedValue(
+        storedLink({ role: 'initiator', status: 'handshaking' }),
+      );
+      mockedNative.probeInboundLink.mockResolvedValue({
+        result: 'pending',
+        linkId: 'fresh-msg1',
+        snapshot: 'fresh-snap',
+      });
+      mockedStorage.deleteLink.mockResolvedValue(undefined);
+
+      await expect(LinkService.syncInbox([PEER])).resolves.toEqual([]);
+
+      expect(mockedStorage.deleteLink).toHaveBeenCalledWith(OWNER, PEER);
+      expect(mockedStorage.upsertLink).toHaveBeenCalledWith(
+        expect.objectContaining({
+          role: 'responder',
+          status: 'handshaking',
+          snapshot: 'fresh-snap',
+        }),
+      );
+    });
+
+    it('does not drop an established link when a new msg1 is present', async () => {
+      mockedStorage.getLink.mockResolvedValue(
+        storedLink({ status: 'established', role: 'responder' }),
+      );
+      mockedNative.restoreLink.mockResolvedValue({ linkId: 'est-live' });
+
+      await expect(LinkService.syncInbox([PEER])).resolves.toEqual([]);
+
+      expect(mockedStorage.deleteLink).not.toHaveBeenCalled();
+      expect(mockedNative.probeInboundLink).not.toHaveBeenCalled();
     });
 
     it('probes the same peer again after a prior none (native must not cache none)', async () => {
@@ -1449,12 +1529,7 @@ describe('LinkService', () => {
 
       await expect(LinkService.ensureLinkWith(PEER)).resolves.toBe('handshaking-responder');
 
-      expect(mockedStorage.updateLinkSnapshot).toHaveBeenCalledWith(
-        OWNER,
-        PEER,
-        'hs-3',
-        'handshaking',
-      );
+      expect(mockedStorage.deleteLink).toHaveBeenCalledWith(OWNER, PEER);
       expect(mockedStorage.upsertLink).toHaveBeenCalledWith(
         expect.objectContaining({
           role: 'responder',
@@ -1462,6 +1537,7 @@ describe('LinkService', () => {
           snapshot: 'crossed-2',
         }),
       );
+      expect(mockedNative.advanceHandshake).not.toHaveBeenCalled();
     });
 
     it('keeps the lexicographically larger pubky on its own initiator handshake', async () => {
@@ -1486,29 +1562,30 @@ describe('LinkService', () => {
 
       await expect(LinkService.ensureLinkWith(smallerPeer)).resolves.toBe('handshaking-initiator');
 
-      expect(mockedNative.probeInboundLink).not.toHaveBeenCalled();
+      expect(mockedNative.advanceHandshake).toHaveBeenCalled();
     });
   });
 
   describe('stale non-ready link vs fresh msg1', () => {
-    it('keeps advancing a young stored handshake instead of probing a leftover msg1', async () => {
+    it('replaces a young stored non-ready handshake when a valid new msg1 is probed', async () => {
       mockedStorage.getLink.mockResolvedValue(
         storedLink({ role: 'responder', status: 'handshaking', snapshot: 'old-channel' }),
       );
-      mockedNative.restoreHandshake.mockResolvedValue({ linkId: 'old-hs', status: 'pending' });
-      mockedNative.advanceHandshake.mockResolvedValue({ status: 'pending', snapshot: 'old-adv' });
       mockedNative.probeInboundLink.mockResolvedValue({
         result: 'pending',
         linkId: 'fresh-hs',
         snapshot: 'new-channel',
       });
+      mockedStorage.deleteLink.mockResolvedValue(undefined);
 
       await expect(LinkService.syncInbox([PEER])).resolves.toEqual([]);
 
-      expect(mockedNative.restoreHandshake).toHaveBeenCalled();
-      expect(mockedNative.advanceHandshake).toHaveBeenCalled();
-      expect(mockedNative.probeInboundLink).not.toHaveBeenCalled();
-      expect(mockedStorage.deleteLink).not.toHaveBeenCalled();
+      expect(mockedNative.probeInboundLink).toHaveBeenCalled();
+      expect(mockedStorage.deleteLink).toHaveBeenCalledWith(OWNER, PEER);
+      expect(mockedNative.restoreHandshake).not.toHaveBeenCalled();
+      expect(mockedStorage.upsertLink).toHaveBeenCalledWith(
+        expect.objectContaining({ snapshot: 'new-channel', role: 'responder' }),
+      );
     });
 
     it('discards a stale responder handshake then adopts a freshly decrypted msg1', async () => {
@@ -3004,6 +3081,13 @@ describe('LinkService', () => {
       });
     }
 
+    function probeNoneWhileStored(state: { link: () => LinkRecord | null }): void {
+      mockedNative.probeInboundLink.mockImplementation(async () => {
+        if (state.link()) return { result: 'none' };
+        return { result: 'pending', linkId: 'hs-hostile', snapshot: 'hostile-msg1' };
+      });
+    }
+
     it('keeps the pending budget when a protocol wipe is followed by re-adoption', async () => {
       const state = givenResponderHandshake();
       mockedNative.advanceHandshake.mockResolvedValue({ status: 'pending', snapshot: 'b-msg2b' });
@@ -3017,7 +3101,7 @@ describe('LinkService', () => {
       // rewritten message 1 — which is the exploit's whole cycle.
       jest.spyOn(Date, 'now').mockReturnValue(state.budget()!.nextAdvanceAt);
       mockedNative.advanceHandshake.mockRejectedValue({ code: 'protocol', message: 'bad msg3' });
-      givenHostileInboundMessage1();
+      probeNoneWhileStored(state);
 
       await LinkService.advancePendingLinks();
 
@@ -3032,7 +3116,7 @@ describe('LinkService', () => {
     it('runs the budget down to exhaustion across repeated wipe/re-adopt cycles', async () => {
       const state = givenResponderHandshake();
       mockedNative.advanceHandshake.mockRejectedValue({ code: 'protocol', message: 'bad msg3' });
-      givenHostileInboundMessage1();
+      probeNoneWhileStored(state);
 
       // Each cycle is a wipe plus a re-adoption, the cheapest attack loop.
       for (let cycle = 0; cycle < HANDSHAKE_PENDING_ADVANCE_LIMIT; cycle += 1) {
@@ -3058,7 +3142,7 @@ describe('LinkService', () => {
     it('charges every wipe even inside one backoff window', async () => {
       const state = givenResponderHandshake();
       mockedNative.advanceHandshake.mockRejectedValue({ code: 'protocol', message: 'bad msg3' });
-      givenHostileInboundMessage1();
+      probeNoneWhileStored(state);
       jest.spyOn(Date, 'now').mockReturnValue(NOW);
 
       // A malformed message 3 forces a wipe on demand, and re-adoption runs off
@@ -3084,7 +3168,8 @@ describe('LinkService', () => {
 
       await LinkService.syncInbox([PEER]);
 
-      expect(mockedNative.getReceiverMarker).not.toHaveBeenCalled();
+      expect(mockedNative.getReceiverMarker).toHaveBeenCalledWith(OWNER, LINK_RECEIVER_PATH);
+      expect(mockedNative.getReceiverMarker).not.toHaveBeenCalledWith(PEER, LINK_RECEIVER_PATH);
       expect(mockedNative.probeInboundLink).not.toHaveBeenCalled();
       expect(mockedStorage.upsertLink).not.toHaveBeenCalled();
       expect(mockedNative.initiateLink).not.toHaveBeenCalled();
@@ -3307,6 +3392,11 @@ describe('LinkService', () => {
       mockedNative.removeReceiverMarker.mockClear();
       mockedNative.signOutSession.mockClear();
       mockedNative.clearAllNativeSecrets.mockClear();
+      mockedNative.getReceiverPublicKey.mockResolvedValue(PEER_NOISE);
+      mockedNative.getReceiverMarker.mockResolvedValue({
+        noisePublicKey: PEER_NOISE,
+        capabilitiesJson: '{}',
+      });
       mockedStorage.listDeliveryQueue.mockResolvedValue([
         {
           id: 'q-mine',

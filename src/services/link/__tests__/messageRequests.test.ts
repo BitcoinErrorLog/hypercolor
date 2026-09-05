@@ -1,4 +1,8 @@
-import { LINK_INBOX_PEER_TIMEOUT_MS, LinkService } from '../LinkService';
+import {
+  LINK_INBOX_PEER_TIMEOUT_MS,
+  LinkService,
+  linkQueueEntryCountForTests,
+} from '../LinkService';
 import { PaykitLinkNative } from '../PaykitLinkNative';
 import { StorageService } from '../../StorageService';
 import { KeyStore } from '../../KeyStore';
@@ -56,6 +60,7 @@ jest.mock('../../StorageService', () => ({
     upsertLink: jest.fn(),
     getLink: jest.fn(),
     getAllLinks: jest.fn(),
+    recordLastSeenPeerMarkerPk: jest.fn(),
     updateLinkSnapshot: jest.fn(),
     getHandshakeBudget: jest.fn(),
     upsertHandshakeBudget: jest.fn(),
@@ -165,6 +170,8 @@ const receiverRow: LinkReceiver = {
   receiverAlias: RECEIVER_ALIAS,
   receiverPath: LINK_RECEIVER_PATH,
   markerPublished: true,
+  receiverRole: 'active' as const,
+  lastSeenOwnMarkerPk: null,
   updatedAt: NOW,
 };
 
@@ -319,9 +326,11 @@ describe('LinkService message requests', () => {
     try {
       const done = LinkService.syncInbox([PEER]);
       await jest.advanceTimersByTimeAsync(LINK_INBOX_PEER_TIMEOUT_MS);
+      await jest.advanceTimersByTimeAsync(LINK_INBOX_PEER_TIMEOUT_MS);
       await expect(done).resolves.toEqual([]);
       expect(mockedNative.probeInboundLink).not.toHaveBeenCalled();
       expect(mockedStorage.upsertMessageRequest).not.toHaveBeenCalled();
+      expect(linkQueueEntryCountForTests()).toBe(0);
     } finally {
       jest.useRealTimers();
     }
