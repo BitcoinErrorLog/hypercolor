@@ -768,10 +768,10 @@ class PaykitLinkModule: NSObject, RCTInvalidating {
                 do {
                     step = try await handshake.advance()
                 } catch is CancellationError {
-                    handshake.close()
+                    // ChatLinkHandshake has no close(); UniFFI deinit frees the FFI pointer (ARC).
                     throw CancellationError()
                 } catch {
-                    handshake.close()
+                    // ChatLinkHandshake has no close(); UniFFI deinit frees the FFI pointer (ARC).
                     return ["result": "none"]
                 }
                 if step.complete, let link = step.link {
@@ -784,7 +784,7 @@ class PaykitLinkModule: NSObject, RCTInvalidating {
                     )
                     let snapshot = try await link.snapshot()
                     let encrypted = try PaykitSnapshotAead.encrypt(snapshot, context: context)
-                    handshake.close()
+                    // ChatLinkHandshake has no close(); UniFFI deinit frees the FFI pointer (ARC).
                     let linkId = UUID().uuidString.lowercased()
                     self.lock.withLock {
                         self.handles[linkId] = LinkHandle(kind: .link(link), context: context)
@@ -797,7 +797,7 @@ class PaykitLinkModule: NSObject, RCTInvalidating {
                 }
                 let after = try await handshake.snapshot()
                 if before == after {
-                    handshake.close()
+                    // ChatLinkHandshake has no close(); UniFFI deinit frees the FFI pointer (ARC).
                     return ["result": "none"]
                 }
                 let context = SnapshotContext(
@@ -818,7 +818,7 @@ class PaykitLinkModule: NSObject, RCTInvalidating {
                     "snapshot": encrypted,
                 ]
             } catch {
-                handshake.close()
+                // ChatLinkHandshake has no close(); UniFFI deinit frees the FFI pointer (ARC).
                 throw error
             }
         }
