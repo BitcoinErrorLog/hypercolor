@@ -250,6 +250,12 @@ function mayInitiate(intent: LinkIntent): boolean {
   return intent !== 'background';
 }
 
+/** Same `ready` predicate the send path uses: live established handle or snapshot. */
+function isReadyLinkPredicate(record: LinkRecord, live: LiveHandle | undefined): boolean {
+  if (live?.status === 'established') return true;
+  return record.status === 'established' && record.snapshot.length > 0;
+}
+
 let session: ActiveSession | null = null;
 let restoreInFlight: Promise<SessionLookup> | null = null;
 const liveHandles = new Map<string, LiveHandle>();
@@ -585,8 +591,9 @@ export const LinkService = {
   },
 
   /**
-   * Read-only persisted Encrypted Link state for display. Does not
-   * initiate or resume a handshake.
+   * Read-only Encrypted Link state for display. Does not initiate or resume
+   * a handshake. `ready` matches the send-path predicate: a live established
+   * handle or a persisted snapshot, not a bare `established` row.
    */
   async getLinkStatus(peerPubky: PubkyKey): Promise<LinkStatus | null> {
     const owner = KeyStore.getPubky();
@@ -594,7 +601,8 @@ export const LinkService = {
     try {
       const record = await StorageService.getLink(owner, peerPubky);
       if (!record) return null;
-      if (record.status === 'established') return 'ready';
+      const live = liveHandles.get(linkKey(owner, peerPubky));
+      if (isReadyLinkPredicate(record, live)) return 'ready';
       return record.role === 'initiator' ? 'handshaking-initiator' : 'handshaking-responder';
     } catch {
       return 'error';
@@ -1525,8 +1533,9 @@ async function publishTakeoverReceiver(
  * After this device publishes its receiver pk, any handshake started while
  * standby was answered against the previously published (often dead) key.
  * Wipe those unestablished rows and their outbox slots, then re-initiate.
- * The wipe charges the handshake budget once; the follow-up uses `user`
- * intent so re-initiate does not charge again.
+ * Takeover is explicit user intent: clear any exhausted budget first so a
+ * long-standby peer is recovered rather than abandoned (queued sends stay
+ * queued). The follow-up uses `user` intent so re-initiate does not charge.
  */
 async function restartUnestablishedLinksAfterTakeover(ownerPubky: PubkyKey): Promise<void> {
   const links = await StorageService.getAllLinks(ownerPubky);
@@ -1539,16 +1548,8 @@ async function restartUnestablishedLinksAfterTakeover(ownerPubky: PubkyKey): Pro
         const latest = await StorageService.getLink(ownerPubky, link.peerPubky);
         abortIfOwnerChanged(ownerPubky);
         if (!latest || latest.status === 'established') return;
-        const budget = await chargeHandshakeBudget(
-          ownerPubky,
-          link.peerPubky,
-          { reason: 'unestablished-wipe' },
-          ownerPubky,
-        );
-        if (budget.exhausted) {
-          await abandonUnestablishedLink(latest, ownerPubky);
-          return;
-        }
+        await StorageService.clearHandshakeBudget(ownerPubky, link.peerPubky);
+        abortIfOwnerChanged(ownerPubky);
         await wipeLinkState(latest, ownerPubky);
         await ensureLinkLocked(link.peerPubky, 'user', true, ownerPubky);
       });
@@ -1766,6 +1767,10 @@ async function ensureLinkLocked(
     return restored;
   }
 
+  const latestReceiver = await StorageService.getLinkReceiver(ownerPubky);
+  abortIfOwnerChanged(expectedOwner);
+  if (latestReceiver?.receiverRole === 'standby') return 'standby-blocked';
+
   if (intent !== 'user' && (await isHandshakeBudgetExhausted(ownerPubky, peerPubky))) {
     abortIfOwnerChanged(expectedOwner);
     return 'idle';
@@ -1892,9 +1897,9 @@ async function ensureLinkLocked(
 
   if (!mayInitiate(intent)) return 'idle';
 
-  const latestReceiver = await StorageService.getLinkReceiver(ownerPubky);
+  const initiateReceiver = await StorageService.getLinkReceiver(ownerPubky);
   abortIfOwnerChanged(expectedOwner);
-  if (latestReceiver?.receiverRole === 'standby') return 'standby-blocked';
+  if (initiateReceiver?.receiverRole === 'standby') return 'standby-blocked';
 
   abortIfOwnerChanged(expectedOwner);
   return initiateHandshake(

@@ -1211,6 +1211,14 @@ describe('LinkService', () => {
       await expect(LinkService.getLinkStatus(PEER)).resolves.toBe('handshaking-initiator');
       expect(mockedNative.advanceHandshake).not.toHaveBeenCalled();
     });
+
+    it('does not treat a bare established row without snapshot as ready', async () => {
+      mockedStorage.getLink.mockResolvedValue(
+        storedLink({ status: 'established', snapshot: '', role: 'initiator' }),
+      );
+      await expect(LinkService.getLinkStatus(PEER)).resolves.toBe('handshaking-initiator');
+      expect(mockedNative.restoreLink).not.toHaveBeenCalled();
+    });
   });
 
   describe('ensureLinkWith — provisioning gates', () => {
@@ -1508,8 +1516,68 @@ describe('LinkService', () => {
       expect(mockedNative.clearLinkOutbox).toHaveBeenCalledTimes(1);
       expect(mockedStorage.deleteLink).toHaveBeenCalledWith(OWNER, PEER);
       expect(mockedNative.initiateLink).toHaveBeenCalledTimes(1);
-      expect(mockedStorage.upsertHandshakeBudget).toHaveBeenCalledTimes(1);
+      expect(mockedStorage.clearHandshakeBudget).toHaveBeenCalledWith(OWNER, PEER);
       expect(receiver.receiverRole).toBe('active');
+
+      const message = await LinkService.sendDm(PEER, 'hello');
+      expect(message.deliveryState).toBe('sent');
+      expect(mockedNative.sendPrivateMessageJson).toHaveBeenCalled();
+    });
+
+    it('takeover of a budget-exhausted peer resets budget, re-initiates, and keeps queued sends', async () => {
+      let receiver: LinkReceiver = {
+        ...receiverRow,
+        receiverRole: 'standby',
+        lastSeenOwnMarkerPk: 'foreign-noise-pk',
+      };
+      mockedStorage.getLinkReceiver.mockImplementation(async () => receiver);
+      mockedStorage.upsertLinkReceiver.mockImplementation(async row => {
+        receiver = { ...receiver, ...row };
+      });
+      let link: LinkRecord | null = storedLink({ status: 'handshaking', snapshot: 'hs-dead' });
+      let budget: HandshakeBudget | null = storedBudget({
+        pendingAdvances: HANDSHAKE_PENDING_ADVANCE_LIMIT,
+        exhaustedAt: NOW,
+      });
+      mockedStorage.getAllLinks.mockImplementation(async owner =>
+        owner === OWNER && link ? [link] : [],
+      );
+      mockedStorage.getLink.mockImplementation(async (owner, peer) =>
+        owner === OWNER && peer === PEER ? link : null,
+      );
+      mockedStorage.upsertLink.mockImplementation(async record => {
+        link = storedLink(record);
+      });
+      mockedStorage.updateLinkSnapshot.mockImplementation(async (_o, _p, snapshot, status) => {
+        if (link) link = storedLink({ ...link, snapshot, status });
+      });
+      mockedStorage.deleteLink.mockImplementation(async () => {
+        link = null;
+      });
+      mockedStorage.getHandshakeBudget.mockImplementation(async (owner, peer) =>
+        owner === OWNER && peer === PEER ? budget : null,
+      );
+      mockedStorage.clearHandshakeBudget.mockImplementation(async (owner, peer) => {
+        if (owner === OWNER && peer === PEER) budget = null;
+      });
+      givenQueuedDm();
+      mockedNative.clearLinkOutbox.mockResolvedValue(0);
+      mockedNative.publishReceiverMarker.mockResolvedValue(undefined);
+      mockedNative.getReceiverPublicKey.mockResolvedValue('local-noise-pk');
+      mockedNative.initiateLink.mockResolvedValue({ linkId: 'hs-new', snapshot: 'hs-new-1' });
+      mockedNative.advanceHandshake.mockResolvedValue({
+        status: 'established',
+        snapshot: 'est-after-takeover',
+      });
+      mockedNative.restoreLink.mockResolvedValue({ linkId: 'handle-ready' });
+      mockedNative.sendPrivateMessageJson.mockResolvedValue({ snapshot: 'est-sent' });
+
+      await LinkService.takeoverReceiver();
+
+      expect(budget).toBeNull();
+      expect(mockedStorage.clearHandshakeBudget).toHaveBeenCalledWith(OWNER, PEER);
+      expect(mockedStorage.failLinkMessageAndDequeue).not.toHaveBeenCalled();
+      expect(mockedNative.initiateLink).toHaveBeenCalledTimes(1);
 
       const message = await LinkService.sendDm(PEER, 'hello');
       expect(message.deliveryState).toBe('sent');
@@ -1948,6 +2016,25 @@ describe('LinkService', () => {
       const finalizeOrder = mockedStorage.finalizeLinkSend.mock.invocationCallOrder[0]!;
       expect(persistOrder).toBeLessThan(sendOrder);
       expect(sendOrder).toBeLessThan(finalizeOrder);
+    });
+
+    it('blocks sendDm on standby when a handshaking row already exists, without queuing', async () => {
+      mockedStorage.getLinkReceiver.mockResolvedValue({
+        ...receiverRow,
+        receiverRole: 'standby',
+      });
+      mockedStorage.getLink.mockResolvedValue(
+        storedLink({ status: 'handshaking', role: 'initiator', snapshot: 'hs-wedge' }),
+      );
+
+      await expect(LinkService.sendDm(PEER, 'hello')).rejects.toMatchObject({
+        code: 'standby-not-receiving',
+        message: COPY.standbyComposerNotice,
+      });
+      expect(mockedNative.restoreHandshake).not.toHaveBeenCalled();
+      expect(mockedNative.advanceHandshake).not.toHaveBeenCalled();
+      expect(mockedNative.initiateLink).not.toHaveBeenCalled();
+      expect(mockedStorage.persistLinkSendIntent).not.toHaveBeenCalled();
     });
 
     it('blocks sendDm on standby when no link is established, without queuing', async () => {

@@ -56,6 +56,8 @@ export function StandbyBanner(): React.ReactElement | null {
         <Button
           testID={showReenable ? 'reenableTakeover' : 'standbyTakeover'}
           label={busy ? 'Taking over…' : primary}
+          busy={busy}
+          disabled={busy}
           onPress={onTakeover}
         />
         <Button

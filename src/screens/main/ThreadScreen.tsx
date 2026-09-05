@@ -584,6 +584,9 @@ export function ThreadScreenContent({
   const linkLabel = formatLinkStatus(linkStatus);
   const receiverRole = useReceiverRoleStore(s => s.role);
   const standbyBlocksNewChat = receiverRole === 'standby' && linkStatus !== 'ready';
+  const [takeoverBusy, setTakeoverBusy] = useState(false);
+  const showQueuedSubtitle =
+    linkStatus === 'handshaking-initiator' || linkStatus === 'handshaking-responder';
 
   const renderItem = useCallback(
     ({ item, index }: { item: ThreadItem; index: number }) => {
@@ -779,7 +782,7 @@ export function ThreadScreenContent({
               {linkLabel}
             </Text>
           ) : null}
-          {linkStatus === 'handshaking-initiator' ? (
+          {showQueuedSubtitle ? (
             <Text testID="threadQueuedWaiting" style={styles.linkStatus}>
               {standbyBlocksNewChat ? COPY.queuedStandbySubtitle : COPY.queuedWaitingSubtitle}
             </Text>
@@ -842,9 +845,11 @@ export function ThreadScreenContent({
                   accessibilityRole="button"
                   accessibilityLabel={COPY.standbyPrimary}
                   hitSlop={HIT_SLOP_44}
+                  disabled={takeoverBusy}
                   onPress={() =>
                     confirmReceiverTakeover({
                       mode: 'takeover',
+                      onBusy: setTakeoverBusy,
                       onSuccess: onTakeoverSuccess,
                     })
                   }

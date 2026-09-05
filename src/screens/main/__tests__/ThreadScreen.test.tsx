@@ -326,4 +326,16 @@ describe('ThreadScreenContent blocked send', () => {
       tree.unmount();
     });
   });
+
+  it('shows the standby queued subtitle for a non-established responder link', async () => {
+    useReceiverRoleStore.getState().setRole('standby');
+    const tree = await render(
+      <ThreadScreenContent {...contentProps({ linkStatus: 'handshaking-responder' })} />,
+    );
+    expect(JSON.stringify(tree.toJSON())).toContain(COPY.queuedStandbySubtitle);
+    expect(JSON.stringify(tree.toJSON())).not.toContain(COPY.queuedWaitingSubtitle);
+    await act(async () => {
+      tree.unmount();
+    });
+  });
 });
