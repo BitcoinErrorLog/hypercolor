@@ -762,55 +762,65 @@ class PaykitLinkModule: NSObject, RCTInvalidating {
                 localReceiverPath: args.localReceiverPath,
                 remoteReceiverPath: args.remoteReceiverPath
             )
-            let before = try await handshake.snapshot()
-            let step: ChatHandshakeStep
             do {
-                step = try await handshake.advance()
-            } catch {
-                handshake.close()
-                return ["result": "none"]
-            }
-            if step.complete, let link = step.link {
+                let before = try await handshake.snapshot()
+                let step: ChatHandshakeStep
+                do {
+                    step = try await handshake.advance()
+                } catch is CancellationError {
+                    handshake.close()
+                    throw CancellationError()
+                } catch {
+                    handshake.close()
+                    return ["result": "none"]
+                }
+                if step.complete, let link = step.link {
+                    let context = SnapshotContext(
+                        ownerPubky: args.session.pubky(),
+                        peerPubky: args.peerPubky,
+                        localReceiverPath: args.localReceiverPath,
+                        remoteReceiverPath: args.remoteReceiverPath,
+                        role: .link
+                    )
+                    let snapshot = try await link.snapshot()
+                    let encrypted = try PaykitSnapshotAead.encrypt(snapshot, context: context)
+                    handshake.close()
+                    let linkId = UUID().uuidString.lowercased()
+                    self.lock.withLock {
+                        self.handles[linkId] = LinkHandle(kind: .link(link), context: context)
+                    }
+                    return [
+                        "result": "established",
+                        "linkId": linkId,
+                        "snapshot": encrypted,
+                    ]
+                }
+                let after = try await handshake.snapshot()
+                if before == after {
+                    handshake.close()
+                    return ["result": "none"]
+                }
                 let context = SnapshotContext(
                     ownerPubky: args.session.pubky(),
                     peerPubky: args.peerPubky,
                     localReceiverPath: args.localReceiverPath,
                     remoteReceiverPath: args.remoteReceiverPath,
-                    role: .link
+                    role: .responder
                 )
+                let encrypted = try PaykitSnapshotAead.encrypt(after, context: context)
                 let linkId = UUID().uuidString.lowercased()
                 self.lock.withLock {
-                    self.handles[linkId] = LinkHandle(kind: .link(link), context: context)
+                    self.handles[linkId] = LinkHandle(kind: .handshake(handshake), context: context)
                 }
-                handshake.close()
-                let snapshot = try await link.snapshot()
                 return [
-                    "result": "established",
+                    "result": "pending",
                     "linkId": linkId,
-                    "snapshot": try PaykitSnapshotAead.encrypt(snapshot, context: context),
+                    "snapshot": encrypted,
                 ]
-            }
-            let after = try await handshake.snapshot()
-            if before == after {
+            } catch {
                 handshake.close()
-                return ["result": "none"]
+                throw error
             }
-            let context = SnapshotContext(
-                ownerPubky: args.session.pubky(),
-                peerPubky: args.peerPubky,
-                localReceiverPath: args.localReceiverPath,
-                remoteReceiverPath: args.remoteReceiverPath,
-                role: .responder
-            )
-            let linkId = UUID().uuidString.lowercased()
-            self.lock.withLock {
-                self.handles[linkId] = LinkHandle(kind: .handshake(handshake), context: context)
-            }
-            return [
-                "result": "pending",
-                "linkId": linkId,
-                "snapshot": try PaykitSnapshotAead.encrypt(after, context: context),
-            ]
         }
     }
 

@@ -30,6 +30,7 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.nio.charset.StandardCharsets
 import java.security.KeyStore
+import java.security.MessageDigest
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import javax.crypto.Cipher
@@ -86,6 +87,11 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
     )
 
     override fun getName(): String = "PaykitLinkModule"
+
+    private fun opaquePeer(peer: String): String {
+        val digest = MessageDigest.getInstance("SHA-256").digest(peer.toByteArray(StandardCharsets.UTF_8))
+        return digest.take(4).joinToString("") { b -> "%02x".format(b) }
+    }
 
     override fun initialize() {
         super.initialize()
@@ -564,8 +570,8 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
                 args.localReceiverPath,
                 args.remoteReceiverPath,
             )
-            val before = handshake.snapshot()
             try {
+                val before = handshake.snapshot()
                 val step = try {
                     handshake.advance()
                 } catch (err: PaykitException) {
@@ -573,7 +579,7 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
                     val probeMs = (System.nanoTime() - probeStartedAt) / 1_000_000L
                     Log.i(
                         "PaykitLink",
-                        "inbound-probe result=none durationMs=$probeMs peer=${args.peerPubky} reason=advance-error",
+                        "inbound-probe result=none durationMs=$probeMs peer=${opaquePeer(args.peerPubky)} reason=advance-error",
                     )
                     resolveMap(promise) { putString("result", "none") }
                     return@launch
@@ -583,7 +589,7 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
                     val probeMs = (System.nanoTime() - probeStartedAt) / 1_000_000L
                     Log.i(
                         "PaykitLink",
-                        "inbound-probe result=established durationMs=$probeMs peer=${args.peerPubky}",
+                        "inbound-probe result=established durationMs=$probeMs peer=${opaquePeer(args.peerPubky)}",
                     )
                     val context = SnapshotContext(
                         ownerPubky = args.session.pubky(),
@@ -592,13 +598,14 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
                         remoteReceiverPath = args.remoteReceiverPath,
                         role = SnapshotRole.LINK,
                     )
+                    val snapshot = store.encryptSnapshot(established.snapshot(), context)
+                    handshake.close()
                     val linkId = UUID.randomUUID().toString()
                     handles[linkId] = LinkHandle(LinkKind.Established(established), context)
-                    handshake.close()
                     resolveMap(promise) {
                         putString("result", "established")
                         putString("linkId", linkId)
-                        putString("snapshot", store.encryptSnapshot(established.snapshot(), context))
+                        putString("snapshot", snapshot)
                     }
                     return@launch
                 }
@@ -608,14 +615,14 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
                     handshake.close()
                     Log.i(
                         "PaykitLink",
-                        "inbound-probe result=none durationMs=$probeMs peer=${args.peerPubky} local=${args.localReceiverPath} remote=${args.remoteReceiverPath} reason=unchanged-snapshot",
+                        "inbound-probe result=none durationMs=$probeMs peer=${opaquePeer(args.peerPubky)} reason=unchanged-snapshot",
                     )
                     resolveMap(promise) { putString("result", "none") }
                     return@launch
                 }
                 Log.i(
                     "PaykitLink",
-                    "inbound-probe result=pending durationMs=$probeMs peer=${args.peerPubky}",
+                    "inbound-probe result=pending durationMs=$probeMs peer=${opaquePeer(args.peerPubky)}",
                 )
                 val context = SnapshotContext(
                     ownerPubky = args.session.pubky(),
@@ -624,12 +631,13 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
                     remoteReceiverPath = args.remoteReceiverPath,
                     role = SnapshotRole.RESPONDER,
                 )
+                val snapshot = store.encryptSnapshot(after, context)
                 val linkId = UUID.randomUUID().toString()
                 handles[linkId] = LinkHandle(LinkKind.Handshake(handshake), context)
                 resolveMap(promise) {
                     putString("result", "pending")
                     putString("linkId", linkId)
-                    putString("snapshot", store.encryptSnapshot(after, context))
+                    putString("snapshot", snapshot)
                 }
             } catch (err: Throwable) {
                 handshake.close()
