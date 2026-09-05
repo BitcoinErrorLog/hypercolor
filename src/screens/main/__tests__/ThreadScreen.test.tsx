@@ -18,7 +18,9 @@ jest.mock('../../../services/link/LinkService', () => ({
     markRead: jest.fn(),
     subscribeInboxSynced: () => () => undefined,
     releaseDeclinedRequest: jest.fn(),
+    takeoverReceiver: jest.fn(),
   },
+  THREAD_INBOX_POLL_MS: 10_000,
 }));
 
 jest.mock('../../../services/StorageService', () => ({

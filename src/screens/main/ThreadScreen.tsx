@@ -14,6 +14,7 @@ import {
   Linking,
   AccessibilityInfo,
   findNodeHandle,
+  RefreshControl,
 } from 'react-native';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
@@ -24,7 +25,7 @@ import type { LinkMessage } from '../../types/link';
 import { buildDmConversationId } from '../../types/link';
 import { useAuthStore } from '../../stores/authStore';
 import { StorageService } from '../../services/StorageService';
-import { LinkService } from '../../services/link/LinkService';
+import { LinkService, THREAD_INBOX_POLL_MS } from '../../services/link/LinkService';
 import { AttachmentBubble } from '../../components/AttachmentBubble';
 import {
   pickAndSendFile,
@@ -120,6 +121,8 @@ export default function ThreadScreen({ route }: Props) {
   const { peerBlocked, runUnblock } = useThreadPeerGate(localPubky, participantPubky);
   const sessionKind = useSessionStatusStore(s => s.kind);
 
+  const [refreshing, setRefreshing] = useState(false);
+
   const conversationId = buildDmConversationId(participantPubky);
 
   const reloadEncrypted = useCallback(async () => {
@@ -155,17 +158,26 @@ export default function ThreadScreen({ route }: Props) {
 
   useFocusEffect(
     useCallback(() => {
-      void (async () => {
+      let stopped = false;
+      const syncOpenThread = async () => {
         if (LinkService.hasSession()) {
           try {
-            await LinkService.syncInbox();
+            await LinkService.syncInbox([participantPubky]);
           } catch {
-            // Inbox drain is best-effort on focus; local history still renders.
+            // Inbox drain is best-effort; local history still renders.
           }
         }
-        await reloadEncrypted();
-      })();
-    }, [reloadEncrypted]),
+        if (!stopped) await reloadEncrypted();
+      };
+      void syncOpenThread();
+      const timer = setInterval(() => {
+        void syncOpenThread();
+      }, THREAD_INBOX_POLL_MS);
+      return () => {
+        stopped = true;
+        clearInterval(timer);
+      };
+    }, [participantPubky, reloadEncrypted]),
   );
 
   useEffect(() => {
@@ -174,6 +186,22 @@ export default function ThreadScreen({ route }: Props) {
       if (owner === localPubky) void reloadEncrypted();
     });
   }, [localPubky, reloadEncrypted]);
+
+  const handleRefresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      if (LinkService.hasSession()) {
+        try {
+          await LinkService.syncInbox([participantPubky]);
+        } catch {
+          // Pull-to-refresh still reloads local rows.
+        }
+      }
+      await reloadEncrypted();
+    } finally {
+      setRefreshing(false);
+    }
+  }, [participantPubky, reloadEncrypted]);
 
   const handleSend = useCallback(async () => {
     const text = draft.trim();
@@ -363,6 +391,10 @@ export default function ThreadScreen({ route }: Props) {
       sessionKind={sessionKind}
       peerContact={peerContact}
       linkStatus={linkStatus}
+      refreshing={refreshing}
+      onRefresh={() => {
+        void handleRefresh();
+      }}
       onEnableMessaging={() => nav.navigate('EnableMessaging' as never)}
       onRetryFailed={eventId => {
         void (async () => {
@@ -426,6 +458,8 @@ export function ThreadScreenContent({
   sessionKind,
   peerContact,
   linkStatus,
+  refreshing = false,
+  onRefresh,
   onEnableMessaging,
   onRetryFailed,
   onCopyPubky,
@@ -472,6 +506,8 @@ export function ThreadScreenContent({
   sessionKind: 'offline' | 'needs-enable' | 'revoked' | string;
   peerContact: Contact | null;
   linkStatus: LinkStatus | null;
+  refreshing?: boolean;
+  onRefresh?: () => void;
   onEnableMessaging: () => void;
   onRetryFailed: (eventId: string) => void;
   onCopyPubky: () => void;
@@ -699,6 +735,11 @@ export function ThreadScreenContent({
               {linkLabel}
             </Text>
           ) : null}
+          {linkStatus === 'handshaking-initiator' ? (
+            <Text testID="threadQueuedWaiting" style={styles.linkStatus}>
+              {COPY.queuedWaitingSubtitle}
+            </Text>
+          ) : null}
         </TouchableOpacity>
         <View style={styles.backBtn} />
       </View>
@@ -728,6 +769,16 @@ export function ThreadScreenContent({
           renderItem={renderItem}
           contentContainerStyle={[styles.messageList, { paddingBottom: space.xl + bottomInset }]}
           onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: false })}
+          refreshControl={
+            onRefresh ? (
+              <RefreshControl
+                refreshing={refreshing}
+                onRefresh={onRefresh}
+                tintColor={color.brand}
+                testID="threadRefresh"
+              />
+            ) : undefined
+          }
         />
       )}
 

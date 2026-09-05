@@ -50,6 +50,7 @@ jest.mock('../../../services/link/LinkService', () => ({
     hasSession: jest.fn(() => true),
     syncInbox: jest.fn().mockResolvedValue(undefined),
     subscribeInboxSynced: jest.fn(() => () => undefined),
+    takeoverReceiver: jest.fn(),
   },
 }));
 

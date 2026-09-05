@@ -3,6 +3,7 @@ import { View, Text, FlatList, TouchableOpacity, StyleSheet, SafeAreaView } from
 import type { Contact } from '../../types';
 import type { LinkConversationSummary } from '../../types/link';
 import { EnableMessagingCta } from '../../components/EnableMessagingCta';
+import { StandbyBanner } from '../../components/StandbyBanner';
 import { StatusBanner } from '../../ui/StatusBanner';
 import { COPY } from '../../copy/uxCopy';
 import { HIT_SLOP_44 } from '../../ui/hitTarget';
@@ -110,6 +111,7 @@ export function ChatsScreenContent({
         </TouchableOpacity>
       </View>
       <Text style={styles.sectionTitle}>{COPY.inbox}</Text>
+      <StandbyBanner />
       {requestsRow}
       {showEnableCta ? (
         <EnableMessagingCta testID="chatsEnableMessaging" onPress={onEnableMessaging} />

@@ -2,6 +2,10 @@ import React from 'react';
 import { act, create } from 'react-test-renderer';
 import { ChatsScreenContent } from '../ChatsScreenContent';
 
+jest.mock('../../../services/link/LinkService', () => ({
+  LinkService: { takeoverReceiver: jest.fn() },
+}));
+
 const noop = () => undefined;
 
 describe('ChatsScreenContent wiring', () => {

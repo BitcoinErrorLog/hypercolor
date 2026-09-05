@@ -53,6 +53,19 @@ export const COPY = {
   encryptedMessagingEnabled: 'Encrypted messaging enabled',
   encryptedMessagingEnabledBody:
     'Ring approved the grant and this device published a receiver marker.',
+  standbyBannerTitle: 'Another device is receiving new messages',
+  standbyBannerBody:
+    'This identity is signed in somewhere else, and that device is the one that can accept new chats. Conversations already on this device still work. Take over if you want new message requests and new handshakes to land here instead.',
+  standbyPrimary: 'Receive on this device',
+  standbySecondary: 'Keep using this device for existing chats',
+  takeoverToast:
+    'This device now receives new messages. Other signed-in devices will stop accepting new chats until they take over.',
+  reenableBannerTitle: 'This device stopped receiving new chats',
+  reenableBannerBody:
+    'The published receiver marker is gone. Conversations already on this device still work. Re-enable receiving if you want new message requests and new handshakes to land here.',
+  reenablePrimary: 'Re-enable receiving',
+  reenableSecondary: 'Not now',
+  queuedWaitingSubtitle: 'Waiting for the other person — retrying if they switched devices.',
   messagingUnavailable: 'Encrypted messaging is unavailable in this build.',
   keystoreUnavailable: 'Encrypted storage is not ready on this device.',
   keystoreUnavailableBody: 'Messaging is paused. Local history is untouched.',

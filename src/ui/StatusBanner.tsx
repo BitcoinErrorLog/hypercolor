@@ -51,6 +51,7 @@ const styles = StyleSheet.create({
     backgroundColor: color.surfaceBrand,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: color.brand,
+    marginBottom: space.lg,
   },
   label: {
     flex: 1,

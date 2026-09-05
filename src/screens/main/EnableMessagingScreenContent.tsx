@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, SafeAreaView, ScrollView } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AuthQr } from '../../components/AuthQr';
 import { COPY, RING_GRANT_SCOPE_DETAIL } from '../../copy/uxCopy';
+import { StandbyBanner } from '../../components/StandbyBanner';
 import { CustodyLine } from '../../ui/CustodyLine';
 import { ErrorDetails } from '../../ui/ErrorDetails';
 import { color, space, radius, typeRole } from '../../theme';
@@ -96,6 +97,7 @@ export function EnableMessagingScreenContent({
   return (
     <SafeAreaView style={styles.container} testID="enableMessagingScreen">
       <PageHeader title={COPY.enableEncryptedMessaging} onBack={onBack} testID="enableMessaging" />
+      <StandbyBanner />
 
       <ScrollView
         testID="enableMessagingScroll"
