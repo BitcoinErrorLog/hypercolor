@@ -3266,6 +3266,7 @@ function rowToLink(row: any): LinkRecord {
     localReceiverPath: row.local_receiver_path,
     remoteReceiverPath: row.remote_receiver_path,
     consecutiveFailures: row.consecutive_failures,
+    createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
 }

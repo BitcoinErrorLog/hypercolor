@@ -126,6 +126,13 @@ export const HANDSHAKE_ADVANCE_BATCH_LIMIT = 10;
  */
 export const HANDSHAKE_PENDING_ADVANCE_LIMIT = 10;
 
+/**
+ * Non-ready (and unaccepted-empty established) links older than this are
+ * wiped so a later probe can adopt a peer's *current* msg1. Advancing a
+ * stored handshake never GETs a new initiator channel.
+ */
+export const HANDSHAKE_STALE_MS = 10 * 60 * 1000;
+
 export const LINK_RETRY_DRAIN_INTERVAL_MS = 30_000;
 
 /**
@@ -1468,8 +1475,9 @@ async function ensureLinkLocked(
   const localPath = assertValidReceiverPath(coerceReceiverPath(receiver.receiverPath));
 
   const key = linkKey(ownerPubky, peerPubky);
-  const live = liveHandles.get(key);
-  if (live?.status === 'established') return 'ready';
+  let live = liveHandles.get(key);
+  let stored = await StorageService.getLink(ownerPubky, peerPubky);
+  abortIfOwnerChanged(expectedOwner);
 
   // Above the live-handle dispatch on purpose. A handshake in progress keeps a
   // handle in memory for as long as the app stays foregrounded, and clearing
@@ -1479,6 +1487,19 @@ async function ensureLinkLocked(
     await StorageService.clearHandshakeBudget(ownerPubky, peerPubky);
     abortIfOwnerChanged(expectedOwner);
   }
+
+  if (stored && (await shouldAgeOutNonReadyLink(stored, expectedOwner))) {
+    console.warn(
+      `[LinkService] handshake-stale-discard peer=${opaquePeerId(ownerPubky, peerPubky)} ageMs=${Date.now() - stored.updatedAt}`,
+    );
+    await wipeLinkState(stored, expectedOwner);
+    stored = null;
+    live = liveHandles.get(key);
+  }
+
+  const replaceable = stored === null || stored.status !== 'established';
+
+  if (live?.status === 'established') return 'ready';
 
   if (live?.status === 'handshaking') {
     abortIfOwnerChanged(expectedOwner);
@@ -1494,9 +1515,7 @@ async function ensureLinkLocked(
     );
   }
 
-  const stored = await StorageService.getLink(ownerPubky, peerPubky);
-  abortIfOwnerChanged(expectedOwner);
-  if (stored?.status === 'established') {
+  if (!replaceable && stored?.status === 'established') {
     const restored = await restoreEstablished(
       activeSession,
       receiver,
@@ -1590,6 +1609,31 @@ async function ensureLinkLocked(
     alreadyRecovered,
     expectedOwner,
   );
+}
+
+async function shouldAgeOutNonReadyLink(
+  stored: LinkRecord,
+  expectedOwner: PubkyKey,
+): Promise<boolean> {
+  abortIfOwnerChanged(expectedOwner);
+  const ageMs = Date.now() - stored.updatedAt;
+  if (!Number.isFinite(ageMs) || ageMs < HANDSHAKE_STALE_MS) return false;
+  if (stored.status === 'handshaking') {
+    const budget = await StorageService.getHandshakeBudget(stored.ownerPubky, stored.peerPubky);
+    abortIfOwnerChanged(expectedOwner);
+    if (budget && budget.exhaustedAt === null && budget.pendingAdvances > 0) return false;
+    return true;
+  }
+  if (stored.status !== 'established') return false;
+  const request = await StorageService.getMessageRequest(stored.ownerPubky, stored.peerPubky);
+  abortIfOwnerChanged(expectedOwner);
+  if (request?.status !== 'pending') return false;
+  const messages = await StorageService.countLinkMessagesForPeer(
+    stored.ownerPubky,
+    stored.peerPubky,
+  );
+  abortIfOwnerChanged(expectedOwner);
+  return messages === 0;
 }
 
 async function restoreEstablished(
@@ -1809,6 +1853,7 @@ function fallbackLinkRecord(
     localReceiverPath: receiver.receiverPath,
     remoteReceiverPath: LINK_RECEIVER_PATH,
     consecutiveFailures: 0,
+    createdAt: Date.now(),
     updatedAt: Date.now(),
   };
 }

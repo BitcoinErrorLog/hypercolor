@@ -434,10 +434,14 @@ export interface LinkRecord {
   localReceiverPath: string;
   remoteReceiverPath: string;
   consecutiveFailures: number;
+  /** Row insert time. Not updated on snapshot/status writes. */
+  createdAt: number;
   updatedAt: number;
 }
 
-export type LinkRecordInput = Omit<LinkRecord, 'updatedAt'>;
+export type LinkRecordInput = Omit<LinkRecord, 'updatedAt' | 'createdAt'> & {
+  createdAt?: number;
+};
 
 /**
  * Durable per-(owner, peer) cost of trying to complete a Noise XX handshake.

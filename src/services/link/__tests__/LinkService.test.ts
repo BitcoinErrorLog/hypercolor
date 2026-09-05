@@ -3,6 +3,7 @@ import {
   HANDSHAKE_ADVANCE_BATCH_LIMIT,
   HANDSHAKE_FAILURE_LIMIT,
   HANDSHAKE_PENDING_ADVANCE_LIMIT,
+  HANDSHAKE_STALE_MS,
   LINK_RETRY_DRAIN_INTERVAL_MS,
   LINK_RETRY_PAYLOAD_TYPE,
   LINK_GROUP_FANOUT_PAYLOAD_TYPE,
@@ -273,7 +274,8 @@ function storedLink(overrides: Partial<LinkRecord> = {}): LinkRecord {
     localReceiverPath: LINK_RECEIVER_PATH,
     remoteReceiverPath: LINK_RECEIVER_PATH,
     consecutiveFailures: 0,
-    updatedAt: NOW,
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
     ...overrides,
   };
 }
@@ -321,7 +323,9 @@ function givenResponderHandshake(seededBudget: HandshakeBudget | null = null): {
     link = storedLink(record);
   });
   mockedStorage.updateLinkSnapshot.mockImplementation(async (owner, peer, snapshot, status) => {
-    if (owner === OWNER && peer === PEER && link) link = storedLink({ ...link, snapshot, status });
+    if (owner === OWNER && peer === PEER && link) {
+      link = storedLink({ ...link, snapshot, status, updatedAt: Date.now() });
+    }
   });
   mockedStorage.deleteLink.mockImplementation(async (owner, peer) => {
     if (owner === OWNER && peer === PEER) link = null;
@@ -1483,6 +1487,123 @@ describe('LinkService', () => {
       await expect(LinkService.ensureLinkWith(smallerPeer)).resolves.toBe('handshaking-initiator');
 
       expect(mockedNative.probeInboundLink).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('stale non-ready link vs fresh msg1', () => {
+    it('keeps advancing a young stored handshake instead of probing a leftover msg1', async () => {
+      mockedStorage.getLink.mockResolvedValue(
+        storedLink({ role: 'responder', status: 'handshaking', snapshot: 'old-channel' }),
+      );
+      mockedNative.restoreHandshake.mockResolvedValue({ linkId: 'old-hs', status: 'pending' });
+      mockedNative.advanceHandshake.mockResolvedValue({ status: 'pending', snapshot: 'old-adv' });
+      mockedNative.probeInboundLink.mockResolvedValue({
+        result: 'pending',
+        linkId: 'fresh-hs',
+        snapshot: 'new-channel',
+      });
+
+      await expect(LinkService.syncInbox([PEER])).resolves.toEqual([]);
+
+      expect(mockedNative.restoreHandshake).toHaveBeenCalled();
+      expect(mockedNative.advanceHandshake).toHaveBeenCalled();
+      expect(mockedNative.probeInboundLink).not.toHaveBeenCalled();
+      expect(mockedStorage.deleteLink).not.toHaveBeenCalled();
+    });
+
+    it('discards a stale responder handshake then adopts a freshly decrypted msg1', async () => {
+      mockedStorage.getLink.mockResolvedValue(
+        storedLink({
+          role: 'responder',
+          status: 'handshaking',
+          snapshot: 'old-channel',
+          createdAt: NOW - HANDSHAKE_STALE_MS - 1,
+          updatedAt: NOW - HANDSHAKE_STALE_MS - 1,
+        }),
+      );
+      mockedNative.restoreHandshake.mockResolvedValue({ linkId: 'old-hs', status: 'pending' });
+      mockedNative.probeInboundLink.mockResolvedValue({
+        result: 'pending',
+        linkId: 'fresh-hs',
+        snapshot: 'new-channel',
+      });
+
+      await expect(LinkService.syncInbox([PEER])).resolves.toEqual([]);
+
+      expect(mockedNative.restoreHandshake).not.toHaveBeenCalled();
+      expect(mockedStorage.deleteLink).toHaveBeenCalledWith(OWNER, PEER);
+      expect(mockedNative.probeInboundLink).toHaveBeenCalled();
+      expect(mockedStorage.upsertLink).toHaveBeenCalledWith(
+        expect.objectContaining({
+          role: 'responder',
+          status: 'handshaking',
+          snapshot: 'new-channel',
+        }),
+      );
+    });
+
+    it('does not discard a ready link with messages when leftover ciphertext still decrypts', async () => {
+      mockedStorage.getLink.mockResolvedValue(
+        storedLink({
+          status: 'established',
+          snapshot: 'est-1',
+          createdAt: NOW - HANDSHAKE_STALE_MS * 2,
+        }),
+      );
+      mockedStorage.getMessageRequest.mockResolvedValue({
+        ownerPubky: OWNER,
+        peerPubky: PEER,
+        createdAt: NOW,
+        updatedAt: NOW,
+        status: 'accepted',
+      });
+      mockedStorage.countLinkMessagesForPeer.mockResolvedValue(3);
+      mockedNative.probeInboundLink.mockResolvedValue({
+        result: 'pending',
+        linkId: 'attacker-hs',
+        snapshot: 'junk-channel',
+      });
+      mockedNative.restoreLink.mockResolvedValue({ linkId: 'handle-1' });
+      mockedNative.receivePrivateMessages.mockResolvedValue({ messages: [], snapshot: 'est-1' });
+
+      await expect(LinkService.syncInbox([PEER])).resolves.toEqual([]);
+
+      expect(mockedStorage.deleteLink).not.toHaveBeenCalled();
+      expect(mockedNative.probeInboundLink).not.toHaveBeenCalled();
+      expect(mockedNative.restoreLink).toHaveBeenCalled();
+    });
+
+    it('ages out unaccepted established-with-no-messages so a later probe can adopt', async () => {
+      mockedStorage.getLink.mockResolvedValue(
+        storedLink({
+          role: 'responder',
+          status: 'established',
+          snapshot: 'zombie-est',
+          createdAt: NOW - HANDSHAKE_STALE_MS - 1,
+          updatedAt: NOW - HANDSHAKE_STALE_MS - 1,
+        }),
+      );
+      mockedStorage.getMessageRequest.mockResolvedValue({
+        ownerPubky: OWNER,
+        peerPubky: PEER,
+        createdAt: NOW - HANDSHAKE_STALE_MS - 1,
+        updatedAt: NOW,
+        status: 'pending',
+      });
+      mockedStorage.countLinkMessagesForPeer.mockResolvedValue(0);
+      mockedNative.probeInboundLink.mockResolvedValue({
+        result: 'pending',
+        linkId: 'fresh-hs',
+        snapshot: 'new-channel',
+      });
+
+      await expect(LinkService.syncInbox([PEER])).resolves.toEqual([]);
+
+      expect(mockedStorage.deleteLink).toHaveBeenCalledWith(OWNER, PEER);
+      expect(mockedNative.restoreLink).not.toHaveBeenCalled();
+      expect(mockedStorage.upsertLink).toHaveBeenCalledWith(
+        expect.objectContaining({ snapshot: 'new-channel', role: 'responder' }),
+      );
     });
   });
 

@@ -276,6 +276,7 @@ function establishedLink(): LinkRecord {
     localReceiverPath: LINK_RECEIVER_PATH,
     remoteReceiverPath: LINK_RECEIVER_PATH,
     consecutiveFailures: 0,
+    createdAt: NOW,
     updatedAt: NOW,
   };
 }
@@ -312,7 +313,11 @@ function wireInMemoryStorage(): void {
   mockedStorage.listBlockedPeerCleanupPending.mockResolvedValue([]);
 
   mockedStorage.upsertLink.mockImplementation(async record => {
-    db.links.set(record.peerPubky, { ...record, updatedAt: NOW });
+    db.links.set(record.peerPubky, {
+      ...record,
+      createdAt: record.createdAt ?? NOW,
+      updatedAt: NOW,
+    });
   });
   mockedStorage.getLink.mockImplementation(async (_owner, peerPubky) => {
     return db.links.get(peerPubky) ?? null;
@@ -527,6 +532,7 @@ describe('group accept gate', () => {
       noisePublicKey: PEER_NOISE,
       capabilitiesJson: '{}',
     });
+    mockedNative.getReceiverPublicKey.mockResolvedValue(PEER_NOISE);
     mockedNative.probeInboundLink.mockResolvedValue({
       result: 'established',
       linkId: 'inbound-1',

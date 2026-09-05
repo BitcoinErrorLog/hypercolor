@@ -207,6 +207,7 @@ describe('LinkService message requests', () => {
       noisePublicKey: PEER_NOISE,
       capabilitiesJson: '{}',
     });
+    mockedNative.getReceiverPublicKey.mockResolvedValue(PEER_NOISE);
     mockedNative.probeInboundLink.mockResolvedValue({
       result: 'established',
       linkId: 'inbound-1',
@@ -414,6 +415,7 @@ describe('LinkService message requests', () => {
       localReceiverPath: LINK_RECEIVER_PATH,
       remoteReceiverPath: LINK_RECEIVER_PATH,
       consecutiveFailures: 0,
+      createdAt: NOW,
       updatedAt: NOW,
     } satisfies LinkRecord);
     mockedNative.restoreLink.mockResolvedValue({ linkId: 'handle-1' });
@@ -456,6 +458,7 @@ describe('LinkService message requests', () => {
       localReceiverPath: LINK_RECEIVER_PATH,
       remoteReceiverPath: LINK_RECEIVER_PATH,
       consecutiveFailures: 0,
+      createdAt: NOW,
       updatedAt: NOW,
     };
     mockedStorage.getLink.mockResolvedValue(stored);
@@ -499,6 +502,7 @@ describe('LinkService message requests', () => {
         localReceiverPath: LINK_RECEIVER_PATH,
         remoteReceiverPath: LINK_RECEIVER_PATH,
         consecutiveFailures: 0,
+        createdAt: NOW,
         updatedAt: NOW,
       },
     ]);
@@ -560,6 +564,7 @@ describe('LinkService message requests', () => {
       localReceiverPath: LINK_RECEIVER_PATH,
       remoteReceiverPath: LINK_RECEIVER_PATH,
       consecutiveFailures: 0,
+      createdAt: NOW,
       updatedAt: NOW,
     } satisfies LinkRecord);
     mockedNative.restoreLink.mockResolvedValue({ linkId: 'handle-1' });

@@ -200,6 +200,7 @@ function storedLink(): LinkRecord {
     localReceiverPath: LINK_RECEIVER_PATH,
     remoteReceiverPath: LINK_RECEIVER_PATH,
     consecutiveFailures: 0,
+    createdAt: NOW,
     updatedAt: NOW,
   };
 }
@@ -219,6 +220,7 @@ describe('inbound deny is authoritative', () => {
       noisePublicKey: PEER_NOISE,
       capabilitiesJson: '{}',
     });
+    mockedNative.getReceiverPublicKey.mockResolvedValue(PEER_NOISE);
     mockedNative.probeInboundLink.mockResolvedValue({
       result: 'established',
       linkId: 'inbound-1',
