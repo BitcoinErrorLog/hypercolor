@@ -15,7 +15,6 @@ import com.synonym.paykit.ChatAuthFlow
 import com.synonym.paykit.ChatClient
 import com.synonym.paykit.ChatLink
 import com.synonym.paykit.ChatLinkHandshake
-import com.synonym.paykit.ChatProbeResult
 import com.synonym.paykit.ChatReceiverCapabilities
 import com.synonym.paykit.ChatSession
 import com.synonym.paykit.AttachmentCiphertext
@@ -550,35 +549,42 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
                 localReceiverPath,
                 remoteReceiverPath,
             )
-            when (
-                val probed = args.session.probeInboundEncryptedLink(
-                    args.receiverSecret,
-                    args.peerPubky,
-                    args.peerNoisePublicKey,
-                    args.localReceiverPath,
-                    args.remoteReceiverPath,
-                )
-            ) {
-                is ChatProbeResult.NoInbound -> {
-                    resolveMap(promise) { putString("result", "none") }
-                }
-                is ChatProbeResult.Pending -> {
-                    val context = SnapshotContext(
-                        ownerPubky = args.session.pubky(),
-                        peerPubky = args.peerPubky,
-                        localReceiverPath = args.localReceiverPath,
-                        remoteReceiverPath = args.remoteReceiverPath,
-                        role = SnapshotRole.RESPONDER,
+            // Do not use ChatSession.probeInboundEncryptedLink. That FFI
+            // helper (paykit-ffi chat_links.rs) (1) parks NoInbound forever
+            // for the same ProbeKey and (2) pre-GETs a slot derived in FFI
+            // (`inbound_handshake_slot_addr`) which can miss msg1 that
+            // `accept_encrypted_link` / wasm `initiateEncryptedLink` wrote
+            // via paykit_lib::compute_private_payment_paths. Match wasm:
+            // accept + one advance; unchanged snapshot means nothing inbound.
+            val probeStartedAt = System.nanoTime()
+            val handshake = args.session.acceptEncryptedLink(
+                args.receiverSecret,
+                args.peerPubky,
+                args.peerNoisePublicKey,
+                args.localReceiverPath,
+                args.remoteReceiverPath,
+            )
+            val before = handshake.snapshot()
+            try {
+                val step = try {
+                    handshake.advance()
+                } catch (err: PaykitException) {
+                    handshake.close()
+                    val probeMs = (System.nanoTime() - probeStartedAt) / 1_000_000L
+                    Log.i(
+                        "PaykitLink",
+                        "inbound-probe result=none durationMs=$probeMs peer=${args.peerPubky} reason=advance-error",
                     )
-                    val linkId = UUID.randomUUID().toString()
-                    handles[linkId] = LinkHandle(LinkKind.Handshake(probed.handshake), context)
-                    resolveMap(promise) {
-                        putString("result", "pending")
-                        putString("linkId", linkId)
-                        putString("snapshot", store.encryptSnapshot(probed.handshake.snapshot(), context))
-                    }
+                    resolveMap(promise) { putString("result", "none") }
+                    return@launch
                 }
-                is ChatProbeResult.Established -> {
+                val established = step.link
+                if (step.complete && established != null) {
+                    val probeMs = (System.nanoTime() - probeStartedAt) / 1_000_000L
+                    Log.i(
+                        "PaykitLink",
+                        "inbound-probe result=established durationMs=$probeMs peer=${args.peerPubky}",
+                    )
                     val context = SnapshotContext(
                         ownerPubky = args.session.pubky(),
                         peerPubky = args.peerPubky,
@@ -587,13 +593,47 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
                         role = SnapshotRole.LINK,
                     )
                     val linkId = UUID.randomUUID().toString()
-                    handles[linkId] = LinkHandle(LinkKind.Established(probed.link), context)
+                    handles[linkId] = LinkHandle(LinkKind.Established(established), context)
+                    handshake.close()
                     resolveMap(promise) {
                         putString("result", "established")
                         putString("linkId", linkId)
-                        putString("snapshot", store.encryptSnapshot(probed.link.snapshot(), context))
+                        putString("snapshot", store.encryptSnapshot(established.snapshot(), context))
                     }
+                    return@launch
                 }
+                val after = handshake.snapshot()
+                val probeMs = (System.nanoTime() - probeStartedAt) / 1_000_000L
+                if (before == after) {
+                    handshake.close()
+                    Log.i(
+                        "PaykitLink",
+                        "inbound-probe result=none durationMs=$probeMs peer=${args.peerPubky} local=${args.localReceiverPath} remote=${args.remoteReceiverPath} reason=unchanged-snapshot",
+                    )
+                    resolveMap(promise) { putString("result", "none") }
+                    return@launch
+                }
+                Log.i(
+                    "PaykitLink",
+                    "inbound-probe result=pending durationMs=$probeMs peer=${args.peerPubky}",
+                )
+                val context = SnapshotContext(
+                    ownerPubky = args.session.pubky(),
+                    peerPubky = args.peerPubky,
+                    localReceiverPath = args.localReceiverPath,
+                    remoteReceiverPath = args.remoteReceiverPath,
+                    role = SnapshotRole.RESPONDER,
+                )
+                val linkId = UUID.randomUUID().toString()
+                handles[linkId] = LinkHandle(LinkKind.Handshake(handshake), context)
+                resolveMap(promise) {
+                    putString("result", "pending")
+                    putString("linkId", linkId)
+                    putString("snapshot", store.encryptSnapshot(after, context))
+                }
+            } catch (err: Throwable) {
+                handshake.close()
+                throw err
             }
         }
     }

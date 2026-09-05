@@ -446,6 +446,7 @@ describe('LinkService', () => {
     mockedNative.cancelAuthFlow.mockResolvedValue(undefined);
     mockedNative.closeLink.mockResolvedValue(undefined);
     mockedNative.probeInboundLink.mockResolvedValue({ result: 'none' });
+    mockedNative.getReceiverPublicKey.mockResolvedValue(PEER_NOISE);
     mockedNative.getReceiverMarker.mockResolvedValue({
       noisePublicKey: PEER_NOISE,
       capabilitiesJson: '{}',
@@ -1379,6 +1380,38 @@ describe('LinkService', () => {
       await expect(LinkService.syncInbox([PEER])).resolves.toEqual([]);
 
       expect(mockedNative.probeInboundLink).toHaveBeenCalledTimes(1);
+      expect(mockedNative.initiateLink).not.toHaveBeenCalled();
+    });
+
+    it('republishes the local receiver marker when it no longer matches homeserver', async () => {
+      const stalePublished = 'stale-noise-pk';
+      mockedNative.getReceiverPublicKey.mockResolvedValue('local-noise-pk');
+      mockedNative.getReceiverMarker.mockImplementation(async (who: string) => {
+        if (who === OWNER) {
+          return { noisePublicKey: stalePublished, capabilitiesJson: '{}' };
+        }
+        return { noisePublicKey: PEER_NOISE, capabilitiesJson: '{}' };
+      });
+      mockedNative.publishReceiverMarker.mockResolvedValue(undefined);
+      mockedNative.probeInboundLink.mockResolvedValue({ result: 'none' });
+
+      await expect(LinkService.syncInbox([PEER])).resolves.toEqual([]);
+
+      expect(mockedNative.publishReceiverMarker).toHaveBeenCalledWith(
+        SESSION_ALIAS,
+        RECEIVER_ALIAS,
+        LINK_RECEIVER_PATH,
+      );
+      expect(mockedNative.probeInboundLink).toHaveBeenCalledTimes(1);
+    });
+
+    it('probes the same peer again after a prior none (native must not cache none)', async () => {
+      mockedNative.probeInboundLink.mockResolvedValue({ result: 'none' });
+
+      await expect(LinkService.syncInbox([PEER])).resolves.toEqual([]);
+      await expect(LinkService.syncInbox([PEER])).resolves.toEqual([]);
+
+      expect(mockedNative.probeInboundLink).toHaveBeenCalledTimes(2);
       expect(mockedNative.initiateLink).not.toHaveBeenCalled();
     });
 
@@ -2949,8 +2982,10 @@ describe('LinkService', () => {
 
       await LinkService.syncInbox([PEER, other]);
 
-      expect(mockedNative.getReceiverMarker).toHaveBeenCalledTimes(1);
+      expect(mockedNative.getReceiverMarker).toHaveBeenCalledTimes(2);
+      expect(mockedNative.getReceiverMarker).toHaveBeenCalledWith(OWNER, LINK_RECEIVER_PATH);
       expect(mockedNative.getReceiverMarker).toHaveBeenCalledWith(other, LINK_RECEIVER_PATH);
+      expect(mockedNative.getReceiverMarker).not.toHaveBeenCalledWith(PEER, LINK_RECEIVER_PATH);
     });
 
     it('lets a deliberate user send clear exhaustion and hand back a full allowance', async () => {

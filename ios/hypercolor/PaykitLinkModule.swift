@@ -752,35 +752,25 @@ class PaykitLinkModule: NSObject, RCTInvalidating {
                 localReceiverPath,
                 remoteReceiverPath
             )
-            let probed = try await args.session.probeInboundEncryptedLink(
+            // Match wasm: accept + one advance. Do not use
+            // probeInboundEncryptedLink (sticky NoInbound + FFI pre-GET
+            // that can miss lib-derived msg1 slots).
+            let handshake = try args.session.acceptEncryptedLink(
                 receiverNoiseSecretKeyHex: args.receiverSecret,
                 senderPublicKey: args.peerPubky,
                 senderNoisePublicKey: args.peerNoisePublicKey,
                 localReceiverPath: args.localReceiverPath,
                 remoteReceiverPath: args.remoteReceiverPath
             )
-            switch probed {
-            case .noInbound:
+            let before = try await handshake.snapshot()
+            let step: ChatHandshakeStep
+            do {
+                step = try await handshake.advance()
+            } catch {
+                handshake.close()
                 return ["result": "none"]
-            case let .pending(handshake):
-                let context = SnapshotContext(
-                    ownerPubky: args.session.pubky(),
-                    peerPubky: args.peerPubky,
-                    localReceiverPath: args.localReceiverPath,
-                    remoteReceiverPath: args.remoteReceiverPath,
-                    role: .responder
-                )
-                let linkId = UUID().uuidString.lowercased()
-                self.lock.withLock {
-                    self.handles[linkId] = LinkHandle(kind: .handshake(handshake), context: context)
-                }
-                let snapshot = try await handshake.snapshot()
-                return [
-                    "result": "pending",
-                    "linkId": linkId,
-                    "snapshot": try PaykitSnapshotAead.encrypt(snapshot, context: context),
-                ]
-            case let .established(link):
+            }
+            if step.complete, let link = step.link {
                 let context = SnapshotContext(
                     ownerPubky: args.session.pubky(),
                     peerPubky: args.peerPubky,
@@ -792,6 +782,7 @@ class PaykitLinkModule: NSObject, RCTInvalidating {
                 self.lock.withLock {
                     self.handles[linkId] = LinkHandle(kind: .link(link), context: context)
                 }
+                handshake.close()
                 let snapshot = try await link.snapshot()
                 return [
                     "result": "established",
@@ -799,6 +790,27 @@ class PaykitLinkModule: NSObject, RCTInvalidating {
                     "snapshot": try PaykitSnapshotAead.encrypt(snapshot, context: context),
                 ]
             }
+            let after = try await handshake.snapshot()
+            if before == after {
+                handshake.close()
+                return ["result": "none"]
+            }
+            let context = SnapshotContext(
+                ownerPubky: args.session.pubky(),
+                peerPubky: args.peerPubky,
+                localReceiverPath: args.localReceiverPath,
+                remoteReceiverPath: args.remoteReceiverPath,
+                role: .responder
+            )
+            let linkId = UUID().uuidString.lowercased()
+            self.lock.withLock {
+                self.handles[linkId] = LinkHandle(kind: .handshake(handshake), context: context)
+            }
+            return [
+                "result": "pending",
+                "linkId": linkId,
+                "snapshot": try PaykitSnapshotAead.encrypt(after, context: context),
+            ]
         }
     }
 

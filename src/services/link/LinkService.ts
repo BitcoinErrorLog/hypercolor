@@ -1527,6 +1527,15 @@ async function ensureLinkLocked(
     return restored;
   }
 
+  await ensureOwnReceiverMarkerMatches(
+    activeSession,
+    receiver,
+    ownerPubky,
+    localPath,
+    expectedOwner,
+  );
+  abortIfOwnerChanged(expectedOwner);
+
   const marker = await PaykitLinkNative.getReceiverMarker(peerPubky, localPath);
   abortIfOwnerChanged(expectedOwner);
   if (marker === null) return mayInitiate(intent) ? 'not-enrolled' : 'idle';
@@ -2049,6 +2058,39 @@ async function initiateHandshake(
 }
 
 /**
+ * Encrypted Link paths DH against the Noise key advertised in the owner's
+ * Receiver Marker. If the device minted a new receiver secret without
+ * republishing, peers write msg1 to a slot this device will never GET.
+ */
+async function ensureOwnReceiverMarkerMatches(
+  activeSession: ActiveSession,
+  receiver: LinkReceiver,
+  ownerPubky: PubkyKey,
+  localPath: string,
+  expectedOwner: PubkyKey,
+): Promise<void> {
+  const localNoisePk = await PaykitLinkNative.getReceiverPublicKey(receiver.receiverAlias);
+  abortIfOwnerChanged(expectedOwner);
+  let published: ReceiverMarker | null = null;
+  try {
+    published = await PaykitLinkNative.getReceiverMarker(ownerPubky, localPath);
+  } catch (err) {
+    console.warn(`[LinkService] own-marker-fetch-failed:`, errorMessage(err));
+  }
+  abortIfOwnerChanged(expectedOwner);
+  if (published?.noisePublicKey === localNoisePk) return;
+  console.warn(
+    `[LinkService] own-marker-mismatch published=${published?.noisePublicKey.slice(0, 8) ?? 'none'} local=${localNoisePk.slice(0, 8)}; republishing`,
+  );
+  await PaykitLinkNative.publishReceiverMarker(
+    activeSession.alias,
+    receiver.receiverAlias,
+    localPath,
+  );
+  abortIfOwnerChanged(expectedOwner);
+}
+
+/**
  * Atomic inbound probe. `none` is not an error and leaves prior state
  * untouched (the reference discards failed / empty probes).
  */
@@ -2061,6 +2103,8 @@ async function probeInbound(
   localPath: string,
 ): Promise<Extract<LinkProbeResult, { result: 'pending' | 'established' }> | null> {
   try {
+    const localNoisePk = await PaykitLinkNative.getReceiverPublicKey(receiver.receiverAlias);
+    const startedAt = Date.now();
     const probed = await PaykitLinkNative.probeInboundLink(
       activeSession.alias,
       receiver.receiverAlias,
@@ -2069,12 +2113,16 @@ async function probeInbound(
       localPath,
       LINK_RECEIVER_PATH,
     );
+    const durationMs = Date.now() - startedAt;
     if (probed.result === 'none') {
       console.warn(
-        `[LinkService] inbound-probe result=none peer=${opaquePeerId(ownerPubky, peerPubky)} local=${localPath} remote=${LINK_RECEIVER_PATH}`,
+        `[LinkService] inbound-probe result=none durationMs=${durationMs} peer=${opaquePeerId(ownerPubky, peerPubky)} peerPubky=${peerPubky} remoteNoisePk=${marker.noisePublicKey.slice(0, 8)} localNoisePk=${localNoisePk.slice(0, 8)} local=${localPath} remote=${LINK_RECEIVER_PATH}`,
       );
       return null;
     }
+    console.warn(
+      `[LinkService] inbound-probe result=${probed.result} durationMs=${durationMs} peer=${opaquePeerId(ownerPubky, peerPubky)}`,
+    );
     return probed;
   } catch (err) {
     console.warn(
