@@ -279,6 +279,7 @@ type PendingEstablishedRekey = {
   marker: ReceiverMarker;
   localPath: string;
   startedAt: number;
+  role: LinkRole;
 };
 const pendingEstablishedRekeys = new Map<string, PendingEstablishedRekey>();
 let inboxOwnMarkerSyncedFor: PubkyKey | null = null;
@@ -1910,6 +1911,7 @@ async function ensureLinkLocked(
         localPath,
         expectedOwner,
         expectedQueueGen,
+        intent,
       );
       abortIfOwnerChanged(expectedOwner);
       if (rekeyed !== null) return rekeyed;
@@ -2137,6 +2139,7 @@ async function maybeAdoptEstablishedRekey(
   localPath: string,
   expectedOwner: PubkyKey,
   expectedQueueGen: number,
+  intent: LinkIntent,
 ): Promise<EnsureOutcome | null> {
   const advanced = await advancePendingEstablishedRekey(
     activeSession,
@@ -2146,6 +2149,7 @@ async function maybeAdoptEstablishedRekey(
     peerPubky,
     expectedOwner,
     expectedQueueGen,
+    intent,
   );
   if (advanced !== undefined) return advanced;
 
@@ -2185,39 +2189,54 @@ async function maybeAdoptEstablishedRekey(
     if (isLinkNativeError(err) && err.code === 'protocol') return null;
     throw err;
   }
-  if (inbound === null) return null;
-  if (queueGenerationChanged(ownerPubky, peerPubky, expectedQueueGen)) {
-    await closeQuietly(inbound.linkId);
-    return null;
-  }
-  if (!(await inboundStillAllowed(ownerPubky, peerPubky, expectedOwner))) {
-    await closeQuietly(inbound.linkId);
-    return null;
-  }
-  abortIfOwnerChanged(expectedOwner);
+  if (inbound !== null) {
+    if (queueGenerationChanged(ownerPubky, peerPubky, expectedQueueGen)) {
+      await closeQuietly(inbound.linkId);
+      return null;
+    }
+    if (!(await inboundStillAllowed(ownerPubky, peerPubky, expectedOwner))) {
+      await closeQuietly(inbound.linkId);
+      return null;
+    }
+    abortIfOwnerChanged(expectedOwner);
 
-  if (inbound.result === 'established') {
-    return commitEstablishedRekey(
+    if (inbound.result === 'established') {
+      return commitEstablishedRekey(
+        activeSession,
+        receiver,
+        stored,
+        ownerPubky,
+        peerPubky,
+        marker,
+        localPath,
+        inbound,
+        expectedOwner,
+        expectedQueueGen,
+      );
+    }
+
+    pendingEstablishedRekeys.set(linkKey(ownerPubky, peerPubky), {
+      handshakeLinkId: inbound.linkId,
+      snapshot: inbound.snapshot,
+      marker,
+      localPath,
+      startedAt: Date.now(),
+      role: 'responder',
+    });
+    const stepped = await advancePendingEstablishedRekey(
       activeSession,
       receiver,
       stored,
       ownerPubky,
       peerPubky,
-      marker,
-      localPath,
-      inbound,
       expectedOwner,
       expectedQueueGen,
+      intent,
     );
+    if (stepped !== undefined) return stepped;
+    return 'handshaking-responder';
   }
 
-  pendingEstablishedRekeys.set(linkKey(ownerPubky, peerPubky), {
-    handshakeLinkId: inbound.linkId,
-    snapshot: inbound.snapshot,
-    marker,
-    localPath,
-    startedAt: Date.now(),
-  });
   return null;
 }
 
@@ -2229,6 +2248,7 @@ async function advancePendingEstablishedRekey(
   peerPubky: PubkyKey,
   expectedOwner: PubkyKey,
   expectedQueueGen: number,
+  intent: LinkIntent,
 ): Promise<EnsureOutcome | null | undefined> {
   const key = linkKey(ownerPubky, peerPubky);
   const pending = pendingEstablishedRekeys.get(key);
@@ -2269,9 +2289,24 @@ async function advancePendingEstablishedRekey(
         expectedQueueGen,
       );
     }
+    const budget = await chargeHandshakeBudget(
+      ownerPubky,
+      peerPubky,
+      {
+        reason: 'pending-advance',
+        intent,
+      },
+      expectedOwner,
+    );
+    abortIfOwnerChanged(expectedOwner);
+    if (budget.exhausted) {
+      await closeQuietly(pending.handshakeLinkId);
+      pendingEstablishedRekeys.delete(key);
+      return null;
+    }
     pending.snapshot = result.snapshot;
     pendingEstablishedRekeys.set(key, pending);
-    return null;
+    return roleStatus(pending.role);
   } catch (err) {
     if (err instanceof LinkSendError && err.code === 'owner-changed') throw err;
     await closeQuietly(pending.handshakeLinkId);
