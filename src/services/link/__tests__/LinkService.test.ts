@@ -1922,6 +1922,113 @@ describe('LinkService', () => {
       );
     });
 
+    it('probes with the fetched marker pk when last_seen already matches GET but the established remote pk is old', async () => {
+      mockedStorage.getLink.mockResolvedValue(
+        storedLink({
+          status: 'established',
+          role: 'responder',
+          snapshot: 'est-old',
+          remoteNoisePublicKey: 'old-peer-pk',
+          lastSeenPeerMarkerPk: 'new-peer-pk',
+        }),
+      );
+      mockedStorage.getMessageRequest.mockResolvedValue({
+        ownerPubky: OWNER,
+        peerPubky: PEER,
+        createdAt: NOW,
+        updatedAt: NOW,
+        status: 'accepted',
+      });
+      mockedNative.restoreLink.mockResolvedValue({ linkId: 'est-live' });
+      mockedNative.getReceiverMarker.mockImplementation(async (who: string) => {
+        if (who === OWNER) return null;
+        return { noisePublicKey: 'new-peer-pk', capabilitiesJson: '{}' };
+      });
+      mockedNative.probeInboundLink.mockResolvedValue({
+        result: 'pending',
+        linkId: 'rekey-hs',
+        snapshot: 'rekey-snap',
+      });
+      mockedNative.receivePrivateMessages.mockResolvedValue({ messages: [], snapshot: 'est-old' });
+
+      await expect(LinkService.syncInbox([PEER])).resolves.toEqual([]);
+
+      expect(mockedNative.probeInboundLink).toHaveBeenCalledWith(
+        SESSION_ALIAS,
+        RECEIVER_ALIAS,
+        PEER,
+        'new-peer-pk',
+        LINK_RECEIVER_PATH,
+        LINK_RECEIVER_PATH,
+      );
+    });
+
+    it('does not probe the established remote pk when a stale GET matches it and last_seen is already the new pk', async () => {
+      mockedStorage.getLink.mockResolvedValue(
+        storedLink({
+          status: 'established',
+          role: 'responder',
+          snapshot: 'est-old',
+          remoteNoisePublicKey: 'old-peer-pk',
+          lastSeenPeerMarkerPk: 'new-peer-pk',
+        }),
+      );
+      mockedStorage.getMessageRequest.mockResolvedValue({
+        ownerPubky: OWNER,
+        peerPubky: PEER,
+        createdAt: NOW,
+        updatedAt: NOW,
+        status: 'accepted',
+      });
+      mockedNative.restoreLink.mockResolvedValue({ linkId: 'est-live' });
+      mockedNative.getReceiverMarker.mockImplementation(async (who: string) => {
+        if (who === OWNER) return null;
+        return { noisePublicKey: 'old-peer-pk', capabilitiesJson: '{}' };
+      });
+      mockedNative.receivePrivateMessages.mockResolvedValue({ messages: [], snapshot: 'est-old' });
+
+      await expect(LinkService.syncInbox([PEER])).resolves.toEqual([]);
+
+      expect(mockedNative.probeInboundLink).not.toHaveBeenCalled();
+    });
+
+    it('probes a fetched re-key pk when the established remote pk is empty', async () => {
+      mockedStorage.getLink.mockResolvedValue(
+        storedLink({
+          status: 'established',
+          role: 'responder',
+          snapshot: 'est-old',
+          remoteNoisePublicKey: '',
+          lastSeenPeerMarkerPk: null,
+        }),
+      );
+      mockedStorage.getMessageRequest.mockResolvedValue({
+        ownerPubky: OWNER,
+        peerPubky: PEER,
+        createdAt: NOW,
+        updatedAt: NOW,
+        status: 'accepted',
+      });
+      mockedNative.restoreLink.mockResolvedValue({ linkId: 'est-live' });
+      mockedNative.getReceiverMarker.mockImplementation(async (who: string) => {
+        if (who === OWNER) return null;
+        return { noisePublicKey: 'new-peer-pk', capabilitiesJson: '{}' };
+      });
+      mockedNative.probeInboundLink.mockResolvedValue({ result: 'none' });
+      mockedNative.receivePrivateMessages.mockResolvedValue({ messages: [], snapshot: 'est-old' });
+
+      await expect(LinkService.syncInbox([PEER])).resolves.toEqual([]);
+
+      expect(mockedNative.probeInboundLink).toHaveBeenCalledWith(
+        SESSION_ALIAS,
+        RECEIVER_ALIAS,
+        PEER,
+        'new-peer-pk',
+        LINK_RECEIVER_PATH,
+        LINK_RECEIVER_PATH,
+      );
+    });
+
     it('refreshes a ready peer marker at most once per 60s', async () => {
       mockedStorage.getLink.mockResolvedValue(
         storedLink({
