@@ -345,6 +345,7 @@ describe('KeyStore link-session readiness', () => {
     expect(() => ks.setHomeserver('hs')).toThrow(ks.KeyStoreNotReady);
     expect(() => ks.getSessionSecret()).toThrow(ks.KeyStoreNotReady);
     expect(() => ks.setSessionSecret('secret')).toThrow(ks.KeyStoreNotReady);
+    expect(() => ks.deleteSessionSecret()).toThrow(ks.KeyStoreNotReady);
     await expect(ks.clear()).rejects.toThrow(ks.KeyStoreNotReady);
     await expect(ks.hasPersistedSession()).resolves.toBe(false);
     await expect(

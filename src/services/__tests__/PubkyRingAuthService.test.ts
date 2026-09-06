@@ -32,9 +32,28 @@ jest.mock('../KeyStore', () => ({
     setPubky: jest.fn(),
     setHomeserver: jest.fn(),
     setSessionSecret: jest.fn(),
+    deleteSessionSecret: jest.fn(),
   },
 }));
 
+jest.mock('../link/PaykitLinkNative', () => ({
+  PaykitLinkNative: {
+    isAvailable: jest.fn(() => false),
+    startAuthFlow: jest.fn(),
+    awaitAuthApproval: jest.fn(),
+    cancelAuthFlow: jest.fn(),
+    stopAuthKeepalive: jest.fn(),
+    signOutSession: jest.fn(),
+  },
+}));
+
+jest.mock('../link/LinkService', () => ({
+  LinkService: {
+    adoptApprovedSession: jest.fn(),
+    provisionReceiverAfterConnect: jest.fn(),
+    signOutSessionQuiet: jest.fn(),
+  },
+}));
 import { Linking } from 'react-native';
 import { get as rnGet } from '@synonymdev/react-native-pubky';
 import {
@@ -51,13 +70,18 @@ import {
   handleRingCallback,
   requestDelegation,
   resolvePendingEphemeralSk,
+  parsePubkyauthAuthorizationUrl,
   ExpiredDelegationError,
   StaleDelegationRequestError,
+  BindingMismatchError,
+  ProvisionReceiverFailedError,
   isExpiredDelegationError,
 } from '../PubkyRingAuthService';
 import { RING_GRANT_CAPABILITIES } from '../../types/link';
 import { pubkyZ32ToHex } from '../../utils/pubkyId';
 import { ENABLE_AUTH_TTL_MS } from '../../copy/uxCopy';
+import { PaykitLinkNative } from '../link/PaykitLinkNative';
+import { LinkService } from '../link/LinkService';
 
 function deferred<T>(): {
   promise: Promise<T>;
@@ -418,7 +442,12 @@ describe('handleRingCallback z32 owner pubky', () => {
     );
     expect(KeyStore.setPubky).toHaveBeenCalledWith(RING_PUBKY_Z32);
     expect(KeyStore.setHomeserver).toHaveBeenCalledWith(RING_HOMESERVER_Z32);
-    expect(result).toEqual({ pubky: RING_PUBKY_Z32, homeserver: RING_HOMESERVER_Z32 });
+    expect(result).toEqual({
+      pubky: RING_PUBKY_Z32,
+      homeserver: RING_HOMESERVER_Z32,
+      kind: 'legacy',
+      receiverPublished: false,
+    });
   });
 
   it('rejects a callback after cancel without storing keys', async () => {
@@ -504,6 +533,8 @@ describe('handleRingCallback z32 owner pubky', () => {
     await expect(callback).resolves.toEqual({
       pubky: RING_PUBKY_Z32,
       homeserver: RING_HOMESERVER_Z32,
+      kind: 'legacy',
+      receiverPublished: false,
     });
     expect(await resolvePendingEphemeralSk()).toBe('sk-b');
     expect(getPendingDelegationSnapshot()?.url).toBe(next.url);
@@ -527,7 +558,12 @@ describe('handleRingCallback z32 owner pubky', () => {
     mockPersistedHandoffSk = sk;
     mockPersistedHandoffExpiresAt = unexpired;
     const result = await handleRingCallback(ringCallbackUrl(RING_PUBKY_Z32));
-    expect(result).toEqual({ pubky: RING_PUBKY_Z32, homeserver: RING_HOMESERVER_Z32 });
+    expect(result).toEqual({
+      pubky: RING_PUBKY_Z32,
+      homeserver: RING_HOMESERVER_Z32,
+      kind: 'legacy',
+      receiverPublished: false,
+    });
   });
 
   it('rejects a legacy raw-hex handoff with no persisted TTL as expired', async () => {
@@ -601,9 +637,219 @@ describe('handleRingCallback z32 owner pubky', () => {
     await expect(callback).resolves.toEqual({
       pubky: RING_PUBKY_Z32,
       homeserver: RING_HOMESERVER_Z32,
+      kind: 'legacy',
+      receiverPublished: false,
     });
     expect(await resolvePendingEphemeralSk()).toBe('sk-b');
     expect(getPendingDelegationSnapshot()?.url).toBe(next.url);
     expect(mockPersistedHandoffSk).toBe('sk-b');
+  });
+
+  it('never persists session_secret on the legacy path', async () => {
+    (sb2Decrypt as jest.Mock).mockResolvedValue({
+      plaintext: Buffer.from(
+        JSON.stringify({ ...HANDOFF_PAYLOAD, session_secret: 'unused-root-secret' }),
+        'utf8',
+      ).toString('hex'),
+    });
+    await handleRingCallback(ringCallbackUrl(RING_PUBKY_Z32));
+    expect(KeyStore.setSessionSecret).not.toHaveBeenCalled();
+    expect(KeyStore.deleteSessionSecret).toHaveBeenCalled();
+  });
+});
+
+const AUTH_SECRET = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
+const AUTH_RELAY = 'https://httprelay.pubky.app/link/';
+
+function pubkyauthUrl(): string {
+  return (
+    `pubkyauth:///?caps=${encodeURIComponent(RING_GRANT_CAPABILITIES)}` +
+    `&secret=${AUTH_SECRET}` +
+    `&relay=${encodeURIComponent(AUTH_RELAY)}`
+  );
+}
+
+describe('parsePubkyauthAuthorizationUrl', () => {
+  it('parses empty-authority pubkyauth URLs by hand', () => {
+    const parsed = parsePubkyauthAuthorizationUrl(pubkyauthUrl());
+    expect(parsed.secret).toHaveLength(43);
+    expect(parsed.relay).toBe(AUTH_RELAY);
+    expect(parsed.caps).toBe(RING_GRANT_CAPABILITIES);
+  });
+
+  it('rejects a missing secret', () => {
+    expect(() => parsePubkyauthAuthorizationUrl('pubkyauth:///?caps=a&relay=https://x')).toThrow(
+      'pubkyauth URL is missing caps, secret, or relay',
+    );
+  });
+});
+
+describe('combined grant', () => {
+  const ephemeralSk = 'ephemeral-sk-hex';
+  const deviceId = 'hypercolor-abc123';
+
+  beforeEach(async () => {
+    await cancelPendingDelegation();
+    jest.mocked(PaykitLinkNative.isAvailable).mockReturnValue(true);
+    jest.mocked(PaykitLinkNative.startAuthFlow).mockResolvedValue({
+      flowId: 'flow-1',
+      authorizationUrl: pubkyauthUrl(),
+    });
+    jest.mocked(PaykitLinkNative.awaitAuthApproval).mockResolvedValue({
+      sessionAlias: 'alias-1',
+      pubky: RING_PUBKY_Z32,
+    });
+    jest.mocked(PaykitLinkNative.cancelAuthFlow).mockResolvedValue(undefined);
+    jest.mocked(PaykitLinkNative.stopAuthKeepalive).mockResolvedValue(undefined);
+    jest.mocked(LinkService.adoptApprovedSession).mockResolvedValue({
+      alias: 'alias-1',
+      pubky: RING_PUBKY_Z32,
+    });
+    jest.mocked(LinkService.provisionReceiverAfterConnect).mockResolvedValue({
+      pubky: RING_PUBKY_Z32,
+      receiverPath: 'hypercolor/wallet',
+      noisePublicKey: 'npk',
+      receiverRole: 'active',
+    });
+    (x25519GenerateKeypair as jest.Mock).mockResolvedValue({
+      secretKey: ephemeralSk,
+      publicKey: 'ephemeral-pk-hex',
+    });
+    (Linking.canOpenURL as jest.Mock).mockResolvedValue(false);
+    (rnGet as jest.Mock).mockResolvedValue({
+      isOk: () => true,
+      value: JSON.stringify({ sb2: 'envelope-b64' }),
+    });
+    (sb2VerifySignature as jest.Mock).mockResolvedValue(true);
+    (sb2Decrypt as jest.Mock).mockResolvedValue({
+      plaintext: Buffer.from(JSON.stringify(HANDOFF_PAYLOAD), 'utf8').toString('hex'),
+    });
+  });
+
+  afterEach(async () => {
+    jest.mocked(PaykitLinkNative.isAvailable).mockReturnValue(false);
+    await cancelPendingDelegation();
+  });
+
+  it('embeds secret(43)+relay+v=2 on the paykit-connect QR after startAuthFlow', async () => {
+    const result = await requestDelegation(deviceId);
+    expect(PaykitLinkNative.startAuthFlow).toHaveBeenCalledWith(RING_GRANT_CAPABILITIES);
+    const startOrder = jest.mocked(PaykitLinkNative.startAuthFlow).mock.invocationCallOrder[0]!;
+    const keyOrder = jest.mocked(x25519GenerateKeypair).mock.invocationCallOrder[0]!;
+    expect(startOrder).toBeLessThan(keyOrder);
+    expect(result.url).toContain(`secret=${encodeURIComponent(AUTH_SECRET)}`);
+    expect(AUTH_SECRET).toHaveLength(43);
+    expect(result.url).toContain(`relay=${encodeURIComponent(AUTH_RELAY)}`);
+    expect(result.url).toContain('v=2');
+    expect(deviceId).toMatch(/^hypercolor-[0-9a-f]+$/);
+    expect(result.url).toContain(`deviceId=${encodeURIComponent(deviceId)}`);
+  });
+
+  it('adopts session then keys then receiver and never stores session_secret', async () => {
+    const order: string[] = [];
+    jest.mocked(LinkService.adoptApprovedSession).mockImplementation(async () => {
+      order.push('session');
+      return { alias: 'alias-1', pubky: RING_PUBKY_Z32 };
+    });
+    jest.mocked(KeyStore.setAppKeypair).mockImplementation(async () => {
+      order.push('keys');
+    });
+    jest.mocked(LinkService.provisionReceiverAfterConnect).mockImplementation(async () => {
+      order.push('receiver');
+      return {
+        pubky: RING_PUBKY_Z32,
+        receiverPath: 'hypercolor/wallet',
+        noisePublicKey: 'npk',
+        receiverRole: 'active',
+      };
+    });
+    await requestDelegation(deviceId);
+    const result = await handleRingCallback(ringCallbackUrl(RING_PUBKY_Z32));
+    expect(order).toEqual(['session', 'keys', 'receiver']);
+    expect(result).toEqual({
+      pubky: RING_PUBKY_Z32,
+      homeserver: RING_HOMESERVER_Z32,
+      kind: 'combined',
+      receiverPublished: true,
+    });
+    expect(KeyStore.setSessionSecret).not.toHaveBeenCalled();
+    expect(KeyStore.deleteSessionSecret).toHaveBeenCalled();
+  });
+
+  it('locator-only at deadline persists nothing', async () => {
+    jest
+      .mocked(PaykitLinkNative.awaitAuthApproval)
+      .mockImplementation(() => new Promise(() => undefined));
+    await requestDelegation(deviceId);
+    const snapshot = getPendingDelegationSnapshot();
+    const nowSpy = jest.spyOn(Date, 'now').mockReturnValue((snapshot?.expiresAt ?? 0) + 1);
+    jest.mocked(KeyStore.setAppKeypair).mockClear();
+    await expect(handleRingCallback(ringCallbackUrl(RING_PUBKY_Z32))).rejects.toBeInstanceOf(
+      ExpiredDelegationError,
+    );
+    expect(KeyStore.setAppKeypair).not.toHaveBeenCalled();
+    expect(LinkService.adoptApprovedSession).not.toHaveBeenCalled();
+    nowSpy.mockRestore();
+  });
+
+  it('drops plaintext when /session adopt fails', async () => {
+    jest.mocked(LinkService.adoptApprovedSession).mockRejectedValue(new Error('session failed'));
+    await requestDelegation(deviceId);
+    jest.mocked(KeyStore.setAppKeypair).mockClear();
+    await expect(handleRingCallback(ringCallbackUrl(RING_PUBKY_Z32))).rejects.toThrow(
+      'session failed',
+    );
+    expect(KeyStore.setAppKeypair).not.toHaveBeenCalled();
+    expect(LinkService.signOutSessionQuiet).toHaveBeenCalledWith('alias-1');
+    expect(LinkService.provisionReceiverAfterConnect).not.toHaveBeenCalled();
+  });
+
+  it('keeps session+keys and throws Retry-publish when provisionReceiver fails', async () => {
+    jest
+      .mocked(LinkService.provisionReceiverAfterConnect)
+      .mockRejectedValue(new Error('put failed'));
+    await requestDelegation(deviceId);
+    await expect(handleRingCallback(ringCallbackUrl(RING_PUBKY_Z32))).rejects.toBeInstanceOf(
+      ProvisionReceiverFailedError,
+    );
+    expect(LinkService.adoptApprovedSession).toHaveBeenCalled();
+    expect(KeyStore.setAppKeypair).toHaveBeenCalled();
+  });
+
+  it('cancel disposes the native auth flow and signs out a late handle', async () => {
+    const approval = deferred<{ sessionAlias: string; pubky: string }>();
+    jest.mocked(PaykitLinkNative.awaitAuthApproval).mockReturnValue(approval.promise);
+    await requestDelegation(deviceId);
+    const pending = handleRingCallback(ringCallbackUrl(RING_PUBKY_Z32));
+    for (
+      let i = 0;
+      i < 20 && jest.mocked(PaykitLinkNative.awaitAuthApproval).mock.calls.length === 0;
+      i += 1
+    ) {
+      await Promise.resolve();
+    }
+    expect(PaykitLinkNative.awaitAuthApproval).toHaveBeenCalledWith('flow-1');
+    await cancelPendingDelegation();
+    expect(PaykitLinkNative.cancelAuthFlow).toHaveBeenCalledWith('flow-1');
+    approval.resolve({ sessionAlias: 'alias-late', pubky: RING_PUBKY_Z32 });
+    await expect(pending).rejects.toThrow(
+      'No pending delegation request. Call requestDelegation() before handling the callback.',
+    );
+    expect(LinkService.signOutSessionQuiet).toHaveBeenCalledWith('alias-late');
+    expect(KeyStore.setAppKeypair).not.toHaveBeenCalled();
+  });
+
+  it('rejects mixed identities (callback vs session vs payload)', async () => {
+    jest.mocked(PaykitLinkNative.awaitAuthApproval).mockResolvedValue({
+      sessionAlias: 'alias-1',
+      pubky: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    });
+    await requestDelegation(deviceId);
+    jest.mocked(KeyStore.setAppKeypair).mockClear();
+    await expect(handleRingCallback(ringCallbackUrl(RING_PUBKY_Z32))).rejects.toBeInstanceOf(
+      BindingMismatchError,
+    );
+    expect(LinkService.signOutSessionQuiet).toHaveBeenCalled();
+    expect(KeyStore.setAppKeypair).not.toHaveBeenCalled();
   });
 });

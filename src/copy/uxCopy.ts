@@ -78,7 +78,9 @@ export const COPY = {
   preparingPaykitConnect: 'Preparing paykit-connect…',
   couldNotStartAuthorization: 'Could not start authorization.',
   couldNotCompleteAuthorization: 'Could not complete authorization.',
-  connectExplanation: 'Adopt your identity on this device. Pubky Ring approves the connection.',
+  connectExplanation: 'Approve once in Pubky Ring',
+  retryPublish: 'Retry publish',
+  couldNotPublishReceiver: 'Could not publish the receiver. Retry publish.',
 
   messageRequests: 'Message requests',
   inbox: 'Inbox',

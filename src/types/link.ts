@@ -82,8 +82,8 @@ export function formatAuthFlowCapabilities(input: string | readonly string[]): s
 }
 
 /**
- * One Ring grant for DMs + owner writes. Requested by Enable Messaging
- * (`startAuthFlow`) and advertised on Welcome `paykit-connect` as `caps=`.
+ * One Ring grant for DMs + owner writes. Requested by Welcome combined
+ * Connect (`startAuthFlow` + paykit-connect QR) and Enable Messaging recovery.
  */
 export const RING_GRANT_CAPABILITIES = formatAuthFlowCapabilities([
   PAYKIT_MESSAGING_CAPABILITY,

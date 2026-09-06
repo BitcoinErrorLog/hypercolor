@@ -562,6 +562,10 @@ export function getSessionSecret(): string | null {
   return requireStore('getSessionSecret').getString(SESSION_SECRET_KEY) ?? null;
 }
 
+export function deleteSessionSecret(): void {
+  requireStore('deleteSessionSecret').remove(SESSION_SECRET_KEY);
+}
+
 // ─── Link session alias (sync, MMKV — opaque native handle, not a bearer) ────
 
 export function setLinkSession(sessionAlias: string): void {
@@ -1025,6 +1029,7 @@ export const KeyStore = {
   getHomeserver,
   setSessionSecret,
   getSessionSecret,
+  deleteSessionSecret,
   // Sign-out incomplete markers
   markSignOutIncomplete,
   isSignOutIncomplete,

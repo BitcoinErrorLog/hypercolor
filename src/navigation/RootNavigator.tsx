@@ -14,6 +14,7 @@ import ThreadScreen from '../screens/main/ThreadScreen';
 import ChannelScreen from '../screens/main/ChannelScreen';
 import { PubkyRingAuthService } from '../services/PubkyRingAuthService';
 import { PubkyService } from '../services/PubkyService';
+import { LinkService } from '../services/link/LinkService';
 import {
   bindPendingPublicJoin,
   consumePendingPublicJoinRedirect,
@@ -129,10 +130,25 @@ export function RootNavigator() {
 
       try {
         await PubkyService.awaitSignOutWipe();
-        const { pubky, homeserver } = await PubkyRingAuthService.handleRingCallback(url);
-        setAuthenticated(pubky as import('../types').PubkyKey, homeserver);
-        notifyEnableMessagingResume();
+        const result = await PubkyRingAuthService.handleRingCallback(url);
+        setAuthenticated(result.pubky as import('../types').PubkyKey, result.homeserver);
+        if (result.kind === 'legacy') {
+          notifyEnableMessagingResume();
+        }
       } catch (err) {
+        if (PubkyRingAuthService.isProvisionReceiverFailedError(err)) {
+          setAuthenticated(err.pubky as import('../types').PubkyKey, err.homeserver);
+          Alert.alert(COPY.couldNotPublishReceiver, COPY.couldNotPublishReceiver, [
+            { text: COPY.cancel, style: 'cancel' },
+            {
+              text: COPY.retryPublish,
+              onPress: () => {
+                void LinkService.provisionReceiverAfterConnect();
+              },
+            },
+          ]);
+          return;
+        }
         const sanitized = sanitizeError(err, COPY.couldNotCompleteAuthorization);
         if (
           PubkyRingAuthService.isExpiredDelegationError(err) ||

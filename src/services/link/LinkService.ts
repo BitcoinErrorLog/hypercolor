@@ -83,10 +83,9 @@ import {
  *
  * ## Product wiring (v1)
  *
- * - `LinkService.enable()` — one `startAuthFlow` with
- *   `/pub/paykit/:rw,/pub/hypercolor.app/v1/:rw`. That Paykit session is
- *   used for Encrypted Links and owner homeserver writes. Welcome
- *   `paykit-connect` is identity/UKD AppCert only.
+ * - Welcome combined grant: `startAuthFlow` is minted with the paykit-connect
+ *   QR; after one Ring sheet, `adoptApprovedSession` then UKD keys then
+ *   `provisionReceiver`. `LinkService.enable()` remains recovery / old Ring.
  * - App startup / `AppState` `'active'` (App.tsx):
  *     `await LinkService.recoverPendingSends();`
  *     `await LinkService.drainRetries();`
@@ -347,6 +346,47 @@ export const LinkService = {
 
   hasSession(): boolean {
     return session !== null;
+  },
+
+  /**
+   * Adopt a Ring-approved pubkyauth session (cookie/bearer already created
+   * inside native `awaitAuthApproval`). Persist the alias, then native adopt.
+   */
+  async adoptApprovedSession(
+    sessionAlias: string,
+    pubky: string,
+  ): Promise<{ alias: string; pubky: string }> {
+    const pendingWipe = pendingWipeInFlight();
+    if (pendingWipe) await waitForWipeInFlight();
+    await persistThenAdopt(sessionAlias);
+    KeyStore.setPubky(pubky);
+    session = { alias: sessionAlias, pubky };
+    paintOwner(pubky);
+    return { alias: sessionAlias, pubky };
+  },
+
+  /**
+   * Publish the receiver marker for the already-adopted Connect session.
+   * Used after UKD keys are persisted, and as the Retry-publish CTA.
+   */
+  async provisionReceiverAfterConnect(): Promise<{
+    pubky: string;
+    receiverPath: string;
+    noisePublicKey: string;
+    receiverRole: ReceiverRole;
+  }> {
+    if (!session) {
+      throw new Error('LinkService.provisionReceiverAfterConnect: no adopted session');
+    }
+    return provisionReceiver(session.alias, session.pubky);
+  },
+
+  async signOutSessionQuiet(sessionAlias: string): Promise<void> {
+    try {
+      await PaykitLinkNative.signOutSession(sessionAlias);
+    } catch {
+      // Detached / already consumed.
+    }
   },
 
   /**
