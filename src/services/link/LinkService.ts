@@ -1979,7 +1979,16 @@ async function ensureLinkLocked(
     marker = undefined;
   }
 
-  if (marker) {
+  // A responder that already wrote Noise msg2 must advance that same
+  // handshake to read initiator msg3. `probeInboundLink` is accept+one
+  // advance: calling it again starts a new XX, rewrites msg2, and the
+  // initiator (already established after the first msg2) never re-sends
+  // msg3. Inbox poll / open-thread sync then loop `result=pending`.
+  const responderHandshaking =
+    (live?.status === 'handshaking' && live.role === 'responder') ||
+    (stored?.status === 'handshaking' && stored.role === 'responder');
+
+  if (marker && !responderHandshaking) {
     let inbound: Extract<LinkProbeResult, { result: 'pending' | 'established' }> | null;
     try {
       inbound = await probeInbound(

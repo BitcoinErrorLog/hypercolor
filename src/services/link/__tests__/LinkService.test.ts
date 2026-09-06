@@ -2645,25 +2645,55 @@ describe('LinkService', () => {
   });
 
   describe('stale non-ready link vs fresh msg1', () => {
-    it('replaces a young stored non-ready handshake when a valid new msg1 is probed', async () => {
+    it('advances a pending responder handshake instead of accepting again', async () => {
+      mockedNative.probeInboundLink.mockResolvedValue({
+        result: 'pending',
+        linkId: 'resp-1',
+        snapshot: 'resp-msg2',
+      });
+      await expect(LinkService.ensureLinkWith(PEER)).resolves.toBe('handshaking-responder');
+      mockedNative.probeInboundLink.mockClear();
+      mockedStorage.getLink.mockResolvedValue(
+        storedLink({ role: 'responder', status: 'handshaking', snapshot: 'resp-msg2' }),
+      );
+      mockedNative.advanceHandshake.mockResolvedValue({
+        status: 'established',
+        snapshot: 'resp-msg3',
+      });
+      mockedNative.restoreLink.mockResolvedValue({ linkId: 'est-resp' });
+
+      await expect(LinkService.ensureLinkWith(PEER)).resolves.toBe('ready');
+
+      expect(mockedNative.probeInboundLink).not.toHaveBeenCalled();
+      expect(mockedNative.advanceHandshake).toHaveBeenCalledWith('resp-1');
+    });
+
+    it('does not re-accept a young stored responder handshake on inbox poll', async () => {
       mockedStorage.getLink.mockResolvedValue(
         storedLink({ role: 'responder', status: 'handshaking', snapshot: 'old-channel' }),
       );
+      mockedNative.restoreHandshake.mockResolvedValue({ linkId: 'hs-old', status: 'pending' });
+      mockedNative.advanceHandshake.mockResolvedValue({
+        status: 'established',
+        snapshot: 'msg3-channel',
+      });
+      mockedNative.restoreLink.mockResolvedValue({ linkId: 'est-old' });
+      mockedNative.receivePrivateMessages.mockResolvedValue({
+        messages: [],
+        snapshot: 'msg3-channel',
+      });
       mockedNative.probeInboundLink.mockResolvedValue({
         result: 'pending',
         linkId: 'fresh-hs',
         snapshot: 'new-channel',
       });
-      mockedStorage.deleteLink.mockResolvedValue(undefined);
 
       await expect(LinkService.syncInbox([PEER])).resolves.toEqual([]);
 
-      expect(mockedNative.probeInboundLink).toHaveBeenCalled();
-      expect(mockedStorage.deleteLink).toHaveBeenCalledWith(OWNER, PEER);
-      expect(mockedNative.restoreHandshake).not.toHaveBeenCalled();
-      expect(mockedStorage.upsertLink).toHaveBeenCalledWith(
-        expect.objectContaining({ snapshot: 'new-channel', role: 'responder' }),
-      );
+      expect(mockedNative.probeInboundLink).not.toHaveBeenCalled();
+      expect(mockedNative.restoreHandshake).toHaveBeenCalled();
+      expect(mockedNative.advanceHandshake).toHaveBeenCalledWith('hs-old');
+      expect(mockedStorage.deleteLink).not.toHaveBeenCalled();
     });
 
     it('discards a stale responder handshake then adopts a freshly decrypted msg1', async () => {
