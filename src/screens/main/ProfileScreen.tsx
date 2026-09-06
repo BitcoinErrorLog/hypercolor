@@ -9,6 +9,8 @@ import type { RootStackParamList } from '../../types';
 import { DebugSignupPanel } from '../auth/DebugSignupPanel';
 import { getE2eIdentity } from '../../navigation/e2eSignupResult';
 import { switchE2eSavedSlotFromUi } from '../../navigation/e2eDeepLinks';
+import { sanitizeDisplayName } from '../../lib/sanitizeDisplayName';
+import { StorageService } from '../../services/StorageService';
 import { COPY } from '../../copy/uxCopy';
 import { ensureSignOutPaint } from '../../services/paintedOwner';
 import { shortPubky } from '../../ui/shortPubky';
@@ -37,6 +39,7 @@ export default function ProfileScreen() {
     message: string;
     details: string | null;
   } | null>(null);
+  const [nameDraft, setNameDraft] = useState('');
   const [copied, setCopied] = useState(false);
   const [qrOpen, setQrOpen] = useState(false);
   const [qrCopied, setQrCopied] = useState(false);
@@ -48,12 +51,15 @@ export default function ProfileScreen() {
       void PubkyService.getProfile(pubky).then(next => {
         if (next) setProfile(next);
       });
+      void StorageService.getOwnerDisplayName(pubky).then(stored => {
+        if (stored) setNameDraft(stored);
+      });
     }, [pubky, setProfile]),
   );
 
   const session = sessionUiModel(sessionKind);
-  const displayName =
-    profile?.displayName?.trim() || (pubky ? shortPubky(pubky) : COPY.notConnected);
+  const storedOrProfile = nameDraft.trim() || profile?.displayName?.trim() || '';
+  const displayName = storedOrProfile || (pubky ? shortPubky(pubky) : COPY.notConnected);
   const lastBackupAt = getLastBackupAt();
 
   async function confirmSignOut() {
@@ -156,6 +162,25 @@ export default function ProfileScreen() {
       }}
       onConfirmSignOut={() => {
         void confirmSignOut();
+      }}
+      nameDraft={nameDraft}
+      onChangeNameDraft={setNameDraft}
+      onSaveDisplayName={() => {
+        if (!pubky) return;
+        const next = sanitizeDisplayName(nameDraft);
+        setNameDraft(next);
+        void StorageService.setOwnerDisplayName(pubky, next);
+        setProfile({
+          pubky,
+          displayName: next,
+          updatedAt: Date.now(),
+          ...(profile?.avatarHash ? { avatarHash: profile.avatarHash } : {}),
+          ...(profile?.status ? { status: profile.status } : {}),
+        });
+        void PubkyService.publishProfile(pubky, {
+          displayName: next,
+          updatedAt: Date.now(),
+        }).catch(() => undefined);
       }}
     />
   );

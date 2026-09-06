@@ -15,6 +15,7 @@ import {
   BackHandler,
   AccessibilityInfo,
   findNodeHandle,
+  Pressable,
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
@@ -43,9 +44,12 @@ import { eventIdsWithDeliveryQueue } from '../../ui/failedSendRetry';
 import {
   pickAndSendFile,
   pickAndSendPhoto,
+  sendGifAttachment,
   type ComposerAttachNotice,
 } from '../../components/ComposerAttachButton';
 import { ComposerActionMenu } from '../../components/ComposerActionMenu';
+import { EmojiAutocomplete, EmojiPickerSheet } from '../../components/EmojiPickerSheet';
+import { GifPickerSheet } from '../../components/GifPickerSheet';
 import { formatDeliveryState } from '../../ui/messageStatus';
 import { formatGroupFanoutAggregate } from '../../ui/groupFanoutStatus';
 import { HIT_SLOP_44, minHitStyle } from '../../ui/hitTarget';
@@ -53,15 +57,32 @@ import { peerIdentity } from '../../ui/peerIdentity';
 import { COPY, messageByteCountLabel, publicGraphWarning } from '../../copy/uxCopy';
 import { sanitizeError } from '../../ui/sanitizedError';
 import { useSessionStatusStore } from '../../stores/sessionStatusStore';
+import { copyText } from '../../utils/copyText';
+import {
+  applyEmojiAtShortcode,
+  matchShortcodeTail,
+  replaceClosedShortcodes,
+} from '../../lib/emoji/matchShortcode';
 import {
   composerActionItems,
   draftEnvelopeByteSize,
   draftExceedsByteCap,
+  type ComposerActionId,
   type DraftEnvelopeContext,
 } from '../../ui/composerActions';
 import { LINK_MESSAGE_MAX_BYTES } from '../../types/link';
 import { color, space, radius, typeRole, measure } from '../../theme';
-import { Avatar, Button, Icon, ListRow, MessageBubble } from '../../ui/primitives';
+import {
+  Avatar,
+  Button,
+  DaySeparator,
+  formatDaySeparator,
+  Icon,
+  ListRow,
+  MarkdownText,
+  MessageBubble,
+  sameCalendarDay,
+} from '../../ui/primitives';
 import {
   COMPOSER_KAV_BEHAVIOR,
   COMPOSER_KAV_OFFSET,
@@ -98,6 +119,8 @@ export default function ChannelScreen({ route }: Props) {
   const [editingEventId, setEditingEventId] = useState<string | null>(null);
   const [fanoutOutcomes, setFanoutOutcomes] = useState<GroupFanoutOutcome[]>([]);
   const [actionMenuOpen, setActionMenuOpen] = useState(false);
+  const [gifPickerOpen, setGifPickerOpen] = useState(false);
+  const [emojiPickerOpen, setEmojiPickerOpen] = useState(false);
   const [composerNotice, setComposerNotice] = useState<ComposerAttachNotice | null>(null);
   const [retryableEventIds, setRetryableEventIds] = useState<Set<string>>(() => new Set());
 
@@ -216,7 +239,7 @@ export default function ChannelScreen({ route }: Props) {
       selfActive={selfActive}
       memberCap={PRIVATE_GROUP_MEMBER_CAP}
       onBack={() => nav.goBack()}
-      onChangeDraft={setDraft}
+      onChangeDraft={value => setDraft(replaceClosedShortcodes(value))}
       onSend={() => {
         void handleSend();
       }}
@@ -224,6 +247,21 @@ export default function ChannelScreen({ route }: Props) {
       composerNotice={composerNotice}
       onOpenActionMenu={() => setActionMenuOpen(true)}
       onCloseActionMenu={() => setActionMenuOpen(false)}
+      gifPickerOpen={gifPickerOpen}
+      emojiPickerOpen={emojiPickerOpen}
+      onOpenEmojiPicker={() => setEmojiPickerOpen(true)}
+      onCloseEmojiPicker={() => setEmojiPickerOpen(false)}
+      onCloseGifPicker={() => setGifPickerOpen(false)}
+      onSendGif={gifId => {
+        if (!channel) return;
+        setGifPickerOpen(false);
+        void sendGifAttachment({ type: 'channel', channelId: channel.channelId }, gifId).then(
+          result => {
+            if (result.ok) void reload();
+            else if ('notice' in result) setComposerNotice(result.notice);
+          },
+        );
+      }}
       onComposerAction={id => {
         setActionMenuOpen(false);
         if (!channel) return;
@@ -239,6 +277,10 @@ export default function ChannelScreen({ route }: Props) {
             if (result.ok) void reload();
             else if ('notice' in result) setComposerNotice(result.notice);
           });
+          return;
+        }
+        if (id === 'gif') {
+          setGifPickerOpen(true);
         }
       }}
       onReply={setReplyTo}
@@ -345,10 +387,16 @@ export function ChannelScreenContent({
   onChangeDraft,
   onSend,
   actionMenuOpen,
+  gifPickerOpen = false,
+  emojiPickerOpen = false,
   composerNotice,
   onOpenActionMenu,
   onCloseActionMenu,
   onComposerAction,
+  onOpenEmojiPicker,
+  onCloseEmojiPicker,
+  onCloseGifPicker,
+  onSendGif,
   onReply,
   onClearReply,
   onToggleMembers,
@@ -383,12 +431,16 @@ export function ChannelScreenContent({
   onChangeDraft: (value: string) => void;
   onSend: () => void;
   actionMenuOpen: boolean;
+  gifPickerOpen?: boolean;
+  emojiPickerOpen?: boolean;
   composerNotice: ComposerAttachNotice | null;
   onOpenActionMenu: () => void;
   onCloseActionMenu: () => void;
-  onComposerAction: (
-    id: 'photo' | 'file' | 'request-payment' | 'send-tip' | 'send-tip-list',
-  ) => void;
+  onComposerAction: (id: ComposerActionId) => void;
+  onOpenEmojiPicker?: () => void;
+  onCloseEmojiPicker?: () => void;
+  onCloseGifPicker?: () => void;
+  onSendGif?: (gifId: string) => void;
   onReply: (message: GroupMessage) => void;
   onClearReply: () => void;
   onToggleMembers: () => void;
@@ -487,7 +539,7 @@ export function ChannelScreenContent({
       const lastInGroup = next ? !sameChannelRun(item, next) : true;
       const daySeparator =
         !previous || !sameCalendarDay(previous.sentAt, item.sentAt) ? (
-          <TimelineDaySeparator label={formatDaySeparator(item.sentAt)} />
+          <DaySeparator label={formatDaySeparator(item.sentAt)} testID="channelDaySeparator" />
         ) : null;
       if (item.kind === GROUP_MEMBERSHIP_KIND) {
         return (
@@ -560,9 +612,16 @@ export function ChannelScreenContent({
                 }
               />
             ) : (
-              <Text style={[styles.bubbleText, isMine ? styles.mineText : styles.theirsText]}>
-                {item.deleted ? 'Message deleted' : item.body}
-              </Text>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={COPY.copyMessage}
+                onLongPress={() => copyText(item.deleted ? 'Message deleted' : item.body)}
+              >
+                <MarkdownText
+                  source={item.deleted ? 'Message deleted' : item.body}
+                  color={isMine ? color.textOnBrand : color.textPrimary}
+                />
+              </Pressable>
             )}
             {item.editedAt ? <Text style={styles.time}>edited</Text> : null}
             {isMine && !isPublic && item.deliveryState === 'failed' ? (
@@ -888,6 +947,12 @@ export function ChannelScreenContent({
                   ) : null}
                 </View>
               ) : null}
+              {matchShortcodeTail(draft) ? (
+                <EmojiAutocomplete
+                  suggestions={matchShortcodeTail(draft)!.suggestions}
+                  onPick={glyph => onChangeDraft(applyEmojiAtShortcode(draft, glyph))}
+                />
+              ) : null}
               <View
                 style={[
                   styles.composer,
@@ -914,6 +979,16 @@ export function ChannelScreenContent({
                   style={styles.plusBtn}
                 >
                   <Icon name="add" tone="secondary" />
+                </TouchableOpacity>
+                <TouchableOpacity
+                  testID="channelComposerEmoji"
+                  accessibilityRole="button"
+                  accessibilityLabel={COPY.emojiPickerTitle}
+                  hitSlop={HIT_SLOP_44}
+                  onPress={onOpenEmojiPicker}
+                  style={styles.plusBtn}
+                >
+                  <Icon name="happy-outline" tone="secondary" />
                 </TouchableOpacity>
                 <TextInput
                   testID="channelComposer"
@@ -961,6 +1036,19 @@ export function ChannelScreenContent({
                   {byteLabel}
                 </Text>
               ) : null}
+              <EmojiPickerSheet
+                visible={emojiPickerOpen}
+                onClose={() => onCloseEmojiPicker?.()}
+                onPick={glyph => {
+                  onChangeDraft(`${draft}${glyph}`);
+                  onCloseEmojiPicker?.();
+                }}
+              />
+              <GifPickerSheet
+                visible={gifPickerOpen}
+                onClose={() => onCloseGifPicker?.()}
+                onPick={hit => onSendGif?.(hit.id)}
+              />
             </>
           ) : null}
         </KeyboardAvoidingView>
@@ -977,25 +1065,9 @@ function formatTime(ms: number): string {
   return new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
-function TimelineDaySeparator({ label }: { label: string }) {
-  return (
-    <View style={styles.daySeparator} accessibilityRole="text">
-      <Text style={styles.daySeparatorText}>{label}</Text>
-    </View>
-  );
-}
-
 function sameChannelRun(previous: GroupMessage, next: GroupMessage): boolean {
   if (previous.kind === GROUP_MEMBERSHIP_KIND || next.kind === GROUP_MEMBERSHIP_KIND) return false;
   return previous.senderPubky === next.senderPubky && sameCalendarDay(previous.sentAt, next.sentAt);
-}
-
-function sameCalendarDay(leftMs: number, rightMs: number): boolean {
-  return new Date(leftMs).toDateString() === new Date(rightMs).toDateString();
-}
-
-function formatDaySeparator(ms: number): string {
-  return new Date(ms).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
 const styles = StyleSheet.create({

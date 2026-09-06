@@ -15,6 +15,8 @@ import { MessageRequestsContent } from '../../src/screens/main/MessageRequestsSc
 import { SettingsScreenContent } from '../../src/screens/main/SettingsScreenContent';
 import { ProfileScreenContent } from '../../src/screens/main/ProfileScreenContent';
 import { ComposerActionMenu } from '../../src/components/ComposerActionMenu';
+import { EmojiPickerSheet } from '../../src/components/EmojiPickerSheet';
+import { GifPickerSheet } from '../../src/components/GifPickerSheet';
 import { PaymentComposeSheet } from '../../src/components/PaymentComposeSheet';
 import { PaymentReviewSheet } from '../../src/components/PaymentReviewSheet';
 import { ThreadTipBarContent } from '../../src/components/ThreadTipBar';
@@ -106,6 +108,9 @@ function chats(patch: Partial<React.ComponentProps<typeof ChatsScreenContent>> =
       onRetry={n}
       onCopyMyPubky={n}
       onShareMyPubky={n}
+      onChangeFilter={n}
+      onOpenSearch={n}
+      listFilter="inbox"
       {...patch}
     />
   );
@@ -312,6 +317,9 @@ function profile(patch: Partial<React.ComponentProps<typeof ProfileScreenContent
       onShowQr={n}
       onCloseQr={n}
       onQrCopied={n}
+      nameDraft="Cedar Example"
+      onChangeNameDraft={n}
+      onSaveDisplayName={n}
       {...patch}
     />
   );
@@ -784,6 +792,9 @@ export const SCENE_RENDERERS: Record<string, () => React.ReactElement> = {
       onBlock={n}
       onUnblock={n}
       onRemove={n}
+      nickname="Ada"
+      onChangeNickname={n}
+      onSaveNickname={n}
     />
   ),
   'tabs.profile.unnamed': () => profile({ displayName: COPY.notConnected, pubky: null }),
@@ -1094,6 +1105,50 @@ export const SCENE_RENDERERS: Record<string, () => React.ReactElement> = {
   ),
   'tabs.settings.recovery-gate': () =>
     settingsScrolled({ recoveryCode: 'fix-code-aaaa-bbbb', recoveryConfirmed: false }, 250),
+  'stack.composer.emoji': () => (
+    <View style={styles.fill}>
+      <EmojiPickerSheet visible onClose={n} onPick={n} />
+    </View>
+  ),
+  'stack.composer.gif-unconfigured': () => (
+    <View style={styles.fill}>
+      <GifPickerSheet
+        visible
+        onClose={n}
+        onPick={n}
+        seedResult={{ ok: false, reason: 'not-configured', message: 'not configured' }}
+      />
+    </View>
+  ),
+  'tabs.chats.archived': () =>
+    chats({
+      conversations: CHAT_ROWS.map(row => ({ ...row, unreadCount: 0 })),
+      listFilter: 'archived',
+    }),
+  'stack.thread.day-separator': () => (
+    <ThreadScreenContent
+      {...threadProps({
+        linkMessages: [
+          linkMessage({
+            eventId: 'evt-day-1',
+            direction: 'received',
+            body: 'Yesterday fixture.',
+            deliveryState: 'delivered',
+            sentAt: FIXED_NOW_MS - 36 * 60 * 60 * 1000,
+          }),
+          linkMessage({
+            eventId: 'evt-day-2',
+            direction: 'sent',
+            body: 'Today fixture.',
+            deliveryState: 'read',
+            sentAt: FIXED_NOW_MS - 60_000,
+          }),
+        ],
+      })}
+    />
+  ),
+  'tabs.profile.display-name': () =>
+    profile({ displayName: 'Cedar Example', nameDraft: 'Cedar Example' }),
 };
 
 export function renderVrtScene(id: string): React.ReactElement {

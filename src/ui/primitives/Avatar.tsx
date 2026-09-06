@@ -1,5 +1,6 @@
 import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
+import { sanitizeDisplayName } from '../../lib/sanitizeDisplayName';
 import { color, typeRole } from '../../theme';
 
 export type AvatarSize = 'sm' | 'md' | 'lg' | 'xl';
@@ -25,7 +26,7 @@ function shortPubky(pubky: string): string {
 }
 
 function initialsFrom(name: string | null | undefined, pubky: string | null | undefined): string {
-  const trimmed = name?.trim();
+  const trimmed = sanitizeDisplayName(name ?? '');
   if (trimmed) {
     const parts = trimmed.split(/\s+/).filter(Boolean);
     if (parts.length >= 2) {

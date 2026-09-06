@@ -1,4 +1,5 @@
 import { getDb } from '../db';
+import { likePattern, normalizeSearchText } from '../lib/search/normalizeSearchText';
 import type {
   Contact,
   DeliveryQueueItem,
@@ -192,6 +193,191 @@ export const StorageService = {
         ],
       );
     });
+  },
+
+  async setContactNickname(
+    ownerPubky: PubkyKey,
+    peerPubky: PubkyKey,
+    nickname: string,
+  ): Promise<void> {
+    await ownedWrite(ownerPubky, db => {
+      const ts = now();
+      if (nickname.length === 0) {
+        db.executeSync('DELETE FROM contact_nicknames WHERE owner_pubky = ? AND peer_pubky = ?', [
+          ownerPubky,
+          peerPubky,
+        ]);
+        return;
+      }
+      db.executeSync(
+        `INSERT INTO contact_nicknames (owner_pubky, peer_pubky, nickname, updated_at)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(owner_pubky, peer_pubky) DO UPDATE SET
+           nickname = excluded.nickname,
+           updated_at = excluded.updated_at`,
+        [ownerPubky, peerPubky, nickname, ts],
+      );
+    });
+  },
+
+  async getContactNickname(ownerPubky: PubkyKey, peerPubky: PubkyKey): Promise<string | null> {
+    const db = await getDb();
+    const result = db.executeSync(
+      'SELECT nickname FROM contact_nicknames WHERE owner_pubky = ? AND peer_pubky = ? LIMIT 1',
+      [ownerPubky, peerPubky],
+    );
+    const row = result.rows?.[0];
+    return row ? String(row.nickname) : null;
+  },
+
+  async getNicknamesForOwner(ownerPubky: PubkyKey): Promise<Record<string, string>> {
+    const db = await getDb();
+    const result = db.executeSync(
+      'SELECT peer_pubky, nickname FROM contact_nicknames WHERE owner_pubky = ?',
+      [ownerPubky],
+    );
+    const map: Record<string, string> = {};
+    for (const row of result.rows ?? []) {
+      map[String(row.peer_pubky)] = String(row.nickname);
+    }
+    return map;
+  },
+
+  async setOwnerDisplayName(ownerPubky: PubkyKey, displayName: string): Promise<void> {
+    await ownedWrite(ownerPubky, db => {
+      db.executeSync(
+        `INSERT INTO owner_profiles (owner_pubky, display_name, updated_at)
+         VALUES (?, ?, ?)
+         ON CONFLICT(owner_pubky) DO UPDATE SET
+           display_name = excluded.display_name,
+           updated_at = excluded.updated_at`,
+        [ownerPubky, displayName, now()],
+      );
+    });
+  },
+
+  async getOwnerDisplayName(ownerPubky: PubkyKey): Promise<string | null> {
+    const db = await getDb();
+    const result = db.executeSync(
+      'SELECT display_name FROM owner_profiles WHERE owner_pubky = ? LIMIT 1',
+      [ownerPubky],
+    );
+    const row = result.rows?.[0];
+    return row ? String(row.display_name) : null;
+  },
+
+  async setThreadLocalPrefs(
+    ownerPubky: PubkyKey,
+    conversationId: string,
+    prefs: { muted?: boolean; archived?: boolean },
+  ): Promise<void> {
+    await ownedWrite(ownerPubky, db => {
+      const existing = db.executeSync(
+        'SELECT muted, archived FROM thread_local_prefs WHERE owner_pubky = ? AND conversation_id = ?',
+        [ownerPubky, conversationId],
+      ).rows?.[0];
+      const muted = prefs.muted === undefined ? Number(existing?.muted ?? 0) : prefs.muted ? 1 : 0;
+      const archived =
+        prefs.archived === undefined ? Number(existing?.archived ?? 0) : prefs.archived ? 1 : 0;
+      db.executeSync(
+        `INSERT INTO thread_local_prefs (owner_pubky, conversation_id, muted, archived, updated_at)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(owner_pubky, conversation_id) DO UPDATE SET
+           muted = excluded.muted,
+           archived = excluded.archived,
+           updated_at = excluded.updated_at`,
+        [ownerPubky, conversationId, muted, archived, now()],
+      );
+    });
+  },
+
+  async getThreadLocalPrefs(
+    ownerPubky: PubkyKey,
+    conversationId: string,
+  ): Promise<{ muted: boolean; archived: boolean }> {
+    const db = await getDb();
+    const row = db.executeSync(
+      'SELECT muted, archived FROM thread_local_prefs WHERE owner_pubky = ? AND conversation_id = ?',
+      [ownerPubky, conversationId],
+    ).rows?.[0];
+    return { muted: Number(row?.muted ?? 0) === 1, archived: Number(row?.archived ?? 0) === 1 };
+  },
+
+  async listThreadLocalPrefs(
+    ownerPubky: PubkyKey,
+  ): Promise<Record<string, { muted: boolean; archived: boolean }>> {
+    const db = await getDb();
+    const result = db.executeSync(
+      'SELECT conversation_id, muted, archived FROM thread_local_prefs WHERE owner_pubky = ?',
+      [ownerPubky],
+    );
+    const map: Record<string, { muted: boolean; archived: boolean }> = {};
+    for (const row of result.rows ?? []) {
+      map[String(row.conversation_id)] = {
+        muted: Number(row.muted) === 1,
+        archived: Number(row.archived) === 1,
+      };
+    }
+    return map;
+  },
+
+  async searchDecryptedMessages(
+    ownerPubky: PubkyKey,
+    query: string,
+    limit = 50,
+  ): Promise<
+    Array<{
+      scope: 'dm' | 'group';
+      conversationId: string;
+      eventId: string;
+      senderPubky: string;
+      body: string;
+      sentAt: number;
+    }>
+  > {
+    const db = await getDb();
+    const needle = normalizeSearchText(query);
+    if (needle.length === 0) return [];
+    const pattern = likePattern(query);
+    const dm = db.executeSync(
+      `SELECT conversation_id, event_id, sender_pubky, body, sent_at
+         FROM link_messages
+        WHERE owner_pubky = ?
+          AND kind IN ('chat.message.v0', 'pubky_app.dm.v0')
+          AND body_search LIKE ? ESCAPE '\\'
+        ORDER BY sent_at DESC
+        LIMIT ?`,
+      [ownerPubky, pattern, limit],
+    );
+    const groups = db.executeSync(
+      `SELECT channel_id, event_id, sender_pubky, body, sent_at
+         FROM group_messages
+        WHERE owner_pubky = ?
+          AND deleted = 0
+          AND body_search LIKE ? ESCAPE '\\'
+        ORDER BY sent_at DESC
+        LIMIT ?`,
+      [ownerPubky, pattern, limit],
+    );
+    const rows = [
+      ...(dm.rows ?? []).map(row => ({
+        scope: 'dm' as const,
+        conversationId: String(row.conversation_id),
+        eventId: String(row.event_id),
+        senderPubky: String(row.sender_pubky),
+        body: String(row.body),
+        sentAt: Number(row.sent_at),
+      })),
+      ...(groups.rows ?? []).map(row => ({
+        scope: 'group' as const,
+        conversationId: String(row.channel_id),
+        eventId: String(row.event_id),
+        senderPubky: String(row.sender_pubky),
+        body: String(row.body),
+        sentAt: Number(row.sent_at),
+      })),
+    ];
+    return rows.sort((a, b) => b.sentAt - a.sentAt).slice(0, limit);
   },
 
   /**
@@ -1540,6 +1726,9 @@ export const StorageService = {
       db.executeSync('DELETE FROM link_receivers WHERE owner_pubky = ?', [ownerPubky]);
       db.executeSync('DELETE FROM message_requests WHERE owner_pubky = ?', [ownerPubky]);
       db.executeSync('DELETE FROM contacts WHERE owner_pubky = ?', [ownerPubky]);
+      db.executeSync('DELETE FROM contact_nicknames WHERE owner_pubky = ?', [ownerPubky]);
+      db.executeSync('DELETE FROM thread_local_prefs WHERE owner_pubky = ?', [ownerPubky]);
+      db.executeSync('DELETE FROM owner_profiles WHERE owner_pubky = ?', [ownerPubky]);
     });
   },
 
@@ -3297,9 +3486,9 @@ function insertLinkMessage(db: SqlExecutor, message: LinkMessage): void {
   db.executeSync(
     `INSERT OR IGNORE INTO link_messages
       (owner_pubky, sender_pubky, kind, event_id, conversation_id, peer_pubky,
-       direction, raw_json, body, sent_at, received_at, delivery_state,
+       direction, raw_json, body, body_search, sent_at, received_at, delivery_state,
        created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       message.ownerPubky,
       message.senderPubky,
@@ -3310,6 +3499,7 @@ function insertLinkMessage(db: SqlExecutor, message: LinkMessage): void {
       message.direction,
       persistRawJson(message.kind, message.rawJson),
       message.body,
+      normalizeSearchText(message.body),
       message.sentAt,
       message.receivedAt,
       message.deliveryState,
@@ -3445,10 +3635,10 @@ function insertGroupMessage(db: SqlExecutor, message: GroupMessage): void {
   const ts = now();
   db.executeSync(
     `INSERT OR IGNORE INTO group_messages
-      (owner_pubky, channel_id, sender_pubky, event_id, kind, body, raw_json,
+      (owner_pubky, channel_id, sender_pubky, event_id, kind, body, body_search, raw_json,
        sent_at, received_at, delivery_state, reply_to_event_id, reply_to_author_pubky,
        target_event_id, target_author_pubky, edited_at, deleted, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       message.ownerPubky,
       message.channelId,
@@ -3456,6 +3646,7 @@ function insertGroupMessage(db: SqlExecutor, message: GroupMessage): void {
       message.eventId,
       message.kind,
       message.body,
+      normalizeSearchText(message.body),
       persistRawJson(message.kind, message.rawJson),
       message.sentAt,
       message.receivedAt,

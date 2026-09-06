@@ -5,7 +5,13 @@ import { buildGroupMessageEnvelope, buildPublicChannelMessageDocument } from '..
 
 export type ComposerSurface = 'dm' | 'private-group' | 'public-topic';
 
-export type ComposerActionId = 'photo' | 'file' | 'request-payment' | 'send-tip' | 'send-tip-list';
+export type ComposerActionId =
+  | 'photo'
+  | 'file'
+  | 'gif'
+  | 'request-payment'
+  | 'send-tip'
+  | 'send-tip-list';
 
 export type ComposerActionItem = {
   id: ComposerActionId;
@@ -37,6 +43,7 @@ const PROBE_PUBKY = 'y'.repeat(52);
 const ACTION_ICONS: Record<ComposerActionId, IconName> = {
   photo: 'image-outline',
   file: 'document-text-outline',
+  gif: 'film-outline',
   'request-payment': 'card-outline',
   'send-tip': 'arrow-up-circle-outline',
   'send-tip-list': 'list-outline',
@@ -143,6 +150,13 @@ export function composerActionItems(
       id: 'file',
       label: COPY.composerFile,
       icon: ACTION_ICONS.file,
+      disabled: photoReason !== null,
+      reason: photoReason,
+    },
+    {
+      id: 'gif',
+      label: COPY.composerGif,
+      icon: ACTION_ICONS.gif,
       disabled: photoReason !== null,
       reason: photoReason,
     },

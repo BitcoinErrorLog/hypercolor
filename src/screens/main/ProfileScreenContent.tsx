@@ -1,5 +1,13 @@
 import React from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, SafeAreaView, ScrollView } from 'react-native';
+import {
+  View,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  StyleSheet,
+  SafeAreaView,
+  ScrollView,
+} from 'react-native';
 import { COPY } from '../../copy/uxCopy';
 import { CustodyLine } from '../../ui/CustodyLine';
 import { ProfileQrSheet } from '../../ui/profile/ProfileQrSheet';
@@ -7,6 +15,7 @@ import { SignOutSheet } from '../../ui/SignOutSheet';
 import { HIT_SLOP_44 } from '../../ui/hitTarget';
 import type { SessionUiModel } from '../../ui/sessionUi';
 import { color, space, radius, typeRole, measure } from '../../theme';
+import { Avatar } from '../../ui/primitives';
 
 export type ProfileScreenContentProps = {
   displayName: string;
@@ -34,6 +43,9 @@ export type ProfileScreenContentProps = {
   onOpenSignOut: () => void;
   onCancelSignOut: () => void;
   onConfirmSignOut: () => void;
+  nameDraft?: string;
+  onChangeNameDraft?: (value: string) => void;
+  onSaveDisplayName?: () => void;
 };
 
 export function ProfileScreenContent({
@@ -62,6 +74,9 @@ export function ProfileScreenContent({
   onOpenSignOut,
   onCancelSignOut,
   onConfirmSignOut,
+  nameDraft,
+  onChangeNameDraft,
+  onSaveDisplayName,
 }: ProfileScreenContentProps): React.ReactElement {
   return (
     <SafeAreaView style={styles.container} testID="profileScreen">
@@ -81,10 +96,31 @@ export function ProfileScreenContent({
 
       <ScrollView contentContainerStyle={styles.scroll}>
         <View style={styles.content}>
-          <View style={styles.avatar}>
-            <Text style={styles.avatarText}>{displayName.charAt(0).toUpperCase()}</Text>
-          </View>
+          <Avatar name={displayName} pubky={pubky} size="lg" testID="profileAvatar" />
           <Text style={styles.displayName}>{displayName}</Text>
+          {onChangeNameDraft && onSaveDisplayName ? (
+            <>
+              <TextInput
+                testID="profileDisplayName"
+                accessibilityLabel={COPY.displayNameLabel}
+                value={nameDraft ?? ''}
+                onChangeText={onChangeNameDraft}
+                placeholder={COPY.displayNamePlaceholder}
+                placeholderTextColor={color.textSecondary}
+                style={styles.nameInput}
+              />
+              <TouchableOpacity
+                testID="profileSaveDisplayName"
+                accessibilityRole="button"
+                accessibilityLabel={COPY.saveDisplayName}
+                hitSlop={HIT_SLOP_44}
+                onPress={onSaveDisplayName}
+                style={styles.copyBtn}
+              >
+                <Text style={styles.copyText}>{COPY.saveDisplayName}</Text>
+              </TouchableOpacity>
+            </>
+          ) : null}
           {pubky ? (
             <>
               <Text
@@ -240,6 +276,15 @@ const styles = StyleSheet.create({
   },
   avatarText: { fontSize: typeRole.display.fontSize, fontWeight: '700', color: color.textOnBrand },
   displayName: { fontSize: typeRole.heading.fontSize, fontWeight: '600', color: color.textPrimary },
+  nameInput: {
+    alignSelf: 'stretch',
+    minHeight: measure.hitTarget,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: color.hairlineStrong,
+    borderRadius: radius.md,
+    paddingHorizontal: space.md,
+    color: color.textPrimary,
+  },
   pubkyKey: {
     fontSize: typeRole.meta.fontSize,
     color: color.textSecondary,

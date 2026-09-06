@@ -53,10 +53,18 @@ jest.mock('../../../stores/sessionStatusStore', () => ({
   useSessionStatusStore: (sel: (s: { kind: string }) => unknown) => sel({ kind: 'enabled' }),
 }));
 
+jest.mock('../../../services/StorageService', () => ({
+  StorageService: {
+    getOwnerDisplayName: jest.fn().mockResolvedValue(null),
+    setOwnerDisplayName: jest.fn().mockResolvedValue(undefined),
+  },
+}));
+
 jest.mock('../../../services/PubkyService', () => ({
   PubkyService: {
     signOut: jest.fn().mockResolvedValue(undefined),
     getProfile: jest.fn().mockResolvedValue(null),
+    publishProfile: jest.fn().mockResolvedValue(undefined),
   },
 }));
 

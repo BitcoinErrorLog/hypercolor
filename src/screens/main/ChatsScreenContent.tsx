@@ -8,8 +8,9 @@ import { StatusBanner } from '../../ui/StatusBanner';
 import { COPY } from '../../copy/uxCopy';
 import { HIT_SLOP_44 } from '../../ui/hitTarget';
 import { peerIdentity } from '../../ui/peerIdentity';
-import { color, space, typeRole, measure } from '../../theme';
+import { color, space, typeRole, measure, radius } from '../../theme';
 import { Avatar, Badge, Button, EmptyState, Icon, ListRow } from '../../ui/primitives';
+import type { ChatListFilter } from '../../ui/chatList';
 
 export type ChatsScreenContentProps = {
   conversations: LinkConversationSummary[];
@@ -27,6 +28,10 @@ export type ChatsScreenContentProps = {
   onRetry: () => void;
   onCopyMyPubky: () => void;
   onShareMyPubky: () => void;
+  nicknames?: Record<string, string>;
+  listFilter?: ChatListFilter;
+  onChangeFilter?: (filter: ChatListFilter) => void;
+  onOpenSearch?: () => void;
 };
 
 export function ChatsScreenContent({
@@ -45,10 +50,23 @@ export function ChatsScreenContent({
   onRetry,
   onCopyMyPubky,
   onShareMyPubky,
+  nicknames = {},
+  listFilter = 'inbox',
+  onChangeFilter,
+  onOpenSearch,
 }: ChatsScreenContentProps): React.ReactElement {
   const renderThread = useCallback(
     ({ item }: { item: LinkConversationSummary }) => {
-      const identity = peerIdentity(item.participantPubky, contacts[item.participantPubky] ?? null);
+      const row = contacts[item.participantPubky];
+      const nick = nicknames[item.participantPubky];
+      const identity = peerIdentity(
+        item.participantPubky,
+        row
+          ? { ...row, ...(nick ? { nickname: nick } : {}) }
+          : nick
+            ? { addedManually: false, nickname: nick }
+            : null,
+      );
       const unread = item.unreadCount > 0;
       return (
         <ListRow
@@ -69,7 +87,7 @@ export function ChatsScreenContent({
         />
       );
     },
-    [contacts, nowMs, onOpenThread],
+    [contacts, nicknames, nowMs, onOpenThread],
   );
 
   const requestsRow = (
@@ -109,8 +127,50 @@ export function ChatsScreenContent({
         >
           <Icon name="add" tone={needsEnable ? 'muted' : 'brand'} />
         </TouchableOpacity>
+        {onOpenSearch ? (
+          <TouchableOpacity
+            testID="chatsSearch"
+            accessibilityRole="button"
+            accessibilityLabel={COPY.messageSearchTitle}
+            hitSlop={HIT_SLOP_44}
+            onPress={onOpenSearch}
+            style={styles.newChatHit}
+          >
+            <Icon name="search-outline" tone="brand" />
+          </TouchableOpacity>
+        ) : null}
       </View>
       <Text style={styles.sectionTitle}>{COPY.inbox}</Text>
+      {onChangeFilter ? (
+        <View style={styles.filters}>
+          {(['inbox', 'archived', 'muted'] as const).map(filter => (
+            <TouchableOpacity
+              key={filter}
+              testID={`chatsFilter-${filter}`}
+              accessibilityRole="button"
+              accessibilityState={{ selected: listFilter === filter }}
+              accessibilityLabel={
+                filter === 'inbox'
+                  ? COPY.chatsFilterInbox
+                  : filter === 'archived'
+                    ? COPY.chatsFilterArchived
+                    : COPY.chatsFilterMuted
+              }
+              hitSlop={HIT_SLOP_44}
+              onPress={() => onChangeFilter(filter)}
+              style={[styles.filterChip, listFilter === filter && styles.filterChipOn]}
+            >
+              <Text style={styles.filterText}>
+                {filter === 'inbox'
+                  ? COPY.chatsFilterInbox
+                  : filter === 'archived'
+                    ? COPY.chatsFilterArchived
+                    : COPY.chatsFilterMuted}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+      ) : null}
       <StandbyBanner />
       {requestsRow}
       {showEnableCta ? (
@@ -198,6 +258,22 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   newChatDisabled: { opacity: 0.4 },
+  filters: {
+    flexDirection: 'row',
+    gap: space.sm,
+    paddingHorizontal: space.xl,
+    paddingBottom: space.sm,
+  },
+  filterChip: {
+    minHeight: measure.hitTarget,
+    paddingHorizontal: space.md,
+    justifyContent: 'center',
+    borderRadius: radius.full,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: color.hairlineStrong,
+  },
+  filterChipOn: { backgroundColor: color.surfaceBrand },
+  filterText: { color: color.textSecondary, fontSize: typeRole.caption.fontSize },
   sectionTitle: {
     color: color.textSecondary,
     fontSize: typeRole.caption.fontSize,

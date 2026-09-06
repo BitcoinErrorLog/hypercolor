@@ -1,5 +1,13 @@
 import React, { useEffect, useState } from 'react';
-import { BackHandler, SafeAreaView, ScrollView, StyleSheet, Text, View } from 'react-native';
+import {
+  BackHandler,
+  SafeAreaView,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from 'react-native';
 import type { Contact } from '../../../types';
 import type { TrustExplanation } from '../../../services/TrustEngine';
 import { formatTipIdentifierDisplay } from '../../../utils/displaySanitize';
@@ -15,7 +23,8 @@ import {
   CONTACTS_MUTED,
 } from '../../../ui/contacts/tokens';
 import { contactPrimaryText, contactSecondaryText } from './contactIdentity';
-import { space, typeRole } from '../../../theme';
+import { COPY } from '../../../copy/uxCopy';
+import { color, measure, radius, space, typeRole } from '../../../theme';
 import {
   Avatar,
   Button,
@@ -52,6 +61,9 @@ export function ContactDetailView({
   onBlock,
   onUnblock,
   onRemove,
+  nickname = '',
+  onChangeNickname,
+  onSaveNickname,
 }: {
   pubky: string;
   contact: Contact | null;
@@ -73,6 +85,9 @@ export function ContactDetailView({
   onBlock: () => void;
   onUnblock: () => void;
   onRemove: () => void;
+  nickname?: string;
+  onChangeNickname?: (value: string) => void;
+  onSaveNickname?: () => void;
 }) {
   const [blockOpen, setBlockOpen] = useState(false);
   const [removeOpen, setRemoveOpen] = useState(false);
@@ -166,6 +181,25 @@ export function ContactDetailView({
             onCopy={onCopy}
             testID="contactDetailPubkyChip"
           />
+          {onChangeNickname && onSaveNickname ? (
+            <>
+              <TextInput
+                testID="contactNickname"
+                accessibilityLabel={COPY.nicknameLabel}
+                value={nickname}
+                onChangeText={onChangeNickname}
+                placeholder={COPY.nicknamePlaceholder}
+                placeholderTextColor={CONTACTS_MUTED}
+                style={styles.nicknameInput}
+              />
+              <Button
+                testID="contactSaveNickname"
+                label={COPY.saveNickname}
+                variant="secondary"
+                onPress={onSaveNickname}
+              />
+            </>
+          ) : null}
           <View style={styles.details}>
             <DetailRow label="Relationship" value={relation} testID="contactDetailRelationship" />
             <DetailRow label="Link" value={linkLabel} testID="contactDetailLink" />
@@ -267,6 +301,14 @@ export function ContactDetailView({
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: CONTACTS_CANVAS },
   body: { padding: space.xl, gap: space.md, paddingBottom: space.xxl + space.lg },
+  nicknameInput: {
+    minHeight: measure.hitTarget,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: color.hairlineStrong,
+    borderRadius: radius.md,
+    paddingHorizontal: space.md,
+    color: CONTACTS_BODY,
+  },
   name: {
     color: CONTACTS_BODY,
     fontSize: typeRole.heading.fontSize,

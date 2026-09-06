@@ -60,6 +60,8 @@ jest.mock('../../../services/StorageService', () => ({
     listPaymentRequestsForPeer: jest.fn().mockResolvedValue([]),
     listTipEndpoints: jest.fn().mockResolvedValue([]),
     getContact: jest.fn().mockResolvedValue(null),
+    getContactNickname: jest.fn().mockResolvedValue(null),
+    getThreadLocalPrefs: jest.fn().mockResolvedValue({ muted: false, archived: false }),
     getMessageRequest: jest.fn().mockResolvedValue({ status: 'accepted' }),
   },
 }));

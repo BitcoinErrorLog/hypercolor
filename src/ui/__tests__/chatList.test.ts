@@ -1,4 +1,4 @@
-import { filterDmConversations } from '../chatList';
+import { filterDmConversations, filterConversationsByPrefs } from '../chatList';
 import { shortPubky } from '../shortPubky';
 import { peerIdentity } from '../peerIdentity';
 
@@ -33,5 +33,31 @@ describe('peerIdentity', () => {
     const trusted = peerIdentity(PEER, { displayName: 'Ada', addedManually: true });
     expect(trusted.title).toBe('Ada');
     expect(trusted.subtitle).toBeNull();
+    const nicknamed = peerIdentity(PEER, {
+      displayName: 'Ada',
+      nickname: 'Ada-alias',
+      addedManually: false,
+    });
+    expect(nicknamed.title).toBe('Ada-alias');
+    expect(nicknamed.subtitle).toBe(shortPubky(PEER));
+  });
+});
+
+describe('filterConversationsByPrefs', () => {
+  it('hides archived from inbox and keeps muted visible until archived', () => {
+    const rows = [{ conversationId: `dm:${PEER}` }, { conversationId: `dm:${OTHER}` }];
+    const prefs = {
+      [`dm:${PEER}`]: { muted: true, archived: false },
+      [`dm:${OTHER}`]: { muted: false, archived: true },
+    };
+    expect(filterConversationsByPrefs(rows, prefs, 'inbox').map(r => r.conversationId)).toEqual([
+      `dm:${PEER}`,
+    ]);
+    expect(filterConversationsByPrefs(rows, prefs, 'archived').map(r => r.conversationId)).toEqual([
+      `dm:${OTHER}`,
+    ]);
+    expect(filterConversationsByPrefs(rows, prefs, 'muted').map(r => r.conversationId)).toEqual([
+      `dm:${PEER}`,
+    ]);
   });
 });

@@ -14,6 +14,7 @@ import {
   Linking,
   AccessibilityInfo,
   findNodeHandle,
+  Pressable,
   RefreshControl,
   AppState,
   type AppStateStatus,
@@ -32,9 +33,12 @@ import { AttachmentBubble } from '../../components/AttachmentBubble';
 import {
   pickAndSendFile,
   pickAndSendPhoto,
+  sendGifAttachment,
   type ComposerAttachNotice,
 } from '../../components/ComposerAttachButton';
 import { ComposerActionMenu } from '../../components/ComposerActionMenu';
+import { EmojiAutocomplete, EmojiPickerSheet } from '../../components/EmojiPickerSheet';
+import { GifPickerSheet } from '../../components/GifPickerSheet';
 import {
   PaymentRequestBubble,
   type PaymentReviewRequest,
@@ -62,6 +66,11 @@ import { HIT_SLOP_44, minHitStyle } from '../../ui/hitTarget';
 import { formatDeliveryState, formatLinkStatus } from '../../ui/messageStatus';
 import { peerIdentity } from '../../ui/peerIdentity';
 import { copyText } from '../../utils/copyText';
+import {
+  applyEmojiAtShortcode,
+  matchShortcodeTail,
+  replaceClosedShortcodes,
+} from '../../lib/emoji/matchShortcode';
 import type { Contact } from '../../types';
 import type { LinkStatus } from '../../types/link';
 import { LINK_MESSAGE_MAX_BYTES } from '../../types/link';
@@ -72,6 +81,7 @@ import {
   composerActionItems,
   draftEnvelopeByteSize,
   draftExceedsByteCap,
+  type ComposerActionId,
 } from '../../ui/composerActions';
 import { mapPaymentReview } from '../../ui/paymentReview';
 import { openBuiltUri } from '../../services/payments/walletHandoff';
@@ -79,7 +89,14 @@ import { continuePaymentReview } from './continuePaymentReview';
 import { eventIdsWithDeliveryQueue } from '../../ui/failedSendRetry';
 import { useReduceMotion } from '../../ui/reduceMotion';
 import { color, space, radius, typeRole, measure } from '../../theme';
-import { Icon, MessageBubble } from '../../ui/primitives';
+import {
+  Icon,
+  MessageBubble,
+  DaySeparator,
+  formatDaySeparator,
+  sameCalendarDay,
+  MarkdownText,
+} from '../../ui/primitives';
 import {
   COMPOSER_KAV_BEHAVIOR,
   COMPOSER_KAV_OFFSET,
@@ -117,6 +134,8 @@ export default function ThreadScreen({ route }: Props) {
   const [pendingTipEndpoint, setPendingTipEndpoint] = useState<TipEndpointRecord | null>(null);
   const [paymentBusy, setPaymentBusy] = useState(false);
   const [actionMenuOpen, setActionMenuOpen] = useState(false);
+  const [gifPickerOpen, setGifPickerOpen] = useState(false);
+  const [emojiPickerOpen, setEmojiPickerOpen] = useState(false);
   const [tipPickerOpen, setTipPickerOpen] = useState(false);
   const [review, setReview] = useState<PaymentReviewRequest | null>(null);
   const [walletUnavailable, setWalletUnavailable] = useState(false);
@@ -124,6 +143,8 @@ export default function ThreadScreen({ route }: Props) {
   const [reviewHandoffError, setReviewHandoffError] = useState<string | null>(null);
   const [composerNotice, setComposerNotice] = useState<ComposerAttachNotice | null>(null);
   const [peerContact, setPeerContact] = useState<Contact | null>(null);
+  const [nickname, setNickname] = useState<string | null>(null);
+  const [threadPrefs, setThreadPrefs] = useState({ muted: false, archived: false });
   const [linkStatus, setLinkStatus] = useState<LinkStatus | null>(null);
   const [retryableEventIds, setRetryableEventIds] = useState<Set<string>>(() => new Set());
   const [requestStatus, setRequestStatus] = useState<'pending' | 'accepted' | 'declined' | null>(
@@ -158,6 +179,8 @@ export default function ThreadScreen({ route }: Props) {
     await LinkService.markRead(conversationId, latest > 0 ? latest : Date.now());
     const contact = await StorageService.getContact(participantPubky, localPubky);
     setPeerContact(contact);
+    setNickname(await StorageService.getContactNickname(localPubky, participantPubky));
+    setThreadPrefs(await StorageService.getThreadLocalPrefs(localPubky, conversationId));
     const request = await StorageService.getMessageRequest(localPubky, participantPubky);
     setRequestStatus(request?.status ?? null);
     try {
@@ -275,6 +298,8 @@ export default function ThreadScreen({ route }: Props) {
       composeIntent={composeIntent}
       paymentBusy={paymentBusy}
       actionMenuOpen={actionMenuOpen}
+      gifPickerOpen={gifPickerOpen}
+      emojiPickerOpen={emojiPickerOpen}
       tipPickerOpen={tipPickerOpen}
       review={review}
       walletUnavailable={walletUnavailable}
@@ -286,7 +311,7 @@ export default function ThreadScreen({ route }: Props) {
       onUnblock={runUnblock}
       composerNotice={composerNotice}
       onBack={() => nav.goBack()}
-      onChangeDraft={setDraft}
+      onChangeDraft={value => setDraft(replaceClosedShortcodes(value))}
       onSend={() => {
         void handleSend();
       }}
@@ -312,6 +337,10 @@ export default function ThreadScreen({ route }: Props) {
               else if ('notice' in result) setComposerNotice(result.notice);
             },
           );
+          return;
+        }
+        if (id === 'gif') {
+          setGifPickerOpen(true);
           return;
         }
         if (id === 'request-payment') {
@@ -432,6 +461,33 @@ export default function ThreadScreen({ route }: Props) {
       }}
       sessionKind={sessionKind}
       peerContact={peerContact}
+      nickname={nickname}
+      threadMuted={threadPrefs.muted}
+      threadArchived={threadPrefs.archived}
+      onToggleMute={() => {
+        if (!localPubky) return;
+        void StorageService.setThreadLocalPrefs(localPubky, conversationId, {
+          muted: !threadPrefs.muted,
+        }).then(() => setThreadPrefs(p => ({ ...p, muted: !p.muted })));
+      }}
+      onToggleArchive={() => {
+        if (!localPubky) return;
+        void StorageService.setThreadLocalPrefs(localPubky, conversationId, {
+          archived: !threadPrefs.archived,
+        }).then(() => setThreadPrefs(p => ({ ...p, archived: !p.archived })));
+      }}
+      onOpenEmojiPicker={() => setEmojiPickerOpen(true)}
+      onCloseEmojiPicker={() => setEmojiPickerOpen(false)}
+      onCloseGifPicker={() => setGifPickerOpen(false)}
+      onSendGif={gifId => {
+        setGifPickerOpen(false);
+        void sendGifAttachment({ type: 'conversation', peerPubky: participantPubky }, gifId).then(
+          result => {
+            if (result.ok) void reloadEncrypted();
+            else if ('notice' in result) setComposerNotice(result.notice);
+          },
+        );
+      }}
       linkStatus={linkStatus}
       refreshing={refreshing}
       onRefresh={() => {
@@ -485,6 +541,8 @@ export function ThreadScreenContent({
   composeIntent,
   paymentBusy,
   actionMenuOpen,
+  gifPickerOpen = false,
+  emojiPickerOpen = false,
   tipPickerOpen,
   review,
   walletUnavailable,
@@ -511,6 +569,15 @@ export function ThreadScreenContent({
   onContinueReview,
   sessionKind,
   peerContact,
+  nickname = null,
+  threadMuted = false,
+  threadArchived = false,
+  onToggleMute,
+  onToggleArchive,
+  onOpenEmojiPicker,
+  onCloseEmojiPicker,
+  onCloseGifPicker,
+  onSendGif,
   linkStatus,
   refreshing = false,
   onRefresh,
@@ -533,6 +600,8 @@ export function ThreadScreenContent({
   composeIntent: 'request' | 'tip';
   paymentBusy: boolean;
   actionMenuOpen: boolean;
+  gifPickerOpen?: boolean;
+  emojiPickerOpen?: boolean;
   tipPickerOpen: boolean;
   review: PaymentReviewRequest | null;
   walletUnavailable: boolean;
@@ -548,9 +617,7 @@ export function ThreadScreenContent({
   onSend: () => void;
   onOpenActionMenu: () => void;
   onCloseActionMenu: () => void;
-  onComposerAction: (
-    id: 'photo' | 'file' | 'request-payment' | 'send-tip' | 'send-tip-list',
-  ) => void;
+  onComposerAction: (id: ComposerActionId) => void;
   onClosePaymentCompose: () => void;
   onSubmitPayment: (amountBtc: string, reference: string) => void;
   onPaymentsChanged: () => void;
@@ -561,6 +628,15 @@ export function ThreadScreenContent({
   onContinueReview: (uri: string) => void;
   sessionKind: 'offline' | 'needs-enable' | 'revoked' | string;
   peerContact: Contact | null;
+  nickname?: string | null;
+  threadMuted?: boolean;
+  threadArchived?: boolean;
+  onToggleMute?: () => void;
+  onToggleArchive?: () => void;
+  onOpenEmojiPicker?: () => void;
+  onCloseEmojiPicker?: () => void;
+  onCloseGifPicker?: () => void;
+  onSendGif?: (gifId: string) => void;
   linkStatus: LinkStatus | null;
   refreshing?: boolean;
   onRefresh?: () => void;
@@ -617,7 +693,14 @@ export function ThreadScreenContent({
     if (tag != null) AccessibilityInfo.setAccessibilityFocus(tag);
   }, [actionMenuOpen]);
 
-  const identity = peerIdentity(participantPubky, peerContact);
+  const identity = peerIdentity(
+    participantPubky,
+    peerContact
+      ? { ...peerContact, ...(nickname ? { nickname } : {}) }
+      : nickname
+        ? { addedManually: false, nickname }
+        : null,
+  );
   const linkLabel = formatLinkStatus(linkStatus);
   const receiverRole = useReceiverRoleStore(s => s.role);
   const standbyBlocksNewChat = receiverRole === 'standby' && linkStatus !== 'ready';
@@ -635,7 +718,7 @@ export function ThreadScreenContent({
       const lastInGroup = next ? !sameThreadRun(item, next, localPubky, participantPubky) : true;
       const daySeparator =
         !previous || !sameCalendarDay(previous.sentAt, item.sentAt) ? (
-          <TimelineDaySeparator label={formatDaySeparator(item.sentAt)} />
+          <DaySeparator label={formatDaySeparator(item.sentAt)} testID="threadDaySeparator" />
         ) : null;
       if (item.kind === 'payment') {
         const isMine = item.record.direction === 'sent';
@@ -706,9 +789,16 @@ export function ThreadScreenContent({
             senderPubky={participantPubky}
             accessibilityLabel={item.message.body}
           >
-            <Text style={[styles.bubbleText, isMine ? styles.mineText : styles.theirsText]}>
-              {item.message.body}
-            </Text>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={COPY.copyMessage}
+              onLongPress={() => copyText(item.message.body)}
+            >
+              <MarkdownText
+                source={item.message.body}
+                color={isMine ? color.textOnBrand : color.textPrimary}
+              />
+            </Pressable>
             {isMine && item.message.deliveryState === 'failed' && !peerBlocked ? (
               retryableEventIds.has(item.message.eventId) ? (
                 <TouchableOpacity
@@ -839,7 +929,29 @@ export function ThreadScreenContent({
             </Text>
           </TouchableOpacity>
         ) : null}
-        <View style={styles.backBtn} />
+        <TouchableOpacity
+          testID="threadMute"
+          accessibilityRole="button"
+          accessibilityLabel={threadMuted ? COPY.unmuteChat : COPY.muteChat}
+          hitSlop={HIT_SLOP_44}
+          onPress={onToggleMute}
+          style={styles.backBtn}
+        >
+          <Icon
+            name={threadMuted ? 'notifications-off-outline' : 'notifications-outline'}
+            tone="secondary"
+          />
+        </TouchableOpacity>
+        <TouchableOpacity
+          testID="threadArchive"
+          accessibilityRole="button"
+          accessibilityLabel={threadArchived ? COPY.unarchiveChat : COPY.archiveChat}
+          hitSlop={HIT_SLOP_44}
+          onPress={onToggleArchive}
+          style={styles.backBtn}
+        >
+          <Icon name={threadArchived ? 'archive' : 'archive-outline'} tone="secondary" />
+        </TouchableOpacity>
       </View>
       {peerBlocked ? <ThreadDeniedBanner onUnblock={onUnblock} /> : null}
       {peerDeclined ? <ThreadDeclinedNotice /> : null}
@@ -957,6 +1069,12 @@ export function ThreadScreenContent({
               }}
             />
           ) : null}
+          {matchShortcodeTail(draft) ? (
+            <EmojiAutocomplete
+              suggestions={matchShortcodeTail(draft)!.suggestions}
+              onPick={glyph => onChangeDraft(applyEmojiAtShortcode(draft, glyph))}
+            />
+          ) : null}
           <View style={styles.composer}>
             <PaymentComposeSheet
               visible={composePayment}
@@ -1002,6 +1120,16 @@ export function ThreadScreenContent({
               style={styles.plusBtn}
             >
               <Icon name="add" tone="secondary" />
+            </TouchableOpacity>
+            <TouchableOpacity
+              testID="threadComposerEmoji"
+              accessibilityRole="button"
+              accessibilityLabel={COPY.emojiPickerTitle}
+              hitSlop={HIT_SLOP_44}
+              onPress={onOpenEmojiPicker}
+              style={styles.plusBtn}
+            >
+              <Icon name="happy-outline" tone="secondary" />
             </TouchableOpacity>
             <TextInput
               testID="threadComposer"
@@ -1055,6 +1183,19 @@ export function ThreadScreenContent({
               {byteLabel}
             </Text>
           ) : null}
+          <EmojiPickerSheet
+            visible={emojiPickerOpen}
+            onClose={() => onCloseEmojiPicker?.()}
+            onPick={glyph => {
+              onChangeDraft(`${draft}${glyph}`);
+              onCloseEmojiPicker?.();
+            }}
+          />
+          <GifPickerSheet
+            visible={gifPickerOpen}
+            onClose={() => onCloseGifPicker?.()}
+            onPick={hit => onSendGif?.(hit.id)}
+          />
           {tipPickerOpen ? (
             <TouchableOpacity
               accessibilityRole="button"
@@ -1131,14 +1272,6 @@ function formatTime(ms: number): string {
   return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
-function TimelineDaySeparator({ label }: { label: string }) {
-  return (
-    <View style={styles.daySeparator} accessibilityRole="text">
-      <Text style={styles.daySeparatorText}>{label}</Text>
-    </View>
-  );
-}
-
 function sameThreadRun(
   current: ThreadItem,
   next: ThreadItem,
@@ -1162,14 +1295,6 @@ function threadItemSenderPubky(
   return item.record.direction === 'sent'
     ? (localPubky ?? '')
     : (item.record.peerPubky ?? participantPubky);
-}
-
-function sameCalendarDay(leftMs: number, rightMs: number): boolean {
-  return new Date(leftMs).toDateString() === new Date(rightMs).toDateString();
-}
-
-function formatDaySeparator(ms: number): string {
-  return new Date(ms).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
 const styles = StyleSheet.create({

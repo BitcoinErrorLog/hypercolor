@@ -173,6 +173,44 @@ export const SCHEMA_V19_STATEMENTS: readonly string[] = [
 ];
 
 /**
+ * Schema v20 — local (not on the wire) nicknames, mute/archive, owner display
+ * name, and a normalized search column. FTS5 is attempted separately; LIKE
+ * on `body_search` is the portable path.
+ */
+export const SCHEMA_V20_STATEMENTS: readonly string[] = [
+  `CREATE TABLE IF NOT EXISTS contact_nicknames (
+    owner_pubky  TEXT    NOT NULL,
+    peer_pubky   TEXT    NOT NULL,
+    nickname     TEXT    NOT NULL,
+    updated_at   INTEGER NOT NULL,
+    PRIMARY KEY (owner_pubky, peer_pubky)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_contact_nicknames_owner
+    ON contact_nicknames(owner_pubky)`,
+  `CREATE TABLE IF NOT EXISTS thread_local_prefs (
+    owner_pubky       TEXT    NOT NULL,
+    conversation_id   TEXT    NOT NULL,
+    muted             INTEGER NOT NULL DEFAULT 0,
+    archived          INTEGER NOT NULL DEFAULT 0,
+    updated_at        INTEGER NOT NULL,
+    PRIMARY KEY (owner_pubky, conversation_id)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_thread_local_prefs_owner
+    ON thread_local_prefs(owner_pubky, archived, muted)`,
+  `CREATE TABLE IF NOT EXISTS owner_profiles (
+    owner_pubky    TEXT    NOT NULL PRIMARY KEY,
+    display_name   TEXT    NOT NULL,
+    updated_at     INTEGER NOT NULL
+  )`,
+  `ALTER TABLE link_messages ADD COLUMN body_search TEXT NOT NULL DEFAULT ''`,
+  `ALTER TABLE group_messages ADD COLUMN body_search TEXT NOT NULL DEFAULT ''`,
+  `CREATE INDEX IF NOT EXISTS idx_link_messages_body_search
+    ON link_messages(owner_pubky, body_search)`,
+  `CREATE INDEX IF NOT EXISTS idx_group_messages_body_search
+    ON group_messages(owner_pubky, body_search)`,
+];
+
+/**
  * Schema v15 — move the handshake advance budget off the `links` row.
  *
  * v14 put `pending_advances` / `next_advance_at` on `links`, which is deleted

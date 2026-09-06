@@ -16,6 +16,7 @@ import { useContactStore } from '../../../stores/contactStore';
 import { copyText } from '../../../utils/copyText';
 import { ContactDetailView, linkStateLabel } from './ContactDetailView';
 import { loadContactDetail } from './contactDetailLoad';
+import { sanitizeDisplayName } from '../../../lib/sanitizeDisplayName';
 
 export { ContactDetailView, linkStateLabel } from './ContactDetailView';
 
@@ -60,6 +61,7 @@ function ContactDetailLoader({
   const [paymentsUnavailableOffline, setPaymentsUnavailableOffline] = useState(false);
   const [reloadToken, setReloadToken] = useState(0);
   const [, setPrivacyTick] = useState(0);
+  const [nickname, setNickname] = useState('');
 
   useEffect(() => FollowsImportSettings.subscribe(() => setPrivacyTick(t => t + 1)), []);
 
@@ -127,6 +129,9 @@ function ContactDetailLoader({
     }).then(result => {
       if (cancelled) return;
       applyLoad(result);
+      void StorageService.getContactNickname(ownerAtStart, pubky).then(value => {
+        if (!cancelled) setNickname(value ?? '');
+      });
     });
     return () => {
       cancelled = true;
@@ -217,6 +222,14 @@ function ContactDetailLoader({
         void StorageService.deleteContact(ownerPubky, pubky);
         removeContact(pubky);
         onBack();
+      }}
+      nickname={nickname}
+      onChangeNickname={setNickname}
+      onSaveNickname={() => {
+        if (!ownerPubky) return;
+        const next = sanitizeDisplayName(nickname);
+        setNickname(next);
+        void StorageService.setContactNickname(ownerPubky, pubky, next);
       }}
     />
   );

@@ -24,6 +24,7 @@ describe('composerActionItems', () => {
     expect(items.map(item => item.icon)).toEqual([
       'image-outline',
       'document-text-outline',
+      'film-outline',
       'card-outline',
       'arrow-up-circle-outline',
       'list-outline',

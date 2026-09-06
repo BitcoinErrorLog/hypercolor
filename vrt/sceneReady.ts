@@ -8,6 +8,8 @@ export function vrtSceneMarkerId(catalogId: string): string {
 
 const SCENE_READY_TEST_IDS: Readonly<Record<string, readonly string[]>> = Object.freeze({
   'stack.composer.sheet': ['composerAction-photo'],
+  'stack.composer.emoji': ['emojiPicker'],
+  'stack.composer.gif-unconfigured': ['gifNotConfigured'],
   'stack.payment.compose-idle': ['text:Request payment'],
   'stack.payment.compose-amount': ['paymentComposeError'],
   'stack.payment.compose-reference': ['paymentComposeError'],

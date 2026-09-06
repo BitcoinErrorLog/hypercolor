@@ -18,6 +18,7 @@ import {
   SCHEMA_V17_STATEMENTS,
   SCHEMA_V18_STATEMENTS,
   SCHEMA_V19_STATEMENTS,
+  SCHEMA_V20_STATEMENTS,
 } from './schema';
 import type { SqlExecutor, SqlValue } from './sql';
 import {
@@ -47,7 +48,7 @@ import {
  */
 
 /** Test seam: current `user_version` after `runMigrations`. Do not hard-code. */
-export const CURRENT_SCHEMA_VERSION = 19;
+export const CURRENT_SCHEMA_VERSION = 20;
 const CURRENT_VERSION = CURRENT_SCHEMA_VERSION;
 
 type Migration = {
@@ -75,6 +76,7 @@ const MIGRATIONS: readonly Migration[] = [
   { version: 17, statements: SCHEMA_V17_STATEMENTS },
   { version: 18, statements: SCHEMA_V18_STATEMENTS },
   { version: 19, statements: SCHEMA_V19_STATEMENTS },
+  { version: 20, statements: SCHEMA_V20_STATEMENTS },
 ];
 
 export async function runMigrations(db: SqlExecutor): Promise<void> {
@@ -117,6 +119,11 @@ export async function runMigrations(db: SqlExecutor): Promise<void> {
       if (/ALTER TABLE/i.test(statement)) continue;
       applyStatement(db, statement);
     }
+    for (const statement of SCHEMA_V20_STATEMENTS) {
+      if (/ALTER TABLE/i.test(statement)) continue;
+      applyStatement(db, statement);
+    }
+    tryEnableMessageFts(db);
     ensureBlockedPeersCleanupPending(db);
     reconcileLegacyQueueOwners(db);
     db.executeSync('COMMIT');
@@ -287,6 +294,41 @@ function reconcileLegacyQueueOwners(db: SqlExecutor): void {
   }
 }
 
+function tryEnableMessageFts(db: SqlExecutor): void {
+  try {
+    db.executeSync(
+      `CREATE VIRTUAL TABLE IF NOT EXISTS link_message_fts USING fts5(
+        body,
+        owner_pubky UNINDEXED,
+        conversation_id UNINDEXED,
+        event_id UNINDEXED,
+        sender_pubky UNINDEXED
+      )`,
+    );
+    db.executeSync(
+      `CREATE VIRTUAL TABLE IF NOT EXISTS group_message_fts USING fts5(
+        body,
+        owner_pubky UNINDEXED,
+        channel_id UNINDEXED,
+        event_id UNINDEXED,
+        sender_pubky UNINDEXED
+      )`,
+    );
+  } catch {
+    // op-sqlite / host SQLite without FTS5: indexed LIKE on body_search.
+  }
+  try {
+    db.executeSync(
+      `UPDATE link_messages SET body_search = lower(body) WHERE body_search = '' AND body != ''`,
+    );
+    db.executeSync(
+      `UPDATE group_messages SET body_search = lower(body) WHERE body_search = '' AND body != ''`,
+    );
+  } catch {
+    // Columns missing on dual-v16 fixtures without link_messages.
+  }
+}
+
 function ensureBlockedPeersCleanupPending(db: SqlExecutor): void {
   const info = db.executeSync('PRAGMA table_info(blocked_peers)');
   const names = (info.rows ?? []).map(row => String(row.name));
@@ -304,15 +346,13 @@ function applyStatement(db: SqlExecutor, statement: string): void {
     db.executeSync(statement);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    if (/ALTER TABLE/i.test(statement) && /ADD COLUMN/i.test(statement)) {
+    if (
+      (/ALTER TABLE/i.test(statement) && /ADD COLUMN/i.test(statement)) ||
+      /CREATE INDEX/i.test(statement)
+    ) {
       if (/duplicate column name/i.test(message)) return;
-      // Dual-v16 union fixtures may stamp a later version without `links` /
-      // `link_receivers`. Skip the W1e ALTERs until those tables exist.
       if (/no such table/i.test(message)) {
-        console.warn(
-          '[migrations] skipping ALTER ADD COLUMN: no such table',
-          statement.split('\n')[0],
-        );
+        console.warn('[migrations] skipping statement: no such table', statement.split('\n')[0]);
         return;
       }
     }
