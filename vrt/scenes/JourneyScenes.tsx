@@ -806,6 +806,14 @@ export const SCENE_RENDERERS: Record<string, () => React.ReactElement> = {
   ),
   'stack.thread.empty': () => <ThreadScreenContent {...threadProps({ linkMessages: [] })} />,
   'stack.thread.populated': () => <ThreadScreenContent {...threadProps()} />,
+  'stack.thread.keyboard-open': () => (
+    <View style={styles.fill}>
+      <View style={styles.fill}>
+        <ThreadScreenContent {...threadProps({ draft: 'Typing above the keyboard' })} />
+      </View>
+      <View testID="vrtKeyboardInset" style={styles.keyboardInset} />
+    </View>
+  ),
   'stack.thread.send-disabled': () => <ThreadScreenContent {...threadProps({ draft: '' })} />,
   'stack.thread.sending': () => (
     <ThreadScreenContent {...threadProps({ sending: true, draft: 'Hi' })} />
@@ -1111,6 +1119,7 @@ const styles = StyleSheet.create({
     gap: space.xxl,
   },
   fill: { flex: 1, backgroundColor: color.canvas },
+  keyboardInset: { height: 280, backgroundColor: color.surfaceRaised },
   debugState: {
     marginHorizontal: space.xl,
     marginBottom: space.xxxl,

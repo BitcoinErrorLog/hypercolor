@@ -379,4 +379,14 @@ describe('ChannelScreenContent fan-out labels', () => {
       tree.unmount();
     });
   });
+
+  it('keeps the composer inside KeyboardAvoidingView', async () => {
+    const tree = await render(<ChannelScreenContent {...contentProps()} />);
+    const kav = tree.root.findByProps({ testID: 'channelKeyboardAvoid' });
+    expect(kav.props.behavior).toBe('padding');
+    expect(kav.findByProps({ testID: 'channelComposer' })).toBeTruthy();
+    await act(async () => {
+      tree.unmount();
+    });
+  });
 });

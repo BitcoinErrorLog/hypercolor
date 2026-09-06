@@ -62,6 +62,13 @@ import {
 import { LINK_MESSAGE_MAX_BYTES } from '../../types/link';
 import { color, space, radius, typeRole, measure } from '../../theme';
 import { Avatar, Button, Icon, ListRow, MessageBubble } from '../../ui/primitives';
+import {
+  COMPOSER_KAV_BEHAVIOR,
+  COMPOSER_KAV_OFFSET,
+  composerDockPadding,
+  keyboardLiftHeight,
+  subscribeComposerKeyboard,
+} from '../../ui/composerKeyboard';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'ChannelScreen'>;
 
@@ -401,6 +408,8 @@ export function ChannelScreenContent({
   const menuWasOpen = useRef(false);
   const insets = useSafeAreaInsets();
   const bottomInset = Math.max(insets.bottom, 0);
+  const [keyboardVisible, setKeyboardVisible] = useState(false);
+  const [androidKeyboardLift, setAndroidKeyboardLift] = useState(0);
   const byAuthorEvent = useMemo(() => {
     const map = new Map<string, GroupMessage>();
     for (const msg of messages) map.set(`${msg.senderPubky}:${msg.eventId}`, msg);
@@ -660,6 +669,22 @@ export function ChannelScreenContent({
   );
 
   useEffect(() => {
+    return subscribeComposerKeyboard({
+      onShow: event => {
+        setKeyboardVisible(true);
+        setAndroidKeyboardLift(keyboardLiftHeight(event, Platform.OS));
+        if (visible.length > 0) {
+          flatListRef.current?.scrollToEnd({ animated: true });
+        }
+      },
+      onHide: () => {
+        setKeyboardVisible(false);
+        setAndroidKeyboardLift(0);
+      },
+    });
+  }, [visible.length]);
+
+  useEffect(() => {
     if (!showMembers) return;
     const sub = BackHandler.addEventListener('hardwareBackPress', () => {
       onToggleMembers();
@@ -710,208 +735,236 @@ export function ChannelScreenContent({
         </View>
       ) : null}
 
-      {loading ? (
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator color={color.brand} />
-        </View>
-      ) : showMembers ? (
-        <ScrollView
-          contentContainerStyle={[styles.memberPane, { paddingBottom: space.xl + bottomInset }]}
-        >
-          <Text style={styles.memberHeading}>
-            {activeMembers.length}
-            {!isPublic ? ` / ${memberCap}` : ''} members
-          </Text>
-          {members.map(member => (
-            <ListRow
-              key={member.memberPubky}
-              title={contactName(contacts, member.memberPubky)}
-              subtitle={`${member.role}${member.status === 'removed' ? ' · removed' : ''}`}
-              leading={
-                <Avatar
-                  name={contactName(contacts, member.memberPubky)}
-                  pubky={member.memberPubky}
-                  size="md"
-                />
-              }
-              trailing={
-                isAdmin &&
-                !isPublic &&
-                member.status === 'active' &&
-                member.memberPubky !== localPubky ? (
-                  <Button
-                    label="Remove"
-                    variant="destructive"
-                    accessibilityLabel={`Remove ${contactName(contacts, member.memberPubky)}`}
-                    onPress={() => onRemoveMember(member.memberPubky)}
+      {showMembers ? (
+        loading ? (
+          <View style={styles.loadingContainer}>
+            <ActivityIndicator color={color.brand} />
+          </View>
+        ) : (
+          <ScrollView
+            contentContainerStyle={[styles.memberPane, { paddingBottom: space.xl + bottomInset }]}
+          >
+            <Text style={styles.memberHeading}>
+              {activeMembers.length}
+              {!isPublic ? ` / ${memberCap}` : ''} members
+            </Text>
+            {members.map(member => (
+              <ListRow
+                key={member.memberPubky}
+                title={contactName(contacts, member.memberPubky)}
+                subtitle={`${member.role}${member.status === 'removed' ? ' · removed' : ''}`}
+                leading={
+                  <Avatar
+                    name={contactName(contacts, member.memberPubky)}
+                    pubky={member.memberPubky}
+                    size="md"
                   />
-                ) : undefined
-              }
-              showChevron={false}
-              hideDivider={members[members.length - 1] === member}
-            />
-          ))}
-          {isAdmin && !isPublic ? (
-            <View style={styles.addRow}>
-              <TextInput
-                style={styles.addInput}
-                value={addPubky}
-                onChangeText={onChangeAddPubky}
-                placeholder="Add member pubky"
-                placeholderTextColor={color.textSecondary}
-                autoCapitalize="none"
+                }
+                trailing={
+                  isAdmin &&
+                  !isPublic &&
+                  member.status === 'active' &&
+                  member.memberPubky !== localPubky ? (
+                    <Button
+                      label="Remove"
+                      variant="destructive"
+                      accessibilityLabel={`Remove ${contactName(contacts, member.memberPubky)}`}
+                      onPress={() => onRemoveMember(member.memberPubky)}
+                    />
+                  ) : undefined
+                }
+                showChevron={false}
+                hideDivider={members[members.length - 1] === member}
               />
-              <TouchableOpacity
-                accessibilityRole="button"
-                accessibilityLabel="Add member"
-                hitSlop={HIT_SLOP_44}
-                onPress={onAddMember}
-                style={minHitStyle}
-              >
-                <Text style={styles.action}>Add</Text>
-              </TouchableOpacity>
-            </View>
-          ) : null}
-          {isPublic ? (
-            <TouchableOpacity
-              accessibilityRole="button"
-              accessibilityLabel="Refresh from homeserver"
-              onPress={onRefreshPublic}
-              style={styles.leaveBtn}
-            >
-              <Text style={styles.action}>Refresh from homeserver</Text>
-            </TouchableOpacity>
-          ) : null}
-          {selfActive ? (
-            <TouchableOpacity
-              accessibilityRole="button"
-              accessibilityLabel="Leave channel"
-              onPress={onLeave}
-              style={styles.leaveBtn}
-            >
-              <Text style={styles.danger}>Leave channel</Text>
-            </TouchableOpacity>
-          ) : (
-            <Text style={styles.memberMeta}>You have left this channel.</Text>
-          )}
-        </ScrollView>
-      ) : (
-        <FlatList
-          ref={flatListRef}
-          data={visible}
-          keyExtractor={item => `${item.senderPubky}:${item.eventId}`}
-          renderItem={renderMessage}
-          contentContainerStyle={[styles.messageList, { paddingBottom: space.xl + bottomInset }]}
-          onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: false })}
-        />
-      )}
-
-      {selfActive && !showMembers ? (
-        <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-          keyboardVerticalOffset={0}
-        >
-          {replyTo ? (
-            <View style={styles.replyBar}>
-              <Text style={styles.replyBarText} numberOfLines={1}>
-                Replying to {replyTo.body}
-              </Text>
-              <TouchableOpacity
-                accessibilityRole="button"
-                accessibilityLabel="Clear reply"
-                hitSlop={HIT_SLOP_44}
-                onPress={onClearReply}
-                style={minHitStyle}
-              >
-                <Text style={styles.action}>Clear</Text>
-              </TouchableOpacity>
-            </View>
-          ) : null}
-          {composerNotice ? (
-            <View testID="channelComposerNotice" accessibilityRole="alert" style={styles.notice}>
-              <Text style={styles.noticeText}>{composerNotice.message}</Text>
-              {composerNotice.actionLabel && composerNotice.onAction ? (
+            ))}
+            {isAdmin && !isPublic ? (
+              <View style={styles.addRow}>
+                <TextInput
+                  style={styles.addInput}
+                  value={addPubky}
+                  onChangeText={onChangeAddPubky}
+                  placeholder="Add member pubky"
+                  placeholderTextColor={color.textSecondary}
+                  autoCapitalize="none"
+                />
                 <TouchableOpacity
                   accessibilityRole="button"
-                  accessibilityLabel={composerNotice.actionLabel}
+                  accessibilityLabel="Add member"
                   hitSlop={HIT_SLOP_44}
-                  onPress={composerNotice.onAction}
+                  onPress={onAddMember}
                   style={minHitStyle}
                 >
-                  <Text style={styles.action}>{composerNotice.actionLabel}</Text>
+                  <Text style={styles.action}>Add</Text>
                 </TouchableOpacity>
-              ) : null}
+              </View>
+            ) : null}
+            {isPublic ? (
+              <TouchableOpacity
+                accessibilityRole="button"
+                accessibilityLabel="Refresh from homeserver"
+                onPress={onRefreshPublic}
+                style={styles.leaveBtn}
+              >
+                <Text style={styles.action}>Refresh from homeserver</Text>
+              </TouchableOpacity>
+            ) : null}
+            {selfActive ? (
+              <TouchableOpacity
+                accessibilityRole="button"
+                accessibilityLabel="Leave channel"
+                onPress={onLeave}
+                style={styles.leaveBtn}
+              >
+                <Text style={styles.danger}>Leave channel</Text>
+              </TouchableOpacity>
+            ) : (
+              <Text style={styles.memberMeta}>You have left this channel.</Text>
+            )}
+          </ScrollView>
+        )
+      ) : (
+        <KeyboardAvoidingView
+          testID="channelKeyboardAvoid"
+          style={[
+            styles.keyboardAvoid,
+            androidKeyboardLift ? { paddingBottom: androidKeyboardLift } : null,
+          ]}
+          behavior={COMPOSER_KAV_BEHAVIOR}
+          keyboardVerticalOffset={COMPOSER_KAV_OFFSET}
+        >
+          {loading ? (
+            <View style={styles.loadingContainer}>
+              <ActivityIndicator color={color.brand} />
             </View>
-          ) : null}
-          <View style={[styles.composer, { paddingBottom: space.lg + bottomInset }]}>
-            <ComposerActionMenu
-              visible={actionMenuOpen}
-              actions={composerActionItems(isPublic ? 'public-topic' : 'private-group', {
-                messagingEnabled: selfActive,
-                inboxClosed: false,
-                hasTipEndpoints: false,
-              })}
-              onSelect={onComposerAction}
-              onClose={onCloseActionMenu}
+          ) : (
+            <FlatList
+              ref={flatListRef}
+              data={visible}
+              keyExtractor={item => `${item.senderPubky}:${item.eventId}`}
+              renderItem={renderMessage}
+              style={styles.list}
+              contentContainerStyle={[styles.messageList, { paddingBottom: space.xl }]}
+              onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: false })}
+              keyboardShouldPersistTaps="handled"
+              keyboardDismissMode="interactive"
             />
-            <TouchableOpacity
-              ref={plusRef}
-              testID="channelComposerPlus"
-              accessibilityRole="button"
-              accessibilityLabel={COPY.composerAttach}
-              hitSlop={HIT_SLOP_44}
-              onPress={onOpenActionMenu}
-              style={styles.plusBtn}
-            >
-              <Icon name="add" tone="secondary" />
-            </TouchableOpacity>
-            <TextInput
-              accessibilityLabel="Message"
-              style={styles.input}
-              value={draft}
-              onChangeText={onChangeDraft}
-              placeholder="Message…"
-              placeholderTextColor={color.textSecondary}
-              multiline
-            />
-            <TouchableOpacity
-              accessibilityRole="button"
-              accessibilityLabel="Send message"
-              accessibilityState={{
-                disabled: !draft.trim() || sending || overCap,
-              }}
-              style={[
-                styles.sendBtn,
-                (!draft.trim() || sending || overCap) && styles.sendBtnDisabled,
-              ]}
-              onPress={onSend}
-              disabled={!draft.trim() || sending || overCap}
-            >
-              {sending ? (
-                <ActivityIndicator color={color.textOnBrand} size="small" />
-              ) : (
-                <Icon
-                  name="arrow-up"
-                  tone={!draft.trim() || sending || overCap ? 'muted' : 'onBrand'}
+          )}
+
+          {selfActive ? (
+            <>
+              {replyTo ? (
+                <View style={styles.replyBar}>
+                  <Text style={styles.replyBarText} numberOfLines={1}>
+                    Replying to {replyTo.body}
+                  </Text>
+                  <TouchableOpacity
+                    accessibilityRole="button"
+                    accessibilityLabel="Clear reply"
+                    hitSlop={HIT_SLOP_44}
+                    onPress={onClearReply}
+                    style={minHitStyle}
+                  >
+                    <Text style={styles.action}>Clear</Text>
+                  </TouchableOpacity>
+                </View>
+              ) : null}
+              {composerNotice ? (
+                <View
+                  testID="channelComposerNotice"
+                  accessibilityRole="alert"
+                  style={styles.notice}
+                >
+                  <Text style={styles.noticeText}>{composerNotice.message}</Text>
+                  {composerNotice.actionLabel && composerNotice.onAction ? (
+                    <TouchableOpacity
+                      accessibilityRole="button"
+                      accessibilityLabel={composerNotice.actionLabel}
+                      hitSlop={HIT_SLOP_44}
+                      onPress={composerNotice.onAction}
+                      style={minHitStyle}
+                    >
+                      <Text style={styles.action}>{composerNotice.actionLabel}</Text>
+                    </TouchableOpacity>
+                  ) : null}
+                </View>
+              ) : null}
+              <View
+                style={[
+                  styles.composer,
+                  { paddingBottom: composerDockPadding(bottomInset, keyboardVisible) },
+                ]}
+              >
+                <ComposerActionMenu
+                  visible={actionMenuOpen}
+                  actions={composerActionItems(isPublic ? 'public-topic' : 'private-group', {
+                    messagingEnabled: selfActive,
+                    inboxClosed: false,
+                    hasTipEndpoints: false,
+                  })}
+                  onSelect={onComposerAction}
+                  onClose={onCloseActionMenu}
                 />
-              )}
-            </TouchableOpacity>
-          </View>
-          {showByteCap ? (
-            <Text
-              testID="channelByteCap"
-              accessibilityLabel={byteLabel}
-              numberOfLines={1}
-              style={[
-                styles.byteCap,
-                byteSize >= LINK_MESSAGE_MAX_BYTES * 0.95 && styles.byteCapOver,
-              ]}
-            >
-              {byteLabel}
-            </Text>
+                <TouchableOpacity
+                  ref={plusRef}
+                  testID="channelComposerPlus"
+                  accessibilityRole="button"
+                  accessibilityLabel={COPY.composerAttach}
+                  hitSlop={HIT_SLOP_44}
+                  onPress={onOpenActionMenu}
+                  style={styles.plusBtn}
+                >
+                  <Icon name="add" tone="secondary" />
+                </TouchableOpacity>
+                <TextInput
+                  testID="channelComposer"
+                  accessibilityLabel="Message"
+                  style={styles.input}
+                  value={draft}
+                  onChangeText={onChangeDraft}
+                  placeholder="Message…"
+                  placeholderTextColor={color.textSecondary}
+                  multiline
+                />
+                <TouchableOpacity
+                  accessibilityRole="button"
+                  accessibilityLabel="Send message"
+                  accessibilityState={{
+                    disabled: !draft.trim() || sending || overCap,
+                  }}
+                  style={[
+                    styles.sendBtn,
+                    (!draft.trim() || sending || overCap) && styles.sendBtnDisabled,
+                  ]}
+                  onPress={onSend}
+                  disabled={!draft.trim() || sending || overCap}
+                >
+                  {sending ? (
+                    <ActivityIndicator color={color.textOnBrand} size="small" />
+                  ) : (
+                    <Icon
+                      name="arrow-up"
+                      tone={!draft.trim() || sending || overCap ? 'muted' : 'onBrand'}
+                    />
+                  )}
+                </TouchableOpacity>
+              </View>
+              {showByteCap ? (
+                <Text
+                  testID="channelByteCap"
+                  accessibilityLabel={byteLabel}
+                  numberOfLines={1}
+                  style={[
+                    styles.byteCap,
+                    byteSize >= LINK_MESSAGE_MAX_BYTES * 0.95 && styles.byteCapOver,
+                  ]}
+                >
+                  {byteLabel}
+                </Text>
+              ) : null}
+            </>
           ) : null}
         </KeyboardAvoidingView>
-      ) : null}
+      )}
     </SafeAreaView>
   );
 }
@@ -947,6 +1000,8 @@ function formatDaySeparator(ms: number): string {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: color.canvas },
+  keyboardAvoid: { flex: 1 },
+  list: { flex: 1 },
   header: {
     flexDirection: 'row',
     alignItems: 'center',

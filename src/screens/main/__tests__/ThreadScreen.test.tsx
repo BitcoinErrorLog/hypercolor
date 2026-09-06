@@ -1,5 +1,5 @@
 import React from 'react';
-import { Alert, StyleSheet, Text } from 'react-native';
+import { Alert, FlatList, Keyboard, StyleSheet, Text } from 'react-native';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import { color, radius, space, measure } from '../../../theme';
 import { CONTACTS_COPY } from '../../../ui/contacts/contactsCopy';
@@ -334,6 +334,30 @@ describe('ThreadScreenContent blocked send', () => {
     );
     expect(JSON.stringify(tree.toJSON())).toContain(COPY.queuedStandbySubtitle);
     expect(JSON.stringify(tree.toJSON())).not.toContain(COPY.queuedWaitingSubtitle);
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('keeps the composer inside KeyboardAvoidingView and scrolls on keyboard show', async () => {
+    const scrollToEnd = jest.fn();
+    jest.spyOn(FlatList.prototype, 'scrollToEnd').mockImplementation(scrollToEnd);
+    const listeners = new Map<string, (event?: unknown) => void>();
+    jest.spyOn(Keyboard, 'addListener').mockImplementation((event, cb) => {
+      listeners.set(String(event), cb as (event?: unknown) => void);
+      return { remove: jest.fn() } as unknown as ReturnType<typeof Keyboard.addListener>;
+    });
+    const tree = await render(<ThreadScreenContent {...contentProps()} />);
+    const kav = tree.root.findByProps({ testID: 'threadKeyboardAvoid' });
+    expect(kav.props.behavior).toBe('padding');
+    expect(kav.findByProps({ testID: 'threadComposer' })).toBeTruthy();
+    expect(kav.findByProps({ testID: 'threadSend' })).toBeTruthy();
+    await act(async () => {
+      listeners.get('keyboardDidShow')?.({
+        endCoordinates: { height: 320, screenX: 0, screenY: 0, width: 0 },
+      } as never);
+    });
+    expect(scrollToEnd).toHaveBeenCalled();
     await act(async () => {
       tree.unmount();
     });

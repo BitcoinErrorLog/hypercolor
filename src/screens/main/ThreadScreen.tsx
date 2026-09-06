@@ -80,6 +80,13 @@ import { eventIdsWithDeliveryQueue } from '../../ui/failedSendRetry';
 import { useReduceMotion } from '../../ui/reduceMotion';
 import { color, space, radius, typeRole, measure } from '../../theme';
 import { Icon, MessageBubble } from '../../ui/primitives';
+import {
+  COMPOSER_KAV_BEHAVIOR,
+  COMPOSER_KAV_OFFSET,
+  composerDockPadding,
+  keyboardLiftHeight,
+  subscribeComposerKeyboard,
+} from '../../ui/composerKeyboard';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Thread'>;
 
@@ -558,16 +565,35 @@ export function ThreadScreenContent({
   const reduceMotion = useReduceMotion();
   const insets = useSafeAreaInsets();
   const bottomInset = Math.max(insets.bottom, 0);
+  const [keyboardVisible, setKeyboardVisible] = useState(false);
+  const [androidKeyboardLift, setAndroidKeyboardLift] = useState(0);
   const items = useMemo(
     () => mergeThreadItems(linkMessages, attachments, payments),
     [linkMessages, attachments, payments],
   );
 
-  useEffect(() => {
-    if (items.length > 0) {
-      flatListRef.current?.scrollToEnd({ animated: !reduceMotion });
-    }
+  const scrollToLatest = useCallback(() => {
+    if (items.length === 0) return;
+    flatListRef.current?.scrollToEnd({ animated: !reduceMotion });
   }, [items.length, reduceMotion]);
+
+  useEffect(() => {
+    scrollToLatest();
+  }, [scrollToLatest]);
+
+  useEffect(() => {
+    return subscribeComposerKeyboard({
+      onShow: event => {
+        setKeyboardVisible(true);
+        setAndroidKeyboardLift(keyboardLiftHeight(event, Platform.OS));
+        scrollToLatest();
+      },
+      onHide: () => {
+        setKeyboardVisible(false);
+        setAndroidKeyboardLift(0);
+      },
+    });
+  }, [scrollToLatest]);
 
   useEffect(() => {
     if (actionMenuOpen) {
@@ -799,41 +825,54 @@ export function ThreadScreenContent({
         <StatusBanner testID="threadOfflineBanner" label={COPY.sessionOfflineBanner} />
       ) : null}
 
-      {loading ? (
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator color={color.brand} />
-        </View>
-      ) : items.length === 0 ? (
-        <View style={styles.empty}>
-          <Text style={styles.emptyTitle}>{COPY.noMessagesYet}</Text>
-          <Text style={styles.emptyBody}>{COPY.threadEmptyBody}</Text>
-        </View>
-      ) : (
-        <FlatList
-          ref={flatListRef}
-          data={items}
-          keyExtractor={item => item.id}
-          renderItem={renderItem}
-          contentContainerStyle={[styles.messageList, { paddingBottom: space.xl + bottomInset }]}
-          onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: false })}
-          refreshControl={
-            onRefresh ? (
-              <RefreshControl
-                refreshing={refreshing}
-                onRefresh={onRefresh}
-                tintColor={color.brand}
-                testID="threadRefresh"
-              />
-            ) : undefined
-          }
-        />
-      )}
-
       <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        keyboardVerticalOffset={0}
+        testID="threadKeyboardAvoid"
+        style={[
+          styles.keyboardAvoid,
+          androidKeyboardLift ? { paddingBottom: androidKeyboardLift } : null,
+        ]}
+        behavior={COMPOSER_KAV_BEHAVIOR}
+        keyboardVerticalOffset={COMPOSER_KAV_OFFSET}
       >
-        <View style={[styles.composerColumn, { paddingBottom: space.lg + bottomInset }]}>
+        {loading ? (
+          <View style={styles.loadingContainer}>
+            <ActivityIndicator color={color.brand} />
+          </View>
+        ) : items.length === 0 ? (
+          <View style={styles.empty}>
+            <Text style={styles.emptyTitle}>{COPY.noMessagesYet}</Text>
+            <Text style={styles.emptyBody}>{COPY.threadEmptyBody}</Text>
+          </View>
+        ) : (
+          <FlatList
+            ref={flatListRef}
+            data={items}
+            keyExtractor={item => item.id}
+            renderItem={renderItem}
+            style={styles.list}
+            contentContainerStyle={[styles.messageList, { paddingBottom: space.xl }]}
+            onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: false })}
+            keyboardShouldPersistTaps="handled"
+            keyboardDismissMode="interactive"
+            refreshControl={
+              onRefresh ? (
+                <RefreshControl
+                  refreshing={refreshing}
+                  onRefresh={onRefresh}
+                  tintColor={color.brand}
+                  testID="threadRefresh"
+                />
+              ) : undefined
+            }
+          />
+        )}
+
+        <View
+          style={[
+            styles.composerColumn,
+            { paddingBottom: composerDockPadding(bottomInset, keyboardVisible) },
+          ]}
+        >
           {standbyBlocksNewChat || composerNotice ? (
             <View testID="composerNotice" accessibilityRole="alert" style={styles.notice}>
               <Text style={styles.noticeText}>
@@ -1110,6 +1149,8 @@ function formatDaySeparator(ms: number): string {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: color.canvas },
+  keyboardAvoid: { flex: 1 },
+  list: { flex: 1 },
   header: {
     flexDirection: 'row',
     alignItems: 'center',

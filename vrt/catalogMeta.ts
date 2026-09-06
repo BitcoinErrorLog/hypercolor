@@ -101,6 +101,7 @@ export const VRT_CATALOG_META: readonly VrtCatalogMeta[] = Object.freeze([
   meta('stack.thread.loading', 'stack', 'thread', 'loading', [pubkyMask]),
   meta('stack.thread.empty', 'stack', 'thread', 'empty', [pubkyMask]),
   meta('stack.thread.populated', 'stack', 'thread', 'populated', [pubkyMask]),
+  meta('stack.thread.keyboard-open', 'stack', 'thread', 'keyboard-open', [pubkyMask]),
   meta('stack.thread.send-disabled', 'stack', 'thread', 'send-disabled', [pubkyMask]),
   meta('stack.thread.sending', 'stack', 'thread', 'sending', [pubkyMask]),
   meta('stack.thread.failed', 'stack', 'thread', 'failed', [pubkyMask]),
