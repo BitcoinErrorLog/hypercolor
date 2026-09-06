@@ -29,11 +29,9 @@ describe('AwaitingRingAuthScreenContent wiring', () => {
         <AwaitingRingAuthScreenContent
           phase="waiting"
           ringAuthUrl="pubkyauth://vrt-fixture"
-          copied={false}
           delegationBusy={false}
           onCancel={noop}
           onOpenRing={onOpenRing}
-          onCopy={noop}
           onGenerateNew={noop}
           onTryAgain={noop}
         />,
@@ -47,6 +45,7 @@ describe('AwaitingRingAuthScreenContent wiring', () => {
       tree.root.findByProps({ testID: 'awaitingRingAuthOpenRing' }).props.onPress();
     });
     expect(onOpenRing).toHaveBeenCalledTimes(1);
+    expect(tree.root.findAllByProps({ testID: 'awaitingRingAuthCopy' })).toHaveLength(0);
   });
 
   it('renders expired copy once and uses shared action buttons', () => {
@@ -56,11 +55,9 @@ describe('AwaitingRingAuthScreenContent wiring', () => {
         <AwaitingRingAuthScreenContent
           phase="expired"
           ringAuthUrl="pubkyauth://expired"
-          copied={false}
           delegationBusy={false}
           onCancel={noop}
           onOpenRing={noop}
-          onCopy={noop}
           onGenerateNew={noop}
           onTryAgain={noop}
         />,

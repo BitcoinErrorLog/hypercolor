@@ -358,6 +358,20 @@ export const LinkService = {
   ): Promise<{ alias: string; pubky: string }> {
     const pendingWipe = pendingWipeInFlight();
     if (pendingWipe) await waitForWipeInFlight();
+    const previousAlias = KeyStore.isInitialized() ? KeyStore.getLinkSession() : null;
+    const previousPubky = session?.pubky ?? null;
+    if (
+      (previousAlias && previousAlias !== sessionAlias) ||
+      (previousPubky && previousPubky !== pubky)
+    ) {
+      if (previousAlias && previousAlias !== sessionAlias) {
+        await this.signOutSessionQuiet(previousAlias);
+        KeyStore.deleteLinkSessionIfAlias(previousAlias);
+      }
+      if (session?.alias === previousAlias || (previousPubky && previousPubky !== pubky)) {
+        session = null;
+      }
+    }
     await persistThenAdopt(sessionAlias);
     KeyStore.setPubky(pubky);
     session = { alias: sessionAlias, pubky };
@@ -386,6 +400,14 @@ export const LinkService = {
       await PaykitLinkNative.signOutSession(sessionAlias);
     } catch {
       // Detached / already consumed.
+    }
+  },
+
+  async rollbackAdoptedSession(sessionAlias: string): Promise<void> {
+    await this.signOutSessionQuiet(sessionAlias);
+    rollbackLinkSession(sessionAlias, null);
+    if (session?.alias === sessionAlias) {
+      session = null;
     }
   },
 

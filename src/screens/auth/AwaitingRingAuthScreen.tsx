@@ -4,7 +4,6 @@ import { useNavigation, useRoute } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { RouteProp } from '@react-navigation/native';
 import type { AuthStackParamList } from '../../types';
-import { copyText } from '../../utils/copyText';
 import {
   PubkyRingAuthService,
   type PendingDelegationSnapshot,
@@ -56,18 +55,11 @@ export default function AwaitingRingAuthScreen() {
   const [expiresAt, setExpiresAt] = useState(initial?.expiresAt ?? 0);
   const expiresAtRef = useRef(initial?.expiresAt ?? 0);
   const connectTokenRef = useRef<number | null>(null);
-  const [copied, setCopied] = useState(false);
   const [delegationBusy, setDelegationBusy] = useState(false);
   const [phase, setPhase] = useState<AwaitPhase>(() => {
     if (!initial) return 'expired';
     return Date.now() >= initial.expiresAt ? 'expired' : 'waiting';
   });
-
-  function handleCopy() {
-    if (!ringAuthUrl) return;
-    copyText(ringAuthUrl);
-    setCopied(true);
-  }
 
   const handleCancel = useCallback(async () => {
     await PubkyRingAuthService.cancelPendingDelegation();
@@ -91,7 +83,6 @@ export default function AwaitingRingAuthScreen() {
       setRingAuthUrl(next.url);
       expiresAtRef.current = next.expiresAt;
       setExpiresAt(next.expiresAt);
-      setCopied(false);
       setPhase(Date.now() >= next.expiresAt ? 'expired' : 'waiting');
     } catch (err) {
       if (!PubkyRingAuthService.isStaleDelegationRequestError(err)) {
@@ -167,7 +158,6 @@ export default function AwaitingRingAuthScreen() {
     <AwaitingRingAuthScreenContent
       phase={phase}
       ringAuthUrl={ringAuthUrl}
-      copied={copied}
       delegationBusy={delegationBusy}
       onCancel={() => {
         void handleCancel();
@@ -177,7 +167,6 @@ export default function AwaitingRingAuthScreen() {
           setPhase('offline');
         });
       }}
-      onCopy={handleCopy}
       onGenerateNew={() => {
         void handleGenerateNew();
       }}

@@ -4,7 +4,7 @@ import { x25519GenerateKeypair, sb2VerifySignature, sb2Decrypt } from '../utils/
 import { parsePubky, pubkyZ32ToHex } from '../utils/pubkyId';
 import { RING_GRANT_CAPABILITIES } from '../types/link';
 import { KeyStore, type AppCert } from './KeyStore';
-import { ENABLE_AUTH_TTL_MS } from '../copy/uxCopy';
+import { COPY, ENABLE_AUTH_TTL_MS } from '../copy/uxCopy';
 import { PaykitLinkNative } from './link/PaykitLinkNative';
 import { LinkService } from './link/LinkService';
 
@@ -14,12 +14,14 @@ import { LinkService } from './link/LinkService';
  * Combined paykit-connect + pubkyauth (one Ring sheet):
  *  1. startAuthFlow (scoped RING_GRANT_CAPABILITIES) first; parse secret/relay.
  *  2. Mint ephemeral X25519; QR is pubkyring://paykit-connect with secret, relay, v=2.
- *  3. Ring posts the scoped AuthToken, then opens hypercolor://ring-callback.
+ *  3. Ring posts the scoped AuthToken, then opens hypercolor://ring-callback
+ *     with mode=secure_handoff+pubkyauth.
  *  4. Decrypt the SB2 handoff in memory; awaitAuthApproval; bind pubky;
  *     adoptApprovedSession → adoptHandoff (UKD keys) → provisionReceiver.
  *
- * Legacy: no auth flow started (native missing). Same callback, persist keys
- * only. session_secret is never stored.
+ * Ring rejects QR without secret/relay. A cold start that lost in-memory
+ * flowId never falls back to keys-only; the user must scan again.
+ * session_secret is never stored.
  */
 
 export class StaleDelegationRequestError extends Error {
@@ -54,6 +56,23 @@ export class ProvisionReceiverFailedError extends Error {
   }
 }
 
+export class CombinedFlowRestartRequiredError extends Error {
+  override readonly name = 'CombinedFlowRestartRequiredError';
+  constructor(message: string = COPY.connectScanAgain) {
+    super(message);
+  }
+}
+
+export class UpdatePubkyRingError extends Error {
+  override readonly name = 'UpdatePubkyRingError';
+  constructor(message = COPY.updatePubkyRing) {
+    super(message);
+  }
+}
+
+export const COMBINED_HANDOFF_MODE = 'secure_handoff+pubkyauth';
+export const ALLOWED_PUBKYAUTH_RELAY_HOST = 'httprelay.pubky.app';
+
 export function isStaleDelegationRequestError(err: unknown): boolean {
   return err instanceof StaleDelegationRequestError;
 }
@@ -68,6 +87,14 @@ export function isProvisionReceiverFailedError(err: unknown): err is ProvisionRe
 
 export function isBindingMismatchError(err: unknown): boolean {
   return err instanceof BindingMismatchError;
+}
+
+export function isCombinedFlowRestartRequiredError(err: unknown): boolean {
+  return err instanceof CombinedFlowRestartRequiredError;
+}
+
+export function isUpdatePubkyRingError(err: unknown): boolean {
+  return err instanceof UpdatePubkyRingError;
 }
 
 export type PendingDelegationSnapshot = {
@@ -85,6 +112,39 @@ export type PubkyauthAuthorizationParts = {
 };
 
 /**
+ * Parse a query string by hand. `new URL` is not used (RN/web parsers disagree).
+ */
+export function parseQueryParams(rawQuery: string): Map<string, string> {
+  const hash = rawQuery.indexOf('#');
+  const q = hash >= 0 ? rawQuery.slice(0, hash) : rawQuery;
+  const params = new Map<string, string>();
+  for (const part of q.split('&')) {
+    if (!part) continue;
+    const eq = part.indexOf('=');
+    const key = eq < 0 ? decodeURIComponent(part) : decodeURIComponent(part.slice(0, eq));
+    // Do not treat `+` as space: Ring sends `mode=secure_handoff+pubkyauth`.
+    const value = eq < 0 ? '' : decodeURIComponent(part.slice(eq + 1));
+    params.set(key, value);
+  }
+  return params;
+}
+
+export function assertAllowedPubkyauthRelay(relay: string): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(relay);
+  } catch {
+    throw new Error('pubkyauth relay URL is invalid');
+  }
+  if (parsed.protocol !== 'https:') {
+    throw new Error('pubkyauth relay must be https');
+  }
+  if (parsed.hostname !== ALLOWED_PUBKYAUTH_RELAY_HOST) {
+    throw new Error('pubkyauth relay host is not allowlisted');
+  }
+}
+
+/**
  * Parse `pubkyauth:///?caps=&secret=&relay=` by hand. Empty authority;
  * `new URL` is not used (RN/web parsers disagree).
  */
@@ -96,23 +156,17 @@ export function parsePubkyauthAuthorizationUrl(raw: string): PubkyauthAuthorizat
   if (qIndex < 0) {
     throw new Error('pubkyauth URL is missing a query');
   }
-  const query = raw.slice(qIndex + 1);
-  const hash = query.indexOf('#');
-  const q = hash >= 0 ? query.slice(0, hash) : query;
-  const params = new Map<string, string>();
-  for (const part of q.split('&')) {
-    if (!part) continue;
-    const eq = part.indexOf('=');
-    const key = eq < 0 ? decodeURIComponent(part) : decodeURIComponent(part.slice(0, eq));
-    const value = eq < 0 ? '' : decodeURIComponent(part.slice(eq + 1).replace(/\+/g, ' '));
-    params.set(key, value);
-  }
+  const params = parseQueryParams(raw.slice(qIndex + 1));
   const caps = params.get('caps') ?? '';
   const secret = params.get('secret') ?? '';
   const relay = params.get('relay') ?? '';
   if (!caps || !secret || !relay) {
     throw new Error('pubkyauth URL is missing caps, secret, or relay');
   }
+  if (caps !== RING_GRANT_CAPABILITIES) {
+    throw new Error('pubkyauth caps do not match RING_GRANT_CAPABILITIES');
+  }
+  assertAllowedPubkyauthRelay(relay);
   return { caps, secret, relay };
 }
 
@@ -122,7 +176,6 @@ interface PendingHandoff {
   url: string;
   generation: number;
   authFlowId: string | null;
-  canceled: boolean;
 }
 
 const trackedFlows = new Map<string, { canceled: boolean }>();
@@ -145,13 +198,20 @@ async function disposeAuthFlow(flowId: string | null | undefined): Promise<void>
   } catch {
     // Native cancel is best-effort.
   }
+  trackedFlows.delete(flowId);
+}
+
+function isDuplicateAwaitError(err: unknown): boolean {
+  if (typeof err !== 'object' || err === null) return false;
+  const rec = err as { code?: unknown; message?: unknown };
+  if (rec.code === 'validation') return true;
+  return typeof rec.message === 'string' && rec.message.includes('already awaiting');
 }
 
 export async function cancelPendingDelegation(): Promise<void> {
   delegationGeneration += 1;
   const work = writeChain.then(async () => {
     const flowId = _pending?.authFlowId ?? null;
-    if (_pending) _pending.canceled = true;
     _pending = null;
     await disposeAuthFlow(flowId);
     await KeyStore.clearPendingRingHandoff();
@@ -287,18 +347,17 @@ export async function requestDelegation(deviceId: string): Promise<DelegationReq
     void disposeAuthFlow(previousFlowId);
   }
 
-  let authFlowId: string | null = null;
-  let authParts: PubkyauthAuthorizationParts | null = null;
-  if (PaykitLinkNative.isAvailable()) {
-    const started = await PaykitLinkNative.startAuthFlow(RING_GRANT_CAPABILITIES);
-    if (myGen !== delegationGeneration) {
-      await disposeAuthFlow(started.flowId);
-      throw new StaleDelegationRequestError();
-    }
-    authParts = parsePubkyauthAuthorizationUrl(started.authorizationUrl);
-    authFlowId = started.flowId;
-    trackedFlows.set(started.flowId, { canceled: false });
+  if (!PaykitLinkNative.isAvailable()) {
+    throw new Error('Paykit native module is required for Connect');
   }
+  const started = await PaykitLinkNative.startAuthFlow(RING_GRANT_CAPABILITIES);
+  if (myGen !== delegationGeneration) {
+    await disposeAuthFlow(started.flowId);
+    throw new StaleDelegationRequestError();
+  }
+  const authParts = parsePubkyauthAuthorizationUrl(started.authorizationUrl);
+  const authFlowId = started.flowId;
+  trackedFlows.set(started.flowId, { canceled: false });
 
   const { secretKey: ephemeralSkHex, publicKey: ephemeralPkHex } = await x25519GenerateKeypair();
 
@@ -311,11 +370,10 @@ export async function requestDelegation(deviceId: string): Promise<DelegationReq
       await disposeAuthFlow(authFlowId);
       return;
     }
-    const url = buildPaykitConnectUrl(
-      deviceId,
-      ephemeralPkHex,
-      authParts ? { secret: authParts.secret, relay: authParts.relay } : undefined,
-    );
+    const url = buildPaykitConnectUrl(deviceId, ephemeralPkHex, {
+      secret: authParts.secret,
+      relay: authParts.relay,
+    });
     const startedAt = Date.now();
     _pending = {
       ephemeralSkHex,
@@ -323,9 +381,10 @@ export async function requestDelegation(deviceId: string): Promise<DelegationReq
       url,
       generation: myGen,
       authFlowId,
-      canceled: false,
     };
-    await KeyStore.setPendingRingHandoff(ephemeralSkHex, startedAt + ENABLE_AUTH_TTL_MS);
+    await KeyStore.setPendingRingHandoff(ephemeralSkHex, startedAt + ENABLE_AUTH_TTL_MS, {
+      combined: true,
+    });
     if (myGen !== delegationGeneration) {
       await discardOwnWrite(myGen, ephemeralSkHex, authFlowId);
       stale = true;
@@ -413,24 +472,32 @@ function parseCallback(url: string): {
   pubky: string;
   requestId: string;
   homeserver: string;
+  mode: string;
 } {
-  const parsed = new URL(url);
-  const pubkyParam = parsed.searchParams.get('pubky');
-  const requestId = parsed.searchParams.get('request_id');
-  const mode = parsed.searchParams.get('mode');
-  const homeserver = parsed.searchParams.get('homeserver');
+  if (typeof url !== 'string' || !url.startsWith('hypercolor:')) {
+    throw new Error('Invalid callback URL — missing required params.');
+  }
+  const qIndex = url.indexOf('?');
+  if (qIndex < 0) {
+    throw new Error('Invalid callback URL — missing required params.');
+  }
+  const params = parseQueryParams(url.slice(qIndex + 1));
+  const pubkyParam = params.get('pubky');
+  const requestId = params.get('request_id');
+  const mode = params.get('mode');
+  const homeserver = params.get('homeserver');
 
   if (!pubkyParam || !requestId || !homeserver) {
     throw new Error('Invalid callback URL — missing required params.');
   }
-  if (mode !== 'secure_handoff' && mode !== 'secure_handoff+pubkyauth') {
+  if (mode !== COMBINED_HANDOFF_MODE && mode !== 'secure_handoff') {
     throw new Error(`Unsupported handoff mode: ${mode}`);
   }
   const pubky = parsePubky(pubkyParam);
   if (!pubky) {
     throw new Error('Invalid callback URL — pubky is not a 52-character z-base-32 key.');
   }
-  return { pubky, requestId, homeserver };
+  return { pubky, requestId, homeserver, mode };
 }
 
 async function decryptHandoffInMemory(
@@ -525,6 +592,9 @@ async function awaitAuthWithDeadline(
     }, remaining);
   });
   try {
+    // Accepted limitation: Paykit FFI `awaitApproval` is not abortable. If this
+    // JS timeout wins, `disposeAuthFlow` still cancels the native job/tombstone,
+    // but the in-flight UniFFI poll may continue until the relay times out.
     return await Promise.race([PaykitLinkNative.awaitAuthApproval(flowId), timeout]);
   } finally {
     if (timeoutId !== undefined) clearTimeout(timeoutId);
@@ -534,12 +604,18 @@ async function awaitAuthWithDeadline(
 /**
  * Called when the app receives the `hypercolor://ring-callback?...` deep link.
  * Combined path decrypts in memory, awaits the tracked auth flow, then
- * session → keys → receiver. Legacy (no auth flow) persists keys only.
+ * session → keys → receiver. Lost in-memory flowId never adopts keys-only.
  */
 export async function handleRingCallback(url: string): Promise<DelegationResult> {
-  const { pubky, requestId, homeserver } = parseCallback(url);
+  const { pubky, requestId, homeserver, mode } = parseCallback(url);
+  const entryGeneration = delegationGeneration;
 
   const ephemeralSkHex = await resolvePendingEphemeralSk();
+  if (entryGeneration !== delegationGeneration) {
+    throw new Error(
+      'No pending delegation request. Call requestDelegation() before handling the callback.',
+    );
+  }
   const expiresAt = await pendingHandoffExpiresAt(ephemeralSkHex);
   if (expiresAt == null || Date.now() >= expiresAt) {
     await clearMatchingHandoff(ephemeralSkHex);
@@ -547,6 +623,11 @@ export async function handleRingCallback(url: string): Promise<DelegationResult>
   }
 
   const payload = await decryptHandoffInMemory(pubky, requestId, ephemeralSkHex);
+  if (entryGeneration !== delegationGeneration) {
+    throw new Error(
+      'No pending delegation request. Call requestDelegation() before handling the callback.',
+    );
+  }
 
   const latestSk = _pending?.ephemeralSkHex ?? (await KeyStore.getPendingRingHandoff());
   if (latestSk !== ephemeralSkHex) {
@@ -559,28 +640,45 @@ export async function handleRingCallback(url: string): Promise<DelegationResult>
     await clearMatchingHandoff(ephemeralSkHex);
     throw new ExpiredDelegationError();
   }
-  if (_pending?.canceled) {
+  if (entryGeneration !== delegationGeneration) {
     throw new Error(
       'No pending delegation request. Call requestDelegation() before handling the callback.',
     );
   }
 
   const flowId = _pending?.authFlowId ?? null;
+  const persistedCombined = await KeyStore.getPendingRingHandoffCombined();
   if (!flowId) {
-    await adoptHandoff(pubky, homeserver, payload, ephemeralSkHex);
-    return { pubky, homeserver, kind: 'legacy', receiverPublished: false };
+    await clearMatchingHandoff(ephemeralSkHex);
+    throw new CombinedFlowRestartRequiredError(
+      persistedCombined ? COPY.connectScanAgain : COPY.updatePubkyRing,
+    );
+  }
+
+  if (mode !== COMBINED_HANDOFF_MODE) {
+    await disposeAuthFlow(flowId);
+    throw new UpdatePubkyRingError();
   }
 
   let session: { sessionAlias: string; pubky: string };
   try {
     session = await awaitAuthWithDeadline(flowId, expiresAtLate);
   } catch (err) {
+    if (isDuplicateAwaitError(err)) {
+      throw err;
+    }
     await disposeAuthFlow(flowId);
     throw err;
   }
+  if (entryGeneration !== delegationGeneration) {
+    await LinkService.signOutSessionQuiet(session.sessionAlias);
+    throw new Error(
+      'No pending delegation request. Call requestDelegation() before handling the callback.',
+    );
+  }
 
   const tracked = trackedFlows.get(flowId);
-  if (tracked?.canceled || _pending?.canceled) {
+  if (tracked?.canceled) {
     await LinkService.signOutSessionQuiet(session.sessionAlias);
     throw new Error(
       'No pending delegation request. Call requestDelegation() before handling the callback.',
@@ -598,8 +696,19 @@ export async function handleRingCallback(url: string): Promise<DelegationResult>
     await LinkService.signOutSessionQuiet(session.sessionAlias);
     throw err;
   }
+  if (entryGeneration !== delegationGeneration) {
+    await LinkService.rollbackAdoptedSession(session.sessionAlias);
+    throw new Error(
+      'No pending delegation request. Call requestDelegation() before handling the callback.',
+    );
+  }
 
-  await adoptHandoff(pubky, homeserver, payload, ephemeralSkHex);
+  try {
+    await adoptHandoff(pubky, homeserver, payload, ephemeralSkHex);
+  } catch (err) {
+    await LinkService.rollbackAdoptedSession(session.sessionAlias);
+    throw err;
+  }
 
   try {
     await LinkService.provisionReceiverAfterConnect();
@@ -611,6 +720,7 @@ export async function handleRingCallback(url: string): Promise<DelegationResult>
     );
   }
 
+  trackedFlows.delete(flowId);
   return { pubky, homeserver, kind: 'combined', receiverPublished: true };
 }
 
@@ -618,6 +728,7 @@ export const PubkyRingAuthService = {
   requestDelegation,
   buildPaykitConnectUrl,
   parsePubkyauthAuthorizationUrl,
+  parseQueryParams,
   handleRingCallback,
   cancelPendingDelegation,
   getPendingDelegationSnapshot,
@@ -626,4 +737,6 @@ export const PubkyRingAuthService = {
   isExpiredDelegationError,
   isProvisionReceiverFailedError,
   isBindingMismatchError,
+  isCombinedFlowRestartRequiredError,
+  isUpdatePubkyRingError,
 };

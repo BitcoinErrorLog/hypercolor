@@ -12,11 +12,9 @@ export type AwaitPhase = 'waiting' | 'expired' | 'denied' | 'offline';
 export type AwaitingRingAuthScreenContentProps = {
   phase: AwaitPhase;
   ringAuthUrl: string;
-  copied: boolean;
   delegationBusy: boolean;
   onCancel: () => void;
   onOpenRing: () => void;
-  onCopy: () => void;
   onGenerateNew: () => void;
   onTryAgain: () => void;
 };
@@ -24,11 +22,9 @@ export type AwaitingRingAuthScreenContentProps = {
 export function AwaitingRingAuthScreenContent({
   phase,
   ringAuthUrl,
-  copied,
   delegationBusy,
   onCancel,
   onOpenRing,
-  onCopy,
   onGenerateNew,
   onTryAgain,
 }: AwaitingRingAuthScreenContentProps): React.ReactElement {
@@ -77,25 +73,11 @@ export function AwaitingRingAuthScreenContent({
           {phase === 'waiting' && ringAuthUrl ? (
             <View style={styles.urlBlock}>
               <Text style={styles.sectionTitle}>Paykit-connect link</Text>
-              <AuthQr value={ringAuthUrl} />
-              <Text
-                selectable
-                style={styles.hint}
-                testID="mask-auth-url"
-                accessibilityLabel={COPY.waitingForRingBody}
-              >
-                {ringAuthUrl}
-              </Text>
+              <AuthQr value={ringAuthUrl} accessibilityLabel={COPY.waitingForRingBody} />
               <Button
                 testID="awaitingRingAuthOpenRing"
                 label={COPY.openPubkyRing}
                 onPress={onOpenRing}
-              />
-              <Button
-                testID="awaitingRingAuthCopy"
-                label={copied ? COPY.copied : COPY.copyPaykitConnectUrl}
-                variant="secondary"
-                onPress={onCopy}
               />
             </View>
           ) : null}

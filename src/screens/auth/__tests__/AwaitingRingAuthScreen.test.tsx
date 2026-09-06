@@ -81,20 +81,15 @@ describe('AwaitingRingAuthScreen', () => {
       COPY.waitingForRingBody,
     );
     expect(JSON.stringify(tree.toJSON())).not.toMatch(/Bitkit/);
-    expect(tree.root.findAllByProps({ children: PAYKIT_CONNECT_URL }).length).toBeGreaterThan(0);
     expect(tree.root.findByProps({ testID: 'awaitingRingAuthOpenRing' })).toBeTruthy();
-    expect(tree.root.findByProps({ testID: 'awaitingRingAuthCopy' })).toBeTruthy();
+    expect(tree.root.findAllByProps({ testID: 'awaitingRingAuthCopy' })).toHaveLength(0);
     await unmount(tree);
   });
 
-  it('copies the paykit-connect URL', async () => {
+  it('does not put the paykit-connect URL on the clipboard', async () => {
     const tree = await render(<AwaitingRingAuthScreen />);
-
-    act(() => {
-      tree.root.findByProps({ testID: 'awaitingRingAuthCopy' }).props.onPress();
-    });
-
-    expect(mockSetString).toHaveBeenCalledWith(PAYKIT_CONNECT_URL);
+    expect(tree.root.findAllByProps({ testID: 'awaitingRingAuthCopy' })).toHaveLength(0);
+    expect(mockSetString).not.toHaveBeenCalled();
     await unmount(tree);
   });
 
@@ -202,8 +197,8 @@ describe('AwaitingRingAuthScreen', () => {
       params: { ringAuthUrl: retryUrl, expiresAt: retryExpiresAt, generation: 2 },
     });
     const remounted = await render(<AwaitingRingAuthScreen />);
-    expect(remounted.root.findAllByProps({ children: retryUrl }).length).toBeGreaterThan(0);
-    expect(remounted.root.findAllByProps({ children: PAYKIT_CONNECT_URL })).toHaveLength(0);
+    expect(remounted.root.findAllByProps({ testID: 'authQr' }).length).toBeGreaterThan(0);
+    expect(remounted.root.findByProps({ testID: 'awaitingRingAuthOpenRing' })).toBeTruthy();
     await unmount(remounted);
   });
 

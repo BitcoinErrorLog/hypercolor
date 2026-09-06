@@ -554,10 +554,6 @@ export function getHomeserver(): string | null {
 
 // ─── Session secret (sync, MMKV — session token only, not a key) ─────────────
 
-export function setSessionSecret(sessionSecret: string): void {
-  requireStore('setSessionSecret').set(SESSION_SECRET_KEY, sessionSecret);
-}
-
 export function getSessionSecret(): string | null {
   return requireStore('getSessionSecret').getString(SESSION_SECRET_KEY) ?? null;
 }
@@ -606,33 +602,43 @@ export function deleteLinkSessionIfAlias(alias: string): boolean {
 type PendingRingHandoffRecord = {
   ephemeralSkHex: string;
   expiresAt: number | null;
+  combined: boolean;
 };
 
 function parsePendingRingHandoff(password: string): PendingRingHandoffRecord | null {
   if (password.length === 0) return null;
   try {
-    const parsed = JSON.parse(password) as { ephemeralSkHex?: unknown; expiresAt?: unknown };
+    const parsed = JSON.parse(password) as {
+      ephemeralSkHex?: unknown;
+      expiresAt?: unknown;
+      combined?: unknown;
+    };
     if (typeof parsed?.ephemeralSkHex === 'string' && parsed.ephemeralSkHex.length > 0) {
       const expiresAt =
         typeof parsed.expiresAt === 'number' && Number.isFinite(parsed.expiresAt)
           ? parsed.expiresAt
           : 0;
-      return { ephemeralSkHex: parsed.ephemeralSkHex, expiresAt };
+      return {
+        ephemeralSkHex: parsed.ephemeralSkHex,
+        expiresAt,
+        combined: parsed.combined === true,
+      };
     }
   } catch {
     // Legacy entries stored the raw hex secret as the password.
   }
   // Legacy raw-hex handoffs have no TTL — treat as already expired.
-  return { ephemeralSkHex: password, expiresAt: 0 };
+  return { ephemeralSkHex: password, expiresAt: 0, combined: false };
 }
 
 export async function setPendingRingHandoff(
   ephemeralSkHex: string,
   expiresAt: number,
+  opts?: { combined?: boolean },
 ): Promise<void> {
   await Keychain.setGenericPassword(
     KEYCHAIN_USERNAME,
-    JSON.stringify({ ephemeralSkHex, expiresAt }),
+    JSON.stringify({ ephemeralSkHex, expiresAt, combined: opts?.combined === true }),
     {
       service: RING_PENDING_SERVICE,
       accessible: Keychain.ACCESSIBLE.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
@@ -648,6 +654,11 @@ export async function getPendingRingHandoff(): Promise<string | null> {
 export async function getPendingRingHandoffExpiresAt(): Promise<number | null> {
   const record = await readPendingRingHandoff();
   return record?.expiresAt ?? null;
+}
+
+export async function getPendingRingHandoffCombined(): Promise<boolean> {
+  const record = await readPendingRingHandoff();
+  return record?.combined === true;
 }
 
 async function readPendingRingHandoff(): Promise<PendingRingHandoffRecord | null> {
@@ -1010,6 +1021,7 @@ export const KeyStore = {
   setPendingRingHandoff,
   getPendingRingHandoff,
   getPendingRingHandoffExpiresAt,
+  getPendingRingHandoffCombined,
   clearPendingRingHandoff,
   setAttachmentSecret,
   getAttachmentSecret,
@@ -1027,7 +1039,6 @@ export const KeyStore = {
   getPubky,
   setHomeserver,
   getHomeserver,
-  setSessionSecret,
   getSessionSecret,
   deleteSessionSecret,
   // Sign-out incomplete markers

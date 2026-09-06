@@ -198,16 +198,19 @@ describe('KeyStore session and Ring pending', () => {
       setPendingRingHandoff,
       getPendingRingHandoff,
       getPendingRingHandoffExpiresAt,
+      getPendingRingHandoffCombined,
       clearPendingRingHandoff,
     } = await freshKeyStore();
     await initKeyStore();
     const expiresAt = 1_700_000_000_000;
-    await setPendingRingHandoff('deadbeef', expiresAt);
+    await setPendingRingHandoff('deadbeef', expiresAt, { combined: true });
     await expect(getPendingRingHandoff()).resolves.toBe('deadbeef');
     await expect(getPendingRingHandoffExpiresAt()).resolves.toBe(expiresAt);
+    await expect(getPendingRingHandoffCombined()).resolves.toBe(true);
     expect(JSON.parse(mockKeychainStore.get('hypercolor-ring-pending') as string)).toEqual({
       ephemeralSkHex: 'deadbeef',
       expiresAt,
+      combined: true,
     });
     await clearPendingRingHandoff();
     await expect(getPendingRingHandoff()).resolves.toBeNull();
@@ -344,7 +347,6 @@ describe('KeyStore link-session readiness', () => {
     expect(() => ks.getHomeserver()).toThrow(ks.KeyStoreNotReady);
     expect(() => ks.setHomeserver('hs')).toThrow(ks.KeyStoreNotReady);
     expect(() => ks.getSessionSecret()).toThrow(ks.KeyStoreNotReady);
-    expect(() => ks.setSessionSecret('secret')).toThrow(ks.KeyStoreNotReady);
     expect(() => ks.deleteSessionSecret()).toThrow(ks.KeyStoreNotReady);
     await expect(ks.clear()).rejects.toThrow(ks.KeyStoreNotReady);
     await expect(ks.hasPersistedSession()).resolves.toBe(false);

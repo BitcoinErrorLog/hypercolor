@@ -127,6 +127,28 @@ export function sanitizeError(
       details: null,
     };
   }
+  if (
+    typeof err === 'object' &&
+    err !== null &&
+    (err as { name?: unknown }).name === 'CombinedFlowRestartRequiredError'
+  ) {
+    return {
+      category: 'invalid-callback',
+      message: COPY.connectScanAgain,
+      details: null,
+    };
+  }
+  if (
+    typeof err === 'object' &&
+    err !== null &&
+    (err as { name?: unknown }).name === 'UpdatePubkyRingError'
+  ) {
+    return {
+      category: 'invalid-callback',
+      message: COPY.updatePubkyRing,
+      details: null,
+    };
+  }
   if (err instanceof LinkSendError) {
     if (err.code === 'denied') {
       return {

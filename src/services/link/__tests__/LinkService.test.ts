@@ -562,6 +562,21 @@ describe('LinkService', () => {
       expect(mockedNative.removeReceiverMarker).not.toHaveBeenCalled();
     });
 
+    it('tears down a previously adopted alias before adopting a different one', async () => {
+      mockedNative.signOutSession.mockClear();
+      mockedNative.adoptAuthSession.mockClear();
+      mockedKeyStore.getLinkSession.mockReturnValue(SESSION_ALIAS);
+      mockedKeyStore.isInitialized.mockReturnValue(true);
+      mockedKeyStore.deleteLinkSessionIfAlias.mockReturnValue(true);
+
+      await LinkService.adoptApprovedSession('session-alias-2', OTHER_OWNER);
+
+      expect(mockedNative.signOutSession).toHaveBeenCalledWith(SESSION_ALIAS);
+      expect(mockedKeyStore.deleteLinkSessionIfAlias).toHaveBeenCalledWith(SESSION_ALIAS);
+      expect(mockedNative.adoptAuthSession).toHaveBeenCalledWith('session-alias-2');
+      expect(mockedKeyStore.setPubky).toHaveBeenCalledWith(OTHER_OWNER);
+    });
+
     it('persists the session alias on signinWithSecret (dev/e2e path)', () => {
       expect(mockedNative.signinWithSecret).toHaveBeenCalledWith('signin-secret-hex');
       expect(mockedNative.adoptAuthSession).toHaveBeenCalledWith(SESSION_ALIAS);

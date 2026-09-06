@@ -487,11 +487,9 @@ export const SCENE_RENDERERS: Record<string, () => React.ReactElement> = {
     <AwaitingRingAuthScreenContent
       phase="waiting"
       ringAuthUrl={AUTH_URL}
-      copied={false}
       delegationBusy={false}
       onCancel={n}
       onOpenRing={n}
-      onCopy={n}
       onGenerateNew={n}
       onTryAgain={n}
     />
@@ -500,11 +498,9 @@ export const SCENE_RENDERERS: Record<string, () => React.ReactElement> = {
     <AwaitingRingAuthScreenContent
       phase="waiting"
       ringAuthUrl=""
-      copied={false}
       delegationBusy={false}
       onCancel={n}
       onOpenRing={n}
-      onCopy={n}
       onGenerateNew={n}
       onTryAgain={n}
     />
@@ -513,11 +509,9 @@ export const SCENE_RENDERERS: Record<string, () => React.ReactElement> = {
     <AwaitingRingAuthScreenContent
       phase="waiting"
       ringAuthUrl={AUTH_URL}
-      copied
       delegationBusy={false}
       onCancel={n}
       onOpenRing={n}
-      onCopy={n}
       onGenerateNew={n}
       onTryAgain={n}
     />
@@ -526,11 +520,9 @@ export const SCENE_RENDERERS: Record<string, () => React.ReactElement> = {
     <AwaitingRingAuthScreenContent
       phase="offline"
       ringAuthUrl={AUTH_URL}
-      copied={false}
       delegationBusy={false}
       onCancel={n}
       onOpenRing={n}
-      onCopy={n}
       onGenerateNew={n}
       onTryAgain={n}
     />

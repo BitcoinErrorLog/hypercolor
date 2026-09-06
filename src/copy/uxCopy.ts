@@ -21,7 +21,6 @@ export const COPY = {
   ringGrantScopeDetail: RING_GRANT_SCOPE_DETAIL,
   openPubkyRing: 'Open Pubky Ring',
   copyAuthorizationUrl: 'Copy authorization URL',
-  copyPaykitConnectUrl: 'Copy paykit-connect URL',
   copied: 'Copied',
   generateNewAuthorization: 'Generate new authorization',
   generateNewLink: 'Generate new link',
@@ -81,6 +80,8 @@ export const COPY = {
   connectExplanation: 'Approve once in Pubky Ring',
   retryPublish: 'Retry publish',
   couldNotPublishReceiver: 'Could not publish the receiver. Retry publish.',
+  updatePubkyRing: 'Update Pubky Ring and scan again.',
+  connectScanAgain: 'Hypercolor was restarted during setup. Scan the paykit-connect code again.',
 
   messageRequests: 'Message requests',
   inbox: 'Inbox',

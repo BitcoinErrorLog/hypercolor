@@ -15,6 +15,7 @@ import ChannelScreen from '../screens/main/ChannelScreen';
 import { PubkyRingAuthService } from '../services/PubkyRingAuthService';
 import { PubkyService } from '../services/PubkyService';
 import { LinkService } from '../services/link/LinkService';
+import { consumeRingCallbackRequestId, ringCallbackRequestIdFromUrl } from './ringCallbackDebounce';
 import {
   bindPendingPublicJoin,
   consumePendingPublicJoinRedirect,
@@ -127,6 +128,8 @@ export function RootNavigator() {
         return;
       }
       if (!url.startsWith('hypercolor://ring-callback')) return;
+      const requestId = ringCallbackRequestIdFromUrl(url);
+      if (requestId && !consumeRingCallbackRequestId(requestId)) return;
 
       try {
         await PubkyService.awaitSignOutWipe();
@@ -143,7 +146,13 @@ export function RootNavigator() {
             {
               text: COPY.retryPublish,
               onPress: () => {
-                void LinkService.provisionReceiverAfterConnect();
+                void (async () => {
+                  try {
+                    await LinkService.provisionReceiverAfterConnect();
+                  } catch {
+                    Alert.alert(COPY.couldNotPublishReceiver, COPY.couldNotPublishReceiver);
+                  }
+                })();
               },
             },
           ]);
