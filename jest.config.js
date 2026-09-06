@@ -7,6 +7,7 @@ module.exports = {
   modulePathIgnorePatterns: ['/\\._'],
   moduleNameMapper: {
     '^@expo/vector-icons/Ionicons$': '<rootDir>/test/mocks/Ionicons.js',
+    '^expo-camera$': '<rootDir>/test/mocks/ExpoCamera.js',
   },
   clearMocks: true,
   // jest-expo default allow-list plus uuid@13 (pure ESM).

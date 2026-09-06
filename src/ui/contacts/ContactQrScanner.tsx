@@ -1,10 +1,84 @@
-import React, { useEffect, useState } from 'react';
+import { CameraView } from 'expo-camera';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 import { COPY } from '../../copy/uxCopy';
+import { parseContactQrPayload } from '../../utils/contactQrPayload';
 import { color, measure, radius, space, typeRole } from '../../theme';
 import { HIT_SLOP_44 } from '../hitTarget';
 import { modalAnimationType, useReduceMotion } from '../reduceMotion';
 import { requestScanCameraPermission, type ScanCameraPermission } from './scanCameraPermission';
+
+function GrantedScanSurface({
+  error,
+  onBarcode,
+}: {
+  error: string | null;
+  onBarcode: (raw: string) => void;
+}): React.ReactElement {
+  const [torch, setTorch] = useState(false);
+  const [scanning, setScanning] = useState(true);
+  const consumedRef = useRef(false);
+
+  const handleBarcode = useCallback(
+    (raw: string) => {
+      if (consumedRef.current) return;
+      const parsed = parseContactQrPayload(raw);
+      if (!parsed.ok) {
+        onBarcode(raw);
+        return;
+      }
+      consumedRef.current = true;
+      setScanning(false);
+      onBarcode(raw);
+    },
+    [onBarcode],
+  );
+
+  const onBarcodeScanned = useCallback(
+    (result: { data: string }) => {
+      handleBarcode(result.data);
+    },
+    [handleBarcode],
+  );
+
+  return (
+    <>
+      <View style={styles.viewfinder} accessibilityLabel="Point the camera at a pubky QR">
+        {scanning ? (
+          <CameraView
+            testID="contactScannerCamera"
+            style={StyleSheet.absoluteFill}
+            facing="back"
+            enableTorch={torch}
+            barcodeScannerSettings={{ barcodeTypes: ['qr'] }}
+            onBarcodeScanned={onBarcodeScanned}
+          />
+        ) : null}
+      </View>
+      {error ? (
+        <Text
+          testID="contactScanError"
+          accessibilityRole="alert"
+          accessibilityLabel={error}
+          style={styles.error}
+        >
+          {error}
+        </Text>
+      ) : (
+        <Text style={styles.hint}>Point this device at a pubky QR.</Text>
+      )}
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Torch"
+        hitSlop={HIT_SLOP_44}
+        onPress={() => setTorch(on => !on)}
+        style={styles.action}
+      >
+        <Text style={styles.actionLabel}>{torch ? 'Torch off' : 'Torch on'}</Text>
+      </Pressable>
+    </>
+  );
+}
 
 export function ContactQrScanner({
   visible,
@@ -36,8 +110,16 @@ export function ContactQrScanner({
   }, [permissionOverride, visible]);
 
   const permission = permissionOverride ?? resolved;
-
   const denied = permission === 'denied';
+
+  const testScanHook =
+    typeof __DEV__ !== 'undefined' && __DEV__
+      ? {
+          onDeliverScan: (raw: string) => {
+            onBarcode(raw);
+          },
+        }
+      : {};
 
   return (
     <Modal
@@ -51,7 +133,7 @@ export function ContactQrScanner({
         testID="contactScanner"
         accessibilityViewIsModal
         accessibilityLabel="Contact QR scanner"
-        {...{ onDeliverScan: onBarcode }}
+        {...testScanHook}
       >
         <View style={styles.sheet}>
           <Text style={styles.title} accessibilityRole="header">
@@ -77,21 +159,12 @@ export function ContactQrScanner({
                 <Text style={styles.actionLabel}>{COPY.enterPubkyManually}</Text>
               </Pressable>
             </>
+          ) : visible && permission === 'granted' ? (
+            <GrantedScanSurface error={error} onBarcode={onBarcode} />
           ) : (
             <>
               <View style={styles.viewfinder} accessibilityLabel="Point the camera at a pubky QR" />
-              {error ? (
-                <Text
-                  testID="contactScanError"
-                  accessibilityRole="alert"
-                  accessibilityLabel={error}
-                  style={styles.error}
-                >
-                  {error}
-                </Text>
-              ) : (
-                <Text style={styles.hint}>Point this device at a pubky QR.</Text>
-              )}
+              <Text style={styles.hint}>Point this device at a pubky QR.</Text>
             </>
           )}
           <Pressable
@@ -138,6 +211,7 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: color.brand,
     backgroundColor: color.canvas,
+    overflow: 'hidden',
   },
   hint: {
     color: color.textSecondary,

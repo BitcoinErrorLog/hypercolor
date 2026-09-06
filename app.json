@@ -13,7 +13,15 @@
         }
       ],
       "expo-document-picker",
-      "expo-file-system"
+      "expo-file-system",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Hypercolor needs camera access to scan contact QR codes and send encrypted photo attachments.",
+          "microphonePermission": false,
+          "recordAudioAndroid": false
+        }
+      ]
     ],
     "ios": {
       "infoPlist": {

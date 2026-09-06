@@ -1,8 +1,8 @@
-import * as ImagePicker from 'expo-image-picker';
+import { Camera } from 'expo-camera';
 
 export type ScanCameraPermission = 'granted' | 'denied';
 
 export async function requestScanCameraPermission(): Promise<ScanCameraPermission> {
-  const result = await ImagePicker.requestCameraPermissionsAsync();
+  const result = await Camera.requestCameraPermissionsAsync();
   return result.granted ? 'granted' : 'denied';
 }

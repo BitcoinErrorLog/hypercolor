@@ -7,10 +7,6 @@ import {
 } from '../../../screens/main/contacts/contactsActions';
 import { ContactQrScanner } from '../ContactQrScanner';
 
-jest.mock('expo-image-picker', () => ({
-  requestCameraPermissionsAsync: jest.fn(async () => ({ granted: false })),
-}));
-
 const OWNER = 'operrr8wsbpr3ue9d4qj41ge1kcc6r7fdiy6o3ugjrrhi4y77rdo';
 const PEER = 'pxnu33x7jtpx9ar1ytsi4yxbp6a5o36gwhffs8zoxmbuptici1jy';
 
@@ -18,6 +14,7 @@ async function render(
   permission: 'granted' | 'denied',
   error: string | null = null,
   onBarcode: (raw: string) => void = () => undefined,
+  onManualFallback: () => void = () => undefined,
 ): Promise<ReactTestRenderer> {
   let tree!: ReactTestRenderer;
   await act(async () => {
@@ -28,7 +25,7 @@ async function render(
         error={error}
         onClose={() => undefined}
         onBarcode={onBarcode}
-        onManualFallback={() => undefined}
+        onManualFallback={onManualFallback}
       />,
     );
   });
@@ -37,11 +34,16 @@ async function render(
 
 describe('ContactQrScanner', () => {
   it('shows camera permission denied copy and a manual-entry fallback', async () => {
-    const tree = await render('denied');
+    const onManualFallback = jest.fn();
+    const tree = await render('denied', null, () => undefined, onManualFallback);
     expect(tree.root.findByProps({ testID: 'contactScanner' })).toBeTruthy();
     expect(JSON.stringify(tree.toJSON())).toContain(COPY.cameraPermissionDenied);
     expect(JSON.stringify(tree.toJSON())).toContain(COPY.enterPubkyManually);
     expect(tree.root.findByProps({ testID: 'contactScanError' })).toBeTruthy();
+    await act(async () => {
+      tree.root.findByProps({ accessibilityLabel: COPY.enterPubkyManually }).props.onPress();
+    });
+    expect(onManualFallback).toHaveBeenCalled();
     await act(async () => {
       tree.unmount();
     });
@@ -82,10 +84,43 @@ describe('ContactQrScanner', () => {
       }
     });
     await act(async () => {
-      tree.root.findByProps({ testID: 'contactScanner' }).props.onDeliverScan(`pubky://${PEER}`);
+      tree.root.findByProps({ testID: 'contactScannerCamera' }).props.onBarcodeScanned({
+        data: `pubky://${PEER}`,
+      });
     });
     await Promise.resolve();
     expect(addManualContact).toHaveBeenCalledWith(OWNER, PEER);
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('keeps the camera open and reports an invalid payload kind', async () => {
+    let scanError: string | null = null;
+    const tree = await render('granted', scanError, raw => {
+      const decision = decideScannedContact(raw, OWNER);
+      if (decision.kind === 'error') scanError = decision.message;
+    });
+    await act(async () => {
+      tree.root.findByProps({ testID: 'contactScannerCamera' }).props.onBarcodeScanned({
+        data: 'https://example.com/not-a-pubky',
+      });
+    });
+    expect(scanError).toBe(COPY.notAPubkyQr);
+    expect(tree.root.findByProps({ testID: 'contactScannerCamera' })).toBeTruthy();
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('still exposes onDeliverScan only as a test hook', async () => {
+    const onBarcode = jest.fn();
+    const tree = await render('granted', null, onBarcode);
+    expect(tree.root.findByProps({ testID: 'contactScanner' }).props.onDeliverScan).toBeTruthy();
+    await act(async () => {
+      tree.root.findByProps({ testID: 'contactScanner' }).props.onDeliverScan(`pubky://${PEER}`);
+    });
+    expect(onBarcode).toHaveBeenCalledWith(`pubky://${PEER}`);
     await act(async () => {
       tree.unmount();
     });

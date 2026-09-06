@@ -13,8 +13,8 @@
 		3B2ED56DF8E7E1E12301DB08 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = CFF77F8E08C889AA71322283 /* PrivacyInfo.xcprivacy */; };
 		3E461D99554A48A4959DE609 /* SplashScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = AA286B85B6C04FC6940260E9 /* SplashScreen.storyboard */; };
 		3E8468AB5D6CA0ECF66E4A86 /* PubkyNoiseModule.swift in Sources */ = {isa = PBXBuildFile; fileRef = E6982E7ABBF22DB3F0D1730F /* PubkyNoiseModule.swift */; };
-		6A60EE9DAC8B00F65C152D7C /* PaykitLinkModule.m in Sources */ = {isa = PBXBuildFile; fileRef = BF7B7296A12D06607BA9774B /* PaykitLinkModule.m */; };
 		4C8E1A2B3D4F5061728394A5 /* PaykitLinkAuthProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5D9F2B3C4E5A61728394B5C6 /* PaykitLinkAuthProtocol.swift */; };
+		6A60EE9DAC8B00F65C152D7C /* PaykitLinkModule.m in Sources */ = {isa = PBXBuildFile; fileRef = BF7B7296A12D06607BA9774B /* PaykitLinkModule.m */; };
 		73A7CBE5CD9CA33126A678D1 /* PaykitLinkModule.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5573E5F4CC79372B98021862 /* PaykitLinkModule.swift */; };
 		804C84CA7A9521ECAAB82020 /* PaykitPublicKeys.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2EAB4AFECF0190612BC6777A /* PaykitPublicKeys.swift */; };
 		8FBE05AEFA21A37FF9FB614B /* Paykit.xcframework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = E37E710A1E9774EE262722A6 /* Paykit.xcframework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
@@ -24,9 +24,9 @@
 		BB2F792D24A3F905000567C9 /* Expo.plist in Resources */ = {isa = PBXBuildFile; fileRef = BB2F792C24A3F905000567C9 /* Expo.plist */; };
 		C53FF632D4BA6166A9BF9C19 /* Paykit.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = E37E710A1E9774EE262722A6 /* Paykit.xcframework */; };
 		CD048A06693A70EC420D2D18 /* ExpoModulesProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4CB466623720FE17F69E268 /* ExpoModulesProvider.swift */; };
+		D4A91B7E6C2F4A18B5E903C1 /* Ionicons.ttf in Resources */ = {isa = PBXBuildFile; fileRef = E5B02C8F7D3A5B29C6F014D2 /* Ionicons.ttf */; };
 		DDF22DD3AF2EC3A58C60861D /* paykit.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4E99088B43A9934B8B14D28F /* paykit.swift */; };
 		F11748422D0307B40044C1D9 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = F11748412D0307B40044C1D9 /* AppDelegate.swift */; };
-		D4A91B7E6C2F4A18B5E903C1 /* Ionicons.ttf in Resources */ = {isa = PBXBuildFile; fileRef = E5B02C8F7D3A5B29C6F014D2 /* Ionicons.ttf */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -64,11 +64,11 @@
 		BF7B7296A12D06607BA9774B /* PaykitLinkModule.m */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.objc; name = PaykitLinkModule.m; path = hypercolor/PaykitLinkModule.m; sourceTree = "<group>"; };
 		CFF77F8E08C889AA71322283 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; includeInIndex = 1; name = PrivacyInfo.xcprivacy; path = hypercolor/PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		E37E710A1E9774EE262722A6 /* Paykit.xcframework */ = {isa = PBXFileReference; includeInIndex = 1; path = Paykit.xcframework; sourceTree = "<group>"; };
+		E5B02C8F7D3A5B29C6F014D2 /* Ionicons.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; name = Ionicons.ttf; path = hypercolor/Fonts/Ionicons.ttf; sourceTree = "<group>"; };
 		E6982E7ABBF22DB3F0D1730F /* PubkyNoiseModule.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = PubkyNoiseModule.swift; path = hypercolor/PubkyNoiseModule.swift; sourceTree = "<group>"; };
 		ED297162215061F000B7C4FE /* JavaScriptCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = JavaScriptCore.framework; path = System/Library/Frameworks/JavaScriptCore.framework; sourceTree = SDKROOT; };
 		F11748412D0307B40044C1D9 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AppDelegate.swift; path = hypercolor/AppDelegate.swift; sourceTree = "<group>"; };
 		F11748442D0722820044C1D9 /* hypercolor-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; name = "hypercolor-Bridging-Header.h"; path = "hypercolor/hypercolor-Bridging-Header.h"; sourceTree = "<group>"; };
-		E5B02C8F7D3A5B29C6F014D2 /* Ionicons.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; name = Ionicons.ttf; path = hypercolor/Fonts/Ionicons.ttf; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
