@@ -166,6 +166,23 @@ export const MARKER_RECOVERY_POLL_LIMIT = 3;
 /** Initiator C: re-GET the peer marker after this much wall time without advance. */
 export const MARKER_RECOVERY_TIMEOUT_MS = 120_000;
 
+/**
+ * Responder holding msg2: consecutive unchanged pending advances before we
+ * treat the initiator as restarted. Thread inbox polls every 5s, so this is
+ * calibrated to ~2 minutes of focused polling — not a handful of ticks,
+ * which would rewrite msg2 while msg3 is still in flight.
+ */
+export const RESPONDER_PENDING_RESTART_POLL_LIMIT = 24;
+
+/**
+ * Responder holding msg2: wall time since that msg2 was written before the
+ * same-pk restart wipe. Strictly longer than the documented 2-minute
+ * ordinary-convergence window; much shorter than budget exhaustion (~2h).
+ * There is no read-only peek of the initiator /0 slot on
+ * {@link PaykitLinkNative} (`fetch_nonempty_text` is not bridged).
+ */
+export const RESPONDER_PENDING_RESTART_MS = 120_000;
+
 /** Open-thread inbox poll while the conversation is focused and the app is active. */
 export const THREAD_INBOX_POLL_MS = 5_000;
 
@@ -275,6 +292,10 @@ let tickInFlight = false;
 let drainInFlight: Promise<void> | null = null;
 const inboxSyncListeners = new Set<(ownerPubky: PubkyKey) => void>();
 const handshakeWatch = new Map<string, { polls: number; firstAt: number; snapshot: string }>();
+const responderPendingWatch = new Map<
+  string,
+  { polls: number; firstAt: number; snapshot: string }
+>();
 const peerMarkerRefreshedAt = new Map<string, number>();
 type PendingEstablishedRekey = {
   handshakeLinkId: string;
@@ -1368,6 +1389,7 @@ export function resetLinkServiceHarnessState(): void {
   queues.clear();
   peerQueueGenerations.clear();
   handshakeWatch.clear();
+  responderPendingWatch.clear();
   peerMarkerRefreshedAt.clear();
   pendingEstablishedRekeys.clear();
   establishedRekeyParkWindows.clear();
@@ -1987,6 +2009,29 @@ async function ensureLinkLocked(
   const responderHandshaking =
     (live?.status === 'handshaking' && live.role === 'responder') ||
     (stored?.status === 'handshaking' && stored.role === 'responder');
+
+  // Peer re-enrolled (new noise pk on receiver.json) while we still hold
+  // msg2: advance() only reads the msg3 slot. Wipe and accept the fresh
+  // msg1. Same-pk restarts are handled after pending advance (bounded).
+  if (
+    responderHandshaking &&
+    marker &&
+    stored?.remoteNoisePublicKey &&
+    marker.noisePublicKey !== stored.remoteNoisePublicKey
+  ) {
+    return restartResponderFromFreshMsg1(
+      activeSession,
+      receiver,
+      ownerPubky,
+      peerPubky,
+      stored,
+      marker,
+      localPath,
+      alreadyRecovered,
+      expectedOwner,
+      expectedQueueGen,
+    );
+  }
 
   if (marker && !responderHandshaking) {
     let inbound: Extract<LinkProbeResult, { result: 'pending' | 'established' }> | null;
@@ -2646,6 +2691,24 @@ async function advanceLiveHandshake(
       );
     }
 
+    if (live.role === 'responder') {
+      const row = stored ?? fallbackLinkRecord(ownerPubky, peerPubky, receiver, 'responder');
+      if (responderPendingRestartDue(ownerPubky, peerPubky, result.snapshot, row.updatedAt)) {
+        return restartResponderFromFreshMsg1(
+          activeSession,
+          receiver,
+          ownerPubky,
+          peerPubky,
+          row,
+          undefined,
+          coerceReceiverPath(row.localReceiverPath || receiver.receiverPath),
+          alreadyRecovered,
+          expectedOwner,
+          currentQueueGeneration(ownerPubky, peerPubky),
+        );
+      }
+    }
+
     if (live.role === 'initiator') {
       const recovered = await maybeRecoverInitiatorMarkerRotation(
         activeSession,
@@ -3116,6 +3179,11 @@ async function adoptInboundHandshake(
     lastSeenPeerMarkerPk: marker.noisePublicKey,
   });
   liveHandles.set(key, { status: 'handshaking', linkId: inbound.linkId, role: 'responder' });
+  responderPendingWatch.set(key, {
+    polls: 0,
+    firstAt: Date.now(),
+    snapshot: inbound.snapshot,
+  });
   return 'handshaking-responder';
 }
 
@@ -3322,9 +3390,131 @@ async function maybeRecoverInitiatorMarkerRotation(
   );
 }
 
+function responderPendingRestartDue(
+  ownerPubky: PubkyKey,
+  peerPubky: PubkyKey,
+  snapshot: string,
+  msg2WrittenAt: number,
+): boolean {
+  const key = linkKey(ownerPubky, peerPubky);
+  const now = Date.now();
+  const watch = responderPendingWatch.get(key);
+  if (!watch) {
+    responderPendingWatch.set(key, {
+      polls: 1,
+      firstAt: msg2WrittenAt || now,
+      snapshot,
+    });
+  } else if (watch.snapshot !== snapshot) {
+    responderPendingWatch.set(key, { polls: 0, firstAt: now, snapshot });
+    return false;
+  } else {
+    responderPendingWatch.set(key, {
+      polls: watch.polls + 1,
+      firstAt: watch.firstAt,
+      snapshot,
+    });
+  }
+  const current = responderPendingWatch.get(key)!;
+  return (
+    current.polls >= RESPONDER_PENDING_RESTART_POLL_LIMIT ||
+    now - current.firstAt > RESPONDER_PENDING_RESTART_MS
+  );
+}
+
+/**
+ * Wipe a pending responder handshake and accept the current msg1. Charges
+ * `unestablished-wipe` (never throttled) so a flapping marker cannot loop
+ * for free. Completing XX later still clears the budget.
+ */
+async function restartResponderFromFreshMsg1(
+  activeSession: ActiveSession,
+  receiver: LinkReceiver,
+  ownerPubky: PubkyKey,
+  peerPubky: PubkyKey,
+  stored: LinkRecord,
+  marker: ReceiverMarker | null | undefined,
+  localPath: string,
+  alreadyRecovered: boolean,
+  expectedOwner: PubkyKey,
+  expectedQueueGen: number,
+): Promise<EnsureOutcome> {
+  abortIfOwnerChanged(expectedOwner);
+  const budget = await chargeHandshakeBudget(
+    ownerPubky,
+    peerPubky,
+    { reason: 'unestablished-wipe' },
+    expectedOwner,
+  );
+  if (budget.exhausted) return abandonUnestablishedLink(stored, expectedOwner);
+
+  await wipeLinkState(stored, expectedOwner);
+  abortIfOwnerChanged(expectedOwner);
+  if (alreadyRecovered) return 'error';
+
+  let nextMarker = marker && marker.noisePublicKey ? marker : null;
+  if (!nextMarker) {
+    try {
+      nextMarker = await PaykitLinkNative.getReceiverMarker(peerPubky, localPath);
+      abortIfOwnerChanged(expectedOwner);
+    } catch (err) {
+      if (err instanceof LinkSendError && err.code === 'owner-changed') throw err;
+      return 'idle';
+    }
+  }
+  if (!nextMarker) return 'idle';
+
+  let inbound: Extract<LinkProbeResult, { result: 'pending' | 'established' }> | null;
+  try {
+    inbound = await probeInbound(
+      activeSession,
+      receiver,
+      ownerPubky,
+      peerPubky,
+      nextMarker,
+      localPath,
+    );
+    abortIfOwnerChanged(expectedOwner);
+  } catch (err) {
+    if (isLinkNativeError(err) && err.code === 'protocol') {
+      abortIfOwnerChanged(expectedOwner);
+      await clearPeerOutboxBestEffort(
+        activeSession,
+        receiver,
+        peerPubky,
+        nextMarker.noisePublicKey,
+        localPath,
+        LINK_RECEIVER_PATH,
+      );
+      abortIfOwnerChanged(expectedOwner);
+      return 'idle';
+    }
+    throw err;
+  }
+  if (inbound === null) {
+    await failQueuedSendsForPeer(ownerPubky, peerPubky);
+    abortIfOwnerChanged(expectedOwner);
+    return 'idle';
+  }
+  if (queueGenerationChanged(ownerPubky, peerPubky, expectedQueueGen)) {
+    await closeQuietly(inbound.linkId);
+    return 'idle';
+  }
+  return adoptInboundHandshake(
+    ownerPubky,
+    peerPubky,
+    nextMarker,
+    localPath,
+    inbound,
+    expectedOwner,
+    expectedQueueGen,
+  );
+}
+
 async function wipeLinkState(stored: LinkRecord, expectedOwner: PubkyKey): Promise<void> {
   abortIfOwnerChanged(expectedOwner);
   const key = linkKey(stored.ownerPubky, stored.peerPubky);
+  responderPendingWatch.delete(key);
   const pending = pendingEstablishedRekeys.get(key);
   if (pending) {
     await closeQuietly(pending.handshakeLinkId);

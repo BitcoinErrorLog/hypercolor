@@ -4,6 +4,8 @@ import {
   HANDSHAKE_FAILURE_LIMIT,
   HANDSHAKE_PENDING_ADVANCE_LIMIT,
   HANDSHAKE_STALE_MS,
+  RESPONDER_PENDING_RESTART_POLL_LIMIT,
+  RESPONDER_PENDING_RESTART_MS,
   LINK_INBOX_PEER_TIMEOUT_MS,
   LINK_RETRY_DRAIN_INTERVAL_MS,
   LINK_RETRY_PAYLOAD_TYPE,
@@ -2696,6 +2698,127 @@ describe('LinkService', () => {
       expect(mockedStorage.deleteLink).not.toHaveBeenCalled();
     });
 
+    it('wipes and re-accepts when the peer re-enrolls a new marker pk while responder-pending', async () => {
+      const state = givenResponderHandshake();
+      mockedNative.getReceiverMarker.mockImplementation(async (who: string) => {
+        if (who === OWNER) return null;
+        return { noisePublicKey: 're-enrolled-noise-pk', capabilitiesJson: '{}' };
+      });
+      mockedNative.probeInboundLink.mockResolvedValue({
+        result: 'established',
+        linkId: 'fresh-est',
+        snapshot: 'est-rekey',
+      });
+      mockedNative.receivePrivateMessages.mockResolvedValue({
+        messages: [],
+        snapshot: 'est-rekey',
+      });
+
+      await expect(LinkService.syncInbox([PEER])).resolves.toEqual([]);
+
+      expect(mockedStorage.deleteLink).toHaveBeenCalledWith(OWNER, PEER);
+      expect(mockedNative.probeInboundLink).toHaveBeenCalled();
+      expect(mockedNative.advanceHandshake).not.toHaveBeenCalled();
+      expect(mockedStorage.upsertLink).toHaveBeenCalledWith(
+        expect.objectContaining({
+          role: 'responder',
+          status: 'established',
+          remoteNoisePublicKey: 're-enrolled-noise-pk',
+          snapshot: 'est-rekey',
+        }),
+      );
+      expect(state.link()?.status).toBe('established');
+    });
+
+    it('recovers a same-pk initiator restart within the pending bound, not budget exhaustion', async () => {
+      const state = givenResponderHandshake();
+      mockedNative.advanceHandshake.mockResolvedValue({
+        status: 'pending',
+        snapshot: 'b-msg2',
+      });
+      mockedNative.probeInboundLink.mockResolvedValue({ result: 'none' });
+
+      await expect(LinkService.syncInbox([PEER])).resolves.toEqual([]);
+      expect(mockedNative.probeInboundLink).not.toHaveBeenCalled();
+      expect(mockedStorage.deleteLink).not.toHaveBeenCalled();
+
+      jest.spyOn(Date, 'now').mockReturnValue(NOW + RESPONDER_PENDING_RESTART_MS + 1);
+      mockedNative.probeInboundLink.mockResolvedValue({
+        result: 'established',
+        linkId: 'restart-est',
+        snapshot: 'est-restart',
+      });
+      mockedNative.receivePrivateMessages.mockResolvedValue({
+        messages: [],
+        snapshot: 'est-restart',
+      });
+
+      await expect(LinkService.syncInbox([PEER])).resolves.toEqual([]);
+
+      expect(mockedStorage.deleteLink).toHaveBeenCalledWith(OWNER, PEER);
+      expect(mockedNative.probeInboundLink).toHaveBeenCalled();
+      expect(state.link()?.status).toBe('established');
+      expect(mockedStorage.upsertHandshakeBudget).toHaveBeenCalled();
+    });
+
+    it('recovers a same-pk restart after consecutive unchanged pending advances', async () => {
+      const state = givenResponderHandshake();
+      mockedNative.advanceHandshake.mockResolvedValue({
+        status: 'pending',
+        snapshot: 'b-msg2',
+      });
+      mockedNative.probeInboundLink.mockResolvedValue({ result: 'none' });
+
+      for (let i = 0; i < RESPONDER_PENDING_RESTART_POLL_LIMIT - 1; i += 1) {
+        await expect(LinkService.syncInbox([PEER])).resolves.toEqual([]);
+      }
+      expect(mockedStorage.deleteLink).not.toHaveBeenCalled();
+
+      mockedNative.probeInboundLink.mockResolvedValue({
+        result: 'established',
+        linkId: 'restart-poll-est',
+        snapshot: 'est-poll-restart',
+      });
+      mockedNative.receivePrivateMessages.mockResolvedValue({
+        messages: [],
+        snapshot: 'est-poll-restart',
+      });
+
+      await expect(LinkService.syncInbox([PEER])).resolves.toEqual([]);
+
+      expect(mockedStorage.deleteLink).toHaveBeenCalledWith(OWNER, PEER);
+      expect(mockedNative.probeInboundLink).toHaveBeenCalled();
+      expect(state.link()?.status).toBe('established');
+    });
+
+    it('charges responder re-key recovery against the durable budget; user intent still clears', async () => {
+      const state = givenResponderHandshake();
+      mockedNative.getReceiverMarker.mockImplementation(async (who: string) => {
+        if (who === OWNER) return null;
+        return { noisePublicKey: 're-enrolled-noise-pk', capabilitiesJson: '{}' };
+      });
+      mockedNative.probeInboundLink.mockResolvedValue({
+        result: 'pending',
+        linkId: 'fresh-hs',
+        snapshot: 'new-msg2',
+      });
+
+      await expect(LinkService.syncInbox([PEER])).resolves.toEqual([]);
+
+      expect(state.budget()?.pendingAdvances).toBe(1);
+      expect(state.budget()?.exhaustedAt).toBeNull();
+      mockedStorage.clearHandshakeBudget.mockClear();
+
+      mockedNative.advanceHandshake.mockResolvedValue({
+        status: 'established',
+        snapshot: 'est-after-user',
+      });
+      mockedNative.restoreLink.mockResolvedValue({ linkId: 'est-user' });
+
+      await expect(LinkService.ensureLinkWith(PEER)).resolves.toBe('ready');
+      expect(mockedStorage.clearHandshakeBudget).toHaveBeenCalledWith(OWNER, PEER);
+    });
+
     it('discards a stale responder handshake then adopts a freshly decrypted msg1', async () => {
       mockedStorage.getLink.mockResolvedValue(
         storedLink({
@@ -4064,9 +4187,13 @@ describe('LinkService', () => {
 
       for (let advance = 0; advance < HANDSHAKE_PENDING_ADVANCE_LIMIT; advance += 1) {
         await tickWhenDue(state.budget());
+        if (state.link() === null) break;
       }
 
-      expect(mockedNative.advanceHandshake).toHaveBeenCalledTimes(HANDSHAKE_PENDING_ADVANCE_LIMIT);
+      expect(mockedNative.advanceHandshake.mock.calls.length).toBeGreaterThan(0);
+      expect(mockedNative.advanceHandshake.mock.calls.length).toBeLessThan(
+        HANDSHAKE_PENDING_ADVANCE_LIMIT,
+      );
       expect(state.link()).toBeNull();
       expect(mockedStorage.deleteLink).toHaveBeenCalledWith(OWNER, PEER);
       // The stuck send stops pretending: `failed` is what ThreadScreen renders
