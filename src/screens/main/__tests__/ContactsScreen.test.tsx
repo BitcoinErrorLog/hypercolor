@@ -62,6 +62,7 @@ function contentProps(
     onAddSuggestion: noop,
     onRetryLoad: noop,
     onRetryImport: noop,
+    onScanQr: noop,
     ...overrides,
   };
 }

@@ -11,6 +11,7 @@ import {
 import { parsePubky } from '../../../utils/pubkyId';
 import { ContactErrorBlock } from '../../../ui/contacts/ContactErrorBlock';
 import { color, space, radius, typeRole } from '../../../theme';
+import { COPY } from '../../../copy/uxCopy';
 import {
   CONTACTS_BODY,
   CONTACTS_BRAND,
@@ -31,6 +32,7 @@ export function ContactSearchView({
   onCancel,
   onAdd,
   onInputChange,
+  onScanQr,
   initialValue = '',
 }: {
   loading: boolean;
@@ -39,6 +41,7 @@ export function ContactSearchView({
   onCancel: () => void;
   onAdd: (pubky: string) => void;
   onInputChange?: () => void;
+  onScanQr?: () => void;
   initialValue?: string;
 }) {
   const [pubkyKey, setPubkyKey] = useState(initialValue);
@@ -96,6 +99,17 @@ export function ContactSearchView({
           </View>
         ) : null}
         {error ? <ContactErrorBlock message={error} details={errorDetails} /> : null}
+        {onScanQr ? (
+          <Pressable
+            testID="contactsScanQr"
+            accessibilityRole="button"
+            accessibilityLabel={COPY.scanQr}
+            onPress={onScanQr}
+            style={styles.scanBtn}
+          >
+            <Text style={styles.scanBtnText}>{COPY.scanQr}</Text>
+          </Pressable>
+        ) : null}
         <Pressable
           testID="contactSearchAdd"
           accessibilityRole="button"
@@ -170,4 +184,14 @@ const styles = StyleSheet.create({
   },
   buttonDisabled: { opacity: 0.4 },
   buttonText: { color: color.textOnBrand, fontSize: typeRole.body.fontSize, fontWeight: '600' },
+  scanBtn: {
+    minHeight: MIN_TARGET,
+    borderRadius: CONTACTS_RADIUS,
+    paddingVertical: space.lg,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: CONTACTS_BRAND,
+  },
+  scanBtnText: { color: CONTACTS_BRAND, fontSize: typeRole.body.fontSize, fontWeight: '600' },
 });

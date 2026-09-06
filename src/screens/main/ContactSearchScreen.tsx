@@ -7,10 +7,15 @@ import { ContactsService } from '../../services/ContactsService';
 import { useAuthStore } from '../../stores/authStore';
 import { useContactStore } from '../../stores/contactStore';
 import { sanitizeError, stripSensitive } from '../../ui/sanitizedError';
-import { afterManualContactAdded, submitManualContact } from './contacts/contactsActions';
+import {
+  afterManualContactAdded,
+  decideScannedContact,
+  submitManualContact,
+} from './contacts/contactsActions';
 import { ContactSearchView } from './contacts/ContactSearchView';
 import { ConfirmSheet } from '../../ui/contacts/ConfirmSheet';
 import { CONTACTS_COPY } from '../../ui/contacts/contactsCopy';
+import { ContactQrScanner } from '../../ui/contacts/ContactQrScanner';
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
 
@@ -23,6 +28,8 @@ export default function ContactSearchScreen() {
   const [error, setError] = useState<string | null>(null);
   const [errorDetails, setErrorDetails] = useState<string | null>(null);
   const [unblockAndAddPubky, setUnblockAndAddPubky] = useState<string | null>(null);
+  const [scanOpen, setScanOpen] = useState(false);
+  const [scanError, setScanError] = useState<string | null>(null);
 
   async function handleAdd(parsed: string, confirmUnblock = false) {
     if (!localPubky) return;
@@ -73,6 +80,32 @@ export default function ContactSearchScreen() {
         }}
         onAdd={pubky => {
           void handleAdd(pubky);
+        }}
+        onScanQr={() => {
+          setScanError(null);
+          setScanOpen(true);
+        }}
+      />
+      <ContactQrScanner
+        visible={scanOpen}
+        error={scanError}
+        onClose={() => {
+          setScanOpen(false);
+          setScanError(null);
+        }}
+        onManualFallback={() => {
+          setScanOpen(false);
+          setScanError(null);
+        }}
+        onBarcode={raw => {
+          const decision = decideScannedContact(raw, localPubky);
+          if (decision.kind === 'error') {
+            setScanError(decision.message);
+            return;
+          }
+          setScanOpen(false);
+          setScanError(null);
+          void handleAdd(decision.pubky);
         }}
       />
       <ConfirmSheet

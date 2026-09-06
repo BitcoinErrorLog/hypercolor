@@ -9,6 +9,7 @@ import { ChannelsScreenContent } from '../../src/screens/main/ChannelsScreen';
 import { ChannelScreenContent } from '../../src/screens/main/ChannelScreen';
 import { ContactsScreenContent } from '../../src/screens/main/contacts/ContactsScreenContent';
 import { ContactSearchView } from '../../src/screens/main/contacts/ContactSearchView';
+import { ContactQrScanner } from '../../src/ui/contacts/ContactQrScanner';
 import { ContactDetailView } from '../../src/screens/main/contacts/ContactDetailView';
 import { MessageRequestsContent } from '../../src/screens/main/MessageRequestsScreen';
 import { SettingsScreenContent } from '../../src/screens/main/SettingsScreenContent';
@@ -137,6 +138,7 @@ function contacts(patch: Partial<React.ComponentProps<typeof ContactsScreenConte
       onAddSuggestion={n}
       onRetryLoad={n}
       onRetryImport={n}
+      onScanQr={n}
       {...patch}
     />
   );
@@ -305,6 +307,11 @@ function profile(patch: Partial<React.ComponentProps<typeof ProfileScreenContent
       onOpenSignOut={n}
       onCancelSignOut={n}
       onConfirmSignOut={n}
+      qrOpen={false}
+      qrCopied={false}
+      onShowQr={n}
+      onCloseQr={n}
+      onQrCopied={n}
       {...patch}
     />
   );
@@ -652,8 +659,41 @@ export const SCENE_RENDERERS: Record<string, () => React.ReactElement> = {
       usedNexusFallback: true,
     }),
   'tabs.contacts.offline': () => contacts({ offline: true, loadError: COPY.couldNotLoadChats }),
+  'tabs.contacts.scan': () => (
+    <>
+      {contacts({ contacts: CONTACTS_POPULATED })}
+      <ContactQrScanner
+        visible
+        permission="granted"
+        error={null}
+        onClose={n}
+        onBarcode={n}
+        onManualFallback={n}
+      />
+    </>
+  ),
+  'tabs.contacts.scan-denied': () => (
+    <>
+      {contacts({ contacts: CONTACTS_POPULATED })}
+      <ContactQrScanner
+        visible
+        permission="denied"
+        error={null}
+        onClose={n}
+        onBarcode={n}
+        onManualFallback={n}
+      />
+    </>
+  ),
   'stack.contact-search.empty': () => (
-    <ContactSearchView loading={false} error={null} errorDetails={null} onCancel={n} onAdd={n} />
+    <ContactSearchView
+      loading={false}
+      error={null}
+      errorDetails={null}
+      onCancel={n}
+      onAdd={n}
+      onScanQr={n}
+    />
   ),
   'stack.contact-search.invalid': () => (
     <ContactSearchView
@@ -662,6 +702,7 @@ export const SCENE_RENDERERS: Record<string, () => React.ReactElement> = {
       errorDetails={null}
       onCancel={n}
       onAdd={n}
+      onScanQr={n}
       initialValue="not-a-pubky"
     />
   ),
@@ -672,6 +713,7 @@ export const SCENE_RENDERERS: Record<string, () => React.ReactElement> = {
       errorDetails={null}
       onCancel={n}
       onAdd={n}
+      onScanQr={n}
       initialValue={PEER}
     />
   ),
@@ -682,6 +724,7 @@ export const SCENE_RENDERERS: Record<string, () => React.ReactElement> = {
       errorDetails={null}
       onCancel={n}
       onAdd={n}
+      onScanQr={n}
       initialValue={PEER}
     />
   ),
@@ -692,6 +735,7 @@ export const SCENE_RENDERERS: Record<string, () => React.ReactElement> = {
       errorDetails={null}
       onCancel={n}
       onAdd={n}
+      onScanQr={n}
       initialValue={PEER}
     />
   ),
@@ -702,11 +746,29 @@ export const SCENE_RENDERERS: Record<string, () => React.ReactElement> = {
       errorDetails={null}
       onCancel={n}
       onAdd={n}
+      onScanQr={n}
       initialValue={PEER}
     />
   ),
   'stack.contact-search.qr': () => (
-    <ContactSearchView loading={false} error={null} errorDetails={null} onCancel={n} onAdd={n} />
+    <>
+      <ContactSearchView
+        loading={false}
+        error={null}
+        errorDetails={null}
+        onCancel={n}
+        onAdd={n}
+        onScanQr={n}
+      />
+      <ContactQrScanner
+        visible
+        permission="granted"
+        error={null}
+        onClose={n}
+        onBarcode={n}
+        onManualFallback={n}
+      />
+    </>
   ),
   'stack.contact-detail.default': () => (
     <ContactDetailView
@@ -734,6 +796,7 @@ export const SCENE_RENDERERS: Record<string, () => React.ReactElement> = {
   ),
   'tabs.profile.unnamed': () => profile({ displayName: COPY.notConnected, pubky: null }),
   'tabs.profile.with-pubky': () => profile(),
+  'tabs.profile.qr': () => profile({ qrOpen: true }),
   'tabs.profile.settings-visible': () => profile(),
   'tabs.profile.sign-out': () => profile({ signOutOpen: true }),
   'tabs.profile.debug': () =>

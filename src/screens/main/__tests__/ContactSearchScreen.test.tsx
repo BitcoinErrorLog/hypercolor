@@ -1,7 +1,12 @@
 import React from 'react';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import { ContactSearchView } from '../contacts/ContactSearchView';
-import { afterManualContactAdded, submitManualContact } from '../contacts/contactsActions';
+import {
+  afterManualContactAdded,
+  decideScannedContact,
+  submitManualContact,
+} from '../contacts/contactsActions';
+import { COPY } from '../../../copy/uxCopy';
 
 const OWNER = 'operrr8wsbpr3ue9d4qj41ge1kcc6r7fdiy6o3ugjrrhi4y77rdo';
 const ALICE = 'pxnu33x7jtpx9ar1ytsi4yxbp6a5o36gwhffs8zoxmbuptici1jy';
@@ -9,6 +14,7 @@ const ALICE = 'pxnu33x7jtpx9ar1ytsi4yxbp6a5o36gwhffs8zoxmbuptici1jy';
 async function render(
   onAdd: (pubky: string) => void = () => undefined,
   error: string | null = null,
+  onScanQr: () => void = () => undefined,
 ): Promise<ReactTestRenderer> {
   let tree!: ReactTestRenderer;
   await act(async () => {
@@ -19,6 +25,7 @@ async function render(
         errorDetails={null}
         onCancel={() => undefined}
         onAdd={onAdd}
+        onScanQr={onScanQr}
       />,
     );
   });
@@ -26,7 +33,7 @@ async function render(
 }
 
 describe('ContactSearchView', () => {
-  it('shows validation copy for a malformed pubky and has no Scan QR control', async () => {
+  it('shows validation copy for a malformed pubky and a Scan QR control', async () => {
     const tree = await render();
     await act(async () => {
       tree.root.findByProps({ testID: 'contactSearchInput' }).props.onChangeText('not-a-pubky');
@@ -34,7 +41,7 @@ describe('ContactSearchView', () => {
     expect(JSON.stringify(tree.toJSON())).toContain(
       'Must be a 52-character z-base-32 pubky (no 0, 2, l, or v).',
     );
-    expect(JSON.stringify(tree.toJSON())).not.toContain('Scan QR');
+    expect(tree.root.findByProps({ testID: 'contactsScanQr' })).toBeTruthy();
     expect(tree.root.findByProps({ testID: 'contactSearchAdd' }).props.disabled).toBe(true);
     await act(async () => {
       tree.unmount();
@@ -114,5 +121,40 @@ describe('submitManualContact / afterManualContactAdded', () => {
       'Main',
       { screen: 'Contacts', params: { focusPubky: ALICE } },
     ]);
+  });
+});
+
+describe('contact QR scan', () => {
+  it('rejects self and accepts a scanned canonical URI into addManualContact', async () => {
+    expect(decideScannedContact(`pubky://${OWNER}`, OWNER)).toEqual({
+      kind: 'error',
+      message: COPY.thatsYourOwnPubky,
+    });
+    expect(decideScannedContact(`pubky://${ALICE}`, OWNER)).toEqual({
+      kind: 'add',
+      pubky: ALICE,
+    });
+    const addManualContact = jest.fn(async () => ({
+      ok: true as const,
+      contact: {
+        pubky: ALICE,
+        ownerPubky: OWNER,
+        trustScore: 0,
+        isFollowing: false,
+        isFollower: false,
+        isMutual: false,
+        addedManually: true,
+        firstSeenAt: 1,
+      },
+    }));
+    const decision = decideScannedContact(`https://pubky.app/profile/${ALICE}`, OWNER);
+    if (decision.kind !== 'add') throw new Error('expected add');
+    const result = await submitManualContact({
+      ownerPubky: OWNER,
+      pubky: decision.pubky,
+      addManualContact,
+    });
+    expect(result.ok).toBe(true);
+    expect(addManualContact).toHaveBeenCalledWith(OWNER, ALICE);
   });
 });

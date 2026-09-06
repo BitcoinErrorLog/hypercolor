@@ -14,8 +14,14 @@ import type { ImportFollowsRefreshResult } from '../../services/ContactsService'
 import { ConfirmSheet } from '../../ui/contacts/ConfirmSheet';
 import { CONTACTS_COPY } from '../../ui/contacts/contactsCopy';
 import { partitionContacts } from '../../ui/contacts/relationshipBadge';
+import { ContactQrScanner } from '../../ui/contacts/ContactQrScanner';
 import { ContactDetailContainer } from './contacts/ContactDetailScreen';
-import { pullToRefreshFollows } from './contacts/contactsActions';
+import {
+  afterManualContactAdded,
+  pullToRefreshFollows,
+  decideScannedContact,
+  submitManualContact,
+} from './contacts/contactsActions';
 import {
   CONTACTS_EMPTY_BODY,
   CONTACTS_EMPTY_PRIMARY,
@@ -79,6 +85,8 @@ export default function ContactsScreen() {
   const [loadErrorDetails, setLoadErrorDetails] = useState<string | null>(null);
   const [offline, setOffline] = useState(false);
   const [unblockAndAddPubky, setUnblockAndAddPubky] = useState<string | null>(null);
+  const [scanOpen, setScanOpen] = useState(false);
+  const [scanError, setScanError] = useState<string | null>(null);
 
   const loadLocal = useCallback(async () => {
     const owner = useAuthStore.getState().pubky;
@@ -203,6 +211,35 @@ export default function ContactsScreen() {
     }
   }, [loadLocal]);
 
+  const handleScanAdd = useCallback(
+    async (pubky: string, confirmUnblock = false) => {
+      const owner = useAuthStore.getState().pubky;
+      if (!owner) return;
+      const result = await submitManualContact({
+        ownerPubky: owner,
+        pubky,
+        confirmUnblock,
+        addManualContact: (o, p, options) => ContactsService.addManualContact(o, p, options),
+      });
+      if (useAuthStore.getState().pubky !== owner) return;
+      if (!result.ok) {
+        if (result.reason === 'blocked') {
+          setScanOpen(false);
+          setUnblockAndAddPubky(pubky);
+          return;
+        }
+        setScanError(result.message);
+        return;
+      }
+      upsertContact(result.contact);
+      const landing = afterManualContactAdded(result.contact.pubky);
+      setScanOpen(false);
+      setScanError(null);
+      openContactDetail(landing.detailPubky);
+    },
+    [openContactDetail, upsertContact],
+  );
+
   const handleAddSuggestion = useCallback(
     (pubky: string, confirmUnblock = false) => {
       const owner = useAuthStore.getState().pubky;
@@ -281,6 +318,31 @@ export default function ContactsScreen() {
         }}
         onRetryImport={() => {
           void runImport();
+        }}
+        onScanQr={() => {
+          setScanError(null);
+          setScanOpen(true);
+        }}
+      />
+      <ContactQrScanner
+        visible={scanOpen}
+        error={scanError}
+        onClose={() => {
+          setScanOpen(false);
+          setScanError(null);
+        }}
+        onManualFallback={() => {
+          setScanOpen(false);
+          setScanError(null);
+          nav.navigate('ContactSearch');
+        }}
+        onBarcode={raw => {
+          const decision = decideScannedContact(raw, ownerPubky);
+          if (decision.kind === 'error') {
+            setScanError(decision.message);
+            return;
+          }
+          void handleScanAdd(decision.pubky);
         }}
       />
       <ConfirmSheet

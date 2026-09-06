@@ -25,6 +25,7 @@ import {
   MIN_TARGET,
 } from '../../../ui/contacts/tokens';
 import { CONTACTS_COPY } from '../../../ui/contacts/contactsCopy';
+import { COPY } from '../../../copy/uxCopy';
 import { contactPrimaryText, contactSecondaryText } from './contactIdentity';
 import { color, space, radius, typeRole } from '../../../theme';
 
@@ -68,6 +69,7 @@ export function ContactsScreenContent({
   onAddSuggestion,
   onRetryLoad,
   onRetryImport,
+  onScanQr,
 }: {
   contacts: Contact[];
   suggestions: Contact[];
@@ -94,6 +96,7 @@ export function ContactsScreenContent({
   onAddSuggestion: (pubky: string) => void;
   onRetryLoad: () => void;
   onRetryImport: () => void;
+  onScanQr: () => void;
 }) {
   const renderContact = useCallback(
     ({ item }: { item: Contact }) => (
@@ -219,15 +222,26 @@ export function ContactsScreenContent({
         <Text style={styles.title} accessibilityRole="header">
           Contacts
         </Text>
-        <Pressable
-          testID="contactsAdd"
-          accessibilityRole="button"
-          accessibilityLabel="Add someone by pubky"
-          onPress={onAdd}
-          style={styles.addBtn}
-        >
-          <Text style={styles.add}>Add</Text>
-        </Pressable>
+        <View style={styles.headerActions}>
+          <Pressable
+            testID="contactsAdd"
+            accessibilityRole="button"
+            accessibilityLabel="Add someone by pubky"
+            onPress={onAdd}
+            style={styles.addBtn}
+          >
+            <Text style={styles.add}>Add</Text>
+          </Pressable>
+          <Pressable
+            testID="contactsScanQr"
+            accessibilityRole="button"
+            accessibilityLabel={COPY.scanQr}
+            onPress={onScanQr}
+            style={styles.addBtn}
+          >
+            <Text style={styles.add}>{COPY.scanQr}</Text>
+          </Pressable>
+        </View>
       </View>
       {empty ? (
         <View style={styles.empty} testID="contactsEmpty">
@@ -380,6 +394,7 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     gap: space.sm,
   },
+  headerActions: { flexDirection: 'row', alignItems: 'center', gap: space.md },
   title: {
     fontSize: typeRole.title.fontSize,
     fontWeight: '700',

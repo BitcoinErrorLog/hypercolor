@@ -39,10 +39,6 @@ export const INTEGRITY_WAIVERS: readonly IntegrityWaiver[] = Object.freeze([
     'Added and valid contact-search fixtures intentionally render the same entered pubky.',
   ),
   ...pairs(
-    ['stack.contact-search.empty', 'stack.contact-search.qr'],
-    'The QR fallback has no distinct production card in this wave, so it matches empty search.',
-  ),
-  ...pairs(
     ['stack.payment.compose-busy', 'stack.payment.compose-idle'],
     'The busy flag only changes disabled accessibility state for the default empty form.',
   ),

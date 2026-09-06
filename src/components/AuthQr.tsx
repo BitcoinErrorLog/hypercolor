@@ -13,6 +13,7 @@ const QR_QUIET_ZONE = 2;
 export type AuthQrProps = {
   value: string;
   testID?: string;
+  accessibilityLabel?: string;
 };
 
 function readByte(buf: Buffer, i: number): number {
@@ -138,7 +139,11 @@ export function generateAuthQrDataUri(value: string): string {
  * High-contrast authorization QR (dark modules on a white quiet zone).
  * Generated in JS via `qrcode` + PNG data URI — no native QR module.
  */
-export function AuthQr({ value, testID = 'authQr' }: AuthQrProps) {
+export function AuthQr({
+  value,
+  testID = 'authQr',
+  accessibilityLabel = 'Authorization QR code',
+}: AuthQrProps) {
   const dataUri = useMemo(() => {
     if (!value) return null;
     try {
@@ -153,7 +158,7 @@ export function AuthQr({ value, testID = 'authQr' }: AuthQrProps) {
   }
 
   return (
-    <View testID={testID} style={styles.frame} accessibilityLabel="Authorization QR code">
+    <View testID={testID} style={styles.frame} accessibilityLabel={accessibilityLabel}>
       <Image
         source={{ uri: dataUri }}
         style={styles.image}

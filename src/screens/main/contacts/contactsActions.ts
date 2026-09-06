@@ -1,9 +1,11 @@
+import { COPY } from '../../../copy/uxCopy';
 import type {
   AddContactResult,
   AddManualContactOptions,
   ImportFollowsRefreshResult,
 } from '../../../services/ContactsService';
 import type { PubkyKey } from '../../../types';
+import { parseContactQrPayload } from '../../../utils/contactQrPayload';
 
 /**
  * Pull-to-refresh on Contacts. Consent is looked up inside
@@ -45,4 +47,20 @@ export async function submitManualContact(args: {
     return args.addManualContact(args.ownerPubky, args.pubky, { confirmUnblock: true });
   }
   return args.addManualContact(args.ownerPubky, args.pubky);
+}
+
+export type ScannedContactDecision =
+  | { kind: 'add'; pubky: PubkyKey }
+  | { kind: 'error'; message: string };
+
+export function decideScannedContact(
+  raw: string,
+  ownerPubky: string | null,
+): ScannedContactDecision {
+  const parsed = parseContactQrPayload(raw);
+  if (!parsed.ok) return { kind: 'error', message: parsed.message };
+  if (ownerPubky && parsed.pubky === ownerPubky) {
+    return { kind: 'error', message: COPY.thatsYourOwnPubky };
+  }
+  return { kind: 'add', pubky: parsed.pubky };
 }

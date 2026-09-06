@@ -38,6 +38,8 @@ export default function ProfileScreen() {
     details: string | null;
   } | null>(null);
   const [copied, setCopied] = useState(false);
+  const [qrOpen, setQrOpen] = useState(false);
+  const [qrCopied, setQrCopied] = useState(false);
 
   useFocusEffect(
     useCallback(() => {
@@ -126,12 +128,20 @@ export default function ProfileScreen() {
       signOutError={signOutError}
       lastBackupRelative={lastBackupAt ? formatRelativeBackupTime(lastBackupAt) : null}
       debugSlot={debugSlot}
+      qrOpen={qrOpen}
+      qrCopied={qrCopied}
       onOpenSettings={() => nav.navigate('Settings')}
       onCopyPubky={() => {
         if (!pubky) return;
         copyText(pubky);
         setCopied(true);
       }}
+      onShowQr={() => {
+        setQrCopied(false);
+        setQrOpen(true);
+      }}
+      onCloseQr={() => setQrOpen(false)}
+      onQrCopied={() => setQrCopied(true)}
       onEnableMessaging={() => nav.navigate('EnableMessaging')}
       onOpenRequests={() => nav.navigate('MessageRequests')}
       onOpenBackup={() => nav.navigate(PROFILE_BACKUP_ROUTE.name, PROFILE_BACKUP_ROUTE.params)}

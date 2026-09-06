@@ -2,6 +2,7 @@ import React from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, SafeAreaView, ScrollView } from 'react-native';
 import { COPY } from '../../copy/uxCopy';
 import { CustodyLine } from '../../ui/CustodyLine';
+import { ProfileQrSheet } from '../../ui/profile/ProfileQrSheet';
 import { SignOutSheet } from '../../ui/SignOutSheet';
 import { HIT_SLOP_44 } from '../../ui/hitTarget';
 import type { SessionUiModel } from '../../ui/sessionUi';
@@ -19,8 +20,13 @@ export type ProfileScreenContentProps = {
   signOutError: { message: string; details: string | null } | null;
   lastBackupRelative: string | null;
   debugSlot?: React.ReactNode;
+  qrOpen: boolean;
+  qrCopied: boolean;
   onOpenSettings: () => void;
   onCopyPubky: () => void;
+  onShowQr: () => void;
+  onCloseQr: () => void;
+  onQrCopied: () => void;
   onEnableMessaging: () => void;
   onOpenRequests: () => void;
   onOpenBackup: () => void;
@@ -42,8 +48,13 @@ export function ProfileScreenContent({
   signOutError,
   lastBackupRelative,
   debugSlot = null,
+  qrOpen,
+  qrCopied,
   onOpenSettings,
   onCopyPubky,
+  onShowQr,
+  onCloseQr,
+  onQrCopied,
   onEnableMessaging,
   onOpenRequests,
   onOpenBackup,
@@ -93,6 +104,16 @@ export function ProfileScreenContent({
                 style={styles.copyBtn}
               >
                 <Text style={styles.copyText}>{copied ? COPY.copied : 'Copy'}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                testID="profileShowQr"
+                accessibilityRole="button"
+                accessibilityLabel={COPY.showQr}
+                hitSlop={HIT_SLOP_44}
+                onPress={onShowQr}
+                style={styles.copyBtn}
+              >
+                <Text style={styles.copyText}>{COPY.showQr}</Text>
               </TouchableOpacity>
             </>
           ) : null}
@@ -167,6 +188,13 @@ export function ProfileScreenContent({
           </TouchableOpacity>
         </View>
       </ScrollView>
+      <ProfileQrSheet
+        visible={qrOpen && Boolean(pubky)}
+        pubky={pubky ?? ''}
+        copied={qrCopied}
+        onCopied={onQrCopied}
+        onClose={onCloseQr}
+      />
       <SignOutSheet
         visible={signOutOpen}
         lastBackupRelative={lastBackupRelative}

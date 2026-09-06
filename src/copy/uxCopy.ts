@@ -89,6 +89,13 @@ export const COPY = {
   addAContact: 'Add a contact',
   copyMyPubky: 'Copy my pubky',
   share: 'Share',
+  showQr: 'Show QR',
+  scanQr: 'Scan QR',
+  yourPubkyQrTitle: 'Your pubky',
+  thatsYourOwnPubky: "That's your own pubky.",
+  notAPubkyQr: 'That code is not a pubky.',
+  cameraPermissionDenied: 'Camera access is required to scan a pubky QR.',
+  enterPubkyManually: 'Enter pubky manually',
   couldNotLoadChats: 'Could not load your chats.',
 
   requestsExplainer:
