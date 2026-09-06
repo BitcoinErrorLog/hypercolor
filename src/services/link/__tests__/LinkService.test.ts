@@ -10,6 +10,7 @@ import {
   LINK_GROUP_FANOUT_PAYLOAD_TYPE,
   LINK_RETRY_TICK_PHASE_TIMEOUT_MS,
   PEER_MARKER_REFRESH_TTL_MS,
+  ESTABLISHED_REKEY_PARK_LIMIT,
   LinkService,
   linkQueueEntryCountForTests,
   resetLinkServiceHarnessState,
@@ -1925,7 +1926,7 @@ describe('LinkService', () => {
       });
       mockedNative.probeInboundLink.mockResolvedValue({ result: 'none' });
 
-      await expect(LinkService.ensureLinkWith(PEER)).resolves.toBe('ready');
+      await expect(LinkService.ensureLinkWith(PEER)).resolves.toBe('error');
       expect(mockedNative.initiateLink).not.toHaveBeenCalled();
       expect(mockedNative.sendPrivateMessageJson).not.toHaveBeenCalled();
       expect(mockedNative.closeLink).not.toHaveBeenCalledWith('est-live');
@@ -1981,6 +1982,186 @@ describe('LinkService', () => {
         expect(link.remoteNoisePublicKey).toBe(newPk);
         expect(link.status).toBe('established');
       }
+    });
+
+    function installDurableBudget() {
+      let budget: HandshakeBudget | null = null;
+      mockedStorage.getHandshakeBudget.mockImplementation(async (owner, peer) =>
+        owner === OWNER && peer === PEER ? budget : null,
+      );
+      mockedStorage.upsertHandshakeBudget.mockImplementation(async input => {
+        budget = storedBudget(input);
+      });
+      mockedStorage.clearHandshakeBudget.mockImplementation(async (owner, peer) => {
+        if (owner === OWNER && peer === PEER) budget = null;
+      });
+      return {
+        set(next: HandshakeBudget) {
+          budget = next;
+        },
+      };
+    }
+
+    it('does not return ready or encrypt on the old handle after the handshake budget is exhausted', async () => {
+      const durable = installDurableBudget();
+      mockedStorage.getLink.mockResolvedValue(
+        storedLink({
+          status: 'established',
+          role: 'responder',
+          snapshot: 'est-old',
+          remoteNoisePublicKey: 'old-peer-pk',
+          lastSeenPeerMarkerPk: 'old-peer-pk',
+        }),
+      );
+      mockedNative.restoreLink.mockResolvedValue({ linkId: 'est-live' });
+      mockedNative.getReceiverMarker.mockImplementation(async (who: string) => {
+        if (who === OWNER) return null;
+        return { noisePublicKey: 'new-peer-pk', capabilitiesJson: '{}' };
+      });
+      mockedNative.probeInboundLink.mockResolvedValue({
+        result: 'pending',
+        linkId: 'rekey-hs',
+        snapshot: 'rekey-snap',
+      });
+      mockedNative.advanceHandshake.mockResolvedValue({
+        status: 'pending',
+        snapshot: 'rekey-snap',
+      });
+      mockedNative.sendPrivateMessageJson.mockResolvedValue({ snapshot: 'should-not-send' });
+      mockedStorage.getMessageRequest.mockResolvedValue({
+        ownerPubky: OWNER,
+        peerPubky: PEER,
+        createdAt: NOW,
+        updatedAt: NOW,
+        status: 'accepted',
+      });
+      mockedStorage.countLinkMessagesForPeer.mockResolvedValue(1);
+      mockedStorage.recordLastSeenPeerMarkerPk.mockImplementation(async (_o, _p, pk) => {
+        const current = await mockedStorage.getLink(OWNER, PEER);
+        if (current) {
+          mockedStorage.getLink.mockResolvedValue({ ...current, lastSeenPeerMarkerPk: pk });
+        }
+      });
+
+      await expect(LinkService.ensureLinkWith(PEER)).resolves.toBe('handshaking-responder');
+      const queued = await LinkService.sendDm(PEER, 'hello');
+      expect(queued.deliveryState).toBe('sending');
+      expect(mockedNative.sendPrivateMessageJson).not.toHaveBeenCalled();
+
+      durable.set(
+        storedBudget({
+          pendingAdvances: HANDSHAKE_PENDING_ADVANCE_LIMIT - 1,
+          nextAdvanceAt: 0,
+          exhaustedAt: null,
+        }),
+      );
+      await LinkService.syncInbox([PEER]);
+      mockedNative.sendPrivateMessageJson.mockClear();
+      givenQueuedDm();
+      await LinkService.drainRetries();
+      expect(mockedNative.sendPrivateMessageJson).not.toHaveBeenCalled();
+      await expect(LinkService.ensureLinkWith(PEER)).resolves.toBe('handshaking-responder');
+    });
+
+    it('caps established re-key parks per stale window until user intent', async () => {
+      installDurableBudget();
+      mockedStorage.getLink.mockResolvedValue(
+        storedLink({
+          status: 'established',
+          role: 'responder',
+          snapshot: 'est-old',
+          remoteNoisePublicKey: 'old-peer-pk',
+          lastSeenPeerMarkerPk: 'old-peer-pk',
+        }),
+      );
+      mockedNative.restoreLink.mockResolvedValue({ linkId: 'est-live' });
+      mockedNative.getReceiverMarker.mockImplementation(async (who: string) => {
+        if (who === OWNER) return null;
+        return { noisePublicKey: 'new-peer-pk', capabilitiesJson: '{}' };
+      });
+      mockedStorage.getMessageRequest.mockResolvedValue({
+        ownerPubky: OWNER,
+        peerPubky: PEER,
+        createdAt: NOW,
+        updatedAt: NOW,
+        status: 'accepted',
+      });
+      mockedStorage.countLinkMessagesForPeer.mockResolvedValue(1);
+
+      for (let cycle = 0; cycle < ESTABLISHED_REKEY_PARK_LIMIT; cycle += 1) {
+        jest.spyOn(Date, 'now').mockReturnValue(NOW + cycle * (PEER_MARKER_REFRESH_TTL_MS + 1));
+        mockedNative.probeInboundLink.mockResolvedValue({
+          result: 'pending',
+          linkId: `rekey-hs-${cycle}`,
+          snapshot: `rekey-snap-${cycle}`,
+        });
+        mockedNative.advanceHandshake.mockRejectedValueOnce(new Error('transient'));
+        await LinkService.syncInbox([PEER]);
+      }
+      jest
+        .spyOn(Date, 'now')
+        .mockReturnValue(NOW + ESTABLISHED_REKEY_PARK_LIMIT * (PEER_MARKER_REFRESH_TTL_MS + 1));
+      mockedNative.probeInboundLink.mockClear();
+      mockedNative.probeInboundLink.mockResolvedValue({
+        result: 'pending',
+        linkId: 'rekey-hs-blocked',
+        snapshot: 'rekey-snap-blocked',
+      });
+      await LinkService.syncInbox([PEER]);
+      expect(mockedNative.probeInboundLink).not.toHaveBeenCalled();
+
+      mockedNative.advanceHandshake.mockReset().mockResolvedValue({
+        status: 'pending',
+        snapshot: 'rekey-snap-user',
+      });
+      mockedNative.probeInboundLink.mockResolvedValue({
+        result: 'pending',
+        linkId: 'rekey-hs-user',
+        snapshot: 'rekey-snap-user',
+      });
+      await expect(LinkService.ensureLinkWith(PEER)).resolves.toBe('handshaking-responder');
+      expect(mockedNative.probeInboundLink).toHaveBeenCalled();
+    });
+
+    it('does not return ready after a stale parked re-key is dropped against a new marker', async () => {
+      mockedStorage.getLink.mockResolvedValue(
+        storedLink({
+          status: 'established',
+          role: 'responder',
+          snapshot: 'est-old',
+          remoteNoisePublicKey: 'old-peer-pk',
+          lastSeenPeerMarkerPk: 'old-peer-pk',
+        }),
+      );
+      mockedNative.restoreLink.mockResolvedValue({ linkId: 'est-live' });
+      mockedNative.getReceiverMarker.mockImplementation(async (who: string) => {
+        if (who === OWNER) return null;
+        return { noisePublicKey: 'new-peer-pk', capabilitiesJson: '{}' };
+      });
+      mockedNative.probeInboundLink.mockResolvedValue({
+        result: 'pending',
+        linkId: 'rekey-hs',
+        snapshot: 'rekey-snap',
+      });
+      mockedNative.advanceHandshake.mockResolvedValue({
+        status: 'pending',
+        snapshot: 'rekey-snap',
+      });
+      mockedStorage.getMessageRequest.mockResolvedValue({
+        ownerPubky: OWNER,
+        peerPubky: PEER,
+        createdAt: NOW,
+        updatedAt: NOW,
+        status: 'accepted',
+      });
+      mockedStorage.countLinkMessagesForPeer.mockResolvedValue(1);
+
+      await expect(LinkService.ensureLinkWith(PEER)).resolves.toBe('handshaking-responder');
+      jest.spyOn(Date, 'now').mockReturnValue(NOW + HANDSHAKE_STALE_MS);
+      mockedNative.sendPrivateMessageJson.mockClear();
+      await LinkService.syncInbox([PEER]);
+      expect(mockedNative.sendPrivateMessageJson).not.toHaveBeenCalled();
+      await expect(LinkService.ensureLinkWith(PEER)).resolves.not.toBe('ready');
     });
 
     it('falls back to the old established link when the adopted handshake ages out', async () => {
