@@ -1287,6 +1287,19 @@ describe('LinkService', () => {
       await expect(LinkService.getLinkStatus(PEER)).resolves.toBe('handshaking-initiator');
       expect(mockedNative.restoreLink).not.toHaveBeenCalled();
     });
+
+    it('surfaces a blocked established re-key as error, not ready', async () => {
+      mockedStorage.getLink.mockResolvedValue(
+        storedLink({
+          status: 'established',
+          snapshot: 'est-1',
+          remoteNoisePublicKey: 'old-peer-pk',
+          lastSeenPeerMarkerPk: 'new-peer-pk',
+        }),
+      );
+      await expect(LinkService.getLinkStatus(PEER)).resolves.toBe('error');
+      expect(mockedNative.initiateLink).not.toHaveBeenCalled();
+    });
   });
 
   describe('ensureLinkWith — provisioning gates', () => {
@@ -1925,11 +1938,23 @@ describe('LinkService', () => {
         return { noisePublicKey: 'new-peer-pk', capabilitiesJson: '{}' };
       });
       mockedNative.probeInboundLink.mockResolvedValue({ result: 'none' });
+      mockedStorage.recordLastSeenPeerMarkerPk.mockImplementation(async (_o, _p, pk) => {
+        const current = await mockedStorage.getLink(OWNER, PEER);
+        if (current) {
+          mockedStorage.getLink.mockResolvedValue({ ...current, lastSeenPeerMarkerPk: pk });
+        }
+      });
 
       await expect(LinkService.ensureLinkWith(PEER)).resolves.toBe('error');
       expect(mockedNative.initiateLink).not.toHaveBeenCalled();
       expect(mockedNative.sendPrivateMessageJson).not.toHaveBeenCalled();
       expect(mockedNative.closeLink).not.toHaveBeenCalledWith('est-live');
+
+      const queued = await LinkService.sendDm(PEER, 'hello');
+      expect(queued.deliveryState).toBe('sending');
+      expect(mockedStorage.persistLinkSendIntent).toHaveBeenCalled();
+      expect(mockedNative.sendPrivateMessageJson).not.toHaveBeenCalled();
+      await expect(LinkService.getLinkStatus(PEER)).resolves.toBe('error');
     });
 
     it('converges three successive established re-key cycles onto the newest link', async () => {
@@ -2121,6 +2146,83 @@ describe('LinkService', () => {
       });
       await expect(LinkService.ensureLinkWith(PEER)).resolves.toBe('handshaking-responder');
       expect(mockedNative.probeInboundLink).toHaveBeenCalled();
+    });
+
+    it('queues a send while the re-key is blocked and flushes once after user retry', async () => {
+      installDurableBudget();
+      let link = storedLink({
+        status: 'established',
+        role: 'responder',
+        snapshot: 'est-old',
+        remoteNoisePublicKey: 'old-peer-pk',
+        lastSeenPeerMarkerPk: 'new-peer-pk',
+      });
+      mockedStorage.getLink.mockImplementation(async (owner, peer) =>
+        owner === OWNER && peer === PEER ? link : null,
+      );
+      mockedStorage.upsertLink.mockImplementation(async record => {
+        link = storedLink(record);
+      });
+      mockedStorage.recordLastSeenPeerMarkerPk.mockImplementation(async (_o, _p, pk) => {
+        link = { ...link, lastSeenPeerMarkerPk: pk };
+      });
+      mockedNative.restoreLink.mockResolvedValue({ linkId: 'est-live' });
+      mockedNative.getReceiverMarker.mockImplementation(async (who: string) => {
+        if (who === OWNER) return null;
+        return { noisePublicKey: 'new-peer-pk', capabilitiesJson: '{}' };
+      });
+      mockedStorage.getMessageRequest.mockResolvedValue({
+        ownerPubky: OWNER,
+        peerPubky: PEER,
+        createdAt: NOW,
+        updatedAt: NOW,
+        status: 'accepted',
+      });
+      mockedStorage.countLinkMessagesForPeer.mockResolvedValue(1);
+
+      for (let cycle = 0; cycle < ESTABLISHED_REKEY_PARK_LIMIT; cycle += 1) {
+        jest.spyOn(Date, 'now').mockReturnValue(NOW + cycle * (PEER_MARKER_REFRESH_TTL_MS + 1));
+        mockedNative.probeInboundLink.mockResolvedValue({
+          result: 'pending',
+          linkId: `rekey-hs-${cycle}`,
+          snapshot: `rekey-snap-${cycle}`,
+        });
+        mockedNative.advanceHandshake.mockRejectedValueOnce(new Error('transient'));
+        await LinkService.syncInbox([PEER]);
+      }
+      jest
+        .spyOn(Date, 'now')
+        .mockReturnValue(NOW + ESTABLISHED_REKEY_PARK_LIMIT * (PEER_MARKER_REFRESH_TTL_MS + 1));
+      mockedNative.probeInboundLink.mockClear();
+      await LinkService.syncInbox([PEER]);
+      await expect(LinkService.getLinkStatus(PEER)).resolves.toBe('error');
+
+      mockedNative.probeInboundLink.mockResolvedValue({
+        result: 'pending',
+        linkId: 'rekey-hs-user',
+        snapshot: 'rekey-snap-user',
+      });
+      mockedNative.advanceHandshake.mockReset().mockResolvedValue({
+        status: 'pending',
+        snapshot: 'rekey-snap-user',
+      });
+      mockedNative.sendPrivateMessageJson.mockResolvedValue({ snapshot: 'should-not-send' });
+      const queued = await LinkService.sendDm(PEER, 'hello');
+      expect(queued.deliveryState).toBe('sending');
+      expect(mockedStorage.persistLinkSendIntent).toHaveBeenCalled();
+      expect(mockedNative.sendPrivateMessageJson).not.toHaveBeenCalled();
+
+      mockedNative.advanceHandshake.mockResolvedValue({
+        status: 'established',
+        snapshot: 'rekey-est',
+      });
+      mockedNative.restoreLink.mockResolvedValue({ linkId: 'rekey-hs-user' });
+      mockedNative.sendPrivateMessageJson.mockResolvedValue({ snapshot: 'est-new-sent' });
+      givenQueuedDm();
+      await LinkService.retryPeerSends(PEER);
+      expect(mockedStorage.clearHandshakeBudget).toHaveBeenCalledWith(OWNER, PEER);
+      expect(mockedNative.probeInboundLink).toHaveBeenCalled();
+      expect(mockedNative.sendPrivateMessageJson).toHaveBeenCalledTimes(1);
     });
 
     it('does not return ready after a stale parked re-key is dropped against a new marker', async () => {

@@ -7,7 +7,8 @@ export type OutboundStatusWord =
   | typeof COPY.failed
   | typeof COPY.inboxClosed
   | typeof COPY.offline
-  | typeof COPY.needsEnable;
+  | typeof COPY.needsEnable
+  | typeof COPY.connectionChangedRetry;
 
 /**
  * Outbound bubble status. `delivered` and `read` fold into `Sent` because
@@ -42,7 +43,7 @@ export function formatLinkStatus(status: LinkStatus | null | undefined): Outboun
     case 'handshaking-responder':
       return COPY.queued;
     case 'error':
-      return COPY.failed;
+      return COPY.connectionChangedRetry;
     case 'native-missing':
     case 'ready':
     case 'message-request':

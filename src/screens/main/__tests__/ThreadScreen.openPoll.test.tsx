@@ -31,6 +31,7 @@ jest.mock('../../../services/link/LinkService', () => ({
     takeoverReceiver: jest.fn(),
     recoverPendingSends: jest.fn(),
     drainRetries: jest.fn(),
+    retryPeerSends: jest.fn(),
   },
   THREAD_INBOX_POLL_MS: 5_000,
 }));

@@ -8,6 +8,7 @@ const OUTBOUND_WORDS = new Set([
   COPY.inboxClosed,
   COPY.offline,
   COPY.needsEnable,
+  COPY.connectionChangedRetry,
 ]);
 
 describe('formatDeliveryState', () => {
@@ -36,5 +37,6 @@ describe('formatLinkStatus', () => {
     expect(formatLinkStatus('not-enrolled')).toBe(COPY.inboxClosed);
     expect(formatLinkStatus('ready')).toBeNull();
     expect(formatLinkStatus('message-request')).toBeNull();
+    expect(formatLinkStatus('error')).toBe(COPY.connectionChangedRetry);
   });
 });

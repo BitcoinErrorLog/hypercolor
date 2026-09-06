@@ -442,14 +442,23 @@ export default function ThreadScreen({ route }: Props) {
         void (async () => {
           if (!retryableEventIds.has(eventId)) return;
           try {
-            await LinkService.recoverPendingSends();
-            await LinkService.drainRetries();
+            await LinkService.retryPeerSends(participantPubky);
           } catch {
             setRetryableEventIds(prev => {
               const next = new Set(prev);
               next.delete(eventId);
               return next;
             });
+          }
+          await reloadEncrypted();
+        })();
+      }}
+      onRetryConnection={() => {
+        void (async () => {
+          try {
+            await LinkService.retryPeerSends(participantPubky);
+          } catch {
+            // Status reload below still surfaces the current link state.
           }
           await reloadEncrypted();
         })();
@@ -507,6 +516,7 @@ export function ThreadScreenContent({
   onRefresh,
   onEnableMessaging,
   onRetryFailed,
+  onRetryConnection,
   onCopyPubky,
   onTakeoverSuccess,
 }: {
@@ -556,6 +566,7 @@ export function ThreadScreenContent({
   onRefresh?: () => void;
   onEnableMessaging: () => void;
   onRetryFailed: (eventId: string) => void;
+  onRetryConnection: () => void;
   onCopyPubky: () => void;
   onTakeoverSuccess?: () => void;
 }) {
@@ -803,7 +814,7 @@ export function ThreadScreenContent({
               {identity.subtitle}
             </Text>
           ) : null}
-          {linkLabel ? (
+          {linkLabel && linkStatus !== 'error' ? (
             <Text testID="threadLinkStatus" style={styles.linkStatus}>
               {linkLabel}
             </Text>
@@ -814,6 +825,20 @@ export function ThreadScreenContent({
             </Text>
           ) : null}
         </TouchableOpacity>
+        {linkStatus === 'error' ? (
+          <TouchableOpacity
+            testID="threadLinkRetry"
+            accessibilityRole="button"
+            accessibilityLabel={COPY.connectionChangedRetry}
+            hitSlop={HIT_SLOP_44}
+            onPress={onRetryConnection}
+            style={styles.titleWrap}
+          >
+            <Text testID="threadLinkStatus" style={styles.linkStatus}>
+              {COPY.connectionChangedRetry}
+            </Text>
+          </TouchableOpacity>
+        ) : null}
         <View style={styles.backBtn} />
       </View>
       {peerBlocked ? <ThreadDeniedBanner onUnblock={onUnblock} /> : null}

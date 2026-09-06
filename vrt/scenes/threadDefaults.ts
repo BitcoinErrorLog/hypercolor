@@ -49,6 +49,7 @@ export function threadProps(patch: Partial<ThreadProps> = {}): ThreadProps {
     linkStatus: 'ready',
     onEnableMessaging: noop,
     onRetryFailed: noop,
+    onRetryConnection: noop,
     onCopyPubky: noop,
     ...patch,
   };

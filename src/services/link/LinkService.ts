@@ -684,7 +684,10 @@ export const LinkService = {
       const record = await StorageService.getLink(owner, peerPubky);
       if (!record) return null;
       const live = liveHandles.get(linkKey(owner, peerPubky));
-      if (isReadyLinkPredicate(record, live)) return 'ready';
+      if (isReadyLinkPredicate(record, live)) {
+        if (blockedEstablishedRekeyOutcome(record) === 'error') return 'error';
+        return 'ready';
+      }
       return record.role === 'initiator' ? 'handshaking-initiator' : 'handshaking-responder';
     } catch {
       return 'error';
@@ -932,6 +935,17 @@ export const LinkService = {
       }
       await deliverQueuedPayload(item, payload);
     }
+  },
+
+  /**
+   * User-gesture recovery for a blocked established re-key: clears the
+   * handshake budget, attempts ensure, then flushes queued sends.
+   */
+  async retryPeerSends(peerPubky: PubkyKey): Promise<LinkStatus> {
+    const status = await LinkService.ensureLinkWith(peerPubky);
+    await LinkService.recoverPendingSends();
+    await LinkService.drainRetries();
+    return status;
   },
 
   /**
@@ -1808,7 +1822,8 @@ function assertLinkSendable(
   if (
     outcome === 'ready' ||
     outcome === 'handshaking-initiator' ||
-    outcome === 'handshaking-responder'
+    outcome === 'handshaking-responder' ||
+    outcome === 'error'
   ) {
     return;
   }
@@ -1831,8 +1846,10 @@ function assertLinkSendable(
  * Handshake abuse budget recovery policy, in one place so it cannot drift:
  *
  * A `user` intent clears the budget before any handshake work is dispatched, so
- * a peer is never permanently denied — one deliberate send or thread open
- * restores a full allowance, whether or not a handshake handle is already live.
+ * a peer is never permanently denied — one deliberate send, "tap to retry",
+ * or failed-bubble retry restores a full allowance, whether or not a handshake
+ * handle is already live. Thread focus / inbox poll stays `background` and
+ * does not clear the budget.
  * Every other intent is refused outright once the budget is exhausted, BEFORE
  * the marker fetch and inbound probe, so an exhausted peer costs zero homeserver
  * IO and cannot be re-adopted by timer or sync activity however many times it

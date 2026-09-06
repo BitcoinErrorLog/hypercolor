@@ -22,6 +22,7 @@ jest.mock('../../../services/link/LinkService', () => ({
     subscribeInboxSynced: () => () => undefined,
     releaseDeclinedRequest: jest.fn(),
     takeoverReceiver: jest.fn(),
+    retryPeerSends: jest.fn(),
   },
   THREAD_INBOX_POLL_MS: 5_000,
 }));
@@ -138,6 +139,7 @@ function contentProps(
     linkStatus: 'ready',
     onEnableMessaging: noop,
     onRetryFailed: noop,
+    onRetryConnection: noop,
     onCopyPubky: noop,
     ...overrides,
   };
@@ -334,6 +336,41 @@ describe('ThreadScreenContent blocked send', () => {
     );
     expect(JSON.stringify(tree.toJSON())).toContain(COPY.queuedStandbySubtitle);
     expect(JSON.stringify(tree.toJSON())).not.toContain(COPY.queuedWaitingSubtitle);
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('renders connection-changed retry copy when the link is blocked', async () => {
+    const onRetryConnection = jest.fn();
+    const tree = await render(
+      <ThreadScreenContent
+        {...contentProps({
+          linkStatus: 'error',
+          onRetryConnection,
+          linkMessages: [
+            {
+              ownerPubky: OWNER,
+              eventId: 'evt-queued',
+              conversationId: `dm:${PEER}`,
+              peerPubky: PEER,
+              senderPubky: OWNER,
+              direction: 'sent',
+              kind: 'chat.message.v0',
+              rawJson: '{}',
+              body: 'held',
+              sentAt: 1,
+              receivedAt: null,
+              deliveryState: 'sending',
+            },
+          ],
+        })}
+      />,
+    );
+    expect(JSON.stringify(tree.toJSON())).toContain(COPY.connectionChangedRetry);
+    expect(JSON.stringify(tree.toJSON())).toContain(COPY.queued);
+    tree.root.findByProps({ testID: 'threadLinkRetry' }).props.onPress();
+    expect(onRetryConnection).toHaveBeenCalled();
     await act(async () => {
       tree.unmount();
     });

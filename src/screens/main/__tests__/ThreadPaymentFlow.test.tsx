@@ -27,6 +27,7 @@ jest.mock('../../../services/link/LinkService', () => ({
     getLinkStatus: jest.fn(),
     recoverPendingSends: jest.fn(),
     drainRetries: jest.fn(),
+    retryPeerSends: jest.fn(),
     subscribeInboxSynced: jest.fn(() => () => undefined),
     syncInbox: jest.fn(),
   },
@@ -135,6 +136,7 @@ function props(
     linkStatus: 'ready',
     onEnableMessaging: noop,
     onRetryFailed: noop,
+    onRetryConnection: noop,
     onCopyPubky: noop,
     ...overrides,
   };
