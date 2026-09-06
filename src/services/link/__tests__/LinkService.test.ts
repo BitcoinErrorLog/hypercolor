@@ -9,6 +9,7 @@ import {
   LINK_RETRY_PAYLOAD_TYPE,
   LINK_GROUP_FANOUT_PAYLOAD_TYPE,
   LINK_RETRY_TICK_PHASE_TIMEOUT_MS,
+  PEER_MARKER_REFRESH_TTL_MS,
   LinkService,
   linkQueueEntryCountForTests,
   resetLinkServiceHarnessState,
@@ -1657,6 +1658,156 @@ describe('LinkService', () => {
 
       expect(mockedStorage.deleteLink).not.toHaveBeenCalled();
       expect(mockedNative.probeInboundLink).not.toHaveBeenCalled();
+    });
+
+    it('adopts a re-key msg1 when the peer marker pk changed and keeps history', async () => {
+      mockedStorage.getLink.mockResolvedValue(
+        storedLink({
+          status: 'established',
+          role: 'responder',
+          snapshot: 'est-old',
+          remoteNoisePublicKey: 'old-peer-pk',
+          lastSeenPeerMarkerPk: 'old-peer-pk',
+        }),
+      );
+      mockedStorage.getMessageRequest.mockResolvedValue({
+        ownerPubky: OWNER,
+        peerPubky: PEER,
+        createdAt: NOW,
+        updatedAt: NOW,
+        status: 'accepted',
+      });
+      mockedStorage.countLinkMessagesForPeer.mockResolvedValue(4);
+      mockedNative.restoreLink.mockResolvedValue({ linkId: 'est-live' });
+      mockedNative.getReceiverMarker.mockImplementation(async (who: string) => {
+        if (who === OWNER) return null;
+        return { noisePublicKey: 'new-peer-pk', capabilitiesJson: '{}' };
+      });
+      mockedNative.probeInboundLink.mockResolvedValue({
+        result: 'pending',
+        linkId: 'rekey-hs',
+        snapshot: 'rekey-snap',
+      });
+
+      await expect(LinkService.syncInbox([PEER])).resolves.toEqual([]);
+
+      expect(mockedNative.closeLink).toHaveBeenCalledWith('est-live');
+      expect(mockedStorage.upsertLink).toHaveBeenCalledWith(
+        expect.objectContaining({ status: 'superseded', snapshot: 'est-old' }),
+      );
+      expect(mockedStorage.upsertLink).toHaveBeenCalledWith(
+        expect.objectContaining({
+          role: 'responder',
+          status: 'handshaking',
+          snapshot: 'rekey-snap',
+          remoteNoisePublicKey: 'new-peer-pk',
+        }),
+      );
+      expect(mockedStorage.deleteLink).not.toHaveBeenCalled();
+      expect(mockedStorage.deleteLinkMessagesForPeer).not.toHaveBeenCalled();
+      expect(mockedStorage.upsertMessageRequest).not.toHaveBeenCalled();
+    });
+
+    it('does not probe a ready peer when the marker pk is unchanged even if junk msg1 exists', async () => {
+      mockedStorage.getLink.mockResolvedValue(
+        storedLink({
+          status: 'established',
+          remoteNoisePublicKey: PEER_NOISE,
+          lastSeenPeerMarkerPk: PEER_NOISE,
+        }),
+      );
+      mockedNative.restoreLink.mockResolvedValue({ linkId: 'est-live' });
+      mockedNative.probeInboundLink.mockResolvedValue({
+        result: 'pending',
+        linkId: 'junk-hs',
+        snapshot: 'junk-snap',
+      });
+
+      await expect(LinkService.syncInbox([PEER])).resolves.toEqual([]);
+
+      expect(mockedNative.probeInboundLink).not.toHaveBeenCalled();
+      expect(mockedStorage.deleteLink).not.toHaveBeenCalled();
+      expect(mockedStorage.upsertLink).not.toHaveBeenCalledWith(
+        expect.objectContaining({ status: 'superseded' }),
+      );
+    });
+
+    it('leaves an established link in place when the new msg1 does not decrypt', async () => {
+      mockedStorage.getLink.mockResolvedValue(
+        storedLink({
+          status: 'established',
+          snapshot: 'est-old',
+          remoteNoisePublicKey: 'old-peer-pk',
+          lastSeenPeerMarkerPk: 'old-peer-pk',
+        }),
+      );
+      mockedNative.restoreLink.mockResolvedValue({ linkId: 'est-live' });
+      mockedNative.getReceiverMarker.mockImplementation(async (who: string) => {
+        if (who === OWNER) return null;
+        return { noisePublicKey: 'new-peer-pk', capabilitiesJson: '{}' };
+      });
+      mockedNative.probeInboundLink.mockRejectedValue({
+        code: 'protocol',
+        message: 'undecryptable msg1',
+      });
+
+      await expect(LinkService.syncInbox([PEER])).resolves.toEqual([]);
+
+      expect(mockedStorage.upsertLink).not.toHaveBeenCalledWith(
+        expect.objectContaining({ status: 'superseded' }),
+      );
+      expect(mockedStorage.deleteLink).not.toHaveBeenCalled();
+      expect(mockedNative.closeLink).not.toHaveBeenCalled();
+    });
+
+    it('does not adopt a re-key handshake from a denied peer', async () => {
+      jest.spyOn(FollowsImportSettings, 'resolveDenyState').mockResolvedValue('denied');
+      mockedStorage.getLink.mockResolvedValue(
+        storedLink({
+          status: 'established',
+          remoteNoisePublicKey: 'old-peer-pk',
+          lastSeenPeerMarkerPk: 'old-peer-pk',
+        }),
+      );
+      mockedNative.restoreLink.mockResolvedValue({ linkId: 'est-live' });
+      mockedNative.getReceiverMarker.mockImplementation(async (who: string) => {
+        if (who === OWNER) return null;
+        return { noisePublicKey: 'new-peer-pk', capabilitiesJson: '{}' };
+      });
+      mockedNative.probeInboundLink.mockResolvedValue({
+        result: 'pending',
+        linkId: 'hostile-hs',
+        snapshot: 'hostile-snap',
+      });
+
+      await expect(LinkService.syncInbox([PEER])).resolves.toEqual([]);
+
+      expect(mockedNative.probeInboundLink).not.toHaveBeenCalled();
+      expect(mockedStorage.upsertLink).not.toHaveBeenCalledWith(
+        expect.objectContaining({ status: 'superseded' }),
+      );
+    });
+
+    it('refreshes a ready peer marker at most once per 60s', async () => {
+      mockedStorage.getLink.mockResolvedValue(
+        storedLink({
+          status: 'established',
+          remoteNoisePublicKey: PEER_NOISE,
+          lastSeenPeerMarkerPk: PEER_NOISE,
+        }),
+      );
+      mockedNative.restoreLink.mockResolvedValue({ linkId: 'est-live' });
+      mockedNative.receivePrivateMessages.mockResolvedValue({ messages: [], snapshot: 'est-1' });
+
+      await LinkService.syncInbox([PEER]);
+      await LinkService.syncInbox([PEER]);
+      const peerGets = mockedNative.getReceiverMarker.mock.calls.filter(c => c[0] === PEER);
+      expect(peerGets).toHaveLength(1);
+
+      jest.spyOn(Date, 'now').mockReturnValue(NOW + PEER_MARKER_REFRESH_TTL_MS);
+      await LinkService.syncInbox([PEER]);
+      const peerGetsAfter = mockedNative.getReceiverMarker.mock.calls.filter(c => c[0] === PEER);
+      expect(peerGetsAfter).toHaveLength(2);
     });
 
     it('probes the same peer again after a prior none (native must not cache none)', async () => {

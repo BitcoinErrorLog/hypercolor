@@ -389,8 +389,8 @@ export type LinkStatus =
 
 export type LinkRole = 'initiator' | 'responder';
 
-/** Persisted link lifecycle — in-progress handshakes and established links. */
-export type StoredLinkStatus = 'handshaking' | 'established';
+/** Persisted link lifecycle — in-progress, live, or archived-after-rekey. */
+export type StoredLinkStatus = 'handshaking' | 'established' | 'superseded';
 
 export type LinkMessageDirection = 'sent' | 'received';
 

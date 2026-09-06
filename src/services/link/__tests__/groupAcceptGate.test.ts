@@ -95,6 +95,7 @@ jest.mock('../../StorageService', () => ({
     upsertLink: jest.fn(),
     getLink: jest.fn(),
     getAllLinks: jest.fn(),
+    recordLastSeenPeerMarkerPk: jest.fn(),
     updateLinkSnapshot: jest.fn(),
     incrementLinkConsecutiveFailures: jest.fn(),
     resetLinkConsecutiveFailures: jest.fn(),
@@ -325,6 +326,10 @@ function wireInMemoryStorage(): void {
     return db.links.get(peerPubky) ?? null;
   });
   mockedStorage.getAllLinks.mockImplementation(async () => [...db.links.values()]);
+  mockedStorage.recordLastSeenPeerMarkerPk.mockImplementation(async (_owner, peerPubky, pk) => {
+    const row = db.links.get(peerPubky);
+    if (row) db.links.set(peerPubky, { ...row, lastSeenPeerMarkerPk: pk });
+  });
   mockedStorage.updateLinkSnapshot.mockImplementation(
     async (_owner, peerPubky, snapshot, status) => {
       const existing = db.links.get(peerPubky);
