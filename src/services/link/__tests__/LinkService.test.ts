@@ -563,7 +563,21 @@ describe('LinkService', () => {
     });
 
     it('tears down a previously adopted alias before adopting a different one', async () => {
+      givenEstablishedLink();
+      await LinkService.ensureLinkWith(PEER);
+      mockedStorage.getAllLinks.mockResolvedValue([
+        storedLink({ status: 'established', snapshot: 'est-1' }),
+      ]);
+      mockedNative.getReceiverPublicKey.mockResolvedValue(PEER_NOISE);
+      mockedNative.getReceiverMarker.mockResolvedValue({
+        noisePublicKey: PEER_NOISE,
+        capabilitiesJson: '{}',
+      });
+      mockedNative.closeLink.mockClear();
+      mockedNative.removeReceiverMarker.mockClear();
       mockedNative.signOutSession.mockClear();
+      mockedNative.clearAllNativeSecrets.mockClear();
+      mockedStorage.clearAccountData.mockClear();
       mockedNative.adoptAuthSession.mockClear();
       mockedKeyStore.getLinkSession.mockReturnValue(SESSION_ALIAS);
       mockedKeyStore.isInitialized.mockReturnValue(true);
@@ -571,10 +585,44 @@ describe('LinkService', () => {
 
       await LinkService.adoptApprovedSession('session-alias-2', OTHER_OWNER);
 
+      expect(mockedNative.closeLink).toHaveBeenCalledWith('handle-1');
+      expect(mockedNative.removeReceiverMarker).toHaveBeenCalledWith(
+        SESSION_ALIAS,
+        LINK_RECEIVER_PATH,
+      );
+      const unpublishOrder = mockedNative.removeReceiverMarker.mock.invocationCallOrder[0]!;
+      const signOutOrder = mockedNative.signOutSession.mock.invocationCallOrder[0]!;
+      expect(unpublishOrder).toBeLessThan(signOutOrder);
       expect(mockedNative.signOutSession).toHaveBeenCalledWith(SESSION_ALIAS);
       expect(mockedKeyStore.deleteLinkSessionIfAlias).toHaveBeenCalledWith(SESSION_ALIAS);
+      expect(mockedNative.clearAllNativeSecrets).not.toHaveBeenCalled();
+      expect(mockedStorage.clearAccountData).not.toHaveBeenCalled();
       expect(mockedNative.adoptAuthSession).toHaveBeenCalledWith('session-alias-2');
       expect(mockedKeyStore.setPubky).toHaveBeenCalledWith(OTHER_OWNER);
+    });
+
+    it('does not sign out or clear on same-alias re-adopt', async () => {
+      givenEstablishedLink();
+      await LinkService.ensureLinkWith(PEER);
+      mockedNative.closeLink.mockClear();
+      mockedNative.removeReceiverMarker.mockClear();
+      mockedNative.signOutSession.mockClear();
+      mockedNative.clearAllNativeSecrets.mockClear();
+      mockedStorage.clearAccountData.mockClear();
+      mockedNative.adoptAuthSession.mockClear();
+      mockedKeyStore.deleteLinkSessionIfAlias.mockClear();
+      mockedKeyStore.getLinkSession.mockReturnValue(SESSION_ALIAS);
+      mockedKeyStore.isInitialized.mockReturnValue(true);
+
+      await LinkService.adoptApprovedSession(SESSION_ALIAS, OWNER);
+
+      expect(mockedNative.signOutSession).not.toHaveBeenCalled();
+      expect(mockedNative.removeReceiverMarker).not.toHaveBeenCalled();
+      expect(mockedNative.closeLink).not.toHaveBeenCalled();
+      expect(mockedKeyStore.deleteLinkSessionIfAlias).not.toHaveBeenCalled();
+      expect(mockedNative.clearAllNativeSecrets).not.toHaveBeenCalled();
+      expect(mockedStorage.clearAccountData).not.toHaveBeenCalled();
+      expect(mockedNative.adoptAuthSession).toHaveBeenCalledWith(SESSION_ALIAS);
     });
 
     it('persists the session alias on signinWithSecret (dev/e2e path)', () => {

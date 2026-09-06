@@ -1,5 +1,6 @@
 const DEBOUNCE_MS = 30_000;
 const seen = new Map<string, number>();
+const inFlight = new Set<string>();
 
 function prune(now: number): void {
   for (const [id, at] of seen) {
@@ -11,16 +12,37 @@ function prune(now: number): void {
 export function consumeRingCallbackRequestId(requestId: string, now: number = Date.now()): boolean {
   if (!requestId) return true;
   prune(now);
+  if (inFlight.has(requestId)) return false;
   const previous = seen.get(requestId);
   if (previous != null && now - previous <= DEBOUNCE_MS) {
     return false;
   }
-  seen.set(requestId, now);
+  inFlight.add(requestId);
   return true;
+}
+
+/**
+ * Release the in-flight guard. A successful handler stays in the 30s replay
+ * window; a rejection is evicted so a legitimate retry of the same callback
+ * can run.
+ */
+export function completeRingCallbackRequestId(
+  requestId: string,
+  succeeded: boolean,
+  now: number = Date.now(),
+): void {
+  if (!requestId) return;
+  inFlight.delete(requestId);
+  if (succeeded) {
+    seen.set(requestId, now);
+  } else {
+    seen.delete(requestId);
+  }
 }
 
 export function resetRingCallbackDebounceForTests(): void {
   seen.clear();
+  inFlight.clear();
 }
 
 export function ringCallbackRequestIdFromUrl(url: string): string | null {

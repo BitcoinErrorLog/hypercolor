@@ -365,8 +365,7 @@ export const LinkService = {
       (previousPubky && previousPubky !== pubky)
     ) {
       if (previousAlias && previousAlias !== sessionAlias) {
-        await this.signOutSessionQuiet(previousAlias);
-        KeyStore.deleteLinkSessionIfAlias(previousAlias);
+        await teardownPreviousAdoptedOwner(previousAlias, previousPubky);
       }
       if (session?.alias === previousAlias || (previousPubky && previousPubky !== pubky)) {
         session = null;
@@ -1393,6 +1392,63 @@ async function restoreFromKeyStore(): Promise<SessionLookup> {
 
 function isActiveSession(lookup: SessionLookup): lookup is ActiveSession {
   return lookup !== null && !('status' in lookup);
+}
+
+/**
+ * Previous-owner teardown for adopt: unpublish that owner's receiver marker
+ * and close its live handles, then sign the old alias out. Does not wipe the
+ * incoming owner's KeyStore identity, native secrets, or SQL rows.
+ */
+async function teardownPreviousAdoptedOwner(
+  previousAlias: string,
+  previousPubky: string | null,
+): Promise<void> {
+  let markerPath = LINK_RECEIVER_PATH;
+  if (previousPubky) {
+    try {
+      const receiver = await StorageService.getLinkReceiver(previousPubky);
+      if (receiver) markerPath = coerceReceiverPath(receiver.receiverPath);
+      const links = await StorageService.getAllLinks(previousPubky);
+      for (const link of links) {
+        const live = liveHandles.get(linkKey(previousPubky, link.peerPubky));
+        if (live) await closeQuietly(live.linkId);
+      }
+    } catch {
+      // Listing previous links is best-effort; prefix sweep still runs.
+    }
+    const ownerPrefix = `${previousPubky}:`;
+    for (const key of [...liveHandles.keys()]) {
+      if (!key.startsWith(ownerPrefix)) continue;
+      const live = liveHandles.get(key);
+      if (live) await closeQuietly(live.linkId);
+      liveHandles.delete(key);
+    }
+    for (const key of [...queues.keys()]) {
+      if (key.startsWith(ownerPrefix)) queues.delete(key);
+    }
+    for (const key of [...peerQueueGenerations.keys()]) {
+      if (key.startsWith(ownerPrefix)) peerQueueGenerations.delete(key);
+    }
+    try {
+      let localPk: string | null = null;
+      try {
+        const receiver = await StorageService.getLinkReceiver(previousPubky);
+        if (receiver) localPk = await PaykitLinkNative.getReceiverPublicKey(receiver.receiverAlias);
+      } catch {
+        localPk = null;
+      }
+      if (localPk) {
+        const marker = await PaykitLinkNative.getReceiverMarker(previousPubky, markerPath);
+        if (marker && marker.noisePublicKey === localPk) {
+          await PaykitLinkNative.removeReceiverMarker(previousAlias, markerPath);
+        }
+      }
+    } catch {
+      // GET failure or foreign pk: leave the published marker.
+    }
+  }
+  await LinkService.signOutSessionQuiet(previousAlias);
+  KeyStore.deleteLinkSessionIfAlias(previousAlias);
 }
 
 /**

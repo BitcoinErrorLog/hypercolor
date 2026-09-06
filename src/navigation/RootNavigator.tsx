@@ -15,7 +15,11 @@ import ChannelScreen from '../screens/main/ChannelScreen';
 import { PubkyRingAuthService } from '../services/PubkyRingAuthService';
 import { PubkyService } from '../services/PubkyService';
 import { LinkService } from '../services/link/LinkService';
-import { consumeRingCallbackRequestId, ringCallbackRequestIdFromUrl } from './ringCallbackDebounce';
+import {
+  completeRingCallbackRequestId,
+  consumeRingCallbackRequestId,
+  ringCallbackRequestIdFromUrl,
+} from './ringCallbackDebounce';
 import {
   bindPendingPublicJoin,
   consumePendingPublicJoinRedirect,
@@ -131,6 +135,7 @@ export function RootNavigator() {
       const requestId = ringCallbackRequestIdFromUrl(url);
       if (requestId && !consumeRingCallbackRequestId(requestId)) return;
 
+      let callbackSucceeded = false;
       try {
         await PubkyService.awaitSignOutWipe();
         const result = await PubkyRingAuthService.handleRingCallback(url);
@@ -138,9 +143,11 @@ export function RootNavigator() {
         if (result.kind === 'legacy') {
           notifyEnableMessagingResume();
         }
+        callbackSucceeded = true;
       } catch (err) {
         if (PubkyRingAuthService.isProvisionReceiverFailedError(err)) {
           setAuthenticated(err.pubky as import('../types').PubkyKey, err.homeserver);
+          callbackSucceeded = true;
           Alert.alert(COPY.couldNotPublishReceiver, COPY.couldNotPublishReceiver, [
             { text: COPY.cancel, style: 'cancel' },
             {
@@ -170,6 +177,8 @@ export function RootNavigator() {
           notifyConnectAuthFeedback('offline');
         }
         Alert.alert(COPY.couldNotCompleteAuthorization, sanitized.message);
+      } finally {
+        if (requestId) completeRingCallbackRequestId(requestId, callbackSucceeded);
       }
     },
     [isAuthenticated, pubky, setAuthenticated],
