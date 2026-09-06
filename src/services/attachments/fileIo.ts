@@ -13,7 +13,9 @@ type ExpoFileSystemLegacy = {
     exists: boolean;
     isDirectory?: boolean;
     size?: number;
+    modificationTime?: number;
   }>;
+  readDirectoryAsync: (uri: string) => Promise<string[]>;
   readAsStringAsync: (uri: string, options: { encoding: string }) => Promise<string>;
   writeAsStringAsync: (
     uri: string,
@@ -84,8 +86,48 @@ export function appCacheDirectory(): string {
   return root.endsWith('/') ? root : `${root}/`;
 }
 
+export function gifStagingDirectory(): string {
+  const root = appCacheDirectory();
+  return `${root}hypercolor-gif`;
+}
+
 export function gifStagingPath(uniqueName: string): string {
-  return `${appCacheDirectory()}hypercolor-gif/${uniqueName}`;
+  return `${gifStagingDirectory()}/${uniqueName}`;
+}
+
+export const GIF_STAGING_MAX_AGE_MS = 60 * 60 * 1000;
+
+export async function sweepStaleGifStaging(
+  nowMs: number = Date.now(),
+  maxAgeMs: number = GIF_STAGING_MAX_AGE_MS,
+): Promise<void> {
+  let dir: string;
+  try {
+    dir = gifStagingDirectory();
+  } catch {
+    return;
+  }
+  try {
+    const info = await FileSystem.getInfoAsync(dir);
+    if (!info.exists || info.isDirectory !== true) return;
+    const names = await FileSystem.readDirectoryAsync(dir);
+    const stale: string[] = [];
+    const cutoffMs = nowMs - maxAgeMs;
+    for (const name of names) {
+      if (!name) continue;
+      const path = `${dir}/${name}`;
+      const file = await FileSystem.getInfoAsync(path);
+      if (!file.exists || file.isDirectory === true) continue;
+      const modifiedMs =
+        typeof file.modificationTime === 'number' && Number.isFinite(file.modificationTime)
+          ? file.modificationTime * 1000
+          : 0;
+      if (modifiedMs <= cutoffMs) stale.push(path);
+    }
+    await deleteCacheFiles(stale);
+  } catch {
+    // Best-effort boot/send sweep.
+  }
 }
 
 export function attachmentCacheDirectory(ownerPubky: string): string {

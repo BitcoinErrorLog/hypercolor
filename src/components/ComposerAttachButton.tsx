@@ -8,6 +8,7 @@ import { AttachmentService } from '../services/attachments/AttachmentService';
 import {
   deleteCacheFiles,
   gifStagingPath,
+  sweepStaleGifStaging,
   writeFileFromStandardBase64,
 } from '../services/attachments/fileIo';
 import { fetchGifBytes } from '../services/gif/GifProxyClient';
@@ -80,6 +81,7 @@ export async function sendGifAttachment(
   target: AttachmentSendTarget,
   gifId: string,
 ): Promise<ComposerAttachResult> {
+  await sweepStaleGifStaging();
   const fetched = await fetchGifBytes(gifId);
   if (!fetched.ok) {
     if (fetched.reason === 'not-configured') {

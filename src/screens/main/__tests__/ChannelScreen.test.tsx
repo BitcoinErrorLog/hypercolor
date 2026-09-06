@@ -400,11 +400,10 @@ describe('ChannelScreenContent fan-out labels', () => {
       COPY.unarchiveChat,
     );
     expect(
-      tree.root.findAll(
-        node =>
-          node.props.accessibilityRole === 'button' &&
-          node.props.accessibilityLabel === COPY.copyMessage,
-      ),
+      tree.root.findAllByProps({
+        accessibilityRole: 'button',
+        accessibilityLabel: COPY.copyMessage,
+      }),
     ).toHaveLength(0);
     await act(async () => {
       tree.root.findByProps({ testID: 'channelMute' }).props.onPress();

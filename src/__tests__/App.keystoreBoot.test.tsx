@@ -20,6 +20,7 @@ const mockRefresh = jest.fn();
 const mockStartDrain = jest.fn(() => () => undefined);
 const mockShouldHoldPreAuthWork = jest.fn(() => false);
 const mockPaintNeedsSignIn = jest.fn();
+const mockSweepStaleGifStaging = jest.fn(async () => undefined);
 let ownerPaintedListener: (() => void) | null = null;
 
 const appStateListeners: Array<(state: string) => void> = [];
@@ -105,6 +106,10 @@ jest.mock('../../src/ui/reduceMotion', () => ({
   ReduceMotionProvider: ({ children }: { children: React.ReactNode }) => children,
 }));
 
+jest.mock('../../src/services/attachments/fileIo', () => ({
+  sweepStaleGifStaging: () => mockSweepStaleGifStaging(),
+}));
+
 import App from '../../App';
 
 describe('App keystore boot ordering', () => {
@@ -132,6 +137,7 @@ describe('App keystore boot ordering', () => {
     mockMarkKeystoreUnavailable.mockReset();
     mockRefresh.mockReset();
     mockStartDrain.mockClear();
+    mockSweepStaleGifStaging.mockClear();
     mockShouldHoldPreAuthWork.mockReset();
     mockPaintNeedsSignIn.mockReset();
     mockShouldHoldPreAuthWork.mockReturnValue(false);
@@ -166,6 +172,7 @@ describe('App keystore boot ordering', () => {
     expect(mockRestorePersistedSession).not.toHaveBeenCalled();
     expect(mockHasInterruptedSignOut).not.toHaveBeenCalled();
     expect(mockReconcileAtBoot).not.toHaveBeenCalled();
+    expect(mockSweepStaleGifStaging).toHaveBeenCalled();
   });
 
   it('runs init → interrupted wipe → reconcile → hydrate before drain', async () => {

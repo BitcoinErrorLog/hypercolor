@@ -121,11 +121,17 @@ function isGifMagic(buffer: Uint8Array): boolean {
   return v87 || v89;
 }
 
-async function readBoundedBody(res: Response, maxBytes: number): Promise<Uint8Array | 'too-large'> {
+async function readBoundedBody(
+  res: Response,
+  maxBytes: number,
+): Promise<Uint8Array | 'too-large' | 'unbounded'> {
   const declared = declaredContentLength(res.headers);
   if (declared !== null && declared > maxBytes) return 'too-large';
   const reader = res.body?.getReader();
   if (!reader) {
+    // Stock RN fetch has no ReadableStream reader. Refuse unknown-size bodies
+    // so arrayBuffer() cannot allocate past the cap.
+    if (declared === null) return 'unbounded';
     const buffer = new Uint8Array(await res.arrayBuffer());
     return buffer.byteLength > maxBytes ? 'too-large' : buffer;
   }
@@ -168,6 +174,9 @@ export async function fetchGifBytes(
     const buffer = await readBoundedBody(res, GIF_MAX_BYTES);
     if (buffer === 'too-large') {
       return { ok: false, reason: 'too-large', message: 'gif exceeds 8 MiB' };
+    }
+    if (buffer === 'unbounded') {
+      return { ok: false, reason: 'error', message: 'missing content-length' };
     }
     if (!isGifMagic(buffer)) {
       return { ok: false, reason: 'error', message: 'response is not a GIF' };

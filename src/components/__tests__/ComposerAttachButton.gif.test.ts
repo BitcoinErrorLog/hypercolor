@@ -4,7 +4,8 @@ jest.mock('expo-file-system/legacy', () => ({
   cacheDirectory: 'file:///cache/',
   documentDirectory: 'file:///docs/',
   EncodingType: { Base64: 'base64' },
-  getInfoAsync: jest.fn(),
+  getInfoAsync: jest.fn().mockResolvedValue({ exists: false, isDirectory: false }),
+  readDirectoryAsync: jest.fn().mockResolvedValue([]),
   readAsStringAsync: jest.fn(),
   writeAsStringAsync: jest.fn().mockResolvedValue(undefined),
   makeDirectoryAsync: jest.fn().mockResolvedValue(undefined),
@@ -29,6 +30,7 @@ const mockedFs = jest.requireMock('expo-file-system/legacy') as {
   cacheDirectory: string;
   writeAsStringAsync: jest.Mock;
   deleteAsync: jest.Mock;
+  getInfoAsync: jest.Mock;
 };
 
 const GIF89A = new Uint8Array([0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0x00, 0x00]);
@@ -56,6 +58,7 @@ describe('sendGifAttachment staging', () => {
     expect(staged).toContain('gif-uuid-1');
     expect(staged.endsWith('.gif')).toBe(true);
     expect(mockedFs.deleteAsync).toHaveBeenCalledWith(staged, { idempotent: true });
+    expect(mockedFs.getInfoAsync).toHaveBeenCalled();
   });
 
   it('deletes the staging file when send fails', async () => {

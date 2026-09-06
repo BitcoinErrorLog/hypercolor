@@ -115,6 +115,48 @@ describe('GifProxyClient', () => {
     if (!result.ok) expect(result.reason).toBe('too-large');
   });
 
+  it('rejects a non-streaming body when Content-Length is missing', async () => {
+    let buffered = false;
+    const stub = {
+      status: 200,
+      ok: true,
+      headers: new Headers({ 'content-type': 'image/gif' }),
+      body: null,
+      arrayBuffer: async () => {
+        buffered = true;
+        return new Uint8Array(GIF_MAX_BYTES + 1).buffer;
+      },
+    } as unknown as Response;
+    const result = await fetchGifBytes('abc', async () => stub);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toBe('error');
+      expect(result.message).toBe('missing content-length');
+    }
+    expect(buffered).toBe(false);
+  });
+
+  it('buffers a non-streaming body only when Content-Length is within the cap', async () => {
+    const gif89a = new Uint8Array([0x47, 0x49, 0x46, 0x38, 0x39, 0x61]);
+    let buffered = false;
+    const stub = {
+      status: 200,
+      ok: true,
+      headers: new Headers({
+        'content-type': 'image/gif',
+        'content-length': String(gif89a.byteLength),
+      }),
+      body: null,
+      arrayBuffer: async () => {
+        buffered = true;
+        return gif89a.buffer;
+      },
+    } as unknown as Response;
+    const result = await fetchGifBytes('abc', async () => stub);
+    expect(buffered).toBe(true);
+    expect(result).toEqual({ ok: true, bytes: gif89a, contentType: 'image/gif' });
+  });
+
   it('rejects a GIF prefix that is not 87a or 89a and a non-gif content-type', async () => {
     const badVersion = await fetchGifBytes(
       'abc',

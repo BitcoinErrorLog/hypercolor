@@ -30,6 +30,7 @@ import {
   hydratePersistedAuth,
 } from './src/stores/hydrateAuthSession';
 import { useSessionStatusStore } from './src/stores/sessionStatusStore';
+import { sweepStaleGifStaging } from './src/services/attachments/fileIo';
 import { ReduceMotionProvider } from './src/ui/reduceMotion';
 import { color, space, typeRole, measure } from './src/theme';
 
@@ -91,6 +92,8 @@ export default function App() {
 
     // Foreground notification strategy: see docs/NOTIFICATIONS.md.
     // AppState 'active' restarts the retry drain and syncs the Encrypted-Link inbox.
+    void sweepStaleGifStaging();
+
     const recoverAndDrain = async () => {
       if (!KeyStore.isInitialized()) {
         console.warn('[App] keystore unavailable');
