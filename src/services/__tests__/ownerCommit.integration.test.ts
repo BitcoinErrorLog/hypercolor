@@ -310,10 +310,13 @@ describe('owner-conditional persist at commit time', () => {
     mockedNative.closeLink.mockResolvedValue(undefined);
     mockedNative.clearLinkOutbox.mockResolvedValue(0);
     mockedNative.restoreLink.mockResolvedValue({ linkId: 'handle-1' });
-    mockedNative.getReceiverMarker.mockResolvedValue({
-      noisePublicKey: PEER_NOISE,
+    mockedNative.getReceiverMarker.mockImplementation(async (who: string) => ({
+      // PEER_B's established row uses `noise-b` (this file:458). A single
+      // PEER_NOISE stub made ensureLink treat that send as a marker mismatch
+      // and return before sendPrivateMessageJson, so the getDb stall never armed.
+      noisePublicKey: who === PEER_B ? 'noise-b' : PEER_NOISE,
       capabilitiesJson: '{}',
-    });
+    }));
     mockedNative.sendPrivateMessageJson.mockResolvedValue({ snapshot: 'est-out' });
     mockedNative.receivePrivateMessages.mockResolvedValue({ messages: [], snapshot: 'est-in' });
     mockedKeyStore.getPubky.mockReturnValue(OWNER);
