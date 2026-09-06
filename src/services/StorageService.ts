@@ -675,6 +675,61 @@ export const StorageService = {
     return (result.rows ?? []).map(rowToLink);
   },
 
+  async upsertArchivedLink(link: LinkRecord): Promise<void> {
+    await ownedWrite(link.ownerPubky, db => {
+      db.executeSync(
+        `INSERT INTO links_archive
+          (owner_pubky, peer_pubky, role, status, snapshot,
+           remote_noise_public_key, local_receiver_path, remote_receiver_path,
+           consecutive_failures, last_seen_peer_marker_pk, archived_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(owner_pubky, peer_pubky) DO UPDATE SET
+           role                    = excluded.role,
+           status                  = excluded.status,
+           snapshot                = excluded.snapshot,
+           remote_noise_public_key = excluded.remote_noise_public_key,
+           local_receiver_path     = excluded.local_receiver_path,
+           remote_receiver_path    = excluded.remote_receiver_path,
+           consecutive_failures    = excluded.consecutive_failures,
+           last_seen_peer_marker_pk = excluded.last_seen_peer_marker_pk,
+           archived_at             = excluded.archived_at`,
+        [
+          link.ownerPubky,
+          link.peerPubky,
+          link.role,
+          'superseded',
+          link.snapshot,
+          link.remoteNoisePublicKey,
+          link.localReceiverPath,
+          link.remoteReceiverPath,
+          link.consecutiveFailures,
+          link.lastSeenPeerMarkerPk ?? null,
+          now(),
+        ],
+      );
+    });
+  },
+
+  async getArchivedLink(ownerPubky: PubkyKey, peerPubky: PubkyKey): Promise<LinkRecord | null> {
+    const db = await getDb();
+    const result = db.executeSync(
+      'SELECT * FROM links_archive WHERE owner_pubky = ? AND peer_pubky = ?',
+      [ownerPubky, peerPubky],
+    );
+    const row = result.rows?.[0];
+    if (!row) return null;
+    return rowToLink({ ...row, updated_at: row.archived_at });
+  },
+
+  async deleteArchivedLink(ownerPubky: PubkyKey, peerPubky: PubkyKey): Promise<void> {
+    await ownedWrite(ownerPubky, db => {
+      db.executeSync('DELETE FROM links_archive WHERE owner_pubky = ? AND peer_pubky = ?', [
+        ownerPubky,
+        peerPubky,
+      ]);
+    });
+  },
+
   /**
    * Handshaking links the periodic stepper is allowed to advance right now,
    * oldest schedule first. Bounded like {@link dequeue} so one tick cannot fan
@@ -1480,6 +1535,7 @@ export const StorageService = {
       db.executeSync('DELETE FROM link_messages WHERE owner_pubky = ?', [ownerPubky]);
       db.executeSync('DELETE FROM link_read_cursors WHERE owner_pubky = ?', [ownerPubky]);
       db.executeSync('DELETE FROM links WHERE owner_pubky = ?', [ownerPubky]);
+      db.executeSync('DELETE FROM links_archive WHERE owner_pubky = ?', [ownerPubky]);
       db.executeSync('DELETE FROM link_handshake_budgets WHERE owner_pubky = ?', [ownerPubky]);
       db.executeSync('DELETE FROM link_receivers WHERE owner_pubky = ?', [ownerPubky]);
       db.executeSync('DELETE FROM message_requests WHERE owner_pubky = ?', [ownerPubky]);

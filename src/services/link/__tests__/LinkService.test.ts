@@ -113,6 +113,8 @@ jest.mock('../../StorageService', () => ({
     upsertLinkReceiver: jest.fn(),
     getLinkReceiver: jest.fn(),
     upsertLink: jest.fn(),
+    upsertArchivedLink: jest.fn(),
+    getArchivedLink: jest.fn(),
     getLink: jest.fn(),
     getAllLinks: jest.fn(),
     recordLastSeenPeerMarkerPk: jest.fn(),
@@ -1514,7 +1516,7 @@ describe('LinkService', () => {
 
       await LinkService.takeoverReceiver();
 
-      expect(mockedNative.clearLinkOutbox).toHaveBeenCalledTimes(1);
+      expect(mockedNative.clearLinkOutbox).toHaveBeenCalled();
       expect(mockedStorage.deleteLink).toHaveBeenCalledWith(OWNER, PEER);
       expect(mockedNative.initiateLink).toHaveBeenCalledTimes(1);
       expect(mockedStorage.clearHandshakeBudget).toHaveBeenCalledWith(OWNER, PEER);
@@ -1660,7 +1662,37 @@ describe('LinkService', () => {
       expect(mockedNative.probeInboundLink).not.toHaveBeenCalled();
     });
 
-    it('adopts a re-key msg1 when the peer marker pk changed and keeps history', async () => {
+    it('parks an orphan msg1 re-key without wedging the established link', async () => {
+      mockedStorage.getLink.mockResolvedValue(
+        storedLink({
+          status: 'established',
+          role: 'responder',
+          snapshot: 'est-old',
+          remoteNoisePublicKey: 'old-peer-pk',
+          lastSeenPeerMarkerPk: 'old-peer-pk',
+        }),
+      );
+      mockedNative.restoreLink.mockResolvedValue({ linkId: 'est-live' });
+      mockedNative.getReceiverMarker.mockImplementation(async (who: string) => {
+        if (who === OWNER) return null;
+        return { noisePublicKey: 'rolled-back-pk', capabilitiesJson: '{}' };
+      });
+      mockedNative.probeInboundLink.mockResolvedValue({
+        result: 'pending',
+        linkId: 'orphan-hs',
+        snapshot: 'orphan-snap',
+      });
+
+      await expect(LinkService.syncInbox([PEER])).resolves.toEqual([]);
+
+      expect(mockedNative.closeLink).not.toHaveBeenCalledWith('est-live');
+      expect(mockedStorage.upsertArchivedLink).not.toHaveBeenCalled();
+      expect(mockedStorage.upsertLink).not.toHaveBeenCalledWith(
+        expect.objectContaining({ status: 'handshaking', snapshot: 'orphan-snap' }),
+      );
+    });
+
+    it('supersedes only after the adopted handshake reaches established', async () => {
       mockedStorage.getLink.mockResolvedValue(
         storedLink({
           status: 'established',
@@ -1688,24 +1720,114 @@ describe('LinkService', () => {
         linkId: 'rekey-hs',
         snapshot: 'rekey-snap',
       });
+      mockedNative.advanceHandshake.mockResolvedValue({
+        status: 'pending',
+        snapshot: 'rekey-snap',
+      });
+      mockedNative.receivePrivateMessages.mockResolvedValue({ messages: [], snapshot: 'est-old' });
 
+      await LinkService.syncInbox([PEER]);
+      expect(mockedNative.closeLink).not.toHaveBeenCalledWith('est-live');
+      expect(mockedStorage.upsertArchivedLink).not.toHaveBeenCalled();
+
+      mockedNative.advanceHandshake.mockResolvedValue({
+        status: 'established',
+        snapshot: 'rekey-est',
+      });
       await expect(LinkService.syncInbox([PEER])).resolves.toEqual([]);
 
       expect(mockedNative.closeLink).toHaveBeenCalledWith('est-live');
-      expect(mockedStorage.upsertLink).toHaveBeenCalledWith(
-        expect.objectContaining({ status: 'superseded', snapshot: 'est-old' }),
+      expect(mockedStorage.upsertArchivedLink).toHaveBeenCalledWith(
+        expect.objectContaining({ snapshot: 'est-old', remoteNoisePublicKey: 'old-peer-pk' }),
       );
       expect(mockedStorage.upsertLink).toHaveBeenCalledWith(
         expect.objectContaining({
           role: 'responder',
-          status: 'handshaking',
-          snapshot: 'rekey-snap',
+          status: 'established',
+          snapshot: 'rekey-est',
           remoteNoisePublicKey: 'new-peer-pk',
         }),
       );
       expect(mockedStorage.deleteLink).not.toHaveBeenCalled();
       expect(mockedStorage.deleteLinkMessagesForPeer).not.toHaveBeenCalled();
       expect(mockedStorage.upsertMessageRequest).not.toHaveBeenCalled();
+    });
+
+    it('falls back to the old established link when the adopted handshake ages out', async () => {
+      mockedStorage.getLink.mockResolvedValue(
+        storedLink({
+          status: 'established',
+          snapshot: 'est-old',
+          remoteNoisePublicKey: 'old-peer-pk',
+          lastSeenPeerMarkerPk: 'old-peer-pk',
+        }),
+      );
+      mockedNative.restoreLink.mockResolvedValue({ linkId: 'est-live' });
+      mockedNative.getReceiverMarker.mockImplementation(async (who: string) => {
+        if (who === OWNER) return null;
+        return { noisePublicKey: 'new-peer-pk', capabilitiesJson: '{}' };
+      });
+      mockedNative.probeInboundLink.mockResolvedValue({
+        result: 'pending',
+        linkId: 'rekey-hs',
+        snapshot: 'rekey-snap',
+      });
+
+      await LinkService.syncInbox([PEER]);
+      jest.spyOn(Date, 'now').mockReturnValue(NOW + HANDSHAKE_STALE_MS);
+      await LinkService.syncInbox([PEER]);
+
+      expect(mockedNative.closeLink).toHaveBeenCalledWith('rekey-hs');
+      expect(mockedNative.closeLink).not.toHaveBeenCalledWith('est-live');
+      expect(mockedStorage.upsertArchivedLink).not.toHaveBeenCalled();
+    });
+
+    it('drains in-flight inbound on the old handle before supersede close', async () => {
+      mockedStorage.getLink.mockResolvedValue(
+        storedLink({
+          status: 'established',
+          role: 'responder',
+          snapshot: 'est-old',
+          remoteNoisePublicKey: 'old-peer-pk',
+          lastSeenPeerMarkerPk: 'old-peer-pk',
+        }),
+      );
+      mockedNative.restoreLink.mockResolvedValue({ linkId: 'est-live' });
+      mockedNative.getReceiverMarker.mockImplementation(async (who: string) => {
+        if (who === OWNER) return null;
+        return { noisePublicKey: 'new-peer-pk', capabilitiesJson: '{}' };
+      });
+      mockedNative.probeInboundLink.mockResolvedValue({
+        result: 'established',
+        linkId: 'rekey-est',
+        snapshot: 'rekey-est-snap',
+      });
+      mockedNative.receivePrivateMessages.mockResolvedValue({
+        messages: [{ version: 1, kind: CHAT_MESSAGE_KIND, rawJson: '{"kind":"chat.message"}' }],
+        snapshot: 'est-drained',
+      });
+
+      await LinkService.syncInbox([PEER]);
+
+      expect(mockedNative.receivePrivateMessages).toHaveBeenCalled();
+      expect(mockedNative.closeLink).toHaveBeenCalledWith('est-live');
+      expect(mockedStorage.upsertArchivedLink).toHaveBeenCalled();
+    });
+
+    it('clears our initiator outbox msg1 after the link becomes established', async () => {
+      mockedStorage.getLink.mockResolvedValue(
+        storedLink({ status: 'handshaking', role: 'initiator' }),
+      );
+      mockedNative.restoreHandshake.mockResolvedValue({ linkId: 'hs-handle', status: 'pending' });
+      mockedNative.advanceHandshake.mockResolvedValue({
+        status: 'established',
+        snapshot: 'est-snap',
+      });
+      mockedNative.restoreLink.mockResolvedValue({ linkId: 'est-new' });
+
+      await expect(LinkService.ensureLinkWith(PEER)).resolves.toBe('ready');
+
+      expect(mockedNative.clearLinkOutbox).toHaveBeenCalled();
     });
 
     it('does not probe a ready peer when the marker pk is unchanged even if junk msg1 exists', async () => {

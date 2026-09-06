@@ -274,6 +274,15 @@ let drainInFlight: Promise<void> | null = null;
 const inboxSyncListeners = new Set<(ownerPubky: PubkyKey) => void>();
 const handshakeWatch = new Map<string, { polls: number; firstAt: number; snapshot: string }>();
 const peerMarkerRefreshedAt = new Map<string, number>();
+type PendingEstablishedRekey = {
+  handshakeLinkId: string;
+  snapshot: string;
+  marker: ReceiverMarker;
+  localPath: string;
+  startedAt: number;
+  predecessor: LinkRecord;
+};
+const pendingEstablishedRekeys = new Map<string, PendingEstablishedRekey>();
 let inboxOwnMarkerSyncedFor: PubkyKey | null = null;
 let inboxOwnMarkerSyncedAt = 0;
 /** In-flight enable / persistThenAdopt / Connect generations. */
@@ -1281,6 +1290,7 @@ export function resetLinkServiceHarnessState(): void {
   peerQueueGenerations.clear();
   handshakeWatch.clear();
   peerMarkerRefreshedAt.clear();
+  pendingEstablishedRekeys.clear();
   inboxOwnMarkerSyncedFor = null;
   inboxOwnMarkerSyncedAt = 0;
   bootReconcileDone = false;
@@ -1988,10 +1998,8 @@ function markPeerMarkerRefreshed(ownerPubky: PubkyKey, peerPubky: PubkyKey): voi
 }
 
 /**
- * Responder re-key: an established link is kept unless a fresh GET shows the
- * peer's published marker pk changed AND a new msg1 decrypts under our current
- * receiver secret against that new pk. Junk / undecryptable msg1 leaves the
- * established link in place (an attacker cannot force a drop).
+ * Responder re-key (two-phase): keep the established handle until the new
+ * handshake reaches `established` (msg3) or first successful inbound decrypt.
  */
 async function maybeAdoptEstablishedRekey(
   activeSession: ActiveSession,
@@ -2003,18 +2011,31 @@ async function maybeAdoptEstablishedRekey(
   expectedOwner: PubkyKey,
   expectedQueueGen: number,
 ): Promise<EnsureOutcome | null> {
+  const advanced = await advancePendingEstablishedRekey(
+    activeSession,
+    receiver,
+    stored,
+    ownerPubky,
+    peerPubky,
+    expectedOwner,
+    expectedQueueGen,
+  );
+  if (advanced !== undefined) return advanced;
+
   if (!peerMarkerRefreshDue(ownerPubky, peerPubky)) return null;
 
+  if (!(await inboundStillAllowed(ownerPubky, peerPubky, expectedOwner))) return null;
+  abortIfOwnerChanged(expectedOwner);
+
+  markPeerMarkerRefreshed(ownerPubky, peerPubky);
   let marker: ReceiverMarker | null | undefined;
   try {
     marker = await PaykitLinkNative.getReceiverMarker(peerPubky, localPath);
     abortIfOwnerChanged(expectedOwner);
   } catch (err) {
     if (err instanceof LinkSendError && err.code === 'owner-changed') throw err;
-    markPeerMarkerRefreshed(ownerPubky, peerPubky);
     return null;
   }
-  markPeerMarkerRefreshed(ownerPubky, peerPubky);
   if (!marker) return null;
 
   const recorded = recordedEstablishedPeerPk(stored);
@@ -2024,13 +2045,13 @@ async function maybeAdoptEstablishedRekey(
   }
 
   if (!(await inboundStillAllowed(ownerPubky, peerPubky, expectedOwner))) return null;
+  abortIfOwnerChanged(expectedOwner);
 
   let inbound: Extract<LinkProbeResult, { result: 'pending' | 'established' }> | null;
   try {
     inbound = await probeInbound(activeSession, receiver, ownerPubky, peerPubky, marker, localPath);
     abortIfOwnerChanged(expectedOwner);
   } catch (err) {
-    // Protocol/decrypt failure of the new msg1 must not wipe the ready link.
     if (isLinkNativeError(err) && err.code === 'protocol') return null;
     throw err;
   }
@@ -2039,8 +2060,133 @@ async function maybeAdoptEstablishedRekey(
     await closeQuietly(inbound.linkId);
     return null;
   }
+  if (!(await inboundStillAllowed(ownerPubky, peerPubky, expectedOwner))) {
+    await closeQuietly(inbound.linkId);
+    return null;
+  }
+  abortIfOwnerChanged(expectedOwner);
 
-  await archiveEstablishedLink(stored, expectedOwner);
+  if (inbound.result === 'established') {
+    return commitEstablishedRekey(
+      activeSession,
+      receiver,
+      stored,
+      ownerPubky,
+      peerPubky,
+      marker,
+      localPath,
+      inbound,
+      expectedOwner,
+      expectedQueueGen,
+    );
+  }
+
+  pendingEstablishedRekeys.set(linkKey(ownerPubky, peerPubky), {
+    handshakeLinkId: inbound.linkId,
+    snapshot: inbound.snapshot,
+    marker,
+    localPath,
+    startedAt: Date.now(),
+    predecessor: stored,
+  });
+  return null;
+}
+
+async function advancePendingEstablishedRekey(
+  activeSession: ActiveSession,
+  receiver: LinkReceiver,
+  stored: LinkRecord,
+  ownerPubky: PubkyKey,
+  peerPubky: PubkyKey,
+  expectedOwner: PubkyKey,
+  expectedQueueGen: number,
+): Promise<EnsureOutcome | null | undefined> {
+  const key = linkKey(ownerPubky, peerPubky);
+  const pending = pendingEstablishedRekeys.get(key);
+  if (!pending) return undefined;
+
+  if (Date.now() - pending.startedAt >= HANDSHAKE_STALE_MS) {
+    await closeQuietly(pending.handshakeLinkId);
+    pendingEstablishedRekeys.delete(key);
+    return null;
+  }
+  if (queueGenerationChanged(ownerPubky, peerPubky, expectedQueueGen)) {
+    await closeQuietly(pending.handshakeLinkId);
+    pendingEstablishedRekeys.delete(key);
+    return null;
+  }
+  if (!(await inboundStillAllowed(ownerPubky, peerPubky, expectedOwner))) {
+    await closeQuietly(pending.handshakeLinkId);
+    pendingEstablishedRekeys.delete(key);
+    return null;
+  }
+  abortIfOwnerChanged(expectedOwner);
+
+  try {
+    const result = await PaykitLinkNative.advanceHandshake(pending.handshakeLinkId);
+    abortIfOwnerChanged(expectedOwner);
+    if (result.status === 'established') {
+      pendingEstablishedRekeys.delete(key);
+      return commitEstablishedRekey(
+        activeSession,
+        receiver,
+        stored,
+        ownerPubky,
+        peerPubky,
+        pending.marker,
+        pending.localPath,
+        { result: 'established', linkId: pending.handshakeLinkId, snapshot: result.snapshot },
+        expectedOwner,
+        expectedQueueGen,
+      );
+    }
+    pending.snapshot = result.snapshot;
+    pendingEstablishedRekeys.set(key, pending);
+    return null;
+  } catch (err) {
+    if (err instanceof LinkSendError && err.code === 'owner-changed') throw err;
+    await closeQuietly(pending.handshakeLinkId);
+    pendingEstablishedRekeys.delete(key);
+    return null;
+  }
+}
+
+async function drainEstablishedBestEffort(
+  ownerPubky: PubkyKey,
+  peerPubky: PubkyKey,
+  expectedQueueGen: number,
+): Promise<void> {
+  try {
+    await persistInboundWithoutRouting(ownerPubky, peerPubky, expectedQueueGen);
+  } catch {
+    // Best-effort drain; close still proceeds.
+  }
+}
+
+async function commitEstablishedRekey(
+  _activeSession: ActiveSession,
+  _receiver: LinkReceiver,
+  stored: LinkRecord,
+  ownerPubky: PubkyKey,
+  peerPubky: PubkyKey,
+  marker: ReceiverMarker,
+  localPath: string,
+  inbound: Extract<LinkProbeResult, { result: 'established' }>,
+  expectedOwner: PubkyKey,
+  expectedQueueGen: number,
+): Promise<EnsureOutcome> {
+  abortIfOwnerChanged(expectedOwner);
+  await drainEstablishedBestEffort(ownerPubky, peerPubky, expectedQueueGen);
+  abortIfOwnerChanged(expectedOwner);
+  const latest = (await StorageService.getLink(ownerPubky, peerPubky)) ?? stored;
+  await StorageService.upsertArchivedLink(latest);
+  const key = linkKey(ownerPubky, peerPubky);
+  const live = liveHandles.get(key);
+  if (live && live.linkId !== inbound.linkId) {
+    await closeQuietly(live.linkId);
+    liveHandles.delete(key);
+  }
+  pendingEstablishedRekeys.delete(key);
   abortIfOwnerChanged(expectedOwner);
   if (queueGenerationChanged(ownerPubky, peerPubky, expectedQueueGen)) {
     await closeQuietly(inbound.linkId);
@@ -2055,29 +2201,6 @@ async function maybeAdoptEstablishedRekey(
     expectedOwner,
     expectedQueueGen,
   );
-}
-
-async function archiveEstablishedLink(stored: LinkRecord, expectedOwner: PubkyKey): Promise<void> {
-  abortIfOwnerChanged(expectedOwner);
-  const key = linkKey(stored.ownerPubky, stored.peerPubky);
-  const live = liveHandles.get(key);
-  if (live) {
-    await closeQuietly(live.linkId);
-    liveHandles.delete(key);
-  }
-  abortIfOwnerChanged(expectedOwner);
-  await StorageService.upsertLink({
-    ownerPubky: stored.ownerPubky,
-    peerPubky: stored.peerPubky,
-    role: stored.role,
-    status: 'superseded',
-    snapshot: stored.snapshot,
-    remoteNoisePublicKey: stored.remoteNoisePublicKey,
-    localReceiverPath: stored.localReceiverPath,
-    remoteReceiverPath: stored.remoteReceiverPath,
-    consecutiveFailures: stored.consecutiveFailures,
-    lastSeenPeerMarkerPk: stored.lastSeenPeerMarkerPk ?? stored.remoteNoisePublicKey,
-  });
 }
 
 async function restoreEstablished(
@@ -2503,12 +2626,18 @@ async function completeEstablished(
     liveHandles.set(key, { status: 'established', linkId });
   } catch (err) {
     if (err instanceof LinkSendError && err.code === 'owner-changed') throw err;
-    // The handshake handle is already closed and the row already says
-    // `established`. Keeping the stale handshaking handle would let a later
-    // step drive a dead linkId; the caller re-reads the row and treats this
-    // as an established-link restore failure.
     liveHandles.delete(key);
     throw err;
+  }
+  if (role === 'initiator') {
+    await clearPeerOutboxBestEffort(
+      activeSession,
+      receiver,
+      peerPubky,
+      remoteNoisePublicKey,
+      localPath,
+      remotePath,
+    );
   }
   return 'ready';
 }
@@ -2912,6 +3041,11 @@ async function maybeRecoverInitiatorMarkerRotation(
 async function wipeLinkState(stored: LinkRecord, expectedOwner: PubkyKey): Promise<void> {
   abortIfOwnerChanged(expectedOwner);
   const key = linkKey(stored.ownerPubky, stored.peerPubky);
+  const pending = pendingEstablishedRekeys.get(key);
+  if (pending) {
+    await closeQuietly(pending.handshakeLinkId);
+    pendingEstablishedRekeys.delete(key);
+  }
   const live = liveHandles.get(key);
   if (live) {
     await closeQuietly(live.linkId);
@@ -4053,6 +4187,7 @@ async function commitSignOutWipe(input: {
   inboxOwnMarkerSyncedFor = null;
   inboxOwnMarkerSyncedAt = 0;
   peerMarkerRefreshedAt.clear();
+  pendingEstablishedRekeys.clear();
   const ownerPrefix = `${input.owner}:`;
   for (const key of [...liveHandles.keys()]) {
     if (key.startsWith(ownerPrefix)) liveHandles.delete(key);

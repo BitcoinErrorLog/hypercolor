@@ -152,6 +152,27 @@ export const SCHEMA_V18_STATEMENTS: readonly string[] = [
 ];
 
 /**
+ * Schema v19 — durable predecessor snapshot for two-phase established re-key.
+ * Live `(owner, peer)` stays established until the new handshake completes.
+ */
+export const SCHEMA_V19_STATEMENTS: readonly string[] = [
+  `CREATE TABLE IF NOT EXISTS links_archive (
+    owner_pubky              TEXT    NOT NULL,
+    peer_pubky               TEXT    NOT NULL,
+    role                     TEXT    NOT NULL,
+    status                   TEXT    NOT NULL,
+    snapshot                 TEXT    NOT NULL,
+    remote_noise_public_key  TEXT    NOT NULL DEFAULT '',
+    local_receiver_path      TEXT    NOT NULL DEFAULT '',
+    remote_receiver_path     TEXT    NOT NULL DEFAULT '',
+    consecutive_failures     INTEGER NOT NULL DEFAULT 0,
+    last_seen_peer_marker_pk TEXT,
+    archived_at              INTEGER NOT NULL,
+    PRIMARY KEY (owner_pubky, peer_pubky)
+  )`,
+];
+
+/**
  * Schema v15 — move the handshake advance budget off the `links` row.
  *
  * v14 put `pending_advances` / `next_advance_at` on `links`, which is deleted
