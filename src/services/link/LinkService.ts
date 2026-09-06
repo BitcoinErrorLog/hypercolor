@@ -280,7 +280,6 @@ type PendingEstablishedRekey = {
   marker: ReceiverMarker;
   localPath: string;
   startedAt: number;
-  predecessor: LinkRecord;
 };
 const pendingEstablishedRekeys = new Map<string, PendingEstablishedRekey>();
 let inboxOwnMarkerSyncedFor: PubkyKey | null = null;
@@ -2087,7 +2086,6 @@ async function maybeAdoptEstablishedRekey(
     marker,
     localPath,
     startedAt: Date.now(),
-    predecessor: stored,
   });
   return null;
 }
@@ -2629,16 +2627,12 @@ async function completeEstablished(
     liveHandles.delete(key);
     throw err;
   }
-  if (role === 'initiator') {
-    await clearPeerOutboxBestEffort(
-      activeSession,
-      receiver,
-      peerPubky,
-      remoteNoisePublicKey,
-      localPath,
-      remotePath,
-    );
-  }
+  // Do not clearLinkOutbox here. That primitive deletes every slot on our
+  // write path, including unconsumed msg3 (Noise XX: initiator is Complete
+  // the instant msg3 is PUT; the responder still has to read it) and any
+  // unread transport slots. There is no protocol ack that msg1 was consumed,
+  // so a slot-scoped delete is also unsafe until paykit grows one. Orphan
+  // msg1 stays as garbage; see docs/DECISIONS.md (P1-1 backlog).
   return 'ready';
 }
 
@@ -3068,6 +3062,7 @@ async function wipeLinkState(stored: LinkRecord, expectedOwner: PubkyKey): Promi
     }
   }
   abortIfOwnerChanged(expectedOwner);
+  await StorageService.deleteArchivedLink(stored.ownerPubky, stored.peerPubky);
   await StorageService.deleteLink(stored.ownerPubky, stored.peerPubky);
 }
 

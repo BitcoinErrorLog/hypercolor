@@ -100,6 +100,7 @@ jest.mock('../../StorageService', () => ({
     incrementLinkConsecutiveFailures: jest.fn(),
     resetLinkConsecutiveFailures: jest.fn(),
     deleteLink: jest.fn(),
+    deleteArchivedLink: jest.fn(),
     saveLinkMessage: jest.fn(),
     persistLinkSendIntent: jest.fn(),
     finalizeLinkSend: jest.fn(),

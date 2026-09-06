@@ -115,6 +115,7 @@ jest.mock('../../StorageService', () => ({
     upsertLink: jest.fn(),
     upsertArchivedLink: jest.fn(),
     getArchivedLink: jest.fn(),
+    deleteArchivedLink: jest.fn(),
     getLink: jest.fn(),
     getAllLinks: jest.fn(),
     recordLastSeenPeerMarkerPk: jest.fn(),
@@ -1814,7 +1815,7 @@ describe('LinkService', () => {
       expect(mockedStorage.upsertArchivedLink).toHaveBeenCalled();
     });
 
-    it('clears our initiator outbox msg1 after the link becomes established', async () => {
+    it('does not clear the initiator outbox (msg3) after the link becomes established', async () => {
       mockedStorage.getLink.mockResolvedValue(
         storedLink({ status: 'handshaking', role: 'initiator' }),
       );
@@ -1827,7 +1828,18 @@ describe('LinkService', () => {
 
       await expect(LinkService.ensureLinkWith(PEER)).resolves.toBe('ready');
 
-      expect(mockedNative.clearLinkOutbox).toHaveBeenCalled();
+      // Noise XX: initiator is Complete the instant msg3 is PUT; the responder
+      // still needs that slot. clearLinkOutbox deletes the whole write path.
+      expect(mockedNative.clearLinkOutbox).not.toHaveBeenCalled();
+    });
+
+    it('deletes the archived predecessor on per-link wipe via decline', async () => {
+      mockedStorage.getLink.mockResolvedValue(storedLink({ status: 'established' }));
+      mockedStorage.deleteArchivedLink.mockResolvedValue(undefined);
+
+      await LinkService.declineMessageRequest(PEER);
+
+      expect(mockedStorage.deleteArchivedLink).toHaveBeenCalledWith(OWNER, PEER);
     });
 
     it('does not probe a ready peer when the marker pk is unchanged even if junk msg1 exists', async () => {
