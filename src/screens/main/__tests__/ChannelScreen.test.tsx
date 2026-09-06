@@ -380,11 +380,38 @@ describe('ChannelScreenContent fan-out labels', () => {
     });
   });
 
-  it('keeps the composer inside KeyboardAvoidingView', async () => {
-    const tree = await render(<ChannelScreenContent {...contentProps()} />);
-    const kav = tree.root.findByProps({ testID: 'channelKeyboardAvoid' });
-    expect(kav.props.behavior).toBe('padding');
-    expect(kav.findByProps({ testID: 'channelComposer' })).toBeTruthy();
+  it('exposes mute and archive without a permanent Copy control on the bubble', async () => {
+    const onToggleMute = jest.fn();
+    const onToggleArchive = jest.fn();
+    const tree = await render(
+      <ChannelScreenContent
+        {...contentProps({
+          onToggleMute,
+          onToggleArchive,
+          channelMuted: false,
+          channelArchived: true,
+        })}
+      />,
+    );
+    expect(tree.root.findByProps({ testID: 'channelMute' }).props.accessibilityLabel).toBe(
+      COPY.muteChat,
+    );
+    expect(tree.root.findByProps({ testID: 'channelArchive' }).props.accessibilityLabel).toBe(
+      COPY.unarchiveChat,
+    );
+    expect(
+      tree.root.findAll(
+        node =>
+          node.props.accessibilityRole === 'button' &&
+          node.props.accessibilityLabel === COPY.copyMessage,
+      ),
+    ).toHaveLength(0);
+    await act(async () => {
+      tree.root.findByProps({ testID: 'channelMute' }).props.onPress();
+      tree.root.findByProps({ testID: 'channelArchive' }).props.onPress();
+    });
+    expect(onToggleMute).toHaveBeenCalledTimes(1);
+    expect(onToggleArchive).toHaveBeenCalledTimes(1);
     await act(async () => {
       tree.unmount();
     });

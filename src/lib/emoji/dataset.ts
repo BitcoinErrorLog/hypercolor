@@ -2,7 +2,16 @@
  * Bundled emoji shortcode table for composer autocomplete and the picker.
  *
  * Source: Unicode CLDR English annotations / emoji names (Unicode, Inc.).
- * License: UNICODE LICENSE V3, https://www.unicode.org/license.txt
+ * UNICODE LICENSE V3 — https://www.unicode.org/license.txt
+ * Copyright © 1991–2025 Unicode, Inc.
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of the Unicode data files and any associated documentation (the "Data Files")
+ * or Unicode software and any associated documentation (the "Software") to deal
+ * in the Data Files or Software without restriction, including without limitation
+ * the rights to use, copy, modify, merge, publish, distribute, and/or sell copies
+ * of the Data Files or Software, and to permit persons to whom the Data Files or
+ * Software are furnished to do so, provided that the Unicode copyright notice and
+ * this permission notice appear with all copies of the Data Files or Software.
  * This file is a small subset of common chat emoji, not a full CLDR dump.
  */
 

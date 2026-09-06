@@ -5,7 +5,11 @@ import * as DocumentPicker from 'expo-document-picker';
 import { v4 as uuidv4 } from 'uuid';
 import type { AttachmentSendTarget } from '../services/attachments/AttachmentService';
 import { AttachmentService } from '../services/attachments/AttachmentService';
-import { writeFileFromStandardBase64 } from '../services/attachments/fileIo';
+import {
+  deleteCacheFiles,
+  gifStagingPath,
+  writeFileFromStandardBase64,
+} from '../services/attachments/fileIo';
 import { fetchGifBytes } from '../services/gif/GifProxyClient';
 import { AttachmentError } from '../types/attachment';
 import { COPY } from '../copy/uxCopy';
@@ -86,8 +90,12 @@ export async function sendGifAttachment(
     }
     return { ok: false, notice: { message: fetched.message } };
   }
-  const b64 = Buffer.from(fetched.bytes).toString('base64');
-  const uri = `file:///tmp/hypercolor-gif-${uuidv4()}.gif`;
-  await writeFileFromStandardBase64(uri, b64);
-  return sendAttachment(target, uri, fetched.contentType);
+  const uri = gifStagingPath(`hypercolor-gif-${uuidv4()}.gif`);
+  try {
+    const b64 = Buffer.from(fetched.bytes).toString('base64');
+    await writeFileFromStandardBase64(uri, b64);
+    return await sendAttachment(target, uri, fetched.contentType);
+  } finally {
+    await deleteCacheFiles([uri]);
+  }
 }

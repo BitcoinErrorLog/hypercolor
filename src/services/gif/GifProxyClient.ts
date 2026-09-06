@@ -93,7 +93,63 @@ export type GifFetchResult =
   | { ok: true; bytes: Uint8Array; contentType: string }
   | { ok: false; reason: 'not-configured' | 'too-large' | 'error'; message: string };
 
-const GIF_MAGIC = [0x47, 0x49, 0x46];
+const GIF_MAGIC = [0x47, 0x49, 0x46]; // GIF
+const GIF_VERSION_87A = [0x38, 0x37, 0x61];
+const GIF_VERSION_89A = [0x38, 0x39, 0x61];
+
+function declaredContentLength(headers: Headers): number | null {
+  const raw = headers.get('content-length');
+  if (raw == null || raw.trim() === '') return null;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0 || !Number.isInteger(n)) return null;
+  return n;
+}
+
+function isGifMagic(buffer: Uint8Array): boolean {
+  if (buffer.byteLength < 6) return false;
+  if (buffer[0] !== GIF_MAGIC[0] || buffer[1] !== GIF_MAGIC[1] || buffer[2] !== GIF_MAGIC[2]) {
+    return false;
+  }
+  const v87 =
+    buffer[3] === GIF_VERSION_87A[0] &&
+    buffer[4] === GIF_VERSION_87A[1] &&
+    buffer[5] === GIF_VERSION_87A[2];
+  const v89 =
+    buffer[3] === GIF_VERSION_89A[0] &&
+    buffer[4] === GIF_VERSION_89A[1] &&
+    buffer[5] === GIF_VERSION_89A[2];
+  return v87 || v89;
+}
+
+async function readBoundedBody(res: Response, maxBytes: number): Promise<Uint8Array | 'too-large'> {
+  const declared = declaredContentLength(res.headers);
+  if (declared !== null && declared > maxBytes) return 'too-large';
+  const reader = res.body?.getReader();
+  if (!reader) {
+    const buffer = new Uint8Array(await res.arrayBuffer());
+    return buffer.byteLength > maxBytes ? 'too-large' : buffer;
+  }
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (!value) continue;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      await reader.cancel();
+      return 'too-large';
+    }
+    chunks.push(value);
+  }
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    out.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return out;
+}
 
 export async function fetchGifBytes(
   id: string,
@@ -109,24 +165,18 @@ export async function fetchGifBytes(
       return { ok: false, reason: 'not-configured', message: 'not configured' };
     if (res.status === 413) return { ok: false, reason: 'too-large', message: 'gif exceeds 8 MiB' };
     if (!res.ok) return { ok: false, reason: 'error', message: `fetch failed (${res.status})` };
-    const buffer = new Uint8Array(await res.arrayBuffer());
-    if (buffer.byteLength > GIF_MAX_BYTES) {
+    const buffer = await readBoundedBody(res, GIF_MAX_BYTES);
+    if (buffer === 'too-large') {
       return { ok: false, reason: 'too-large', message: 'gif exceeds 8 MiB' };
     }
-    if (
-      buffer.byteLength < 6 ||
-      buffer[0] !== GIF_MAGIC[0] ||
-      buffer[1] !== GIF_MAGIC[1] ||
-      buffer[2] !== GIF_MAGIC[2]
-    ) {
+    if (!isGifMagic(buffer)) {
       return { ok: false, reason: 'error', message: 'response is not a GIF' };
     }
-    const contentType = res.headers.get('content-type')?.split(';')[0]?.trim() || 'image/gif';
-    return {
-      ok: true,
-      bytes: buffer,
-      contentType: contentType === 'image/gif' ? contentType : 'image/gif',
-    };
+    const contentType = res.headers.get('content-type')?.split(';')[0]?.trim() ?? '';
+    if (contentType !== 'image/gif') {
+      return { ok: false, reason: 'error', message: 'response is not a GIF' };
+    }
+    return { ok: true, bytes: buffer, contentType: 'image/gif' };
   } catch (err) {
     return {
       ok: false,

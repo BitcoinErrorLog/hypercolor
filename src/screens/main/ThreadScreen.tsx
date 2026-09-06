@@ -14,7 +14,6 @@ import {
   Linking,
   AccessibilityInfo,
   findNodeHandle,
-  Pressable,
   RefreshControl,
   AppState,
   type AppStateStatus,
@@ -788,17 +787,12 @@ export function ThreadScreenContent({
             senderName={identity.title}
             senderPubky={participantPubky}
             accessibilityLabel={item.message.body}
+            copyBody={item.message.body}
           >
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel={COPY.copyMessage}
-              onLongPress={() => copyText(item.message.body)}
-            >
-              <MarkdownText
-                source={item.message.body}
-                color={isMine ? color.textOnBrand : color.textPrimary}
-              />
-            </Pressable>
+            <MarkdownText
+              source={item.message.body}
+              color={isMine ? color.textOnBrand : color.textPrimary}
+            />
             {isMine && item.message.deliveryState === 'failed' && !peerBlocked ? (
               retryableEventIds.has(item.message.eventId) ? (
                 <TouchableOpacity

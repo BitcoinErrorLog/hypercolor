@@ -15,7 +15,6 @@ import {
   BackHandler,
   AccessibilityInfo,
   findNodeHandle,
-  Pressable,
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
@@ -57,7 +56,6 @@ import { peerIdentity } from '../../ui/peerIdentity';
 import { COPY, messageByteCountLabel, publicGraphWarning } from '../../copy/uxCopy';
 import { sanitizeError } from '../../ui/sanitizedError';
 import { useSessionStatusStore } from '../../stores/sessionStatusStore';
-import { copyText } from '../../utils/copyText';
 import {
   applyEmojiAtShortcode,
   matchShortcodeTail,
@@ -123,6 +121,7 @@ export default function ChannelScreen({ route }: Props) {
   const [emojiPickerOpen, setEmojiPickerOpen] = useState(false);
   const [composerNotice, setComposerNotice] = useState<ComposerAttachNotice | null>(null);
   const [retryableEventIds, setRetryableEventIds] = useState<Set<string>>(() => new Set());
+  const [channelPrefs, setChannelPrefs] = useState({ muted: false, archived: false });
 
   const reload = useCallback(async () => {
     const [ch, msgs, mems, atts, outcomes] = await Promise.all([
@@ -165,6 +164,11 @@ export default function ChannelScreen({ route }: Props) {
   useEffect(() => {
     void reload();
   }, [reload]);
+
+  useEffect(() => {
+    if (!ownerPubky) return;
+    void StorageService.getThreadLocalPrefs(ownerPubky, channelId).then(setChannelPrefs);
+  }, [ownerPubky, channelId]);
 
   useEffect(() => {
     if (!ownerPubky) return;
@@ -238,6 +242,20 @@ export default function ChannelScreen({ route }: Props) {
       isAdmin={isAdmin}
       selfActive={selfActive}
       memberCap={PRIVATE_GROUP_MEMBER_CAP}
+      channelMuted={channelPrefs.muted}
+      channelArchived={channelPrefs.archived}
+      onToggleMute={() => {
+        if (!localPubky) return;
+        void StorageService.setThreadLocalPrefs(localPubky, channelId, {
+          muted: !channelPrefs.muted,
+        }).then(() => setChannelPrefs(p => ({ ...p, muted: !p.muted })));
+      }}
+      onToggleArchive={() => {
+        if (!localPubky) return;
+        void StorageService.setThreadLocalPrefs(localPubky, channelId, {
+          archived: !channelPrefs.archived,
+        }).then(() => setChannelPrefs(p => ({ ...p, archived: !p.archived })));
+      }}
       onBack={() => nav.goBack()}
       onChangeDraft={value => setDraft(replaceClosedShortcodes(value))}
       onSend={() => {
@@ -410,6 +428,10 @@ export function ChannelScreenContent({
   onRefreshPublic,
   retryableEventIds,
   onRetryFailed,
+  channelMuted = false,
+  channelArchived = false,
+  onToggleMute,
+  onToggleArchive,
 }: {
   channel: GroupChannel | null;
   messages: GroupMessage[];
@@ -454,6 +476,10 @@ export function ChannelScreenContent({
   onRefreshPublic: () => void;
   retryableEventIds: ReadonlySet<string>;
   onRetryFailed: (eventId: string) => void;
+  channelMuted?: boolean;
+  channelArchived?: boolean;
+  onToggleMute?: () => void;
+  onToggleArchive?: () => void;
 }) {
   const flatListRef = useRef<FlatList<GroupMessage>>(null);
   const plusRef = useRef<View>(null);
@@ -590,6 +616,7 @@ export function ChannelScreenContent({
             grouped={grouped}
             lastInGroup={lastInGroup}
             accessibilityLabel={item.deleted ? 'Message deleted' : item.body}
+            copyBody={item.deleted ? null : item.body}
           >
             {!isMine && (
               <Text style={styles.sender} numberOfLines={1} ellipsizeMode="middle">
@@ -612,16 +639,10 @@ export function ChannelScreenContent({
                 }
               />
             ) : (
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel={COPY.copyMessage}
-                onLongPress={() => copyText(item.deleted ? 'Message deleted' : item.body)}
-              >
-                <MarkdownText
-                  source={item.deleted ? 'Message deleted' : item.body}
-                  color={isMine ? color.textOnBrand : color.textPrimary}
-                />
-              </Pressable>
+              <MarkdownText
+                source={item.deleted ? 'Message deleted' : item.body}
+                color={isMine ? color.textOnBrand : color.textPrimary}
+              />
             )}
             {item.editedAt ? <Text style={styles.time}>edited</Text> : null}
             {isMine && !isPublic && item.deliveryState === 'failed' ? (
@@ -771,6 +792,33 @@ export function ChannelScreenContent({
         >
           {channel ? `${channel.isPublic ? '#' : ''} ${channel.name}` : 'Channel'}
         </Text>
+        {onToggleMute ? (
+          <TouchableOpacity
+            testID="channelMute"
+            accessibilityRole="button"
+            accessibilityLabel={channelMuted ? COPY.unmuteChat : COPY.muteChat}
+            hitSlop={HIT_SLOP_44}
+            onPress={onToggleMute}
+            style={styles.backBtn}
+          >
+            <Icon
+              name={channelMuted ? 'notifications-off-outline' : 'notifications-outline'}
+              tone="secondary"
+            />
+          </TouchableOpacity>
+        ) : null}
+        {onToggleArchive ? (
+          <TouchableOpacity
+            testID="channelArchive"
+            accessibilityRole="button"
+            accessibilityLabel={channelArchived ? COPY.unarchiveChat : COPY.archiveChat}
+            hitSlop={HIT_SLOP_44}
+            onPress={onToggleArchive}
+            style={styles.backBtn}
+          >
+            <Icon name={channelArchived ? 'archive' : 'archive-outline'} tone="secondary" />
+          </TouchableOpacity>
+        ) : null}
         <TouchableOpacity
           accessibilityRole="button"
           accessibilityLabel={showMembers ? 'Chat' : 'Members'}

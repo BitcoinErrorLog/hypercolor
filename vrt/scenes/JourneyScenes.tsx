@@ -174,6 +174,8 @@ function channels(patch: Partial<React.ComponentProps<typeof ChannelsScreenConte
       onConfirmPendingJoin={n}
       onDismissPendingJoin={n}
       onOpenChannel={n}
+      listFilter="inbox"
+      onChangeFilter={n}
       {...patch}
     />
   );
@@ -219,6 +221,10 @@ function channel(patch: Partial<React.ComponentProps<typeof ChannelScreenContent
       onRefreshPublic={n}
       retryableEventIds={new Set()}
       onRetryFailed={n}
+      channelMuted={false}
+      channelArchived={false}
+      onToggleMute={n}
+      onToggleArchive={n}
       {...patch}
     />
   );

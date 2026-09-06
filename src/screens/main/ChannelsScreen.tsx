@@ -31,6 +31,7 @@ import { HIT_SLOP_44 } from '../../ui/hitTarget';
 import { shortPubky } from '../../ui/shortPubky';
 import {
   filterChannelsByMode,
+  filterChannelsByPrefs,
   mayReadPublicGraph,
   mayWritePublicGraph,
   parseChannelMode,
@@ -39,6 +40,7 @@ import {
   type ChannelListItem,
   type ChannelMode,
 } from '../../ui/channelList';
+import type { ChatListFilter } from '../../ui/chatList';
 import { modalAnimationType, useReduceMotion } from '../../ui/reduceMotion';
 import { sanitizeError } from '../../ui/sanitizedError';
 import { color, space, radius, typeRole, measure } from '../../theme';
@@ -65,6 +67,8 @@ export default function ChannelsScreen() {
   const [createPublicDefault, setCreatePublicDefault] = useState(false);
   const [busy, setBusy] = useState(false);
   const [pendingInvite, setPendingInvite] = useState<string | null>(null);
+  const [prefs, setPrefs] = useState<Record<string, { muted: boolean; archived: boolean }>>({});
+  const [listFilter, setListFilter] = useState<ChatListFilter>('inbox');
 
   const reload = useCallback(async () => {
     if (!ownerPubky) {
@@ -72,13 +76,15 @@ export default function ChannelsScreen() {
       setContacts([]);
       return;
     }
-    const [rows, unread, people] = await Promise.all([
+    const [rows, unread, people, threadPrefs] = await Promise.all([
       GroupService.listChannels(),
       StorageService.unreadCountsForGroupChannels(ownerPubky),
       StorageService.getAllContacts(ownerPubky),
+      StorageService.listThreadLocalPrefs(ownerPubky),
     ]);
     setChannels(withUnreadCounts(rows, unread));
     setContacts(people);
+    setPrefs(threadPrefs);
   }, [ownerPubky]);
 
   const refreshPendingInvite = useCallback(() => {
@@ -199,6 +205,9 @@ export default function ChannelsScreen() {
         refreshPendingInvite();
       }}
       onOpenChannel={channelId => nav.navigate('ChannelScreen', { channelId })}
+      prefs={prefs}
+      listFilter={listFilter}
+      onChangeFilter={setListFilter}
     />
   );
 }
@@ -226,6 +235,9 @@ export function ChannelsScreenContent({
   onConfirmPendingJoin,
   onDismissPendingJoin,
   onOpenChannel,
+  prefs = {},
+  listFilter = 'inbox',
+  onChangeFilter,
 }: {
   channels: ChannelListItem[];
   contacts: Contact[];
@@ -249,6 +261,9 @@ export function ChannelsScreenContent({
   onConfirmPendingJoin: () => void;
   onDismissPendingJoin: () => void;
   onOpenChannel: (channelId: string) => void;
+  prefs?: Record<string, { muted: boolean; archived: boolean }>;
+  listFilter?: ChatListFilter;
+  onChangeFilter?: (filter: ChatListFilter) => void;
 }) {
   const reduceMotion = useReduceMotion();
   const [name, setName] = useState('');
@@ -267,8 +282,8 @@ export function ChannelsScreenContent({
   const visible = useMemo(() => {
     const filtered = filterChannelsByMode(channels, mode);
     if (mode === 'public' && !publicListVisible(publicOptIn)) return [];
-    return filtered;
-  }, [channels, mode, publicOptIn]);
+    return filterChannelsByPrefs(filtered, prefs, listFilter);
+  }, [channels, mode, publicOptIn, prefs, listFilter]);
 
   const selectedPubkys = Object.keys(selected).filter(k => selected[k]);
   const animation = modalAnimationType(reduceMotion, 'slide');
@@ -390,6 +405,37 @@ export function ChannelsScreenContent({
           </Text>
         </TouchableOpacity>
       </View>
+
+      {onChangeFilter ? (
+        <View style={styles.filters}>
+          {(['inbox', 'archived', 'muted'] as const).map(filter => (
+            <TouchableOpacity
+              key={filter}
+              testID={`channelsFilter-${filter}`}
+              accessibilityRole="button"
+              accessibilityState={{ selected: listFilter === filter }}
+              accessibilityLabel={
+                filter === 'inbox'
+                  ? COPY.chatsFilterInbox
+                  : filter === 'archived'
+                    ? COPY.chatsFilterArchived
+                    : COPY.chatsFilterMuted
+              }
+              hitSlop={HIT_SLOP_44}
+              onPress={() => onChangeFilter(filter)}
+              style={[styles.filterChip, listFilter === filter && styles.filterChipOn]}
+            >
+              <Text style={styles.filterText}>
+                {filter === 'inbox'
+                  ? COPY.chatsFilterInbox
+                  : filter === 'archived'
+                    ? COPY.chatsFilterArchived
+                    : COPY.chatsFilterMuted}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+      ) : null}
 
       {pendingInvite ? (
         <View testID="channelsPendingInvite" accessibilityRole="alert" style={styles.pendingInvite}>
@@ -661,6 +707,22 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
+  filters: {
+    flexDirection: 'row',
+    gap: space.sm,
+    paddingHorizontal: space.xl,
+    paddingTop: space.sm,
+  },
+  filterChip: {
+    minHeight: measure.hitTarget,
+    paddingHorizontal: space.md,
+    justifyContent: 'center',
+    borderRadius: radius.full,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: color.hairlineStrong,
+  },
+  filterChipOn: { backgroundColor: color.surfaceBrand },
+  filterText: { color: color.textSecondary, fontSize: typeRole.caption.fontSize },
   action: { color: color.brand, fontSize: typeRole.body.fontSize, fontWeight: '600' },
   actionPrimary: { color: color.brandMuted, fontSize: typeRole.body.fontSize, fontWeight: '700' },
   add: { fontSize: typeRole.display.fontSize, color: color.brand, fontWeight: '600' },

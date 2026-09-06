@@ -1,4 +1,7 @@
 import type { GroupChannel } from '../types/group';
+import { filterConversationsByPrefs, type ChatListFilter } from './chatList';
+
+export type { ChatListFilter };
 
 export type ChannelMode = 'private' | 'public';
 
@@ -9,6 +12,18 @@ export function filterChannelsByMode(
   mode: ChannelMode,
 ): ChannelListItem[] {
   return channels.filter(channel => (mode === 'public' ? channel.isPublic : !channel.isPublic));
+}
+
+export function filterChannelsByPrefs(
+  channels: readonly ChannelListItem[],
+  prefs: Record<string, { muted: boolean; archived: boolean }>,
+  filter: ChatListFilter,
+): ChannelListItem[] {
+  return filterConversationsByPrefs(
+    channels.map(channel => ({ ...channel, conversationId: channel.channelId })),
+    prefs,
+    filter,
+  );
 }
 
 /** Public homeserver/index reads are gated until the user opts in. */

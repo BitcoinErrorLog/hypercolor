@@ -76,9 +76,20 @@ export async function writeFileFromStandardBase64(
   });
 }
 
+export function appCacheDirectory(): string {
+  const root = FileSystem.cacheDirectory ?? FileSystem.documentDirectory;
+  if (!root) {
+    throw new Error('no app cache directory');
+  }
+  return root.endsWith('/') ? root : `${root}/`;
+}
+
+export function gifStagingPath(uniqueName: string): string {
+  return `${appCacheDirectory()}hypercolor-gif/${uniqueName}`;
+}
+
 export function attachmentCacheDirectory(ownerPubky: string): string {
-  const root = FileSystem.cacheDirectory ?? FileSystem.documentDirectory ?? 'file:///tmp/';
-  return `${root}hypercolor-attachments/${ownerPubky}/`;
+  return `${appCacheDirectory()}hypercolor-attachments/${ownerPubky}/`;
 }
 
 export function attachmentCachePath(

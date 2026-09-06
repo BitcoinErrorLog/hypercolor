@@ -36,6 +36,7 @@ jest.mock('../../../services/StorageService', () => ({
     listGroupChannels: jest.fn().mockResolvedValue([]),
     unreadCountsForGroupChannels: jest.fn().mockResolvedValue({}),
     getAllContacts: jest.fn().mockResolvedValue([]),
+    listThreadLocalPrefs: jest.fn().mockResolvedValue({}),
   },
 }));
 

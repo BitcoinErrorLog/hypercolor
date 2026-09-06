@@ -1,6 +1,11 @@
 import React from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { color, radius, space, typeRole } from '../../theme';
+import {
+  COPY_MESSAGE_A11Y_ACTION,
+  handleCopyAccessibilityAction,
+  presentMessageCopySheet,
+} from '../messageCopyActions';
 import { Avatar } from './Avatar';
 import { Icon } from './Icon';
 
@@ -17,6 +22,7 @@ export type MessageBubbleProps = {
   senderName?: string | null;
   senderPubky?: string | null;
   accessibilityLabel?: string;
+  copyBody?: string | null;
   testID?: string;
 };
 
@@ -33,8 +39,30 @@ export function MessageBubble({
   senderName = null,
   senderPubky = null,
   accessibilityLabel,
+  copyBody = null,
   testID,
 }: MessageBubbleProps) {
+  const copyEnabled = Boolean(copyBody);
+  const bubbleStyle = [
+    styles.bubble,
+    mine ? styles.mine : styles.theirs,
+    lastInGroup && mine ? styles.mineTail : null,
+    lastInGroup && !mine ? styles.theirsTail : null,
+    grouped ? styles.grouped : null,
+  ];
+  const a11y = {
+    ...(testID ? { testID } : {}),
+    ...(accessibilityLabel ? { accessible: true as const, accessibilityLabel } : {}),
+    ...(copyEnabled
+      ? {
+          accessibilityActions: [COPY_MESSAGE_A11Y_ACTION],
+          onAccessibilityAction: (event: { nativeEvent: { actionName: string } }) =>
+            handleCopyAccessibilityAction(event.nativeEvent.actionName, copyBody ?? ''),
+          onLongPress: () => presentMessageCopySheet(copyBody ?? ''),
+        }
+      : {}),
+  };
+  const Bubble = copyEnabled ? Pressable : View;
   return (
     <View
       style={[
@@ -53,17 +81,7 @@ export function MessageBubble({
       ) : !mine ? (
         <View style={styles.avatarSpacer} />
       ) : null}
-      <View
-        {...(testID ? { testID } : {})}
-        {...(accessibilityLabel ? { accessible: true, accessibilityLabel } : {})}
-        style={[
-          styles.bubble,
-          mine ? styles.mine : styles.theirs,
-          lastInGroup && mine ? styles.mineTail : null,
-          lastInGroup && !mine ? styles.theirsTail : null,
-          grouped ? styles.grouped : null,
-        ]}
-      >
+      <Bubble {...a11y} style={bubbleStyle}>
         {children}
         <View style={styles.meta}>
           <Text style={[styles.time, mine ? styles.mineMeta : styles.theirsMeta]}>{time}</Text>
@@ -81,7 +99,7 @@ export function MessageBubble({
             </>
           ) : null}
         </View>
-      </View>
+      </Bubble>
     </View>
   );
 }

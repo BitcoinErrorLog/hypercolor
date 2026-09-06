@@ -2615,9 +2615,18 @@ export const StorageService = {
     await ownedWrite(ownerPubky, db => {
       db.executeSync(
         `UPDATE group_messages
-       SET body = ?, edited_at = ?, updated_at = ?
+       SET body = ?, body_search = ?, edited_at = ?, updated_at = ?
        WHERE owner_pubky = ? AND channel_id = ? AND sender_pubky = ? AND event_id = ?`,
-        [body, editedAt, now(), ownerPubky, channelId, senderPubky, eventId],
+        [
+          body,
+          normalizeSearchText(body),
+          editedAt,
+          now(),
+          ownerPubky,
+          channelId,
+          senderPubky,
+          eventId,
+        ],
       );
     });
   },
@@ -2631,7 +2640,7 @@ export const StorageService = {
     await ownedWrite(ownerPubky, db => {
       db.executeSync(
         `UPDATE group_messages
-       SET deleted = 1, updated_at = ?
+       SET deleted = 1, body_search = '', updated_at = ?
        WHERE owner_pubky = ? AND channel_id = ? AND sender_pubky = ? AND event_id = ?`,
         [now(), ownerPubky, channelId, senderPubky, eventId],
       );

@@ -441,6 +441,31 @@ describe('GroupService', () => {
     expect(msgs.some(m => m.body === 'hello public' && m.senderPubky === OWNER)).toBe(true);
   });
 
+  it('updates body_search on edit and clears it on tombstone', async () => {
+    const channelId = await createPrivateGroup();
+    await GroupService.sendGroupMessage(channelId, 'secret old body');
+    const stored = await StorageService.listGroupMessages(OWNER, channelId);
+    const chat = stored.find(m => m.kind === GROUP_MESSAGE_KIND);
+    expect(chat).toBeTruthy();
+    const secretHits = await StorageService.searchDecryptedMessages(OWNER, 'secret');
+    expect(secretHits.some(hit => hit.eventId === chat!.eventId)).toBe(true);
+
+    await StorageService.applyGroupMessageEdit(
+      OWNER,
+      channelId,
+      OWNER,
+      chat!.eventId,
+      'revised body',
+      NOW + 1,
+    );
+    expect(await StorageService.searchDecryptedMessages(OWNER, 'secret')).toEqual([]);
+    const revised = await StorageService.searchDecryptedMessages(OWNER, 'revised');
+    expect(revised.some(hit => hit.body === 'revised body')).toBe(true);
+
+    await StorageService.tombstoneGroupMessage(OWNER, channelId, OWNER, chat!.eventId);
+    expect(await StorageService.searchDecryptedMessages(OWNER, 'revised')).toEqual([]);
+  });
+
   it('lists local channels without reading the public homeserver', async () => {
     mockedPubky.get.mockClear();
     mockedPubky.list.mockClear();

@@ -63,4 +63,77 @@ describe('GifProxyClient', () => {
     );
     expect(notGif.ok).toBe(false);
   });
+
+  it('rejects oversized Content-Length before buffering the body', async () => {
+    let read = false;
+    const stub = {
+      status: 200,
+      ok: true,
+      headers: new Headers({
+        'content-type': 'image/gif',
+        'content-length': String(GIF_MAX_BYTES + 1),
+      }),
+      body: {
+        getReader() {
+          read = true;
+          throw new Error('must not read body after oversized Content-Length');
+        },
+      },
+      arrayBuffer: async () => {
+        throw new Error('must not buffer after oversized Content-Length');
+      },
+    } as unknown as Response;
+    const result = await fetchGifBytes('abc', async () => stub);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toBe('too-large');
+    expect(read).toBe(false);
+  });
+
+  it('aborts a body stream that exceeds the cap without Content-Length', async () => {
+    const chunk = new Uint8Array(64 * 1024);
+    const oversize = GIF_MAX_BYTES + 1;
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        let sent = 0;
+        while (sent < oversize) {
+          const n = Math.min(chunk.byteLength, oversize - sent);
+          controller.enqueue(chunk.subarray(0, n));
+          sent += n;
+        }
+        controller.close();
+      },
+    });
+    const result = await fetchGifBytes(
+      'abc',
+      async () =>
+        new Response(stream, {
+          status: 200,
+          headers: { 'content-type': 'image/gif' },
+        }),
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toBe('too-large');
+  });
+
+  it('rejects a GIF prefix that is not 87a or 89a and a non-gif content-type', async () => {
+    const badVersion = await fetchGifBytes(
+      'abc',
+      async () =>
+        new Response(new Uint8Array([0x47, 0x49, 0x46, 0x00, 0x00, 0x00]), {
+          status: 200,
+          headers: { 'content-type': 'image/gif' },
+        }),
+    );
+    expect(badVersion.ok).toBe(false);
+    const gif89a = new Uint8Array([0x47, 0x49, 0x46, 0x38, 0x39, 0x61]);
+    const wrongType = await fetchGifBytes(
+      'abc',
+      async () =>
+        new Response(gif89a, {
+          status: 200,
+          headers: { 'content-type': 'application/octet-stream' },
+        }),
+    );
+    expect(wrongType.ok).toBe(false);
+  });
 });
