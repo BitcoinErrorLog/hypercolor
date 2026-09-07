@@ -126,13 +126,27 @@ export const CHAT_MESSAGE_KIND = 'chat.message.v0';
  */
 export const PUBKY_APP_DM_KIND = 'pubky_app.dm.v0';
 
-/** Reserved kind for delivery/read receipts. No receipt logic exists yet. */
+/** Delivery/read receipts. Opt-in per device; never a transcript row. */
 export const CHAT_RECEIPT_KIND = 'chat.receipt.v0';
 
-/** Reserved kind for message reactions. No reaction logic exists yet. */
+/** Decode alias for reserved DM reactions → `chat.tag.v0` add. */
 export const CHAT_REACTION_KIND = 'chat.reaction.v0';
 
-export type LinkWireKind = typeof CHAT_MESSAGE_KIND | typeof PUBKY_APP_DM_KIND;
+export const CHAT_TAG_KIND = 'chat.tag.v0';
+export const CHAT_TYPING_KIND = 'chat.typing.v0';
+export const CHAT_EDIT_KIND = 'chat.edit.v0';
+export const CHAT_DELETE_KIND = 'chat.delete.v0';
+export const CHAT_PIN_KIND = 'chat.pin.v0';
+
+export type LinkWireKind =
+  | typeof CHAT_MESSAGE_KIND
+  | typeof PUBKY_APP_DM_KIND
+  | typeof CHAT_TAG_KIND
+  | typeof CHAT_RECEIPT_KIND
+  | typeof CHAT_TYPING_KIND
+  | typeof CHAT_EDIT_KIND
+  | typeof CHAT_DELETE_KIND
+  | typeof CHAT_PIN_KIND;
 
 // ─── Chat message envelope ──────────────────────────────────────────────────
 
@@ -396,10 +410,10 @@ export type LinkMessageDirection = 'sent' | 'received';
 
 /**
  * Outbound delivery lifecycle for one message. `delivered` and `read` are
- * driven by the reserved receipt kind and stay unused until receipt logic
- * ships; received messages persist as `delivered` on arrival. `failed` is
- * set when a native send attempt fails or when the retry queue permanently
- * drops an outbound item.
+ * driven by `chat.receipt.v0` and are monotonic (`sent`→`delivered`→`read`).
+ * Received messages persist as `delivered` on arrival. `failed` is set when
+ * a native send attempt fails or when the retry queue permanently drops an
+ * outbound item.
  */
 export type LinkDeliveryState = 'sending' | 'sent' | 'delivered' | 'read' | 'failed';
 

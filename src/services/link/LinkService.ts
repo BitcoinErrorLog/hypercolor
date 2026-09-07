@@ -21,8 +21,12 @@ import {
   buildChatMessageEnvelope,
   buildDmConversationId,
   CHAT_MESSAGE_KIND,
+  CHAT_RECEIPT_KIND,
+  CHAT_REACTION_KIND,
+  CHAT_TAG_KIND,
   coerceReceiverPath,
   decodeLinkEnvelope,
+  parseDmConversationId,
   type LinkMessage,
   type LinkReceiver,
   type LinkRecord,
@@ -35,12 +39,21 @@ import {
 import type { DeliveryQueueItem, PubkyKey } from '../../types';
 import {
   decodeGroupEnvelope,
+  GROUP_MESSAGE_KIND,
+  GROUP_REACTION_KIND,
   isGroupWireKind,
   LINK_GROUP_FANOUT_PAYLOAD_TYPE,
   peekEnvelopeKind,
   type GroupPeerTrust,
 } from '../../types/group';
 import { applyGroupInbound } from '../group/applyGroupInbound';
+import {
+  applyInboundTagOrReceipt,
+  applyLocalTag,
+  buildOutboundReceipt,
+  buildOutboundTag,
+  queueItemForPeer,
+} from './applyChatKinds';
 import { isGroupInboundGated } from '../group/groupInboundGate';
 import { classifyInboundPeer, wotInputFromContact } from './wotGate';
 import {
@@ -771,6 +784,54 @@ export const LinkService = {
     });
   },
 
+  async sendTag(input: {
+    peerPubky: PubkyKey;
+    targetEventId: string;
+    targetAuthorPubky: PubkyKey;
+    label: string;
+    op: 'add' | 'remove';
+    channelId?: string;
+  }): Promise<void> {
+    const owner = requireOwner();
+    const built = buildOutboundTag({
+      targetEventId: input.targetEventId,
+      targetAuthorPubky: input.targetAuthorPubky,
+      label: input.label,
+      op: input.op,
+      ...(input.channelId ? { channelId: input.channelId } : {}),
+    });
+    await applyLocalTag(owner, owner, built.envelope, input.peerPubky);
+    if (input.channelId) {
+      const members = await StorageService.listGroupMembers(owner, input.channelId);
+      const recipients = members
+        .filter(m => m.status === 'active' && m.memberPubky !== owner)
+        .map(m => m.memberPubky);
+      for (const peer of recipients) {
+        const item = queueItemForPeer(
+          owner,
+          peer,
+          built.eventId,
+          built.json,
+          CHAT_TAG_KIND,
+          input.channelId,
+        );
+        await StorageService.persistControlSendIntent({ ownerPubky: owner, queueItem: item });
+        await LinkService.sendPersistedLinkJson({
+          ownerPubky: owner,
+          senderPubky: owner,
+          peerPubky: peer,
+          queueId: item.id,
+          kind: CHAT_TAG_KIND,
+          eventId: built.eventId,
+          rawJson: built.json,
+          channelId: input.channelId,
+        });
+      }
+      return;
+    }
+    await dispatchControlPam(owner, input.peerPubky, built.eventId, built.json, CHAT_TAG_KIND);
+  },
+
   /**
    * Serializes work against the same per-peer queue used for inbound apply
    * and native send. Payment local transitions MUST run inside this.
@@ -1122,6 +1183,32 @@ export const LinkService = {
     const owner = KeyStore.getPubky();
     if (!owner) return;
     await StorageService.setLinkReadCursor(owner, conversationId, readAt);
+    const parsed = parseDmConversationId(conversationId);
+    if (!parsed) return;
+    const msgs =
+      (await StorageService.getLinkMessagesForConversation?.(owner, conversationId, 200)) ?? [];
+    const ids = msgs
+      .filter(row => row.senderPubky !== owner && row.sentAt <= readAt)
+      .map(row => row.eventId);
+    await emitReceiptIfEnabled(owner, parsed.counterpartyPubky, 'read', ids);
+  },
+
+  async markGroupRead(channelId: string, readAt: number = Date.now()): Promise<void> {
+    const owner = KeyStore.getPubky();
+    if (!owner) return;
+    const msgs = await StorageService.listGroupMessages(owner, channelId, 200);
+    const byAuthor = new Map<string, string[]>();
+    for (const row of msgs) {
+      if (row.senderPubky === owner) continue;
+      if (row.kind !== GROUP_MESSAGE_KIND) continue;
+      if (row.sentAt > readAt) continue;
+      const list = byAuthor.get(row.senderPubky) ?? [];
+      list.push(row.eventId);
+      byAuthor.set(row.senderPubky, list);
+    }
+    for (const [author, ids] of byAuthor) {
+      await emitReceiptIfEnabled(owner, author, 'read', ids, channelId);
+    }
   },
 
   /**
@@ -3610,6 +3697,24 @@ async function routeGroupStreamItem(input: {
     receivedAt: item.receivedAt,
     peerTrust,
   });
+  if (envelope.kind === GROUP_REACTION_KIND) {
+    await applyInboundTagOrReceipt({
+      ownerPubky,
+      senderPubky: peerPubky,
+      rawJson: item.rawJson,
+      peerTrust,
+      kindHint: GROUP_REACTION_KIND,
+    });
+  }
+  if (envelope.kind === GROUP_MESSAGE_KIND) {
+    await emitReceiptIfEnabled(
+      ownerPubky,
+      peerPubky,
+      'delivered',
+      [envelope.event_id],
+      envelope.channel_id,
+    );
+  }
   return 'settled';
 }
 
@@ -3808,6 +3913,19 @@ async function routeUnprocessedStreamItems(
       await StorageService.markLinkStreamItemProcessed(item.id);
       continue;
     }
+    if (peeked === CHAT_TAG_KIND || peeked === CHAT_RECEIPT_KIND || peeked === CHAT_REACTION_KIND) {
+      const result = await applyInboundTagOrReceipt({
+        ownerPubky,
+        senderPubky: peerPubky,
+        rawJson: item.rawJson,
+        peerTrust,
+        kindHint: peeked,
+      });
+      if (result === 'processed') {
+        await StorageService.markLinkStreamItemProcessed(item.id);
+      }
+      continue;
+    }
     if (peeked !== null && isGroupWireKind(peeked)) {
       const outcome = await routeGroupStreamItem({
         ownerPubky,
@@ -3851,6 +3969,7 @@ async function routeUnprocessedStreamItems(
     await StorageService.saveLinkMessage(row);
     await StorageService.markLinkStreamItemProcessed(item.id);
     received.push(row);
+    await emitReceiptIfEnabled(ownerPubky, peerPubky, 'delivered', [row.eventId]);
   }
   return received;
 }
@@ -3877,30 +3996,36 @@ async function deliverQueuedPayload(
     // this the same `rawJson` could go out twice.
     if (!(await StorageService.hasQueueItem(item.id))) return;
     if (payload.type === LINK_RETRY_PAYLOAD_TYPE) {
-      const row = await StorageService.getLinkMessage(
-        payload.ownerPubky,
-        payload.senderPubky,
-        payload.kind,
-        payload.eventId,
-      );
-      if (!row) {
-        await RetryQueue.recordSuccess(item.id);
-        return;
-      }
-      if (!isRetryableDeliveryState(row.deliveryState)) {
-        await RetryQueue.recordSuccess(item.id);
-        return;
+      const control = payload.kind === CHAT_TAG_KIND || payload.kind === CHAT_RECEIPT_KIND;
+      if (!control) {
+        const row = await StorageService.getLinkMessage(
+          payload.ownerPubky,
+          payload.senderPubky,
+          payload.kind,
+          payload.eventId,
+        );
+        if (!row) {
+          await RetryQueue.recordSuccess(item.id);
+          return;
+        }
+        if (!isRetryableDeliveryState(row.deliveryState)) {
+          await RetryQueue.recordSuccess(item.id);
+          return;
+        }
       }
     } else {
-      const exists = await StorageService.hasGroupMessage(
-        payload.ownerPubky,
-        payload.channelId,
-        payload.senderPubky,
-        payload.eventId,
-      );
-      if (!exists) {
-        await RetryQueue.recordSuccess(item.id);
-        return;
+      const control = payload.kind === CHAT_TAG_KIND || payload.kind === CHAT_RECEIPT_KIND;
+      if (!control) {
+        const exists = await StorageService.hasGroupMessage(
+          payload.ownerPubky,
+          payload.channelId,
+          payload.senderPubky,
+          payload.eventId,
+        );
+        if (!exists) {
+          await RetryQueue.recordSuccess(item.id);
+          return;
+        }
       }
     }
 
@@ -4244,6 +4369,67 @@ function retryPayload(
     eventId,
     rawJson,
   };
+}
+
+async function dispatchControlPam(
+  ownerPubky: PubkyKey,
+  peerPubky: PubkyKey,
+  eventId: string,
+  rawJson: string,
+  kind: string,
+): Promise<void> {
+  await withQueue(peerPubky, async () => {
+    abortIfOwnerChanged(ownerPubky);
+    let outcome: EnsureOutcome;
+    try {
+      outcome = await ensureLinkLocked(peerPubky, 'user', false, ownerPubky);
+    } catch {
+      outcome = 'handshaking-initiator';
+    }
+    abortIfOwnerChanged(ownerPubky);
+    const item = queueItemForPeer(ownerPubky, peerPubky, eventId, rawJson, kind);
+    if (typeof StorageService.persistControlSendIntent !== 'function') return;
+    await StorageService.persistControlSendIntent({ ownerPubky, queueItem: item });
+    if (outcome !== 'ready') return;
+    try {
+      const handle = requireEstablishedHandle(ownerPubky, peerPubky);
+      const wireJson = await wireJsonForNativeSend(kind, rawJson, ownerPubky, ownerPubky, eventId);
+      const { snapshot } = await PaykitLinkNative.sendPrivateMessageJson(handle, wireJson);
+      await StorageService.finalizeControlSend({
+        ownerPubky,
+        peerPubky,
+        snapshot,
+        queueId: item.id,
+      });
+    } catch (err) {
+      if (err instanceof LinkSendError && err.code === 'owner-changed') throw err;
+    }
+  });
+}
+
+async function emitReceiptIfEnabled(
+  ownerPubky: PubkyKey,
+  peerPubky: PubkyKey,
+  status: 'delivered' | 'read',
+  eventIds: string[],
+  channelId?: string,
+): Promise<void> {
+  if (typeof StorageService.getChatDevicePrefs !== 'function') return;
+  const prefs = await StorageService.getChatDevicePrefs(ownerPubky);
+  if (!prefs?.receiptsEnabled) return;
+  const unique = [...new Set(eventIds.filter(id => id.length > 0))].sort((a, b) =>
+    a < b ? -1 : a > b ? 1 : 0,
+  );
+  if (unique.length === 0) return;
+  for (let i = 0; i < unique.length; i += 16) {
+    const batch = unique.slice(i, i + 16);
+    const built = buildOutboundReceipt({
+      status,
+      eventIds: batch,
+      ...(channelId ? { channelId } : {}),
+    });
+    await dispatchControlPam(ownerPubky, peerPubky, built.eventId, built.json, CHAT_RECEIPT_KIND);
+  }
 }
 
 async function dispatchPreparedDm(input: {

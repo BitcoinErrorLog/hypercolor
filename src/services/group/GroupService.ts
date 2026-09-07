@@ -255,6 +255,18 @@ export const GroupService = {
       targetAuthorPubky,
     });
     notifyGroupEvent(owner, channelId);
+    try {
+      await LinkService.sendTag({
+        peerPubky: owner,
+        targetEventId,
+        targetAuthorPubky,
+        label: emoji,
+        op: 'add',
+        channelId,
+      });
+    } catch {
+      // Invalid labels stay on the legacy reaction row only.
+    }
     return message;
   },
 

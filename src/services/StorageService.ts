@@ -3313,7 +3313,276 @@ export const StorageService = {
     );
     return (result.rows ?? []).map(rowToTipEndpoint);
   },
+
+  async getChatDevicePrefs(ownerPubky: PubkyKey): Promise<{
+    receiptsEnabled: boolean;
+    typingEnabled: boolean;
+  }> {
+    const db = await getDb();
+    const row = db.executeSync(`SELECT * FROM chat_device_prefs WHERE owner_pubky = ?`, [
+      ownerPubky,
+    ]).rows?.[0];
+    if (!row) {
+      return { receiptsEnabled: true, typingEnabled: true };
+    }
+    return {
+      receiptsEnabled: Number(row.receipts_enabled) !== 0,
+      typingEnabled: Number(row.typing_enabled) !== 0,
+    };
+  },
+
+  async setChatReceiptsEnabled(ownerPubky: PubkyKey, enabled: boolean): Promise<void> {
+    await ownedWrite(ownerPubky, db => {
+      const ts = now();
+      db.executeSync(
+        `INSERT INTO chat_device_prefs (owner_pubky, receipts_enabled, typing_enabled, updated_at)
+         VALUES (?, ?, 1, ?)
+         ON CONFLICT(owner_pubky) DO UPDATE SET
+           receipts_enabled = excluded.receipts_enabled,
+           updated_at = excluded.updated_at`,
+        [ownerPubky, enabled ? 1 : 0, ts],
+      );
+    });
+  },
+
+  async upsertChatTag(input: {
+    ownerPubky: PubkyKey;
+    conversationId: string | null;
+    channelId: string | null;
+    targetEventId: string;
+    targetAuthorPubky: PubkyKey;
+    taggerPubky: PubkyKey;
+    label: string;
+    createdAt: number;
+  }): Promise<'inserted' | 'duplicate' | 'cap'> {
+    const scopeKey = input.channelId ?? input.conversationId;
+    if (!scopeKey) return 'cap';
+    let outcome: 'inserted' | 'duplicate' | 'cap' = 'inserted';
+    await ownedTransact(input.ownerPubky, db => {
+      const live = db.executeSync(
+        `SELECT COUNT(*) AS n FROM chat_tags
+         WHERE owner_pubky = ? AND scope_key = ? AND target_author_pubky = ?
+           AND target_event_id = ? AND tagger_pubky = ?`,
+        [
+          input.ownerPubky,
+          scopeKey,
+          input.targetAuthorPubky,
+          input.targetEventId,
+          input.taggerPubky,
+        ],
+      ).rows?.[0];
+      const liveCount = Number(live?.n ?? 0);
+      const exists = db.executeSync(
+        `SELECT 1 FROM chat_tags
+         WHERE owner_pubky = ? AND scope_key = ? AND target_author_pubky = ?
+           AND target_event_id = ? AND tagger_pubky = ? AND label = ?
+         LIMIT 1`,
+        [
+          input.ownerPubky,
+          scopeKey,
+          input.targetAuthorPubky,
+          input.targetEventId,
+          input.taggerPubky,
+          input.label,
+        ],
+      );
+      if ((exists.rows?.length ?? 0) > 0) {
+        outcome = 'duplicate';
+        return;
+      }
+      if (liveCount >= 20) {
+        outcome = 'cap';
+        return;
+      }
+      const minuteAgo = input.createdAt - 60_000;
+      const recent = db.executeSync(
+        `SELECT COUNT(*) AS n FROM chat_tags
+         WHERE owner_pubky = ? AND tagger_pubky = ? AND created_at >= ?`,
+        [input.ownerPubky, input.taggerPubky, minuteAgo],
+      ).rows?.[0];
+      if (Number(recent?.n ?? 0) >= 100) {
+        outcome = 'cap';
+        return;
+      }
+      db.executeSync(
+        `INSERT OR IGNORE INTO chat_tags
+          (owner_pubky, conversation_id, channel_id, scope_key, target_event_id,
+           target_author_pubky, tagger_pubky, label, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          input.ownerPubky,
+          input.conversationId,
+          input.channelId,
+          scopeKey,
+          input.targetEventId,
+          input.targetAuthorPubky,
+          input.taggerPubky,
+          input.label,
+          input.createdAt,
+        ],
+      );
+    });
+    return outcome;
+  },
+
+  async deleteChatTag(input: {
+    ownerPubky: PubkyKey;
+    scopeKey: string;
+    targetEventId: string;
+    targetAuthorPubky: PubkyKey;
+    taggerPubky: PubkyKey;
+    label: string;
+  }): Promise<void> {
+    await ownedWrite(input.ownerPubky, db => {
+      db.executeSync(
+        `DELETE FROM chat_tags
+         WHERE owner_pubky = ? AND scope_key = ? AND target_author_pubky = ?
+           AND target_event_id = ? AND tagger_pubky = ? AND label = ?`,
+        [
+          input.ownerPubky,
+          input.scopeKey,
+          input.targetAuthorPubky,
+          input.targetEventId,
+          input.taggerPubky,
+          input.label,
+        ],
+      );
+    });
+  },
+
+  async listChatTagsForScope(ownerPubky: PubkyKey, scopeKey: string): Promise<ChatTagRow[]> {
+    const db = await getDb();
+    const result = db.executeSync(
+      `SELECT * FROM chat_tags WHERE owner_pubky = ? AND scope_key = ?
+       ORDER BY created_at ASC, label ASC`,
+      [ownerPubky, scopeKey],
+    );
+    return (result.rows ?? []).map(row => rowToChatTag(row));
+  },
+
+  async persistControlSendIntent(input: {
+    ownerPubky: PubkyKey;
+    queueItem: DeliveryQueueItem;
+  }): Promise<void> {
+    await ownedTransact(input.ownerPubky, db => {
+      insertQueueItem(
+        db,
+        bindQueueItemToOwner(input.queueItem, input.ownerPubky),
+        input.ownerPubky,
+      );
+    });
+  },
+
+  async finalizeControlSend(input: {
+    ownerPubky: PubkyKey;
+    peerPubky: PubkyKey;
+    snapshot: string;
+    queueId: string;
+  }): Promise<void> {
+    await ownedTransact(input.ownerPubky, db => {
+      const ts = now();
+      db.executeSync(
+        `UPDATE links
+         SET snapshot = ?, status = 'established', consecutive_failures = 0, updated_at = ?
+         WHERE owner_pubky = ? AND peer_pubky = ?`,
+        [input.snapshot, ts, input.ownerPubky, input.peerPubky],
+      );
+      db.executeSync('DELETE FROM delivery_queue WHERE id = ?', [input.queueId]);
+    });
+  },
+
+  async applyMonotonicDelivery(input: {
+    ownerPubky: PubkyKey;
+    authorPubky: PubkyKey;
+    eventId: string;
+    status: 'delivered' | 'read';
+    channelId?: string;
+  }): Promise<void> {
+    await ownedWrite(input.ownerPubky, db => {
+      const ts = now();
+      if (input.channelId) {
+        const row = db.executeSync(
+          `SELECT delivery_state FROM group_messages
+           WHERE owner_pubky = ? AND channel_id = ? AND sender_pubky = ? AND event_id = ?
+           LIMIT 1`,
+          [input.ownerPubky, input.channelId, input.authorPubky, input.eventId],
+        ).rows?.[0];
+        const next = nextDeliveryState(row ? String(row.delivery_state) : null, input.status);
+        if (!next) return;
+        db.executeSync(
+          `UPDATE group_messages SET delivery_state = ?, updated_at = ?
+           WHERE owner_pubky = ? AND channel_id = ? AND sender_pubky = ? AND event_id = ?`,
+          [next, ts, input.ownerPubky, input.channelId, input.authorPubky, input.eventId],
+        );
+        return;
+      }
+      const row = db.executeSync(
+        `SELECT delivery_state, kind FROM link_messages
+         WHERE owner_pubky = ? AND sender_pubky = ? AND event_id = ?
+         LIMIT 1`,
+        [input.ownerPubky, input.authorPubky, input.eventId],
+      ).rows?.[0];
+      const next = nextDeliveryState(row ? String(row.delivery_state) : null, input.status);
+      if (!next) return;
+      db.executeSync(
+        `UPDATE link_messages SET delivery_state = ?, updated_at = ?
+         WHERE owner_pubky = ? AND sender_pubky = ? AND event_id = ?`,
+        [next, ts, input.ownerPubky, input.authorPubky, input.eventId],
+      );
+    });
+  },
 };
+
+export type ChatTagRow = {
+  ownerPubky: string;
+  conversationId: string | null;
+  channelId: string | null;
+  scopeKey: string;
+  targetEventId: string;
+  targetAuthorPubky: string;
+  taggerPubky: string;
+  label: string;
+  createdAt: number;
+};
+
+function deliveryRank(state: string | null): number {
+  switch (state) {
+    case 'sending':
+      return 0;
+    case 'sent':
+      return 1;
+    case 'delivered':
+      return 2;
+    case 'read':
+      return 3;
+    default:
+      return -1;
+  }
+}
+
+function nextDeliveryState(
+  current: string | null,
+  incoming: 'delivered' | 'read',
+): 'delivered' | 'read' | null {
+  if (current === 'failed') return null;
+  const nextRank = incoming === 'read' ? 3 : 2;
+  if (nextRank <= deliveryRank(current)) return null;
+  return incoming;
+}
+
+function rowToChatTag(row: Record<string, unknown>): ChatTagRow {
+  return {
+    ownerPubky: String(row.owner_pubky),
+    conversationId: row.conversation_id == null ? null : String(row.conversation_id),
+    channelId: row.channel_id == null ? null : String(row.channel_id),
+    scopeKey: String(row.scope_key),
+    targetEventId: String(row.target_event_id),
+    targetAuthorPubky: String(row.target_author_pubky),
+    taggerPubky: String(row.tagger_pubky),
+    label: String(row.label),
+    createdAt: Number(row.created_at),
+  };
+}
 
 // ─── Row mappers ──────────────────────────────────────────────────────────
 

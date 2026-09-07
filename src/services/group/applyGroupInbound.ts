@@ -19,6 +19,8 @@ import {
   type GroupMessage,
   type GroupPeerTrust,
 } from '../../types/group';
+import { CHAT_TAG_KIND } from '../../types/link';
+import { applyDeferredChatTag } from '../link/applyChatKinds';
 import { notifyGroupEvent } from './groupEvents';
 import { isGroupInboundGated } from './groupInboundGate';
 
@@ -409,6 +411,15 @@ async function applyDeferredForTarget(
         );
         continue;
       }
+    }
+    if (ev.kind === CHAT_TAG_KIND) {
+      await applyDeferredChatTag({
+        ownerPubky,
+        senderPubky: ev.senderPubky,
+        rawJson: ev.rawJson,
+      });
+      await StorageService.deleteGroupDeferred(ownerPubky, channelId, ev.senderPubky, ev.eventId);
+      continue;
     }
     await persistDeferredAsHistory(ev);
     if (ev.kind === GROUP_EDIT_KIND) {

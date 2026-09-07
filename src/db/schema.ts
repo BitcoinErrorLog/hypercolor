@@ -211,6 +211,57 @@ export const SCHEMA_V20_STATEMENTS: readonly string[] = [
 ];
 
 /**
+ * Schema v21 — chat.tag.v0 / chat.receipt.v0 device prefs, tags, pins, invites.
+ * Additive only. Frozen v1–v20 are not rewritten. Same DDL as kinds-v1.md.
+ */
+export const SCHEMA_V21_STATEMENTS: readonly string[] = [
+  `CREATE TABLE IF NOT EXISTS chat_device_prefs (
+  owner_pubky TEXT NOT NULL PRIMARY KEY,
+  receipts_enabled INTEGER NOT NULL DEFAULT 1,
+  typing_enabled INTEGER NOT NULL DEFAULT 1,
+  updated_at INTEGER NOT NULL
+)`,
+  `CREATE TABLE IF NOT EXISTS chat_tags (
+  owner_pubky TEXT NOT NULL,
+  conversation_id TEXT,
+  channel_id TEXT,
+  scope_key TEXT NOT NULL,
+  target_event_id TEXT NOT NULL,
+  target_author_pubky TEXT NOT NULL,
+  tagger_pubky TEXT NOT NULL,
+  label TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  CHECK ((channel_id IS NULL) != (conversation_id IS NULL)),
+  PRIMARY KEY (owner_pubky, scope_key, target_author_pubky, target_event_id, tagger_pubky, label)
+)`,
+  `CREATE INDEX IF NOT EXISTS idx_chat_tags_target
+    ON chat_tags(owner_pubky, scope_key, target_author_pubky, target_event_id)`,
+  `CREATE TABLE IF NOT EXISTS chat_pins (
+  owner_pubky TEXT NOT NULL,
+  conversation_id TEXT,
+  channel_id TEXT,
+  scope_key TEXT NOT NULL,
+  target_event_id TEXT NOT NULL,
+  target_author_pubky TEXT NOT NULL,
+  pinned_by TEXT NOT NULL,
+  sent_at INTEGER NOT NULL,
+  event_id TEXT NOT NULL,
+  CHECK ((channel_id IS NULL) != (conversation_id IS NULL)),
+  PRIMARY KEY (owner_pubky, scope_key)
+)`,
+  `CREATE TABLE IF NOT EXISTS chat_group_invites (
+  owner_pubky TEXT NOT NULL,
+  channel_id TEXT NOT NULL,
+  invite_id TEXT NOT NULL,
+  sender_pubky TEXT NOT NULL,
+  name TEXT NOT NULL,
+  expires_at INTEGER NOT NULL,
+  event_id TEXT NOT NULL,
+  PRIMARY KEY (owner_pubky, invite_id)
+)`,
+];
+
+/**
  * Schema v15 — move the handshake advance budget off the `links` row.
  *
  * v14 put `pending_advances` / `next_advance_at` on `links`, which is deleted

@@ -85,6 +85,8 @@ export const GROUP_EDIT_KIND = 'chat.group.edit.v0';
 export const GROUP_DELETE_KIND = 'chat.group.delete.v0';
 export const GROUP_MEMBERSHIP_KIND = 'chat.group.membership.v0';
 export const PUBLIC_CHANNEL_MESSAGE_KIND = 'chat.public.message.v0';
+/** Peek-routed; not in {@link GROUP_WIRE_KINDS}. */
+export const GROUP_INVITE_KIND = 'chat.group.invite.v0';
 
 export const GROUP_WIRE_KINDS = [
   GROUP_MESSAGE_KIND,

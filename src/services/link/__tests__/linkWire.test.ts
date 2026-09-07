@@ -5,6 +5,7 @@ import {
   CHAT_MESSAGE_KIND,
   CHAT_REACTION_KIND,
   CHAT_RECEIPT_KIND,
+  CHAT_TAG_KIND,
   decodeChatMessageEnvelope,
   decodeLinkEnvelope,
   decodePubkyAppDmEnvelope,
@@ -28,6 +29,7 @@ describe('link wire contracts', () => {
       expect(PUBKY_APP_DM_KIND).toBe('pubky_app.dm.v0');
       expect(CHAT_RECEIPT_KIND).toBe('chat.receipt.v0');
       expect(CHAT_REACTION_KIND).toBe('chat.reaction.v0');
+      expect(CHAT_TAG_KIND).toBe('chat.tag.v0');
     });
   });
 
