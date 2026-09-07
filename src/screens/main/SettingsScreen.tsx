@@ -37,6 +37,7 @@ import { copyText } from '../../utils/copyText';
 import { useReduceMotion } from '../../ui/reduceMotion';
 import { scrollSettingsToSection, focusSettingsSection } from '../../ui/settingsSectionFocus';
 import { SettingsScreenContent } from './SettingsScreenContent';
+import { StorageService } from '../../services/StorageService';
 import { color, space, radius, typeRole, measure } from '../../theme';
 
 type Nav = NativeStackNavigationProp<RootStackParamList, 'Settings'>;
@@ -54,6 +55,7 @@ export default function SettingsScreen() {
 
   const [meshEnabled, setMeshEnabled] = useState(() => FeatureFlags.get('mesh_transport'));
   const [telemetryEnabled, setTelemetryEnabled] = useState(() => FeatureFlags.get('telemetry'));
+  const [receiptsEnabled, setReceiptsEnabled] = useState(true);
   const [backupBusy, setBackupBusy] = useState(false);
   const [recoveryCode, setRecoveryCode] = useState<string | null>(null);
   const [recoveryConfirmed, setRecoveryConfirmed] = useState(false);
@@ -72,6 +74,12 @@ export default function SettingsScreen() {
   const paymentsY = useRef(0);
   const reduceMotion = useReduceMotion();
   const markedSection = highlightedSection ?? sectionParam ?? null;
+  useEffect(() => {
+    if (!pubky) return;
+    void StorageService.getChatDevicePrefs(pubky).then(prefs => {
+      setReceiptsEnabled(prefs.receiptsEnabled);
+    });
+  }, [pubky]);
 
   const consumeSectionFocus = useCallback(
     (target: SettingsSectionFocus, y: number, node: View | null) => {
@@ -196,6 +204,7 @@ export default function SettingsScreen() {
       session={session}
       meshEnabled={meshEnabled}
       telemetryEnabled={telemetryEnabled}
+      receiptsEnabled={receiptsEnabled}
       backupBusy={backupBusy}
       recoveryCode={recoveryCode}
       recoveryConfirmed={recoveryConfirmed}
@@ -212,6 +221,11 @@ export default function SettingsScreen() {
       onBack={() => requestLeave()}
       onToggleMesh={toggleMesh}
       onToggleTelemetry={toggleTelemetry}
+      onToggleReceipts={val => {
+        setReceiptsEnabled(val);
+        if (!pubky) return;
+        void StorageService.setChatReceiptsEnabled(pubky, val);
+      }}
       onBackup={() => {
         setBackupBusy(true);
         setRestoreNote(null);

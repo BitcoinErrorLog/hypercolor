@@ -99,7 +99,7 @@ export const THREAD_POPULATED: LinkMessage[] = [
     eventId: 'evt-mine-1',
     direction: 'sent',
     body: 'Reply from the catalog fixture.',
-    deliveryState: 'read',
+    deliveryState: 'sent',
     sentAt: FIXED_NOW_MS - 60_000,
   }),
 ];

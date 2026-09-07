@@ -23,6 +23,16 @@ describe('VRT catalog', () => {
     }
     expect(names.size).toBe(VRT_CATALOG_META.length * 4);
     expect(VRT_CATALOG).toHaveLength(VRT_CATALOG_META.length);
+    const ids = VRT_CATALOG_META.map(item => item.id);
+    expect(ids).toEqual(
+      expect.arrayContaining([
+        'stack.thread.tagged',
+        'stack.thread.tag-picker',
+        'stack.thread.receipt-sent',
+        'stack.thread.receipt-delivered',
+        'stack.thread.receipt-read',
+      ]),
+    );
   });
 
   it('renders the token swatch with vrtSceneReady and every contrast pair', async () => {

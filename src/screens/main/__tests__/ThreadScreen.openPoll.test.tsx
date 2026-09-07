@@ -63,6 +63,7 @@ jest.mock('../../../services/StorageService', () => ({
     getContactNickname: jest.fn().mockResolvedValue(null),
     getThreadLocalPrefs: jest.fn().mockResolvedValue({ muted: false, archived: false }),
     getMessageRequest: jest.fn().mockResolvedValue({ status: 'accepted' }),
+    listChatTagsForScope: jest.fn().mockResolvedValue([]),
   },
 }));
 

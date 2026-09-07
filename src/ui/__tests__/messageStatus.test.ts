@@ -9,6 +9,8 @@ const OUTBOUND_WORDS = new Set([
   COPY.offline,
   COPY.needsEnable,
   COPY.connectionChangedRetry,
+  COPY.delivered,
+  COPY.read,
 ]);
 
 describe('formatDeliveryState', () => {
@@ -17,14 +19,12 @@ describe('formatDeliveryState', () => {
     expect(formatDeliveryState('failed')).toBe(COPY.failed);
   });
 
-  it('never emits delivered or read', () => {
-    expect(formatDeliveryState('delivered')).toBe(COPY.sent);
-    expect(formatDeliveryState('read')).toBe(COPY.sent);
+  it('maps delivered and read to receipt words', () => {
+    expect(formatDeliveryState('delivered')).toBe(COPY.delivered);
+    expect(formatDeliveryState('read')).toBe(COPY.read);
     expect(formatDeliveryState('sent')).toBe(COPY.sent);
     for (const state of ['sending', 'sent', 'failed', 'delivered', 'read', 'unknown']) {
       const label = formatDeliveryState(state);
-      expect(label.toLowerCase()).not.toBe('delivered');
-      expect(label.toLowerCase()).not.toBe('read');
       expect(OUTBOUND_WORDS.has(label)).toBe(true);
     }
   });

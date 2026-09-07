@@ -3,12 +3,21 @@ import { COPY } from '../copy/uxCopy';
 import { copyText } from '../utils/copyText';
 
 export const COPY_MESSAGE_A11Y_ACTION = { name: 'copy' as const, label: COPY.copyMessage };
+export const TAG_MESSAGE_A11Y_ACTION = { name: 'tag' as const, label: COPY.tagMessage };
 
 export function presentMessageCopySheet(body: string): void {
-  Alert.alert(COPY.copyMessage, undefined, [
+  presentMessageActionSheet(body);
+}
+
+export function presentMessageActionSheet(body: string, onTag?: () => void): void {
+  const buttons: Array<{ text: string; style?: 'cancel'; onPress?: () => void }> = [
     { text: COPY.cancel, style: 'cancel' },
-    { text: COPY.copyMessage, onPress: () => copyText(body) },
-  ]);
+  ];
+  if (onTag) {
+    buttons.push({ text: COPY.tagMessage, onPress: onTag });
+  }
+  buttons.push({ text: COPY.copyMessage, onPress: () => copyText(body) });
+  Alert.alert(COPY.copyMessage, undefined, buttons);
 }
 
 export function handleCopyAccessibilityAction(actionName: string, body: string): void {

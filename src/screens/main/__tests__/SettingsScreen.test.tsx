@@ -77,6 +77,13 @@ jest.mock('../../../services/backup/BackupService', () => ({
   },
 }));
 
+jest.mock('../../../services/StorageService', () => ({
+  StorageService: {
+    getChatDevicePrefs: jest.fn().mockResolvedValue({ receiptsEnabled: true, typingEnabled: true }),
+    setChatReceiptsEnabled: jest.fn().mockResolvedValue(undefined),
+  },
+}));
+
 jest.mock('../../../components/TipEndpointsSettings', () => ({
   TipEndpointsSettings: () => null,
 }));

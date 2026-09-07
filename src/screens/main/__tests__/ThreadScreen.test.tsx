@@ -17,6 +17,7 @@ jest.mock('../../../services/link/LinkService', () => ({
   LinkService: {
     hasSession: () => false,
     sendDm: jest.fn(),
+    sendTag: jest.fn(),
     syncInbox: jest.fn(),
     markRead: jest.fn(),
     subscribeInboxSynced: () => () => undefined,
@@ -395,6 +396,49 @@ describe('ThreadScreenContent blocked send', () => {
       } as never);
     });
     expect(scrollToEnd).toHaveBeenCalled();
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('renders tag chips and Delivered/Read status on own bubbles', async () => {
+    const tree = await render(
+      <ThreadScreenContent
+        {...contentProps({
+          linkMessages: [
+            {
+              ownerPubky: OWNER,
+              eventId: 'evt-1',
+              conversationId: `dm:${PEER}`,
+              peerPubky: PEER,
+              senderPubky: OWNER,
+              direction: 'sent',
+              kind: 'chat.message.v0',
+              rawJson: '{}',
+              body: 'hello',
+              sentAt: 1,
+              receivedAt: null,
+              deliveryState: 'delivered',
+            },
+          ],
+          tags: [
+            {
+              ownerPubky: OWNER,
+              conversationId: `dm:${PEER}`,
+              channelId: null,
+              scopeKey: `dm:${PEER}`,
+              targetEventId: 'evt-1',
+              targetAuthorPubky: OWNER,
+              taggerPubky: OWNER,
+              label: 'ok',
+              createdAt: 1,
+            },
+          ],
+        })}
+      />,
+    );
+    expect(JSON.stringify(tree.toJSON())).toContain(COPY.delivered);
+    expect(tree.root.findByProps({ testID: 'tagChip-ok' })).toBeTruthy();
     await act(async () => {
       tree.unmount();
     });

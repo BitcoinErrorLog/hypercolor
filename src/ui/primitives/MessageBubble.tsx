@@ -3,8 +3,9 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { color, radius, space, typeRole } from '../../theme';
 import {
   COPY_MESSAGE_A11Y_ACTION,
+  TAG_MESSAGE_A11Y_ACTION,
   handleCopyAccessibilityAction,
-  presentMessageCopySheet,
+  presentMessageActionSheet,
 } from '../messageCopyActions';
 import { Avatar } from './Avatar';
 import { Icon } from './Icon';
@@ -24,6 +25,8 @@ export type MessageBubbleProps = {
   accessibilityLabel?: string;
   copyBody?: string | null;
   testID?: string;
+  footer?: React.ReactNode;
+  onTag?: () => void;
 };
 
 export function MessageBubble({
@@ -41,6 +44,8 @@ export function MessageBubble({
   accessibilityLabel,
   copyBody = null,
   testID,
+  footer = null,
+  onTag,
 }: MessageBubbleProps) {
   const copyEnabled = Boolean(copyBody);
   const bubbleStyle = [
@@ -55,10 +60,17 @@ export function MessageBubble({
     ...(accessibilityLabel ? { accessible: true as const, accessibilityLabel } : {}),
     ...(copyEnabled
       ? {
-          accessibilityActions: [COPY_MESSAGE_A11Y_ACTION],
-          onAccessibilityAction: (event: { nativeEvent: { actionName: string } }) =>
-            handleCopyAccessibilityAction(event.nativeEvent.actionName, copyBody ?? ''),
-          onLongPress: () => presentMessageCopySheet(copyBody ?? ''),
+          accessibilityActions: onTag
+            ? [COPY_MESSAGE_A11Y_ACTION, TAG_MESSAGE_A11Y_ACTION]
+            : [COPY_MESSAGE_A11Y_ACTION],
+          onAccessibilityAction: (event: { nativeEvent: { actionName: string } }) => {
+            if (event.nativeEvent.actionName === 'tag') {
+              onTag?.();
+              return;
+            }
+            handleCopyAccessibilityAction(event.nativeEvent.actionName, copyBody ?? '');
+          },
+          onLongPress: () => presentMessageActionSheet(copyBody ?? '', onTag),
         }
       : {}),
   };
@@ -99,6 +111,7 @@ export function MessageBubble({
             </>
           ) : null}
         </View>
+        {footer}
       </Bubble>
     </View>
   );

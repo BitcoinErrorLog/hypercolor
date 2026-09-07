@@ -246,6 +246,7 @@ function SettingsVrtBase({
       session={sessionUiModel('enabled')}
       meshEnabled={false}
       telemetryEnabled={false}
+      receiptsEnabled={true}
       backupBusy={false}
       recoveryCode={null}
       recoveryConfirmed={false}
@@ -257,6 +258,7 @@ function SettingsVrtBase({
       onBack={n}
       onToggleMesh={n}
       onToggleTelemetry={n}
+      onToggleReceipts={n}
       onBackup={n}
       onCopyRecovery={n}
       onToggleRecoveryConfirmed={n}
@@ -842,7 +844,109 @@ export const SCENE_RENDERERS: Record<string, () => React.ReactElement> = {
       })}
     />
   ),
-  'stack.thread.delivered-read': () => <ThreadScreenContent {...threadProps()} />,
+  'stack.thread.delivered-read': () => (
+    <ThreadScreenContent
+      {...threadProps({
+        linkMessages: [
+          linkMessage({
+            eventId: 'evt-sent',
+            direction: 'sent',
+            body: 'Sent only.',
+            deliveryState: 'sent',
+          }),
+          linkMessage({
+            eventId: 'evt-delivered',
+            direction: 'sent',
+            body: 'Delivered only.',
+            deliveryState: 'delivered',
+          }),
+          linkMessage({
+            eventId: 'evt-read',
+            direction: 'sent',
+            body: 'Read only.',
+            deliveryState: 'read',
+          }),
+        ],
+      })}
+    />
+  ),
+  'stack.thread.tagged': () => (
+    <ThreadScreenContent
+      {...threadProps({
+        tags: [
+          {
+            ownerPubky: OWNER,
+            conversationId: `dm:${PEER}`,
+            channelId: null,
+            scopeKey: `dm:${PEER}`,
+            targetEventId: 'evt-theirs-1',
+            targetAuthorPubky: PEER,
+            taggerPubky: OWNER,
+            label: '👍',
+            createdAt: FIXED_NOW_MS,
+          },
+          {
+            ownerPubky: OWNER,
+            conversationId: `dm:${PEER}`,
+            channelId: null,
+            scopeKey: `dm:${PEER}`,
+            targetEventId: 'evt-theirs-1',
+            targetAuthorPubky: PEER,
+            taggerPubky: PEER,
+            label: 'ok',
+            createdAt: FIXED_NOW_MS,
+          },
+        ],
+      })}
+    />
+  ),
+  'stack.thread.tag-picker': () => (
+    <View style={styles.fill} nativeID="tagPickerScene" testID="tagPickerScene">
+      <ThreadScreenContent {...threadProps({ tagPickerOpen: true })} />
+    </View>
+  ),
+  'stack.thread.receipt-sent': () => (
+    <ThreadScreenContent
+      {...threadProps({
+        linkMessages: [
+          linkMessage({
+            eventId: 'evt-sent-only',
+            direction: 'sent',
+            body: 'Waiting on the peer.',
+            deliveryState: 'sent',
+          }),
+        ],
+      })}
+    />
+  ),
+  'stack.thread.receipt-delivered': () => (
+    <ThreadScreenContent
+      {...threadProps({
+        linkMessages: [
+          linkMessage({
+            eventId: 'evt-delivered-only',
+            direction: 'sent',
+            body: 'Peer decrypted this.',
+            deliveryState: 'delivered',
+          }),
+        ],
+      })}
+    />
+  ),
+  'stack.thread.receipt-read': () => (
+    <ThreadScreenContent
+      {...threadProps({
+        linkMessages: [
+          linkMessage({
+            eventId: 'evt-read-only',
+            direction: 'sent',
+            body: 'Peer opened the thread.',
+            deliveryState: 'read',
+          }),
+        ],
+      })}
+    />
+  ),
   'stack.thread.messaging-cta': () => (
     <ThreadScreenContent {...threadProps({ sessionKind: 'needs-enable' })} />
   ),

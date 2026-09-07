@@ -37,6 +37,9 @@ import {
 } from '../../components/ComposerAttachButton';
 import { ComposerActionMenu } from '../../components/ComposerActionMenu';
 import { EmojiAutocomplete, EmojiPickerSheet } from '../../components/EmojiPickerSheet';
+import { TagPickerSheet } from '../../ui/TagPickerSheet';
+import { TagChips, aggregateTags } from '../../ui/TagChips';
+import type { ChatTagRow } from '../../services/StorageService';
 import { GifPickerSheet } from '../../components/GifPickerSheet';
 import {
   PaymentRequestBubble,
@@ -144,6 +147,9 @@ export default function ThreadScreen({ route }: Props) {
   const [peerContact, setPeerContact] = useState<Contact | null>(null);
   const [nickname, setNickname] = useState<string | null>(null);
   const [threadPrefs, setThreadPrefs] = useState({ muted: false, archived: false });
+  const [chatTags, setChatTags] = useState<ChatTagRow[]>([]);
+  const [tagPickerOpen, setTagPickerOpen] = useState(false);
+  const [tagTarget, setTagTarget] = useState<{ eventId: string; authorPubky: string } | null>(null);
   const [linkStatus, setLinkStatus] = useState<LinkStatus | null>(null);
   const [retryableEventIds, setRetryableEventIds] = useState<Set<string>>(() => new Set());
   const [requestStatus, setRequestStatus] = useState<'pending' | 'accepted' | 'declined' | null>(
@@ -158,16 +164,18 @@ export default function ThreadScreen({ route }: Props) {
 
   const reloadEncrypted = useCallback(async () => {
     if (!localPubky) return;
-    const [msgs, atts, pays, tips] = await Promise.all([
+    const [msgs, atts, pays, tips, loadedTags] = await Promise.all([
       StorageService.getLinkMessagesForConversation(localPubky, conversationId, 200),
       StorageService.listAttachmentsForConversation(localPubky, conversationId),
       StorageService.listPaymentRequestsForPeer(localPubky, participantPubky),
       StorageService.listTipEndpoints(localPubky, participantPubky),
+      StorageService.listChatTagsForScope(localPubky, conversationId),
     ]);
     setLinkMessages(msgs);
     setAttachments(atts);
     setPayments(pays);
     setTipEndpoints(tips);
+    setChatTags(loadedTags);
     const failedIds = [
       ...msgs.filter(row => row.deliveryState === 'failed').map(row => row.eventId),
       ...atts.filter(row => row.deliveryState === 'failed').map(row => row.eventId),
@@ -299,6 +307,39 @@ export default function ThreadScreen({ route }: Props) {
       actionMenuOpen={actionMenuOpen}
       gifPickerOpen={gifPickerOpen}
       emojiPickerOpen={emojiPickerOpen}
+      tagPickerOpen={tagPickerOpen}
+      tags={chatTags}
+      onCloseTagPicker={() => {
+        setTagPickerOpen(false);
+        setTagTarget(null);
+      }}
+      onPickTag={label => {
+        if (!tagTarget) return;
+        void LinkService.sendTag({
+          peerPubky: participantPubky,
+          targetEventId: tagTarget.eventId,
+          targetAuthorPubky: tagTarget.authorPubky,
+          label,
+          op: 'add',
+        }).then(() => {
+          setTagPickerOpen(false);
+          setTagTarget(null);
+          void reloadEncrypted();
+        });
+      }}
+      onToggleTag={({ eventId, authorPubky, label, mine }) => {
+        void LinkService.sendTag({
+          peerPubky: participantPubky,
+          targetEventId: eventId,
+          targetAuthorPubky: authorPubky,
+          label,
+          op: mine ? 'remove' : 'add',
+        }).then(() => void reloadEncrypted());
+      }}
+      onRequestTag={target => {
+        setTagTarget(target);
+        setTagPickerOpen(true);
+      }}
       tipPickerOpen={tipPickerOpen}
       review={review}
       walletUnavailable={walletUnavailable}
@@ -585,6 +626,12 @@ export function ThreadScreenContent({
   onRetryConnection,
   onCopyPubky,
   onTakeoverSuccess,
+  tags = [],
+  tagPickerOpen = false,
+  onCloseTagPicker,
+  onPickTag,
+  onToggleTag,
+  onRequestTag,
 }: {
   participantPubky: string;
   localPubky: string | null;
@@ -644,6 +691,17 @@ export function ThreadScreenContent({
   onRetryConnection: () => void;
   onCopyPubky: () => void;
   onTakeoverSuccess?: () => void;
+  tags?: ChatTagRow[];
+  tagPickerOpen?: boolean;
+  onCloseTagPicker?: () => void;
+  onPickTag?: (label: string) => void;
+  onToggleTag?: (target: {
+    eventId: string;
+    authorPubky: string;
+    label: string;
+    mine: boolean;
+  }) => void;
+  onRequestTag?: (target: { eventId: string; authorPubky: string }) => void;
 }) {
   const flatListRef = useRef<FlatList<ThreadItem>>(null);
   const plusRef = useRef<View>(null);
@@ -780,6 +838,10 @@ export function ThreadScreenContent({
             mine={isMine}
             time={formatTime(item.message.sentAt)}
             status={isMine ? formatDeliveryState(item.message.deliveryState) : null}
+            statusTextVisible={
+              isMine &&
+              (item.message.deliveryState === 'delivered' || item.message.deliveryState === 'read')
+            }
             failed={item.message.deliveryState === 'failed'}
             grouped={grouped}
             lastInGroup={lastInGroup}
@@ -788,6 +850,30 @@ export function ThreadScreenContent({
             senderPubky={participantPubky}
             accessibilityLabel={item.message.body}
             copyBody={item.message.body}
+            onTag={() =>
+              onRequestTag?.({
+                eventId: item.message.eventId,
+                authorPubky: item.message.senderPubky,
+              })
+            }
+            footer={
+              <TagChips
+                tags={aggregateTags(
+                  tags,
+                  item.message.senderPubky,
+                  item.message.eventId,
+                  localPubky,
+                )}
+                onToggle={(label, mine) =>
+                  onToggleTag?.({
+                    eventId: item.message.eventId,
+                    authorPubky: item.message.senderPubky,
+                    label,
+                    mine,
+                  })
+                }
+              />
+            }
           >
             <MarkdownText
               source={item.message.body}
@@ -827,6 +913,9 @@ export function ThreadScreenContent({
       participantPubky,
       peerBlocked,
       retryableEventIds,
+      tags,
+      onRequestTag,
+      onToggleTag,
     ],
   );
 
@@ -1177,6 +1266,11 @@ export function ThreadScreenContent({
               {byteLabel}
             </Text>
           ) : null}
+          <TagPickerSheet
+            visible={tagPickerOpen}
+            onClose={() => onCloseTagPicker?.()}
+            onPick={label => onPickTag?.(label)}
+          />
           <EmojiPickerSheet
             visible={emojiPickerOpen}
             onClose={() => onCloseEmojiPicker?.()}

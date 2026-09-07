@@ -24,6 +24,7 @@ export type SettingsScreenContentProps = {
   session: SessionUiModel;
   meshEnabled: boolean;
   telemetryEnabled: boolean;
+  receiptsEnabled: boolean;
   backupBusy: boolean;
   recoveryCode: string | null;
   recoveryConfirmed: boolean;
@@ -40,6 +41,7 @@ export type SettingsScreenContentProps = {
   onBack: () => void;
   onToggleMesh: (value: boolean) => void;
   onToggleTelemetry: (value: boolean) => void;
+  onToggleReceipts: (value: boolean) => void;
   onBackup: () => void;
   onCopyRecovery: () => void;
   onToggleRecoveryConfirmed: () => void;
@@ -58,6 +60,7 @@ export function SettingsScreenContent({
   session,
   meshEnabled,
   telemetryEnabled,
+  receiptsEnabled,
   backupBusy,
   recoveryCode,
   recoveryConfirmed,
@@ -74,6 +77,7 @@ export function SettingsScreenContent({
   onBack,
   onToggleMesh,
   onToggleTelemetry,
+  onToggleReceipts,
   onBackup,
   onCopyRecovery,
   onToggleRecoveryConfirmed,
@@ -281,6 +285,29 @@ export function SettingsScreenContent({
                 style={[styles.switchTrack, telemetryEnabled && styles.switchTrackOn]}
               >
                 <View style={[styles.switchThumb, telemetryEnabled && styles.switchThumbOn]} />
+              </View>
+            </Pressable>
+          </View>
+          <View style={styles.row}>
+            <View>
+              <Text style={styles.rowLabel}>{COPY.readReceipts}</Text>
+              <Text style={styles.rowHint}>{COPY.readReceiptsHint}</Text>
+            </View>
+            <Pressable
+              testID="settingsReadReceipts"
+              style={styles.switchHit}
+              accessibilityRole="switch"
+              accessibilityLabel={COPY.readReceipts}
+              accessibilityState={{ checked: receiptsEnabled }}
+              onPress={() => onToggleReceipts(!receiptsEnabled)}
+            >
+              <View
+                testID="settingsReadReceiptsSwitch"
+                accessibilityElementsHidden
+                importantForAccessibility="no"
+                style={[styles.switchTrack, receiptsEnabled && styles.switchTrackOn]}
+              >
+                <View style={[styles.switchThumb, receiptsEnabled && styles.switchThumbOn]} />
               </View>
             </Pressable>
           </View>

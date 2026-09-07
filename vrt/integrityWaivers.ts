@@ -43,12 +43,7 @@ export const INTEGRITY_WAIVERS: readonly IntegrityWaiver[] = Object.freeze([
     'The busy flag only changes disabled accessibility state for the default empty form.',
   ),
   ...pairs(
-    [
-      'stack.thread.delivered-read',
-      'stack.thread.populated',
-      'stack.thread.send-disabled',
-      'stack.thread.tip-collapsed',
-    ],
+    ['stack.thread.populated', 'stack.thread.send-disabled', 'stack.thread.tip-collapsed'],
     'These thread fixtures intentionally share the same visible transcript and collapsed composer.',
   ),
   ...pairs(

@@ -8,11 +8,12 @@ export type OutboundStatusWord =
   | typeof COPY.inboxClosed
   | typeof COPY.offline
   | typeof COPY.needsEnable
-  | typeof COPY.connectionChangedRetry;
+  | typeof COPY.connectionChangedRetry
+  | typeof COPY.delivered
+  | typeof COPY.read;
 
 /**
- * Outbound bubble status. `delivered` and `read` fold into `Sent` because
- * receipt kinds are reserved and unimplemented.
+ * Outbound bubble status. Receipts drive Delivered and Read.
  */
 export function formatDeliveryState(state: LinkDeliveryState | string): OutboundStatusWord {
   switch (state) {
@@ -20,9 +21,11 @@ export function formatDeliveryState(state: LinkDeliveryState | string): Outbound
       return COPY.queued;
     case 'failed':
       return COPY.failed;
-    case 'sent':
     case 'delivered':
+      return COPY.delivered;
     case 'read':
+      return COPY.read;
+    case 'sent':
       return COPY.sent;
     default:
       return COPY.sent;

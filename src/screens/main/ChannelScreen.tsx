@@ -50,6 +50,9 @@ import { ComposerActionMenu } from '../../components/ComposerActionMenu';
 import { EmojiAutocomplete, EmojiPickerSheet } from '../../components/EmojiPickerSheet';
 import { GifPickerSheet } from '../../components/GifPickerSheet';
 import { formatDeliveryState } from '../../ui/messageStatus';
+import { TagChips, aggregateTags } from '../../ui/TagChips';
+import { TagPickerSheet } from '../../ui/TagPickerSheet';
+import type { ChatTagRow } from '../../services/StorageService';
 import { formatGroupFanoutAggregate } from '../../ui/groupFanoutStatus';
 import { HIT_SLOP_44, minHitStyle } from '../../ui/hitTarget';
 import { peerIdentity } from '../../ui/peerIdentity';
@@ -122,9 +125,12 @@ export default function ChannelScreen({ route }: Props) {
   const [composerNotice, setComposerNotice] = useState<ComposerAttachNotice | null>(null);
   const [retryableEventIds, setRetryableEventIds] = useState<Set<string>>(() => new Set());
   const [channelPrefs, setChannelPrefs] = useState({ muted: false, archived: false });
+  const [chatTags, setChatTags] = useState<ChatTagRow[]>([]);
+  const [tagPickerOpen, setTagPickerOpen] = useState(false);
+  const [tagTarget, setTagTarget] = useState<{ eventId: string; authorPubky: string } | null>(null);
 
   const reload = useCallback(async () => {
-    const [ch, msgs, mems, atts, outcomes] = await Promise.all([
+    const [ch, msgs, mems, atts, outcomes, loadedTags] = await Promise.all([
       GroupService.getChannel(channelId),
       GroupService.listMessages(channelId),
       GroupService.listMembers(channelId),
@@ -134,12 +140,16 @@ export default function ChannelScreen({ route }: Props) {
       ownerPubky
         ? StorageService.listGroupFanoutOutcomesForChannel(ownerPubky, channelId)
         : Promise.resolve([] as GroupFanoutOutcome[]),
+      ownerPubky
+        ? StorageService.listChatTagsForScope(ownerPubky, channelId)
+        : Promise.resolve([] as ChatTagRow[]),
     ]);
     setChannel(ch);
     setMessages(msgs);
     setMembers(mems);
     setAttachments(atts);
     setFanoutOutcomes(outcomes);
+    setChatTags(loadedTags);
     const failedIds = [
       ...msgs.filter(row => row.deliveryState === 'failed').map(row => row.eventId),
       ...atts.filter(row => row.deliveryState === 'failed').map(row => row.eventId),
@@ -156,6 +166,7 @@ export default function ChannelScreen({ route }: Props) {
         groupReadCursorId(channelId),
         latest > 0 ? latest : Date.now(),
       );
+      await LinkService.markGroupRead(channelId, latest > 0 ? latest : Date.now());
       const unread = await StorageService.countUnreadGroupMessages(ownerPubky);
       useSessionStatusStore.getState().setGroupUnreadCount(unread);
     }
@@ -232,6 +243,41 @@ export default function ChannelScreen({ route }: Props) {
       members={members}
       contacts={contacts}
       fanoutOutcomes={fanoutOutcomes}
+      tags={chatTags}
+      tagPickerOpen={tagPickerOpen}
+      onCloseTagPicker={() => {
+        setTagPickerOpen(false);
+        setTagTarget(null);
+      }}
+      onPickTag={label => {
+        if (!tagTarget) return;
+        void LinkService.sendTag({
+          peerPubky: localPubky ?? channelId,
+          targetEventId: tagTarget.eventId,
+          targetAuthorPubky: tagTarget.authorPubky,
+          label,
+          op: 'add',
+          channelId,
+        }).then(() => {
+          setTagPickerOpen(false);
+          setTagTarget(null);
+          void reload();
+        });
+      }}
+      onToggleTag={({ eventId, authorPubky, label, mine }) => {
+        void LinkService.sendTag({
+          peerPubky: localPubky ?? channelId,
+          targetEventId: eventId,
+          targetAuthorPubky: authorPubky,
+          label,
+          op: mine ? 'remove' : 'add',
+          channelId,
+        }).then(() => void reload());
+      }}
+      onRequestTag={target => {
+        setTagTarget(target);
+        setTagPickerOpen(true);
+      }}
       localPubky={localPubky}
       draft={draft}
       replyTo={replyTo}
@@ -432,6 +478,12 @@ export function ChannelScreenContent({
   channelArchived = false,
   onToggleMute,
   onToggleArchive,
+  tags = [],
+  tagPickerOpen = false,
+  onCloseTagPicker,
+  onPickTag,
+  onToggleTag,
+  onRequestTag,
 }: {
   channel: GroupChannel | null;
   messages: GroupMessage[];
@@ -480,6 +532,17 @@ export function ChannelScreenContent({
   channelArchived?: boolean;
   onToggleMute?: () => void;
   onToggleArchive?: () => void;
+  tags?: ChatTagRow[];
+  tagPickerOpen?: boolean;
+  onCloseTagPicker?: () => void;
+  onPickTag?: (label: string) => void;
+  onToggleTag?: (target: {
+    eventId: string;
+    authorPubky: string;
+    label: string;
+    mine: boolean;
+  }) => void;
+  onRequestTag?: (target: { eventId: string; authorPubky: string }) => void;
 }) {
   const flatListRef = useRef<FlatList<GroupMessage>>(null);
   const plusRef = useRef<View>(null);
@@ -674,6 +737,17 @@ export function ChannelScreenContent({
                 ))}
               </View>
             ) : null}
+            <TagChips
+              tags={aggregateTags(tags, item.senderPubky, item.eventId, localPubky)}
+              onToggle={(label, mine) =>
+                onToggleTag?.({
+                  eventId: item.eventId,
+                  authorPubky: item.senderPubky,
+                  label,
+                  mine,
+                })
+              }
+            />
             {!item.deleted && selfActive ? (
               <View style={styles.actionRow}>
                 <TouchableOpacity
@@ -684,6 +758,17 @@ export function ChannelScreenContent({
                   style={minHitStyle}
                 >
                   <Text style={styles.action}>Reply</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  accessibilityRole="button"
+                  accessibilityLabel={COPY.tagMessage}
+                  hitSlop={HIT_SLOP_44}
+                  onPress={() =>
+                    onRequestTag?.({ eventId: item.eventId, authorPubky: item.senderPubky })
+                  }
+                  style={minHitStyle}
+                >
+                  <Text style={styles.action}>{COPY.tagMessage}</Text>
                 </TouchableOpacity>
                 {!isPublic
                   ? REACTION_EMOJIS.map(emoji => (
@@ -745,6 +830,9 @@ export function ChannelScreenContent({
       onRetryFailed,
       retryableEventIds,
       visible,
+      tags,
+      onToggleTag,
+      onRequestTag,
     ],
   );
 
@@ -1084,6 +1172,11 @@ export function ChannelScreenContent({
                   {byteLabel}
                 </Text>
               ) : null}
+              <TagPickerSheet
+                visible={tagPickerOpen}
+                onClose={() => onCloseTagPicker?.()}
+                onPick={label => onPickTag?.(label)}
+              />
               <EmojiPickerSheet
                 visible={emojiPickerOpen}
                 onClose={() => onCloseEmojiPicker?.()}
