@@ -10,6 +10,8 @@ Wire contract for Encrypted-Link PAMs, identical on mobile (`hypercolor-ux-int`)
 
 **Emit gating (pre-v1 peers).** Send `chat.typing.v0` / `chat.receipt.v0` only to peers whose client is known to be v1 (advertise via an additive field on an existing PAM or the receiver marker). `chat.tag.v0` / `chat.pin.v0` may be emitted ungated (dual-write covers tags). Invites/edits/deletes follow their own routing.
 
+**Advertisement (R7).** Both apps PUT an additive top-level integer `chat_kinds_v` on `receiver.json` (`/pub/paykit.app/v0/receiver.json`). Value `1` means this client implements kinds v1. Absent or `0` is pre-v1. The field is additive: parsers ignore unknown keys on the marker document. Store the peer's `chat_kinds_v` on the local link row when the marker is fetched (including re-key refresh). Emit typing/receipts only when the stored value is `>= 1`. When it flips `0→1`, replay `chat.receipt.v0` for currently-read threads once (idempotent).
+
 **Upgrade replay.** Pre-v1 clients treat new kinds as unknown → persist on `link_stream_items`, never mark processed (`LinkService.ts` `if (!envelope) continue`). On first v1 launch, record local `upgrade_at` (Unix ms) and re-scan unprocessed stream. Per-kind apply:
 
 | Kind | Replay |
@@ -297,7 +299,7 @@ Implement parse+apply tests in both apps against this file; do not diverge field
 | R4 | Stored-compare LWW; `sent_at` clamp = receiver now + **5 minutes** for edit/pin; group edit out of scope | `chat.edit.v0` / `chat.pin.v0` |
 | R5 | Label cap is UTF-8 32 B (legacy reaction is UTF-16 32, send-side); invalid alias emoji stays reaction-only; remove not back-compat during dual-write | `chat.tag.v0` |
 | R6 | Post-trim offsets; no surrogate-pair split; headroom ≤ ~78 B body with full mentions+reply (927 B measured) | Mentions |
-| R7 | Emit-gate typing/receipts to known-v1; upgrade-replay table (typing discarded by age; receipts/tags idempotent; pins skipped if `sent_at < upgrade_at`); 30-day stream purge MAY | Device prefs / Upgrade replay |
+| R7 | Emit-gate typing/receipts to known-v1 via `receiver.json` `chat_kinds_v`; upgrade-replay table (typing discarded by age; receipts/tags idempotent; pins skipped if `sent_at < upgrade_at`); 30-day stream purge MAY | Device prefs / Advertisement / Upgrade replay |
 | R8 | `invite_id` = UUID; reasons `bad-event-id` / `invalid-label` / `bad-sent-at` / `expired`; admin check only if channel known | `chat.group.invite.v0` |
 | R9 | Byte proofs: tag worst **401**, receipt 16+ch **876**, pin+ch **358**; Node one-liners + literal output | Byte proofs; each kind’s proof line |
 | R10 | Unsend uses existing `AttachmentResolveState` **`unavailable-from-backup`** (do not invent `'unavailable'`) | `chat.delete.v0` attachments |

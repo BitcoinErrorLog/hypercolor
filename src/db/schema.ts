@@ -211,7 +211,8 @@ export const SCHEMA_V20_STATEMENTS: readonly string[] = [
 ];
 
 /**
- * Schema v21 — chat.tag.v0 / chat.receipt.v0 device prefs, tags, pins, invites.
+ * Schema v21 — chat.tag.v0 / chat.receipt.v0 device prefs, tags, pins, invites,
+ * plus additive `links.chat_kinds_v` for R7 emit-gating.
  * Additive only. Frozen v1–v20 are not rewritten. Same DDL as kinds-v1.md.
  */
 export const SCHEMA_V21_STATEMENTS: readonly string[] = [
@@ -259,6 +260,7 @@ export const SCHEMA_V21_STATEMENTS: readonly string[] = [
   event_id TEXT NOT NULL,
   PRIMARY KEY (owner_pubky, invite_id)
 )`,
+  `ALTER TABLE links ADD COLUMN chat_kinds_v INTEGER NOT NULL DEFAULT 0`,
 ];
 
 /**

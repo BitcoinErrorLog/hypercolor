@@ -432,9 +432,10 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
                     promise.resolve(null)
                     return@launch
                 }
-                resolveMap(promise) {
+    resolveMap(promise) {
                     putString("noisePublicKey", marker.noisePublicKey)
                     putString("capabilitiesJson", capabilitiesJson(marker.capabilities))
+                    putInt("chatKindsV", 0)
                 }
             } catch (error: PaykitException) {
                 if (ffiCode(error) == "not_found") {

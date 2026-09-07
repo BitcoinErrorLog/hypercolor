@@ -27,6 +27,7 @@ import { useReceiverRoleStore } from '../../../stores/receiverRoleStore';
 import { wireSignOutMarkerMocks } from '../../__tests__/wireSignOutMarkerMocks';
 import {
   CHAT_MESSAGE_KIND,
+  CHAT_RECEIPT_KIND,
   LINK_MESSAGE_MAX_BYTES,
   LINK_RECEIVER_PATH,
   RING_GRANT_CAPABILITIES,
@@ -120,6 +121,7 @@ jest.mock('../../StorageService', () => ({
     getLink: jest.fn(),
     getAllLinks: jest.fn(),
     recordLastSeenPeerMarkerPk: jest.fn(),
+    recordPeerChatKindsV: jest.fn(),
     getDueHandshakingLinks: jest.fn(),
     updateLinkSnapshot: jest.fn(),
     getHandshakeBudget: jest.fn(),
@@ -142,6 +144,9 @@ jest.mock('../../StorageService', () => ({
     markLinkStreamItemProcessed: jest.fn(),
     getLinkReadCursor: jest.fn(),
     setLinkReadCursor: jest.fn(),
+    getChatDevicePrefs: jest.fn(),
+    persistControlSendIntent: jest.fn(),
+    finalizeControlSend: jest.fn(),
     clearAccountData: jest.fn(),
     persistSignOutIncompleteJournal: jest.fn().mockResolvedValue(undefined),
     hasSignOutIncompleteJournal: jest.fn().mockResolvedValue(false),
@@ -489,6 +494,17 @@ describe('LinkService', () => {
     mockedStorage.getLinkReceiver.mockResolvedValue(receiverRow);
     mockedStorage.getLink.mockResolvedValue(null);
     mockedStorage.recordLastSeenPeerMarkerPk.mockResolvedValue(undefined);
+    mockedStorage.recordPeerChatKindsV.mockResolvedValue(undefined);
+    mockedStorage.getChatDevicePrefs.mockResolvedValue({
+      receiptsEnabled: true,
+      typingEnabled: true,
+    });
+    mockedStorage.persistControlSendIntent.mockResolvedValue(undefined);
+    mockedStorage.finalizeControlSend.mockResolvedValue(undefined);
+    mockedStorage.getLinkMessagesForConversation.mockResolvedValue([]);
+    mockedStorage.getLinkReadCursor.mockResolvedValue(null);
+    mockedNative.putPublic.mockResolvedValue(undefined);
+    global.fetch = jest.fn().mockRejectedValue(new Error('offline'));
     mockedStorage.getAllLinks.mockResolvedValue([]);
     mockedStorage.getDueHandshakingLinks.mockResolvedValue([]);
     mockedStorage.getHandshakeBudget.mockResolvedValue(null);
@@ -893,6 +909,12 @@ describe('LinkService', () => {
         'alias-2',
         'recv-new',
         LINK_RECEIVER_PATH,
+      );
+      expect(mockedNative.putPublic).toHaveBeenCalledWith(
+        'alias-2',
+        `pubky://${OWNER}/pub/paykit.app/v0/receiver.json`,
+        expect.stringContaining('"chat_kinds_v":1'),
+        'https://homeserver.example',
       );
       const aliasOrder = mockedStorage.upsertLinkReceiver.mock.invocationCallOrder[0]!;
       const publishOrder = mockedNative.publishReceiverMarker.mock.invocationCallOrder[0]!;
@@ -4768,6 +4790,110 @@ describe('LinkService', () => {
       await LinkService.markRead(CONVERSATION_ID);
 
       expect(mockedStorage.setLinkReadCursor).toHaveBeenCalledWith(OWNER, CONVERSATION_ID, NOW);
+    });
+
+    it('does not emit chat.receipt.v0 to a pre-v1 peer', async () => {
+      mockedStorage.getLink.mockResolvedValue(storedLink({ chatKindsV: 0 }));
+      mockedStorage.getLinkMessagesForConversation.mockResolvedValue([
+        sendingRow({
+          senderPubky: PEER,
+          direction: 'received',
+          eventId: EVENT_ID,
+        }),
+      ]);
+
+      await LinkService.markRead(CONVERSATION_ID, NOW);
+
+      expect(mockedStorage.persistControlSendIntent).not.toHaveBeenCalled();
+    });
+
+    it('emits chat.receipt.v0 after the peer marker shows v1', async () => {
+      mockedStorage.getLink.mockResolvedValue(
+        storedLink({ status: 'established', snapshot: 'est-1', chatKindsV: 1 }),
+      );
+      mockedStorage.getLinkMessagesForConversation.mockResolvedValue([
+        sendingRow({
+          senderPubky: PEER,
+          direction: 'received',
+          eventId: EVENT_ID,
+        }),
+      ]);
+      mockedNative.sendPrivateMessageJson.mockResolvedValue({ snapshot: 'snap' });
+      mockedNative.restoreLink.mockResolvedValue({ linkId: 'handle-1' });
+
+      await LinkService.markRead(CONVERSATION_ID, NOW);
+
+      expect(mockedStorage.persistControlSendIntent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          ownerPubky: OWNER,
+          queueItem: expect.objectContaining({
+            payload: expect.stringContaining(CHAT_RECEIPT_KIND),
+          }),
+        }),
+      );
+    });
+  });
+
+  describe('chat_kinds_v advertisement', () => {
+    it('persists chat_kinds_v from a fetched peer marker', async () => {
+      mockedNative.getReceiverMarker.mockResolvedValue({
+        noisePublicKey: PEER_NOISE,
+        capabilitiesJson: '{}',
+        chatKindsV: 1,
+      });
+      givenEstablishedLink();
+      mockedStorage.getLink.mockResolvedValue(
+        storedLink({
+          status: 'established',
+          snapshot: 'est-1',
+          chatKindsV: 0,
+        }),
+      );
+
+      await LinkService.ensureLinkWith(PEER);
+
+      expect(mockedStorage.recordPeerChatKindsV).toHaveBeenCalledWith(OWNER, PEER, 1);
+    });
+
+    it('replays read receipts once when chat_kinds_v flips 0 to 1', async () => {
+      mockedNative.getReceiverMarker.mockResolvedValue({
+        noisePublicKey: PEER_NOISE,
+        capabilitiesJson: '{}',
+        chatKindsV: 1,
+      });
+      givenEstablishedLink();
+      mockedStorage.getLink.mockResolvedValue(
+        storedLink({
+          status: 'established',
+          snapshot: 'est-1',
+          chatKindsV: 0,
+        }),
+      );
+      mockedStorage.getLinkReadCursor.mockResolvedValue(NOW);
+      mockedStorage.getLinkMessagesForConversation.mockResolvedValue([
+        sendingRow({
+          senderPubky: PEER,
+          direction: 'received',
+          eventId: EVENT_ID,
+        }),
+      ]);
+      mockedNative.sendPrivateMessageJson.mockResolvedValue({ snapshot: 'snap' });
+
+      await LinkService.ensureLinkWith(PEER);
+      await new Promise<void>(resolve => {
+        setImmediate(resolve);
+      });
+      await new Promise<void>(resolve => {
+        setImmediate(resolve);
+      });
+
+      expect(mockedStorage.persistControlSendIntent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          queueItem: expect.objectContaining({
+            payload: expect.stringContaining(CHAT_RECEIPT_KIND),
+          }),
+        }),
+      );
     });
   });
 

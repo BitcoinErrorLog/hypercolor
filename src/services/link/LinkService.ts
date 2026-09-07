@@ -38,6 +38,12 @@ import {
 } from '../../types/link';
 import type { DeliveryQueueItem, PubkyKey } from '../../types';
 import {
+  persistPeerChatKindsVFromMarker,
+  putChatKindsVReceiverJson,
+  resetChatKindsUpgradeReplayedForTests,
+} from './chatKindsAdvertisement';
+import { CHAT_KINDS_V, normalizeChatKindsV } from '../../types/receiverMarker';
+import {
   decodeGroupEnvelope,
   GROUP_MESSAGE_KIND,
   GROUP_REACTION_KIND,
@@ -1453,6 +1459,7 @@ export function resetLinkServiceHarnessState(): void {
   restoreInFlight = null;
   liveHandles.clear();
   queues.clear();
+  resetChatKindsUpgradeReplayedForTests();
   peerQueueGenerations.clear();
   handshakeWatch.clear();
   peerMarkerRefreshedAt.clear();
@@ -1678,6 +1685,7 @@ async function provisionReceiver(
   }
 
   if (published.kind === 'present' && published.noisePublicKey === noisePublicKey) {
+    await putChatKindsVReceiverJson(sessionAlias, pubky, noisePublicKey);
     await persistReceiverRow(
       pubky,
       receiverAlias,
@@ -1692,6 +1700,7 @@ async function provisionReceiver(
 
   try {
     await PaykitLinkNative.publishReceiverMarker(sessionAlias, receiverAlias, receiverPath);
+    await putChatKindsVReceiverJson(sessionAlias, pubky, noisePublicKey);
   } catch (error) {
     if (rollbackOnFailure) await rollbackUnpublishedReceiver(pubky);
     throw error;
@@ -1699,6 +1708,45 @@ async function provisionReceiver(
   await persistReceiverRow(pubky, receiverAlias, receiverPath, true, 'active', noisePublicKey);
   setReceiverRoleState('active', null);
   return { pubky, receiverPath, noisePublicKey, receiverRole: 'active' };
+}
+
+async function rememberFetchedPeerMarker(
+  ownerPubky: PubkyKey,
+  peerPubky: PubkyKey,
+  marker: ReceiverMarker,
+): Promise<void> {
+  await persistPeerChatKindsVFromMarker(
+    ownerPubky,
+    peerPubky,
+    marker,
+    replayReadReceiptsAfterV1Upgrade,
+  );
+}
+
+async function fetchPeerReceiverMarker(
+  ownerPubky: PubkyKey,
+  peerPubky: PubkyKey,
+  receiverPath: string,
+): Promise<ReceiverMarker | null> {
+  const marker = await PaykitLinkNative.getReceiverMarker(peerPubky, receiverPath);
+  if (!marker) return null;
+  await rememberFetchedPeerMarker(ownerPubky, peerPubky, marker);
+  return marker;
+}
+
+async function replayReadReceiptsAfterV1Upgrade(
+  ownerPubky: PubkyKey,
+  peerPubky: PubkyKey,
+): Promise<void> {
+  const conversationId = buildDmConversationId(peerPubky);
+  const cursor = await StorageService.getLinkReadCursor(ownerPubky, conversationId);
+  if (cursor == null || cursor <= 0) return;
+  const msgs =
+    (await StorageService.getLinkMessagesForConversation?.(ownerPubky, conversationId, 200)) ?? [];
+  const ids = msgs
+    .filter(row => row.senderPubky !== ownerPubky && row.sentAt <= cursor)
+    .map(row => row.eventId);
+  await emitReceiptIfEnabled(ownerPubky, peerPubky, 'read', ids, undefined, true);
 }
 
 async function inspectOwnPublishedMarker(
@@ -1759,6 +1807,7 @@ async function publishTakeoverReceiver(
   }
   const noisePublicKey = await PaykitLinkNative.getReceiverPublicKey(existing.receiverAlias);
   await PaykitLinkNative.publishReceiverMarker(sessionAlias, existing.receiverAlias, receiverPath);
+  await putChatKindsVReceiverJson(sessionAlias, pubky, noisePublicKey);
   await persistReceiverRow(
     pubky,
     existing.receiverAlias,
@@ -2055,7 +2104,7 @@ async function ensureLinkLocked(
 
   let marker: ReceiverMarker | null | undefined;
   try {
-    marker = await PaykitLinkNative.getReceiverMarker(peerPubky, localPath);
+    marker = await fetchPeerReceiverMarker(ownerPubky, peerPubky, localPath);
     abortIfOwnerChanged(expectedOwner);
     if (marker && stored) {
       await StorageService.recordLastSeenPeerMarkerPk(ownerPubky, peerPubky, marker.noisePublicKey);
@@ -2368,7 +2417,7 @@ async function maybeAdoptEstablishedRekey(
   markPeerMarkerRefreshed(ownerPubky, peerPubky);
   let marker: ReceiverMarker | null | undefined;
   try {
-    marker = await PaykitLinkNative.getReceiverMarker(peerPubky, localPath);
+    marker = await fetchPeerReceiverMarker(ownerPubky, peerPubky, localPath);
     abortIfOwnerChanged(expectedOwner);
   } catch (err) {
     if (err instanceof LinkSendError && err.code === 'owner-changed') throw err;
@@ -2774,7 +2823,7 @@ async function advanceLiveHandshake(
     }
 
     if (live.role === 'initiator' && ownerPubky < peerPubky) {
-      const marker = await PaykitLinkNative.getReceiverMarker(peerPubky, LINK_RECEIVER_PATH);
+      const marker = await fetchPeerReceiverMarker(ownerPubky, peerPubky, LINK_RECEIVER_PATH);
       abortIfOwnerChanged(expectedOwner);
       if (marker) {
         const inbound = await probeInbound(
@@ -3325,7 +3374,11 @@ async function recoverWedgedLink(
   const protocol = isLinkNativeError(cause) && cause.code === 'protocol';
   if (protocol) {
     try {
-      const marker = await PaykitLinkNative.getReceiverMarker(stored.peerPubky, LINK_RECEIVER_PATH);
+      const marker = await fetchPeerReceiverMarker(
+        stored.ownerPubky,
+        stored.peerPubky,
+        LINK_RECEIVER_PATH,
+      );
       abortIfOwnerChanged(expectedOwner);
       if (
         marker &&
@@ -3395,7 +3448,7 @@ async function maybeRecoverInitiatorMarkerRotation(
 
   let marker: ReceiverMarker | null;
   try {
-    marker = await PaykitLinkNative.getReceiverMarker(peerPubky, LINK_RECEIVER_PATH);
+    marker = await fetchPeerReceiverMarker(ownerPubky, peerPubky, LINK_RECEIVER_PATH);
     abortIfOwnerChanged(expectedOwner);
   } catch (err) {
     if (err instanceof LinkSendError && err.code === 'owner-changed') throw err;
@@ -3466,7 +3519,7 @@ async function restartResponderFromFreshMsg1(
   let nextMarker = marker && marker.noisePublicKey ? marker : null;
   if (!nextMarker) {
     try {
-      nextMarker = await PaykitLinkNative.getReceiverMarker(peerPubky, localPath);
+      nextMarker = await fetchPeerReceiverMarker(ownerPubky, peerPubky, localPath);
       abortIfOwnerChanged(expectedOwner);
     } catch (err) {
       if (err instanceof LinkSendError && err.code === 'owner-changed') throw err;
@@ -3758,7 +3811,7 @@ async function rejectDeclinedInbound(ownerPubky: PubkyKey, peerPubky: PubkyKey):
   const receiver = await StorageService.getLinkReceiver(ownerPubky);
   if (!receiver) return;
   try {
-    const marker = await PaykitLinkNative.getReceiverMarker(peerPubky, LINK_RECEIVER_PATH);
+    const marker = await fetchPeerReceiverMarker(ownerPubky, peerPubky, LINK_RECEIVER_PATH);
     if (!marker) return;
     await PaykitLinkNative.clearLinkOutbox(
       lookup.alias,
@@ -4413,10 +4466,15 @@ async function emitReceiptIfEnabled(
   status: 'delivered' | 'read',
   eventIds: string[],
   channelId?: string,
+  peerKnownV1?: boolean,
 ): Promise<void> {
   if (typeof StorageService.getChatDevicePrefs !== 'function') return;
   const prefs = await StorageService.getChatDevicePrefs(ownerPubky);
   if (!prefs?.receiptsEnabled) return;
+  if (!peerKnownV1) {
+    const link = await StorageService.getLink(ownerPubky, peerPubky);
+    if (normalizeChatKindsV(link?.chatKindsV) < CHAT_KINDS_V) return;
+  }
   const unique = [...new Set(eventIds.filter(id => id.length > 0))].sort((a, b) =>
     a < b ? -1 : a > b ? 1 : 0,
   );

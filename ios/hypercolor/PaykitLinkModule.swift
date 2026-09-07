@@ -622,6 +622,7 @@ class PaykitLinkModule: NSObject, RCTInvalidating {
                 return [
                     "noisePublicKey": marker.noisePublicKey,
                     "capabilitiesJson": try Self.capabilitiesJson(marker.capabilities),
+                    "chatKindsV": 0,
                 ]
             } catch {
                 if Self.paykitCode(error) == "not_found" {

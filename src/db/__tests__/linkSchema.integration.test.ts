@@ -2801,3 +2801,38 @@ describe('schema upgrade union (v15 / dual-v16)', () => {
     expectUnionSchema(db);
   });
 });
+
+describe('schema v21 — additive chat_kinds_v on links', () => {
+  let openDbs: Array<ReturnType<typeof openMemoryDb>> = [];
+
+  afterEach(() => {
+    for (const db of openDbs) {
+      try {
+        db.close();
+      } catch {
+        // already closed
+      }
+    }
+    openDbs = [];
+    setDbForTests(null);
+  });
+
+  it('adds links.chat_kinds_v defaulting to 0 without rewriting frozen versions', async () => {
+    const db = openMemoryDb();
+    openDbs.push(db);
+    setDbForTests(db);
+    await runMigrations(db);
+    expect(db.executeSync('PRAGMA user_version').rows?.[0]?.user_version).toBe(
+      CURRENT_SCHEMA_VERSION,
+    );
+    const cols = (db.executeSync('PRAGMA table_info(links)').rows ?? []).map(row =>
+      String(row.name),
+    );
+    expect(cols).toContain('chat_kinds_v');
+    expect(CURRENT_SCHEMA_VERSION).toBe(21);
+    const prefs = db.executeSync(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'chat_device_prefs'",
+    );
+    expect(prefs.rows).toHaveLength(1);
+  });
+});

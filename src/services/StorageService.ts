@@ -841,6 +841,26 @@ export const StorageService = {
     });
   },
 
+  /**
+   * Records the peer's advertised `chat_kinds_v` without bumping
+   * `links.updated_at` (same clock rule as last-seen marker pk).
+   */
+  async recordPeerChatKindsV(
+    ownerPubky: PubkyKey,
+    peerPubky: PubkyKey,
+    chatKindsV: number,
+  ): Promise<void> {
+    const value = Number.isFinite(chatKindsV) && chatKindsV >= 1 ? Math.floor(chatKindsV) : 0;
+    await ownedWrite(ownerPubky, db => {
+      db.executeSync(
+        `UPDATE links
+         SET chat_kinds_v = ?
+         WHERE owner_pubky = ? AND peer_pubky = ?`,
+        [value, ownerPubky, peerPubky],
+      );
+    });
+  },
+
   async getLink(ownerPubky: PubkyKey, peerPubky: PubkyKey): Promise<LinkRecord | null> {
     const db = await getDb();
     const result = db.executeSync('SELECT * FROM links WHERE owner_pubky = ? AND peer_pubky = ?', [
@@ -3822,6 +3842,7 @@ function rowToLink(row: any): LinkRecord {
     consecutiveFailures: row.consecutive_failures,
     lastSeenPeerMarkerPk:
       typeof row.last_seen_peer_marker_pk === 'string' ? row.last_seen_peer_marker_pk : null,
+    chatKindsV: Number(row.chat_kinds_v) >= 1 ? Math.floor(Number(row.chat_kinds_v)) : 0,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };

@@ -459,6 +459,8 @@ export interface LinkRecord {
   remoteReceiverPath: string;
   consecutiveFailures: number;
   lastSeenPeerMarkerPk?: string | null;
+  /** Peer's advertised chat kinds; 0 = pre-v1 / unknown. */
+  chatKindsV?: number;
   /** Row insert time. Not updated on snapshot/status writes. */
   createdAt: number;
   updatedAt: number;
