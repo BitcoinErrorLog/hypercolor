@@ -1,6 +1,7 @@
 import {
   CHAT_KINDS_V,
   CHAT_KINDS_V_KEY,
+  addChatKindsVToReceiverJson,
   buildReceiverMarkerPutBody,
   chatKindsVFromMarker,
   normalizeChatKindsV,
@@ -38,6 +39,21 @@ describe('receiver.json chat_kinds_v parser', () => {
       chat_kinds_v: number;
     };
     expect(body[CHAT_KINDS_V_KEY]).toBe(CHAT_KINDS_V);
+  });
+
+  it('adds chat_kinds_v without dropping existing fields', () => {
+    const original =
+      '{"noisePublicKey":"pk","capabilities":{"privatePayments":true},"extra":{"n":1}}';
+    const merged = addChatKindsVToReceiverJson(original);
+    expect(merged).toContain('"extra":{"n":1}');
+    expect(merged).toContain('"capabilities":{"privatePayments":true}');
+    expect(merged).toContain(`"${CHAT_KINDS_V_KEY}":${CHAT_KINDS_V}`);
+    expect(merged?.startsWith('{"noisePublicKey":"pk"')).toBe(true);
+  });
+
+  it('returns null for a non-object GET body so callers skip PUT', () => {
+    expect(addChatKindsVToReceiverJson('[]')).toBeNull();
+    expect(addChatKindsVToReceiverJson('not-json')).toBeNull();
   });
 
   it('reads chatKindsV from the native marker object', () => {

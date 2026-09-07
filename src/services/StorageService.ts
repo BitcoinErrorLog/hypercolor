@@ -90,6 +90,9 @@ const SIGN_OUT_INCOMPLETE_TARGET = 'identity';
 const SIGN_OUT_INCOMPLETE_ALIAS_PREFIX = 'alias:';
 const SIGN_OUT_WIPE_FAILURES_KIND = 'sign-out-wipe-failures';
 
+/** Live tables without an owner_pubky wipe (device-global or wipe journal). */
+export const CLEAR_ACCOUNT_NON_OWNER_TABLES = ['mesh_peers', 'pending_cleanup'] as const;
+
 function journalTargetForAlias(alias: string | null | undefined): string {
   if (typeof alias === 'string' && alias.length > 0) {
     return `${SIGN_OUT_INCOMPLETE_ALIAS_PREFIX}${alias}`;
@@ -1749,6 +1752,10 @@ export const StorageService = {
       db.executeSync('DELETE FROM contact_nicknames WHERE owner_pubky = ?', [ownerPubky]);
       db.executeSync('DELETE FROM thread_local_prefs WHERE owner_pubky = ?', [ownerPubky]);
       db.executeSync('DELETE FROM owner_profiles WHERE owner_pubky = ?', [ownerPubky]);
+      db.executeSync('DELETE FROM chat_tags WHERE owner_pubky = ?', [ownerPubky]);
+      db.executeSync('DELETE FROM chat_device_prefs WHERE owner_pubky = ?', [ownerPubky]);
+      db.executeSync('DELETE FROM chat_pins WHERE owner_pubky = ?', [ownerPubky]);
+      db.executeSync('DELETE FROM chat_group_invites WHERE owner_pubky = ?', [ownerPubky]);
     });
   },
 
@@ -3414,7 +3421,7 @@ export const StorageService = {
         outcome = 'cap';
         return;
       }
-      const minuteAgo = input.createdAt - 60_000;
+      const minuteAgo = Date.now() - 60_000;
       const recent = db.executeSync(
         `SELECT COUNT(*) AS n FROM chat_tags
          WHERE owner_pubky = ? AND tagger_pubky = ? AND created_at >= ?`,
@@ -3438,7 +3445,7 @@ export const StorageService = {
           input.targetAuthorPubky,
           input.taggerPubky,
           input.label,
-          input.createdAt,
+          Date.now(),
         ],
       );
     });
@@ -3473,8 +3480,12 @@ export const StorageService = {
   async listChatTagsForScope(ownerPubky: PubkyKey, scopeKey: string): Promise<ChatTagRow[]> {
     const db = await getDb();
     const result = db.executeSync(
-      `SELECT * FROM chat_tags WHERE owner_pubky = ? AND scope_key = ?
-       ORDER BY created_at ASC, label ASC`,
+      `SELECT owner_pubky, conversation_id, channel_id, scope_key, target_event_id,
+              target_author_pubky, tagger_pubky, label, created_at
+         FROM chat_tags
+        WHERE owner_pubky = ? AND scope_key = ?
+        ORDER BY created_at ASC, label ASC
+        LIMIT 2000`,
       [ownerPubky, scopeKey],
     );
     return (result.rows ?? []).map(row => rowToChatTag(row));

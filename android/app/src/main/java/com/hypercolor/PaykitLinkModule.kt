@@ -432,10 +432,13 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
                     promise.resolve(null)
                     return@launch
                 }
-    resolveMap(promise) {
+                resolveMap(promise) {
                     putString("noisePublicKey", marker.noisePublicKey)
                     putString("capabilitiesJson", capabilitiesJson(marker.capabilities))
-                    putInt("chatKindsV", 0)
+                    val chatKindsV = chatKindsVFromMarker(marker)
+                    if (chatKindsV != null) {
+                        putInt("chatKindsV", chatKindsV)
+                    }
                 }
             } catch (error: PaykitException) {
                 if (ffiCode(error) == "not_found") {
@@ -1173,6 +1176,21 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
             .put("receipts", capabilities.receipts)
             .put("outgoingPayments", capabilities.outgoingPayments)
             .toString()
+    }
+
+    private fun chatKindsVFromMarker(marker: Any): Int? {
+        return try {
+            val method = marker.javaClass.methods.firstOrNull {
+                it.parameterCount == 0 && (
+                    it.name.equals("getChatKindsV", ignoreCase = true) ||
+                        it.name.equals("chatKindsV", ignoreCase = true)
+                    )
+            } ?: return null
+            val value = method.invoke(marker) as? Number ?: return null
+            value.toInt()
+        } catch (_: Exception) {
+            null
+        }
     }
 
     // Inline so callers may invoke suspend functions inside the builder lambda

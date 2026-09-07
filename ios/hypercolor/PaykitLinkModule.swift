@@ -619,11 +619,14 @@ class PaykitLinkModule: NSObject, RCTInvalidating {
                 ) else {
                     return NSNull()
                 }
-                return [
+                var payload: [String: Any] = [
                     "noisePublicKey": marker.noisePublicKey,
                     "capabilitiesJson": try Self.capabilitiesJson(marker.capabilities),
-                    "chatKindsV": 0,
                 ]
+                for (key, value) in Self.chatKindsVMap(from: marker) {
+                    payload[key] = value
+                }
+                return payload
             } catch {
                 if Self.paykitCode(error) == "not_found" {
                     return NSNull()
@@ -1661,6 +1664,17 @@ class PaykitLinkModule: NSObject, RCTInvalidating {
             throw PaykitLinkBridgeError(code: "protocol", message: "failed to encode capabilities")
         }
         return json
+    }
+
+    private static func chatKindsVMap(from marker: ChatReceiverMarker) -> [String: Int] {
+        let mirror = Mirror(reflecting: marker)
+        for child in mirror.children {
+            if child.label == "chatKindsV" || child.label == "chat_kinds_v",
+               let value = child.value as? Int {
+                return ["chatKindsV": value]
+            }
+        }
+        return [:]
     }
 
     private static func paykitCode(_ error: Error) -> String? {

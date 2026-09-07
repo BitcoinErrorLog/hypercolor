@@ -6,6 +6,10 @@ const ANDROID_REGISTRY = readFileSync(
   join(ROOT, 'android/app/src/main/java/com/hypercolor/AuthFlowCancelRegistry.kt'),
   'utf8',
 );
+const ANDROID_MODULE = readFileSync(
+  join(ROOT, 'android/app/src/main/java/com/hypercolor/PaykitLinkModule.kt'),
+  'utf8',
+);
 const IOS_MODULE = readFileSync(join(ROOT, 'ios/hypercolor/PaykitLinkModule.swift'), 'utf8');
 
 describe('native auth-flow source pin', () => {
@@ -24,5 +28,12 @@ describe('native auth-flow source pin', () => {
     expect(IOS_MODULE).toContain('bridgeTornDown');
     expect(IOS_MODULE).toContain('unavailable');
     expect(IOS_MODULE).toContain('auth_flow_cancelled');
+  });
+
+  it('plumbs chatKindsV from the FFI marker instead of hardcoding 0', () => {
+    expect(ANDROID_MODULE).toContain('fun chatKindsVFromMarker');
+    expect(ANDROID_MODULE).not.toContain('putInt("chatKindsV", 0)');
+    expect(IOS_MODULE).toContain('func chatKindsVMap(from marker: ChatReceiverMarker)');
+    expect(IOS_MODULE).not.toContain('"chatKindsV": 0');
   });
 });

@@ -15,7 +15,13 @@ export type OutboundStatusWord =
 /**
  * Outbound bubble status. Receipts drive Delivered and Read.
  */
-export function formatDeliveryState(state: LinkDeliveryState | string): OutboundStatusWord {
+export function formatDeliveryState(
+  state: LinkDeliveryState | string,
+  receiptsEnabled = true,
+): OutboundStatusWord {
+  if (!receiptsEnabled && (state === 'delivered' || state === 'read')) {
+    return COPY.sent;
+  }
   switch (state) {
     case 'sending':
       return COPY.queued;

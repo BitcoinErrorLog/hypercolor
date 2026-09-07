@@ -64,6 +64,34 @@ export function buildReceiverMarkerPutBody(input: { noisePublicKey: string }): s
   });
 }
 
+/**
+ * Additive RMW: keep every existing field (including unknown keys) and only
+ * insert `chat_kinds_v` when it is absent. Returns null when `raw` is not a
+ * JSON object — callers must not PUT a partial replacement.
+ */
+export function addChatKindsVToReceiverJson(raw: string): string | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw) as unknown;
+  } catch {
+    return null;
+  }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return null;
+  }
+  const rec = parsed as Record<string, unknown>;
+  if (rec[CHAT_KINDS_V_KEY] === CHAT_KINDS_V) return raw;
+  const trimmed = raw.trim();
+  if (!trimmed.startsWith('{') || !trimmed.endsWith('}')) return null;
+  if (Object.prototype.hasOwnProperty.call(rec, CHAT_KINDS_V_KEY)) {
+    return JSON.stringify({ ...rec, [CHAT_KINDS_V_KEY]: CHAT_KINDS_V });
+  }
+  const inner = trimmed.slice(1, -1).trim();
+  if (inner.length === 0) return `{"${CHAT_KINDS_V_KEY}":${CHAT_KINDS_V}}`;
+  const withoutTrailingComma = inner.endsWith(',') ? inner.slice(0, -1) : inner;
+  return `{${withoutTrailingComma},"${CHAT_KINDS_V_KEY}":${CHAT_KINDS_V}}`;
+}
+
 export function chatKindsVFromMarker(marker: {
   chatKindsV?: unknown;
   capabilitiesJson?: string;

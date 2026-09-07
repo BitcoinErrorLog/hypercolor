@@ -47,13 +47,13 @@ export async function applyGroupInbound(input: {
   rawJson: string;
   receivedAt: number;
   peerTrust: GroupPeerTrust;
-}): Promise<void> {
+}): Promise<'applied' | 'skipped'> {
   const { ownerPubky, senderPubky, envelope, rawJson, receivedAt, peerTrust } = input;
-  if (await isGroupInboundGated({ ownerPubky, envelope, peerTrust })) return;
+  if (await isGroupInboundGated({ ownerPubky, envelope, peerTrust })) return 'skipped';
   const channelId = envelope.channel_id;
 
   if (await StorageService.hasGroupEvent(ownerPubky, channelId, senderPubky, envelope.event_id)) {
-    return;
+    return 'skipped';
   }
 
   const decision = await authorizeInbound(ownerPubky, senderPubky, envelope);
@@ -65,7 +65,7 @@ export async function applyGroupInbound(input: {
       envelope.event_id,
       receivedAt,
     );
-    return;
+    return 'skipped';
   }
 
   if (isTargetedKind(envelope)) {
@@ -86,7 +86,7 @@ export async function applyGroupInbound(input: {
           receivedAt,
         );
       }
-      return;
+      return 'skipped';
     }
   } else if (envelope.kind === GROUP_MEMBERSHIP_KIND) {
     const applied = await applyMembership(ownerPubky, senderPubky, envelope);
@@ -98,16 +98,19 @@ export async function applyGroupInbound(input: {
         envelope.event_id,
         receivedAt,
       );
-      return;
+      return 'skipped';
     }
     await persistAdmitted(ownerPubky, senderPubky, envelope, rawJson, receivedAt);
   } else if (envelope.kind === GROUP_MESSAGE_KIND) {
     await persistAdmitted(ownerPubky, senderPubky, envelope, rawJson, receivedAt);
     await StorageService.touchGroupChannel(ownerPubky, channelId, envelope.sent_at);
     await applyDeferredForTarget(ownerPubky, channelId, senderPubky, envelope.event_id);
+    notifyGroupEvent(ownerPubky, channelId);
+    return 'applied';
   }
 
   notifyGroupEvent(ownerPubky, channelId);
+  return 'skipped';
 }
 
 type AuthDecision = 'accept' | 'reject';

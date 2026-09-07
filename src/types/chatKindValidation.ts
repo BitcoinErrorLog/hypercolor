@@ -184,8 +184,6 @@ function parseCommon(
   }
   const sentAt = parseLinkSentAt(candidate.sent_at);
   if (sentAt === null || !isLinkSentAtUnixMs(sentAt)) return { error: 'bad-sent-at' };
-  const nowMs = ctx.nowMs ?? Date.now();
-  if (sentAt > nowMs + LWW_SENT_AT_CLAMP_MS) return { error: 'bad-sent-at' };
   if (candidate.channel_id !== undefined) {
     if (typeof candidate.channel_id !== 'string') return { error: 'bad-channel-id' };
     if (!parseFounderBoundChannelId(candidate.channel_id)) return { error: 'bad-channel-id' };
@@ -196,6 +194,15 @@ function parseCommon(
   };
   if (typeof candidate.channel_id === 'string') common.channel_id = candidate.channel_id;
   return { ok: common };
+}
+
+/** Spec R4: 5-minute future clamp applies only to LWW kinds (edit/pin). */
+export function rejectLwwSentAtSkew(
+  sentAt: number,
+  nowMs: number = Date.now(),
+): ChatKindParseResult<number> {
+  if (sentAt > nowMs + LWW_SENT_AT_CLAMP_MS) return { error: 'bad-sent-at' };
+  return { ok: sentAt };
 }
 
 export function parseChatTagV0(

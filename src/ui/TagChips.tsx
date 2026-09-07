@@ -4,8 +4,6 @@ import { color, radius, space, typeRole } from '../theme';
 import { HIT_SLOP_44, minHitStyle } from './hitTarget';
 import type { ChatTagRow } from '../services/StorageService';
 
-const WORD = /^[a-z0-9_]{1,32}$/;
-
 export type TagAggregate = {
   label: string;
   count: number;
@@ -58,7 +56,7 @@ export function TagChips({
           style={[styles.chip, tag.mine ? styles.mine : null, minHitStyle]}
         >
           <Text style={[styles.text, tag.mine ? styles.mineText : null]}>
-            {WORD.test(tag.label) ? tag.label : tag.label} {tag.count}
+            {tag.label} {tag.count}
           </Text>
         </Pressable>
       ))}

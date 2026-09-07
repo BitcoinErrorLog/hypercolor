@@ -5,6 +5,7 @@ import {
   chatKindByteProofChannelId,
   parseChatReceiptV0,
   parseChatTagV0,
+  rejectLwwSentAtSkew,
   serializedUtf8Bytes,
 } from '../chatKindValidation';
 import { CHAT_RECEIPT_KIND, CHAT_TAG_KIND, LINK_MESSAGE_MAX_BYTES } from '../link';
@@ -127,7 +128,7 @@ describe('chat.tag.v0 / chat.receipt.v0 spec vectors', () => {
     expect(parseChatTagV0(oversized, ctx)).toEqual({ error: 'oversized' });
   });
 
-  it('clamps future sent_at beyond five minutes', () => {
+  it('accepts tag sent_at more than five minutes in the future (R4 clamp is LWW-only)', () => {
     const built = buildChatTagEnvelope({
       eventId: uuid,
       sentAt: sentAt + 6 * 60 * 1000,
@@ -136,7 +137,8 @@ describe('chat.tag.v0 / chat.receipt.v0 spec vectors', () => {
       label: 'ok',
       op: 'add',
     });
-    expect(parseChatTagV0(built.json, { ...ctx, nowMs: sentAt })).toEqual({ error: 'bad-sent-at' });
+    expect(parseChatTagV0(built.json, { ...ctx, nowMs: sentAt })).toEqual({ ok: built.envelope });
+    expect(rejectLwwSentAtSkew(sentAt + 6 * 60 * 1000, sentAt)).toEqual({ error: 'bad-sent-at' });
   });
 
   it('sorts receipt ids for canonical JSON', () => {

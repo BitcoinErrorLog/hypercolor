@@ -126,11 +126,12 @@ export default function ChannelScreen({ route }: Props) {
   const [retryableEventIds, setRetryableEventIds] = useState<Set<string>>(() => new Set());
   const [channelPrefs, setChannelPrefs] = useState({ muted: false, archived: false });
   const [chatTags, setChatTags] = useState<ChatTagRow[]>([]);
+  const [receiptsEnabled, setReceiptsEnabled] = useState(true);
   const [tagPickerOpen, setTagPickerOpen] = useState(false);
   const [tagTarget, setTagTarget] = useState<{ eventId: string; authorPubky: string } | null>(null);
 
   const reload = useCallback(async () => {
-    const [ch, msgs, mems, atts, outcomes, loadedTags] = await Promise.all([
+    const [ch, msgs, mems, atts, outcomes, loadedTags, prefs] = await Promise.all([
       GroupService.getChannel(channelId),
       GroupService.listMessages(channelId),
       GroupService.listMembers(channelId),
@@ -143,6 +144,9 @@ export default function ChannelScreen({ route }: Props) {
       ownerPubky
         ? StorageService.listChatTagsForScope(ownerPubky, channelId)
         : Promise.resolve([] as ChatTagRow[]),
+      ownerPubky && typeof StorageService.getChatDevicePrefs === 'function'
+        ? StorageService.getChatDevicePrefs(ownerPubky)
+        : Promise.resolve({ receiptsEnabled: true, typingEnabled: true }),
     ]);
     setChannel(ch);
     setMessages(msgs);
@@ -150,6 +154,7 @@ export default function ChannelScreen({ route }: Props) {
     setAttachments(atts);
     setFanoutOutcomes(outcomes);
     setChatTags(loadedTags);
+    setReceiptsEnabled(prefs?.receiptsEnabled !== false);
     const failedIds = [
       ...msgs.filter(row => row.deliveryState === 'failed').map(row => row.eventId),
       ...atts.filter(row => row.deliveryState === 'failed').map(row => row.eventId),
@@ -161,12 +166,12 @@ export default function ChannelScreen({ route }: Props) {
     setLoading(false);
     if (ownerPubky) {
       const latest = msgs.reduce((max, m) => Math.max(max, m.sentAt), 0);
+      await LinkService.markGroupRead(channelId, latest > 0 ? latest : Date.now());
       await StorageService.setLinkReadCursor(
         ownerPubky,
         groupReadCursorId(channelId),
         latest > 0 ? latest : Date.now(),
       );
-      await LinkService.markGroupRead(channelId, latest > 0 ? latest : Date.now());
       const unread = await StorageService.countUnreadGroupMessages(ownerPubky);
       useSessionStatusStore.getState().setGroupUnreadCount(unread);
     }
@@ -244,6 +249,7 @@ export default function ChannelScreen({ route }: Props) {
       contacts={contacts}
       fanoutOutcomes={fanoutOutcomes}
       tags={chatTags}
+      receiptsEnabled={receiptsEnabled}
       tagPickerOpen={tagPickerOpen}
       onCloseTagPicker={() => {
         setTagPickerOpen(false);
@@ -258,11 +264,13 @@ export default function ChannelScreen({ route }: Props) {
           label,
           op: 'add',
           channelId,
-        }).then(() => {
-          setTagPickerOpen(false);
-          setTagTarget(null);
-          void reload();
-        });
+        })
+          .then(() => {
+            setTagPickerOpen(false);
+            setTagTarget(null);
+            void reload();
+          })
+          .catch(() => undefined);
       }}
       onToggleTag={({ eventId, authorPubky, label, mine }) => {
         void LinkService.sendTag({
@@ -272,7 +280,9 @@ export default function ChannelScreen({ route }: Props) {
           label,
           op: mine ? 'remove' : 'add',
           channelId,
-        }).then(() => void reload());
+        })
+          .then(() => void reload())
+          .catch(() => undefined);
       }}
       onRequestTag={target => {
         setTagTarget(target);
@@ -479,6 +489,7 @@ export function ChannelScreenContent({
   onToggleMute,
   onToggleArchive,
   tags = [],
+  receiptsEnabled = true,
   tagPickerOpen = false,
   onCloseTagPicker,
   onPickTag,
@@ -533,6 +544,7 @@ export function ChannelScreenContent({
   onToggleMute?: () => void;
   onToggleArchive?: () => void;
   tags?: ChatTagRow[];
+  receiptsEnabled?: boolean;
   tagPickerOpen?: boolean;
   onCloseTagPicker?: () => void;
   onPickTag?: (label: string) => void;
@@ -650,7 +662,7 @@ export function ChannelScreenContent({
         isMine && !isPublic
           ? fanout && fanout.length > 0
             ? formatGroupFanoutAggregate(fanout, memberNames)
-            : formatDeliveryState(item.deliveryState)
+            : formatDeliveryState(item.deliveryState, receiptsEnabled)
           : null;
       const parent = item.replyToEventId
         ? item.replyToAuthorPubky
@@ -833,6 +845,7 @@ export function ChannelScreenContent({
       tags,
       onToggleTag,
       onRequestTag,
+      receiptsEnabled,
     ],
   );
 

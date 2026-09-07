@@ -46,6 +46,14 @@ export async function applyInboundTagOrReceipt(input: {
       return 'processed';
     }
     const envelope = parsed.ok;
+    if (envelope.channel_id) {
+      const member = await StorageService.getGroupMember(
+        input.ownerPubky,
+        envelope.channel_id,
+        input.senderPubky,
+      );
+      if (member?.status !== 'active') return 'processed';
+    }
     for (const eventId of envelope.event_ids) {
       const author = await resolveReceiptAuthor(
         input.ownerPubky,
@@ -74,14 +82,18 @@ async function resolveReceiptAuthor(
   receiptSender: PubkyKey,
 ): Promise<string | null> {
   if (channelId) {
+    const member = await StorageService.getGroupMember(ownerPubky, channelId, receiptSender);
+    if (member?.status !== 'active') return null;
     const rows = await StorageService.listGroupMessages(ownerPubky, channelId, 400);
     const hit = rows.find(row => row.eventId === eventId);
     return hit?.senderPubky ?? null;
   }
+  const expected = buildDmConversationId(receiptSender);
   const own = await StorageService.getLinkMessageByEventId(ownerPubky, ownerPubky, eventId);
-  if (own) return ownerPubky;
+  if (own?.conversationId === expected) return ownerPubky;
   const fromPeer = await StorageService.getLinkMessageByEventId(ownerPubky, receiptSender, eventId);
-  return fromPeer?.senderPubky ?? null;
+  if (fromPeer?.conversationId === expected) return fromPeer.senderPubky ?? null;
+  return null;
 }
 
 async function applyTagish(
@@ -97,7 +109,8 @@ async function applyTagish(
       if (parsed.error === 'unknown-kind' || parsed.error === 'gated-peer') return 'unprocessed';
       return 'processed';
     }
-    await applyTagEnvelope(ownerPubky, senderPubky, parsed.ok, senderPubky);
+    const tagResult = await applyTagEnvelope(ownerPubky, senderPubky, parsed.ok, senderPubky);
+    if (tagResult === 'deferred') return 'unprocessed';
     return 'processed';
   }
 
@@ -128,23 +141,25 @@ async function applyTagish(
     op: 'add',
     ...(channelId ? { channel_id: channelId } : {}),
   };
-  await applyTagEnvelope(ownerPubky, senderPubky, alias, senderPubky);
-  return 'processed';
+  const tagResult = await applyTagEnvelope(ownerPubky, senderPubky, alias, senderPubky);
+  return tagResult === 'deferred' ? 'unprocessed' : 'processed';
 }
+
+type TagApplyResult = 'applied' | 'deferred' | 'rejected';
 
 async function applyTagEnvelope(
   ownerPubky: PubkyKey,
   senderPubky: PubkyKey,
   envelope: ChatTagEnvelope,
   dmPeerPubky?: PubkyKey,
-): Promise<void> {
+): Promise<TagApplyResult> {
   if (envelope.channel_id) {
     const member = await StorageService.getGroupMember(
       ownerPubky,
       envelope.channel_id,
       senderPubky,
     );
-    if (member?.status !== 'active') return;
+    if (member?.status !== 'active') return 'rejected';
     const target = await StorageService.getGroupMessage(
       ownerPubky,
       envelope.channel_id,
@@ -165,16 +180,21 @@ async function applyTagEnvelope(
         targetEventId: envelope.target_event_id,
         targetAuthorPubky: envelope.target_author_pubky,
       });
-      return;
+      return 'applied';
     }
-    if (target.deleted) return;
+    if (target.deleted) return 'rejected';
   } else {
+    const expectedConversation = buildDmConversationId(
+      dmPeerPubky ?? (senderPubky === ownerPubky ? envelope.target_author_pubky : senderPubky),
+    );
     const target = await StorageService.getLinkMessageByEventId(
       ownerPubky,
       envelope.target_author_pubky,
       envelope.target_event_id,
     );
-    if (!target) return;
+    if (!target) return 'deferred';
+    if (target.deleted) return 'rejected';
+    if (target.conversationId !== expectedConversation) return 'rejected';
   }
 
   const conversationId = envelope.channel_id
@@ -193,7 +213,7 @@ async function applyTagEnvelope(
       taggerPubky: senderPubky,
       label: envelope.label,
     });
-    return;
+    return 'applied';
   }
   await StorageService.upsertChatTag({
     ownerPubky,
@@ -205,6 +225,7 @@ async function applyTagEnvelope(
     label: envelope.label,
     createdAt: envelope.sent_at,
   });
+  return 'applied';
 }
 
 export async function applyLocalTag(

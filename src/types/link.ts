@@ -526,6 +526,8 @@ export interface LinkMessage {
   /** Local arrival time (Unix ms); `null` for sent messages. */
   receivedAt: number | null;
   deliveryState: LinkDeliveryState;
+  /** Present when a delete kind has tombstoned the row. */
+  deleted?: boolean;
 }
 
 /**

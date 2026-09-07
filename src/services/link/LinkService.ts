@@ -47,6 +47,7 @@ import {
   decodeGroupEnvelope,
   GROUP_MESSAGE_KIND,
   GROUP_REACTION_KIND,
+  groupReadCursorId,
   isGroupWireKind,
   LINK_GROUP_FANOUT_PAYLOAD_TYPE,
   peekEnvelopeKind,
@@ -1188,13 +1189,17 @@ export const LinkService = {
   async markRead(conversationId: string, readAt: number = Date.now()): Promise<void> {
     const owner = KeyStore.getPubky();
     if (!owner) return;
+    const prev = await StorageService.getLinkReadCursor(owner, conversationId);
     await StorageService.setLinkReadCursor(owner, conversationId, readAt);
     const parsed = parseDmConversationId(conversationId);
     if (!parsed) return;
     const msgs =
       (await StorageService.getLinkMessagesForConversation?.(owner, conversationId, 200)) ?? [];
     const ids = msgs
-      .filter(row => row.senderPubky !== owner && row.sentAt <= readAt)
+      .filter(
+        row =>
+          row.senderPubky !== owner && row.sentAt <= readAt && (prev == null || row.sentAt > prev),
+      )
       .map(row => row.eventId);
     await emitReceiptIfEnabled(owner, parsed.counterpartyPubky, 'read', ids);
   },
@@ -1202,12 +1207,14 @@ export const LinkService = {
   async markGroupRead(channelId: string, readAt: number = Date.now()): Promise<void> {
     const owner = KeyStore.getPubky();
     if (!owner) return;
+    const prev = await StorageService.getLinkReadCursor(owner, groupReadCursorId(channelId));
     const msgs = await StorageService.listGroupMessages(owner, channelId, 200);
     const byAuthor = new Map<string, string[]>();
     for (const row of msgs) {
       if (row.senderPubky === owner) continue;
       if (row.kind !== GROUP_MESSAGE_KIND) continue;
       if (row.sentAt > readAt) continue;
+      if (prev != null && row.sentAt <= prev) continue;
       const list = byAuthor.get(row.senderPubky) ?? [];
       list.push(row.eventId);
       byAuthor.set(row.senderPubky, list);
@@ -3688,6 +3695,7 @@ async function routeHeldGroupInbound(
   peerTrust: GroupPeerTrust,
 ): Promise<void> {
   const items = await StorageService.getUnprocessedLinkStreamItems(ownerPubky, peerPubky);
+  const deliveredByChannel = new Map<string, string[]>();
   for (const item of items) {
     if (shouldDropOversizedKnownInbound(item.rawJson, item.kind)) {
       const peekedOver = peekEnvelopeKind(item.rawJson);
@@ -3714,8 +3722,17 @@ async function routeHeldGroupInbound(
       item,
       peerTrust,
     });
-    if (outcome === 'deferred') continue;
+    if (outcome.kind === 'deferred') continue;
     await StorageService.markLinkStreamItemProcessed(item.id);
+    if (outcome.deliveredEventId && outcome.channelId) {
+      deliveredByChannel.set(outcome.channelId, [
+        ...(deliveredByChannel.get(outcome.channelId) ?? []),
+        outcome.deliveredEventId,
+      ]);
+    }
+  }
+  for (const [channelId, ids] of deliveredByChannel) {
+    await emitReceiptIfEnabled(ownerPubky, peerPubky, 'delivered', ids, channelId);
   }
 }
 
@@ -3737,12 +3754,14 @@ async function routeGroupStreamItem(input: {
   peerPubky: PubkyKey;
   item: LinkStreamItem;
   peerTrust: GroupPeerTrust;
-}): Promise<'settled' | 'deferred'> {
+}): Promise<
+  { kind: 'deferred' } | { kind: 'settled'; deliveredEventId?: string; channelId?: string }
+> {
   const { ownerPubky, peerPubky, item, peerTrust } = input;
   const envelope = decodeGroupEnvelope(item.rawJson);
-  if (!envelope) return 'settled';
-  if (await isGroupInboundGated({ ownerPubky, envelope, peerTrust })) return 'deferred';
-  await applyGroupInbound({
+  if (!envelope) return { kind: 'settled' };
+  if (await isGroupInboundGated({ ownerPubky, envelope, peerTrust })) return { kind: 'deferred' };
+  const applied = await applyGroupInbound({
     ownerPubky,
     senderPubky: peerPubky,
     envelope,
@@ -3759,16 +3778,14 @@ async function routeGroupStreamItem(input: {
       kindHint: GROUP_REACTION_KIND,
     });
   }
-  if (envelope.kind === GROUP_MESSAGE_KIND) {
-    await emitReceiptIfEnabled(
-      ownerPubky,
-      peerPubky,
-      'delivered',
-      [envelope.event_id],
-      envelope.channel_id,
-    );
+  if (envelope.kind === GROUP_MESSAGE_KIND && applied === 'applied') {
+    return {
+      kind: 'settled',
+      deliveredEventId: envelope.event_id,
+      channelId: envelope.channel_id,
+    };
   }
-  return 'settled';
+  return { kind: 'settled' };
 }
 
 async function holdAsMessageRequest(
@@ -3924,6 +3941,8 @@ async function routeUnprocessedStreamItems(
   const items = await StorageService.getUnprocessedLinkStreamItems(ownerPubky, peerPubky);
   const received: LinkMessage[] = [];
   const seenInBatch = new Set<string>();
+  const deliveredDmIds: string[] = [];
+  const deliveredByChannel = new Map<string, string[]>();
   for (const item of items) {
     if (shouldDropOversizedKnownInbound(item.rawJson, item.kind)) {
       const peekedOver = peekEnvelopeKind(item.rawJson);
@@ -3986,8 +4005,14 @@ async function routeUnprocessedStreamItems(
         item,
         peerTrust,
       });
-      if (outcome === 'settled') {
+      if (outcome.kind === 'settled') {
         await StorageService.markLinkStreamItemProcessed(item.id);
+        if (outcome.deliveredEventId && outcome.channelId) {
+          deliveredByChannel.set(outcome.channelId, [
+            ...(deliveredByChannel.get(outcome.channelId) ?? []),
+            outcome.deliveredEventId,
+          ]);
+        }
       }
       continue;
     }
@@ -4022,7 +4047,13 @@ async function routeUnprocessedStreamItems(
     await StorageService.saveLinkMessage(row);
     await StorageService.markLinkStreamItemProcessed(item.id);
     received.push(row);
-    await emitReceiptIfEnabled(ownerPubky, peerPubky, 'delivered', [row.eventId]);
+    deliveredDmIds.push(row.eventId);
+  }
+  if (deliveredDmIds.length > 0) {
+    await emitReceiptIfEnabled(ownerPubky, peerPubky, 'delivered', deliveredDmIds);
+  }
+  for (const [channelId, ids] of deliveredByChannel) {
+    await emitReceiptIfEnabled(ownerPubky, peerPubky, 'delivered', ids, channelId);
   }
   return received;
 }

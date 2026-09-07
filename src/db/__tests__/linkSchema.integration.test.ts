@@ -62,7 +62,7 @@ import {
   SCHEMA_V16_STATEMENTS,
   SCHEMA_V17_STATEMENTS,
 } from '../schema';
-import { StorageService } from '../../services/StorageService';
+import { StorageService, CLEAR_ACCOUNT_NON_OWNER_TABLES } from '../../services/StorageService';
 import { KeyStore } from '../../services/KeyStore';
 import { paintOwner } from '../../services/paintedOwner';
 import { CHAT_MESSAGE_KIND, type HandshakeBudgetInput } from '../../types/link';
@@ -92,7 +92,7 @@ import {
   OWN_INVOICE_HASH_BACKFILL_SCAN_FROM,
   OWN_INVOICE_HASH_REPAIR_RETRY_META_KEY,
 } from '../ownInvoiceHashes';
-import { mkdtempSync, rmSync } from 'fs';
+import { mkdtempSync, readFileSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { dirname, join } from 'path';
 
@@ -2834,5 +2834,102 @@ describe('schema v21 — additive chat_kinds_v on links', () => {
       "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'chat_device_prefs'",
     );
     expect(prefs.rows).toHaveLength(1);
+  });
+
+  it('wipes v21 chat tables on clearAccountData', async () => {
+    const db = openMemoryDb();
+    openDbs.push(db);
+    setDbForTests(db);
+    await runMigrations(db);
+    const conv = `dm:${PEER}`;
+    await StorageService.setChatReceiptsEnabled(OWNER, false);
+    await StorageService.upsertChatTag({
+      ownerPubky: OWNER,
+      conversationId: conv,
+      channelId: null,
+      targetEventId: EVENT,
+      targetAuthorPubky: OWNER,
+      taggerPubky: PEER,
+      label: 'ok',
+      createdAt: 1,
+    });
+    db.executeSync(
+      `INSERT INTO chat_pins
+        (owner_pubky, conversation_id, channel_id, scope_key, target_event_id,
+         target_author_pubky, pinned_by, sent_at, event_id)
+       VALUES (?, ?, NULL, ?, ?, ?, ?, 1, ?)`,
+      [OWNER, conv, conv, EVENT, OWNER, PEER, EVENT],
+    );
+    db.executeSync(
+      `INSERT INTO chat_group_invites
+        (owner_pubky, channel_id, invite_id, sender_pubky, name, expires_at, event_id)
+       VALUES (?, 'chan', 'inv-1', ?, 'Crew', 9, ?)`,
+      [OWNER, PEER, EVENT],
+    );
+
+    await StorageService.clearAccountData(OWNER);
+
+    for (const table of ['chat_tags', 'chat_device_prefs', 'chat_pins', 'chat_group_invites']) {
+      const n = db.executeSync(`SELECT COUNT(*) AS n FROM ${table} WHERE owner_pubky = ?`, [OWNER])
+        .rows?.[0]?.n;
+      expect(Number(n)).toBe(0);
+    }
+  });
+
+  it('references every live owner-scoped table in clearAccountData', async () => {
+    const db = openMemoryDb();
+    openDbs.push(db);
+    setDbForTests(db);
+    await runMigrations(db);
+    const live = (db.executeSync(
+      `SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'`,
+    ).rows ?? []) as Array<{ name: string }>;
+    const src = readFileSync(join(__dirname, '../../services/StorageService.ts'), 'utf8');
+    const start = src.indexOf('async clearAccountData');
+    const end = src.indexOf('async retryPendingCleanup');
+    const wipe = src.slice(start, end);
+    const allow = new Set<string>(CLEAR_ACCOUNT_NON_OWNER_TABLES);
+    for (const row of live) {
+      if (allow.has(row.name)) continue;
+      if (row.name.includes('_fts')) continue;
+      const cols = (db.executeSync(`PRAGMA table_info(${row.name})`).rows ?? []).map(col =>
+        String(col.name),
+      );
+      if (!cols.includes('owner_pubky')) continue;
+      expect(wipe).toMatch(new RegExp(`DELETE FROM ${row.name}\\b`));
+    }
+    expect(src).toMatch(/FROM chat_tags[\s\S]*LIMIT 2000/);
+  });
+
+  it('caps inbound tags using receiver time not backdated sent_at', async () => {
+    const db = openMemoryDb();
+    openDbs.push(db);
+    setDbForTests(db);
+    await runMigrations(db);
+    const conv = `dm:${PEER}`;
+    for (let i = 0; i < 100; i += 1) {
+      const result = await StorageService.upsertChatTag({
+        ownerPubky: OWNER,
+        conversationId: conv,
+        channelId: null,
+        targetEventId: `00000000-0000-4000-8000-${i.toString(16).padStart(12, '0')}`,
+        targetAuthorPubky: OWNER,
+        taggerPubky: PEER,
+        label: 'ok',
+        createdAt: 1,
+      });
+      expect(result).toBe('inserted');
+    }
+    const capped = await StorageService.upsertChatTag({
+      ownerPubky: OWNER,
+      conversationId: conv,
+      channelId: null,
+      targetEventId: EVENT,
+      targetAuthorPubky: OWNER,
+      taggerPubky: PEER,
+      label: 'nope',
+      createdAt: 1,
+    });
+    expect(capped).toBe('cap');
   });
 });

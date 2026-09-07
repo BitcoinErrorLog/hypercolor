@@ -157,6 +157,12 @@ jest.mock('../../StorageService', () => ({
     listDeliveryQueue: jest.fn(),
     listPaymentRequestsWithPendingEvent: jest.fn().mockResolvedValue([]),
     getLinkMessageByEventId: jest.fn(),
+    getGroupMember: jest.fn(),
+    getGroupMessage: jest.fn(),
+    listGroupMessages: jest.fn().mockResolvedValue([]),
+    applyMonotonicDelivery: jest.fn(),
+    upsertChatTag: jest.fn(),
+    saveGroupDeferred: jest.fn(),
     hasQueueItemForMessage: jest.fn(),
     clearPaymentPendingEvent: jest.fn(),
     enqueue: jest.fn(),
@@ -200,7 +206,7 @@ jest.mock('../../StorageService', () => ({
 }));
 
 jest.mock('../../group/applyGroupInbound', () => ({
-  applyGroupInbound: jest.fn().mockResolvedValue(undefined),
+  applyGroupInbound: jest.fn().mockResolvedValue('applied'),
 }));
 
 jest.mock('../../attachments/applyAttachmentInbound', () => ({
@@ -871,6 +877,10 @@ describe('LinkService', () => {
   describe('enable (Ring path)', () => {
     it('starts a combined Paykit + Hypercolor write grant, then provisions a native-owned receiver', async () => {
       mockedStorage.getLinkReceiver.mockResolvedValue(null);
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        text: async () => '{"noisePublicKey":"noise-pk","capabilities":{"privatePayments":true}}',
+      }) as unknown as typeof fetch;
       mockedNative.startAuthFlow.mockResolvedValue({
         flowId: 'flow-1',
         authorizationUrl: 'pubkyauth://grant',
@@ -4831,6 +4841,37 @@ describe('LinkService', () => {
           }),
         }),
       );
+    });
+
+    it('receipts only ids newer than the previous read cursor', async () => {
+      mockedStorage.getLink.mockResolvedValue(
+        storedLink({ status: 'established', snapshot: 'est-1', chatKindsV: 1 }),
+      );
+      mockedStorage.getLinkReadCursor.mockResolvedValue(NOW - 10);
+      mockedStorage.getLinkMessagesForConversation.mockResolvedValue([
+        sendingRow({
+          senderPubky: PEER,
+          direction: 'received',
+          eventId: 'old-id',
+          sentAt: NOW - 20,
+        }),
+        sendingRow({
+          senderPubky: PEER,
+          direction: 'received',
+          eventId: EVENT_ID,
+          sentAt: NOW,
+        }),
+      ]);
+      mockedNative.sendPrivateMessageJson.mockResolvedValue({ snapshot: 'snap' });
+      mockedNative.restoreLink.mockResolvedValue({ linkId: 'handle-1' });
+
+      await LinkService.markRead(CONVERSATION_ID, NOW);
+
+      const payload = String(
+        mockedStorage.persistControlSendIntent.mock.calls[0]?.[0]?.queueItem.payload,
+      );
+      expect(payload).toContain(EVENT_ID);
+      expect(payload).not.toContain('old-id');
     });
   });
 

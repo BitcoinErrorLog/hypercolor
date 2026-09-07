@@ -19,10 +19,11 @@ describe('formatDeliveryState', () => {
     expect(formatDeliveryState('failed')).toBe(COPY.failed);
   });
 
-  it('maps delivered and read to receipt words', () => {
+  it('maps delivered and read to sent when receipts are off', () => {
     expect(formatDeliveryState('delivered')).toBe(COPY.delivered);
     expect(formatDeliveryState('read')).toBe(COPY.read);
-    expect(formatDeliveryState('sent')).toBe(COPY.sent);
+    expect(formatDeliveryState('delivered', false)).toBe(COPY.sent);
+    expect(formatDeliveryState('read', false)).toBe(COPY.sent);
     for (const state of ['sending', 'sent', 'failed', 'delivered', 'read', 'unknown']) {
       const label = formatDeliveryState(state);
       expect(OUTBOUND_WORDS.has(label)).toBe(true);

@@ -148,6 +148,7 @@ export default function ThreadScreen({ route }: Props) {
   const [nickname, setNickname] = useState<string | null>(null);
   const [threadPrefs, setThreadPrefs] = useState({ muted: false, archived: false });
   const [chatTags, setChatTags] = useState<ChatTagRow[]>([]);
+  const [receiptsEnabled, setReceiptsEnabled] = useState(true);
   const [tagPickerOpen, setTagPickerOpen] = useState(false);
   const [tagTarget, setTagTarget] = useState<{ eventId: string; authorPubky: string } | null>(null);
   const [linkStatus, setLinkStatus] = useState<LinkStatus | null>(null);
@@ -164,18 +165,22 @@ export default function ThreadScreen({ route }: Props) {
 
   const reloadEncrypted = useCallback(async () => {
     if (!localPubky) return;
-    const [msgs, atts, pays, tips, loadedTags] = await Promise.all([
+    const [msgs, atts, pays, tips, loadedTags, prefs] = await Promise.all([
       StorageService.getLinkMessagesForConversation(localPubky, conversationId, 200),
       StorageService.listAttachmentsForConversation(localPubky, conversationId),
       StorageService.listPaymentRequestsForPeer(localPubky, participantPubky),
       StorageService.listTipEndpoints(localPubky, participantPubky),
       StorageService.listChatTagsForScope(localPubky, conversationId),
+      typeof StorageService.getChatDevicePrefs === 'function'
+        ? StorageService.getChatDevicePrefs(localPubky)
+        : Promise.resolve({ receiptsEnabled: true, typingEnabled: true }),
     ]);
     setLinkMessages(msgs);
     setAttachments(atts);
     setPayments(pays);
     setTipEndpoints(tips);
     setChatTags(loadedTags);
+    setReceiptsEnabled(prefs?.receiptsEnabled !== false);
     const failedIds = [
       ...msgs.filter(row => row.deliveryState === 'failed').map(row => row.eventId),
       ...atts.filter(row => row.deliveryState === 'failed').map(row => row.eventId),
@@ -309,6 +314,7 @@ export default function ThreadScreen({ route }: Props) {
       emojiPickerOpen={emojiPickerOpen}
       tagPickerOpen={tagPickerOpen}
       tags={chatTags}
+      receiptsEnabled={receiptsEnabled}
       onCloseTagPicker={() => {
         setTagPickerOpen(false);
         setTagTarget(null);
@@ -321,11 +327,13 @@ export default function ThreadScreen({ route }: Props) {
           targetAuthorPubky: tagTarget.authorPubky,
           label,
           op: 'add',
-        }).then(() => {
-          setTagPickerOpen(false);
-          setTagTarget(null);
-          void reloadEncrypted();
-        });
+        })
+          .then(() => {
+            setTagPickerOpen(false);
+            setTagTarget(null);
+            void reloadEncrypted();
+          })
+          .catch(() => undefined);
       }}
       onToggleTag={({ eventId, authorPubky, label, mine }) => {
         void LinkService.sendTag({
@@ -334,7 +342,9 @@ export default function ThreadScreen({ route }: Props) {
           targetAuthorPubky: authorPubky,
           label,
           op: mine ? 'remove' : 'add',
-        }).then(() => void reloadEncrypted());
+        })
+          .then(() => void reloadEncrypted())
+          .catch(() => undefined);
       }}
       onRequestTag={target => {
         setTagTarget(target);
@@ -627,6 +637,7 @@ export function ThreadScreenContent({
   onCopyPubky,
   onTakeoverSuccess,
   tags = [],
+  receiptsEnabled = true,
   tagPickerOpen = false,
   onCloseTagPicker,
   onPickTag,
@@ -692,6 +703,7 @@ export function ThreadScreenContent({
   onCopyPubky: () => void;
   onTakeoverSuccess?: () => void;
   tags?: ChatTagRow[];
+  receiptsEnabled?: boolean;
   tagPickerOpen?: boolean;
   onCloseTagPicker?: () => void;
   onPickTag?: (label: string) => void;
@@ -837,9 +849,12 @@ export function ThreadScreenContent({
             testID={isMine ? 'threadBubbleMine' : 'threadBubbleTheirs'}
             mine={isMine}
             time={formatTime(item.message.sentAt)}
-            status={isMine ? formatDeliveryState(item.message.deliveryState) : null}
+            status={
+              isMine ? formatDeliveryState(item.message.deliveryState, receiptsEnabled) : null
+            }
             statusTextVisible={
               isMine &&
+              receiptsEnabled &&
               (item.message.deliveryState === 'delivered' || item.message.deliveryState === 'read')
             }
             failed={item.message.deliveryState === 'failed'}
@@ -916,6 +931,7 @@ export function ThreadScreenContent({
       tags,
       onRequestTag,
       onToggleTag,
+      receiptsEnabled,
     ],
   );
 
