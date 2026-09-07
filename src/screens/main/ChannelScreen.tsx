@@ -38,6 +38,7 @@ import { useAuthStore } from '../../stores/authStore';
 import { StorageService } from '../../services/StorageService';
 import { GroupService, subscribeGroupEvents } from '../../services/group/GroupService';
 import { LinkService } from '../../services/link/LinkService';
+import { isEmojiGraphemeLabel } from '../../types/chatKindValidation';
 import { AttachmentBubble } from '../../components/AttachmentBubble';
 import { eventIdsWithDeliveryQueue } from '../../ui/failedSendRetry';
 import {
@@ -257,14 +258,17 @@ export default function ChannelScreen({ route }: Props) {
       }}
       onPickTag={label => {
         if (!tagTarget) return;
-        void LinkService.sendTag({
-          peerPubky: localPubky ?? channelId,
-          targetEventId: tagTarget.eventId,
-          targetAuthorPubky: tagTarget.authorPubky,
-          label,
-          op: 'add',
-          channelId,
-        })
+        const run = isEmojiGraphemeLabel(label)
+          ? GroupService.reactToMessage(channelId, tagTarget.eventId, label, tagTarget.authorPubky)
+          : LinkService.sendTag({
+              peerPubky: localPubky ?? channelId,
+              targetEventId: tagTarget.eventId,
+              targetAuthorPubky: tagTarget.authorPubky,
+              label,
+              op: 'add',
+              channelId,
+            });
+        void run
           .then(() => {
             setTagPickerOpen(false);
             setTagTarget(null);

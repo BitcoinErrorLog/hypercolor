@@ -5,6 +5,7 @@ import {
   chatKindByteProofChannelId,
   parseChatReceiptV0,
   parseChatTagV0,
+  parseChatDeleteV0,
   rejectLwwSentAtSkew,
   serializedUtf8Bytes,
 } from '../chatKindValidation';
@@ -84,6 +85,38 @@ describe('chat.tag.v0 / chat.receipt.v0 spec vectors', () => {
     });
     const parsedReceipt = parseChatReceiptV0(receipt.json, ctx);
     expect(parsedReceipt).toEqual({ ok: receipt.envelope });
+  });
+
+  it('parses chat.delete.v0 and rejects a channel-scoped envelope', () => {
+    const raw = JSON.stringify({
+      version: 1,
+      kind: 'chat.delete.v0',
+      event_id: uuid,
+      sent_at: sentAt,
+      target_event_id: uuid,
+    });
+    expect(parseChatDeleteV0(raw, ctx)).toEqual({
+      ok: {
+        version: 1,
+        kind: 'chat.delete.v0',
+        event_id: uuid,
+        sent_at: sentAt,
+        target_event_id: uuid,
+      },
+    });
+    expect(
+      parseChatDeleteV0(
+        JSON.stringify({
+          version: 1,
+          kind: 'chat.delete.v0',
+          event_id: uuid,
+          sent_at: sentAt,
+          target_event_id: uuid,
+          channel_id: chatKindByteProofChannelId(),
+        }),
+        ctx,
+      ),
+    ).toEqual({ error: 'bad-channel-id' });
   });
 
   it('rejects malformed and oversized known envelopes', () => {

@@ -244,6 +244,11 @@ describe('payment wire contracts', () => {
       expect(isKnownInboundChatKind(kind)).toBe(true);
     }
     expect(isKnownInboundChatKind('paykit.unknown')).toBe(false);
+    expect(isKnownInboundChatKind('chat.delete.v0')).toBe(true);
+    expect(isKnownInboundChatKind('chat.typing.v0')).toBe(false);
+    expect(isKnownInboundChatKind('chat.edit.v0')).toBe(false);
+    expect(isKnownInboundChatKind('chat.pin.v0')).toBe(false);
+    expect(isKnownInboundChatKind('chat.group.invite.v0')).toBe(false);
   });
 
   it('enforces the Encrypted Link byte budget on outbound envelopes', () => {

@@ -90,6 +90,14 @@ export interface ChatReceiptEnvelope {
   channel_id?: string;
 }
 
+export interface ChatDeleteEnvelope {
+  version: 1;
+  kind: typeof CHAT_DELETE_KIND;
+  event_id: string;
+  sent_at: number;
+  target_event_id: string;
+}
+
 export const CHAT_KIND_UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const PUBKY_LENGTH = 52;
@@ -118,7 +126,7 @@ function graphemeCount(value: string): number {
   return Array.from(value).length;
 }
 
-function isEmojiGraphemeLabel(value: string): boolean {
+export function isEmojiGraphemeLabel(value: string): boolean {
   if (graphemeCount(value) !== 1) return false;
   if (WORD_LABEL.test(value)) return false;
   return /\p{Extended_Pictographic}|\p{Emoji_Presentation}/u.test(value);
@@ -273,6 +281,30 @@ export function parseChatReceiptV0(
   };
   if (common.ok.channel_id) envelope.channel_id = common.ok.channel_id;
   return { ok: envelope };
+}
+
+export function parseChatDeleteV0(
+  raw: string,
+  ctx: ChatKindParseCtx,
+): ChatKindParseResult<ChatDeleteEnvelope> {
+  const parsed = parseObject(raw);
+  if ('error' in parsed) return parsed;
+  const common = parseCommon(parsed.value, CHAT_DELETE_KIND, ctx);
+  if ('error' in common) return common;
+  if (common.ok.channel_id) return { error: 'bad-channel-id' };
+  const candidate = parsed.value;
+  if (typeof candidate.target_event_id !== 'string' || !isChatKindUuid(candidate.target_event_id)) {
+    return { error: 'bad-target-id' };
+  }
+  return {
+    ok: {
+      version: 1,
+      kind: CHAT_DELETE_KIND,
+      event_id: common.ok.event_id,
+      sent_at: common.ok.sent_at,
+      target_event_id: candidate.target_event_id,
+    },
+  };
 }
 
 export function buildChatTagEnvelope(input: {

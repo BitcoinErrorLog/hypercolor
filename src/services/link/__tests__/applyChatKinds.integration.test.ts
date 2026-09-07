@@ -9,6 +9,7 @@ jest.mock('../../KeyStore', () => ({
     getPubky: jest.fn(),
     deleteAttachmentSecrets: jest.fn().mockResolvedValue([]),
     clearAttachmentSecretsForOwner: jest.fn().mockResolvedValue([]),
+    deleteAttachmentSecret: jest.fn().mockResolvedValue(true),
   },
 }));
 
@@ -17,7 +18,7 @@ import { runMigrations } from '../../../db/migrations';
 import { openMemoryDb } from '../../../db/__tests__/betterSqliteAdapter';
 import { StorageService } from '../../StorageService';
 import { paintOwner } from '../../paintedOwner';
-import { applyInboundTagOrReceipt } from '../applyChatKinds';
+import { applyInboundTagOrReceipt, applyInboundDelete } from '../applyChatKinds';
 import {
   CHAT_MESSAGE_KIND,
   CHAT_RECEIPT_KIND,
@@ -43,6 +44,7 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
+  jest.restoreAllMocks();
   for (const db of liveDbs) {
     try {
       db.close();
@@ -221,5 +223,85 @@ describe('applyChatKinds integration', () => {
     });
     const rows = await StorageService.listGroupMessages(OWNER, channelId, 10);
     expect(rows[0]?.deliveryState).toBe('sent');
+  });
+
+  it('tombstones a DM only when the delete sender is the author and redacts stream/queue/backup', async () => {
+    await seedDm(PEER, PEER, TARGET);
+    await StorageService.saveLinkStreamItems([
+      {
+        id: 'stream-del',
+        ownerPubky: OWNER,
+        peerPubky: PEER,
+        kind: CHAT_MESSAGE_KIND,
+        rawJson: JSON.stringify({
+          version: 1,
+          kind: CHAT_MESSAGE_KIND,
+          event_id: TARGET,
+          sent_at: 10,
+          body: 'secret-body',
+        }),
+        receivedAt: 11,
+      },
+    ]);
+    await StorageService.persistControlSendIntent({
+      ownerPubky: OWNER,
+      queueItem: {
+        id: 'q-del',
+        messageId: TARGET,
+        recipientPubky: PEER,
+        payload: JSON.stringify({ type: 'link.chat.message', ownerPubky: OWNER, eventId: TARGET }),
+        attempts: 0,
+        nextRetryAt: 1,
+        createdAt: 1,
+      },
+    });
+    const forged = JSON.stringify({
+      version: 1,
+      kind: 'chat.delete.v0',
+      event_id: TAG_EVENT,
+      sent_at: 30,
+      target_event_id: TARGET,
+    });
+    const forgedResult = await applyInboundDelete({
+      ownerPubky: OWNER,
+      senderPubky: OTHER,
+      peerPubky: PEER,
+      rawJson: forged,
+      peerTrust: 'accepted',
+    });
+    expect(forgedResult).toBe('processed');
+    expect((await StorageService.getLinkMessageByEventId(OWNER, PEER, TARGET))?.body).toBe('hi');
+
+    const ok = JSON.stringify({
+      version: 1,
+      kind: 'chat.delete.v0',
+      event_id: TAG_EVENT,
+      sent_at: 30,
+      target_event_id: TARGET,
+    });
+    const result = await applyInboundDelete({
+      ownerPubky: OWNER,
+      senderPubky: PEER,
+      peerPubky: PEER,
+      rawJson: ok,
+      peerTrust: 'accepted',
+    });
+    expect(result).toBe('processed');
+    const tomb = await StorageService.getLinkMessageByEventId(OWNER, PEER, TARGET);
+    expect(tomb?.deleted).toBe(true);
+    expect(tomb?.body).toBe('');
+    expect(JSON.parse(tomb?.rawJson ?? '{}').deleted).toBe(true);
+    expect(
+      (
+        await StorageService.getLinkMessagesForConversation(OWNER, buildDmConversationId(PEER), 10)
+      )[0]?.body,
+    ).toBe('');
+    const stream = await StorageService.getUnprocessedLinkStreamItems(OWNER, PEER);
+    expect(stream.every(row => !row.rawJson.includes('secret-body'))).toBe(true);
+    expect(await StorageService.hasQueueItemForMessage(TARGET)).toBe(false);
+    const snapshot = await StorageService.collectOwnerBackup(OWNER);
+    const backed = snapshot.linkMessages.find(row => row.eventId === TARGET);
+    expect(backed?.body).toBe('');
+    expect(backed?.rawJson.includes('secret-body')).toBe(false);
   });
 });

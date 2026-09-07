@@ -20,6 +20,7 @@ import {
   SCHEMA_V19_STATEMENTS,
   SCHEMA_V20_STATEMENTS,
   SCHEMA_V21_STATEMENTS,
+  SCHEMA_V22_STATEMENTS,
 } from './schema';
 import type { SqlExecutor, SqlValue } from './sql';
 import {
@@ -49,7 +50,7 @@ import {
  */
 
 /** Test seam: current `user_version` after `runMigrations`. Do not hard-code. */
-export const CURRENT_SCHEMA_VERSION = 21;
+export const CURRENT_SCHEMA_VERSION = 22;
 const CURRENT_VERSION = CURRENT_SCHEMA_VERSION;
 
 type Migration = {
@@ -79,6 +80,7 @@ const MIGRATIONS: readonly Migration[] = [
   { version: 19, statements: SCHEMA_V19_STATEMENTS },
   { version: 20, statements: SCHEMA_V20_STATEMENTS },
   { version: 21, statements: SCHEMA_V21_STATEMENTS },
+  { version: 22, statements: SCHEMA_V22_STATEMENTS },
 ];
 
 export async function runMigrations(db: SqlExecutor): Promise<void> {

@@ -37,6 +37,7 @@ jest.mock('../../KeyStore', () => ({
 jest.mock('../../link/LinkService', () => ({
   LinkService: {
     sendPersistedLinkJson: jest.fn(),
+    sendTag: jest.fn(),
   },
 }));
 
@@ -380,6 +381,21 @@ describe('GroupService', () => {
     expect(queued.some(item => item.recipientPubky === PEER_A)).toBe(false);
     expect(mockedLink.sendPersistedLinkJson).toHaveBeenCalledWith(
       expect.objectContaining({ peerPubky: PEER_A }),
+    );
+  });
+
+  it('dual-writes chat.tag.v0 when reacting with a picker emoji', async () => {
+    const channelId = await createPrivateGroup();
+    const sent = await GroupService.sendGroupMessage(channelId, 'react to me');
+    mockedLink.sendTag.mockResolvedValue(undefined);
+    await GroupService.reactToMessage(channelId, sent.eventId, '👍', OWNER);
+    expect(mockedLink.sendTag).toHaveBeenCalledWith(
+      expect.objectContaining({
+        targetEventId: sent.eventId,
+        label: '👍',
+        op: 'add',
+        channelId,
+      }),
     );
   });
 

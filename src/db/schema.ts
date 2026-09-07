@@ -264,6 +264,14 @@ export const SCHEMA_V21_STATEMENTS: readonly string[] = [
 ];
 
 /**
+ * Schema v22 — DM unsend tombstone flag on `link_messages` (kinds-v1.md
+ * `chat.delete.v0` / R3). Additive ALTER. Frozen v1–v21 are not rewritten.
+ */
+export const SCHEMA_V22_STATEMENTS: readonly string[] = [
+  `ALTER TABLE link_messages ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0`,
+];
+
+/**
  * Schema v15 — move the handshake advance budget off the `links` row.
  *
  * v14 put `pending_advances` / `next_advance_at` on `links`, which is deleted

@@ -20,6 +20,7 @@ import {
   assertValidReceiverPath,
   buildChatMessageEnvelope,
   buildDmConversationId,
+  CHAT_DELETE_KIND,
   CHAT_MESSAGE_KIND,
   CHAT_RECEIPT_KIND,
   CHAT_REACTION_KIND,
@@ -55,6 +56,7 @@ import {
 } from '../../types/group';
 import { applyGroupInbound } from '../group/applyGroupInbound';
 import {
+  applyInboundDelete,
   applyInboundTagOrReceipt,
   applyLocalTag,
   buildOutboundReceipt,
@@ -1466,6 +1468,7 @@ export function resetLinkServiceHarnessState(): void {
   restoreInFlight = null;
   liveHandles.clear();
   queues.clear();
+  heldPeerQueues.clear();
   resetChatKindsUpgradeReplayedForTests();
   peerQueueGenerations.clear();
   handshakeWatch.clear();
@@ -3732,7 +3735,15 @@ async function routeHeldGroupInbound(
     }
   }
   for (const [channelId, ids] of deliveredByChannel) {
-    await emitReceiptIfEnabled(ownerPubky, peerPubky, 'delivered', ids, channelId);
+    await emitReceiptIfEnabled(
+      ownerPubky,
+      peerPubky,
+      'delivered',
+      ids,
+      channelId,
+      undefined,
+      peerTrust,
+    );
   }
 }
 
@@ -3983,6 +3994,19 @@ async function routeUnprocessedStreamItems(
         receivedAt: item.receivedAt,
       });
       await StorageService.markLinkStreamItemProcessed(item.id);
+      continue;
+    }
+    if (peeked === CHAT_DELETE_KIND) {
+      const result = await applyInboundDelete({
+        ownerPubky,
+        senderPubky: peerPubky,
+        peerPubky,
+        rawJson: item.rawJson,
+        peerTrust,
+      });
+      if (result === 'processed') {
+        await StorageService.markLinkStreamItemProcessed(item.id);
+      }
       continue;
     }
     if (peeked === CHAT_TAG_KIND || peeked === CHAT_RECEIPT_KIND || peeked === CHAT_REACTION_KIND) {
@@ -4462,33 +4486,46 @@ async function dispatchControlPam(
   rawJson: string,
   kind: string,
 ): Promise<void> {
-  await withQueue(peerPubky, async () => {
-    abortIfOwnerChanged(ownerPubky);
-    let outcome: EnsureOutcome;
-    try {
-      outcome = await ensureLinkLocked(peerPubky, 'user', false, ownerPubky);
-    } catch {
-      outcome = 'handshaking-initiator';
-    }
-    abortIfOwnerChanged(ownerPubky);
-    const item = queueItemForPeer(ownerPubky, peerPubky, eventId, rawJson, kind);
-    if (typeof StorageService.persistControlSendIntent !== 'function') return;
-    await StorageService.persistControlSendIntent({ ownerPubky, queueItem: item });
-    if (outcome !== 'ready') return;
-    try {
-      const handle = requireEstablishedHandle(ownerPubky, peerPubky);
-      const wireJson = await wireJsonForNativeSend(kind, rawJson, ownerPubky, ownerPubky, eventId);
-      const { snapshot } = await PaykitLinkNative.sendPrivateMessageJson(handle, wireJson);
-      await StorageService.finalizeControlSend({
-        ownerPubky,
-        peerPubky,
-        snapshot,
-        queueId: item.id,
-      });
-    } catch (err) {
-      if (err instanceof LinkSendError && err.code === 'owner-changed') throw err;
-    }
-  });
+  const run = () => dispatchControlPamLocked(ownerPubky, peerPubky, eventId, rawJson, kind);
+  if (heldPeerQueues.has(peerQueueKey(peerPubky))) {
+    await run();
+    return;
+  }
+  await withQueue(peerPubky, run);
+}
+
+async function dispatchControlPamLocked(
+  ownerPubky: PubkyKey,
+  peerPubky: PubkyKey,
+  eventId: string,
+  rawJson: string,
+  kind: string,
+): Promise<void> {
+  abortIfOwnerChanged(ownerPubky);
+  let outcome: EnsureOutcome;
+  try {
+    outcome = await ensureLinkLocked(peerPubky, 'user', false, ownerPubky);
+  } catch {
+    outcome = 'handshaking-initiator';
+  }
+  abortIfOwnerChanged(ownerPubky);
+  const item = queueItemForPeer(ownerPubky, peerPubky, eventId, rawJson, kind);
+  if (typeof StorageService.persistControlSendIntent !== 'function') return;
+  await StorageService.persistControlSendIntent({ ownerPubky, queueItem: item });
+  if (outcome !== 'ready') return;
+  try {
+    const handle = requireEstablishedHandle(ownerPubky, peerPubky);
+    const wireJson = await wireJsonForNativeSend(kind, rawJson, ownerPubky, ownerPubky, eventId);
+    const { snapshot } = await PaykitLinkNative.sendPrivateMessageJson(handle, wireJson);
+    await StorageService.finalizeControlSend({
+      ownerPubky,
+      peerPubky,
+      snapshot,
+      queueId: item.id,
+    });
+  } catch (err) {
+    if (err instanceof LinkSendError && err.code === 'owner-changed') throw err;
+  }
 }
 
 async function emitReceiptIfEnabled(
@@ -4498,7 +4535,9 @@ async function emitReceiptIfEnabled(
   eventIds: string[],
   channelId?: string,
   peerKnownV1?: boolean,
+  peerTrust: GroupPeerTrust = 'accepted',
 ): Promise<void> {
+  if (peerTrust === 'gated') return;
   if (typeof StorageService.getChatDevicePrefs !== 'function') return;
   const prefs = await StorageService.getChatDevicePrefs(ownerPubky);
   if (!prefs?.receiptsEnabled) return;
@@ -4888,11 +4927,20 @@ async function commitSignOutWipe(input: {
  * Serializes operations per counterparty. Settled entries are pruned so the
  * map cannot grow without bound across a long-lived process.
  */
-async function withQueue<T>(peerPubky: PubkyKey, operation: () => Promise<T>): Promise<T> {
+const heldPeerQueues = new Set<string>();
+
+function peerQueueKey(peerPubky: PubkyKey): string {
   const owner = session?.pubky ?? KeyStore.getPubky() ?? '';
-  const key = `${owner}:${peerPubky}`;
+  return `${owner}:${peerPubky}`;
+}
+
+async function withQueue<T>(peerPubky: PubkyKey, operation: () => Promise<T>): Promise<T> {
+  const key = peerQueueKey(peerPubky);
   const previous = queues.get(key) ?? Promise.resolve();
-  const next = previous.then(operation, operation);
+  const next = previous.then(
+    () => runHeldPeerQueue(key, operation),
+    () => runHeldPeerQueue(key, operation),
+  );
   const tracked = next.catch(() => undefined);
   queues.set(key, tracked);
   try {
@@ -4904,9 +4952,19 @@ async function withQueue<T>(peerPubky: PubkyKey, operation: () => Promise<T>): P
   }
 }
 
+async function runHeldPeerQueue<T>(key: string, operation: () => Promise<T>): Promise<T> {
+  heldPeerQueues.add(key);
+  try {
+    return await operation();
+  } finally {
+    heldPeerQueues.delete(key);
+  }
+}
+
 function resetPeerQueue(ownerPubky: PubkyKey, peerPubky: PubkyKey): void {
   const key = `${ownerPubky}:${peerPubky}`;
   queues.delete(key);
+  heldPeerQueues.delete(key);
   peerQueueGenerations.set(key, currentQueueGeneration(ownerPubky, peerPubky) + 1);
 }
 

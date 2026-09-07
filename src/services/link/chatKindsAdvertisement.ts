@@ -13,22 +13,45 @@ import { StorageService } from '../StorageService';
 import { PaykitLinkNative, type ReceiverMarker } from './PaykitLinkNative';
 
 const chatKindsUpgradeReplayed = new Set<string>();
+const advertiseRetryOwners = new Set<string>();
 
 export function resetChatKindsUpgradeReplayedForTests(): void {
   chatKindsUpgradeReplayed.clear();
+  advertiseRetryOwners.clear();
+}
+
+export function chatKindsAdvertiseRetryPending(ownerPubky: PubkyKey): boolean {
+  return advertiseRetryOwners.has(ownerPubky);
 }
 
 export async function putChatKindsVReceiverJson(
   sessionAlias: string,
   ownerPubky: PubkyKey,
-  _noisePublicKey: string,
+  noisePublicKey: string,
 ): Promise<void> {
   const origin = await resolveHomeserverOrigin(ownerPubky);
-  const current = await getPublicReceiverJson(ownerPubky, origin);
-  if (current === null) return;
-  const body = addChatKindsVToReceiverJson(current);
-  if (body === null) return;
+  const first = await getPublicReceiverJson(ownerPubky, origin);
+  if (first === null) {
+    advertiseRetryOwners.add(ownerPubky);
+    return;
+  }
+  const latest = await getPublicReceiverJson(ownerPubky, origin);
+  if (latest === null) {
+    advertiseRetryOwners.add(ownerPubky);
+    return;
+  }
+  const latestDoc = parseReceiverMarkerJson(latest);
+  if (latestDoc?.noisePublicKey && latestDoc.noisePublicKey !== noisePublicKey) {
+    advertiseRetryOwners.add(ownerPubky);
+    return;
+  }
+  const body = addChatKindsVToReceiverJson(latest);
+  if (body === null) {
+    advertiseRetryOwners.delete(ownerPubky);
+    return;
+  }
   await PaykitLinkNative.putPublic(sessionAlias, receiverJsonPubkyUrl(ownerPubky), body, origin);
+  advertiseRetryOwners.delete(ownerPubky);
 }
 
 async function getPublicReceiverJson(pubky: PubkyKey, origin: string): Promise<string | null> {

@@ -20,6 +20,7 @@ import { StorageService } from '../../StorageService';
 import {
   persistPeerChatKindsVFromMarker,
   putChatKindsVReceiverJson,
+  chatKindsAdvertiseRetryPending,
   resetChatKindsUpgradeReplayedForTests,
 } from '../chatKindsAdvertisement';
 import { CHAT_KINDS_V_KEY, receiverJsonPubkyUrl } from '../../../types/receiverMarker';
@@ -54,6 +55,7 @@ describe('chat_kinds_v advertisement RMW', () => {
     expect(body).toContain('"keep":true');
     expect(body).toContain(`"${CHAT_KINDS_V_KEY}":1`);
     expect(mockedNative.putPublic.mock.calls[0]?.[1]).toBe(receiverJsonPubkyUrl(OWNER));
+    expect(chatKindsAdvertiseRetryPending(OWNER)).toBe(false);
 
     mockedNative.putPublic.mockClear();
     global.fetch = jest.fn().mockResolvedValue({
@@ -63,6 +65,33 @@ describe('chat_kinds_v advertisement RMW', () => {
 
     await putChatKindsVReceiverJson('alias', OWNER, 'abc');
     expect(mockedNative.putPublic).not.toHaveBeenCalled();
+    expect(chatKindsAdvertiseRetryPending(OWNER)).toBe(true);
+
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      text: async () => existing,
+    }) as unknown as typeof fetch;
+    await putChatKindsVReceiverJson('alias', OWNER, 'abc');
+    expect(mockedNative.putPublic).toHaveBeenCalledTimes(1);
+    expect(chatKindsAdvertiseRetryPending(OWNER)).toBe(false);
+  });
+
+  it('skips PUT when a re-GET shows a different noisePublicKey', async () => {
+    global.fetch = jest
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        text: async () => '{"noisePublicKey":"abc"}',
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        text: async () => '{"noisePublicKey":"other"}',
+      }) as unknown as typeof fetch;
+    mockedNative.putPublic.mockResolvedValue(undefined);
+
+    await putChatKindsVReceiverJson('alias', OWNER, 'abc');
+    expect(mockedNative.putPublic).not.toHaveBeenCalled();
+    expect(chatKindsAdvertiseRetryPending(OWNER)).toBe(true);
   });
 
   it('does not persist 0 over a stored v1 when the HTTP GET fails', async () => {

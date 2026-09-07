@@ -1456,7 +1456,15 @@ export const StorageService = {
       .map(rowToLinkMessage)
       .map(message => ({
         ...message,
-        rawJson: persistRawJson(message.kind, message.rawJson),
+        body: message.deleted ? '' : message.body,
+        rawJson: message.deleted
+          ? JSON.stringify({
+              kind: message.kind,
+              event_id: message.eventId,
+              sent_at: message.sentAt,
+              deleted: true,
+            })
+          : persistRawJson(message.kind, message.rawJson),
       }));
     const readCursors = (
       db.executeSync(
@@ -3562,6 +3570,42 @@ export const StorageService = {
       );
     });
   },
+
+  async tombstoneLinkMessage(input: {
+    ownerPubky: PubkyKey;
+    peerPubky: PubkyKey;
+    senderPubky: PubkyKey;
+    eventId: string;
+    redactedRawJson: string;
+  }): Promise<void> {
+    await ownedTransact(input.ownerPubky, db => {
+      const ts = now();
+      db.executeSync(
+        `UPDATE link_messages
+         SET deleted = 1, body = ?, body_search = ?, raw_json = ?, updated_at = ?
+         WHERE owner_pubky = ? AND sender_pubky = ? AND event_id = ?`,
+        ['', '', input.redactedRawJson, ts, input.ownerPubky, input.senderPubky, input.eventId],
+      );
+      const stream = db.executeSync(
+        `SELECT id, raw_json FROM link_stream_items
+         WHERE owner_pubky = ? AND peer_pubky = ?`,
+        [input.ownerPubky, input.peerPubky],
+      );
+      for (const row of stream.rows ?? []) {
+        const raw = String(row.raw_json ?? '');
+        if (!raw.includes(input.eventId)) continue;
+        db.executeSync(`UPDATE link_stream_items SET raw_json = ? WHERE id = ?`, [
+          input.redactedRawJson,
+          String(row.id),
+        ]);
+      }
+      db.executeSync(
+        `DELETE FROM delivery_queue
+         WHERE message_id = ? AND json_extract(payload, '$.ownerPubky') = ?`,
+        [input.eventId, input.ownerPubky],
+      );
+    });
+  },
 };
 
 export type ChatTagRow = {
@@ -3861,6 +3905,7 @@ function rowToLink(row: any): LinkRecord {
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function rowToLinkMessage(row: any): LinkMessage {
+  const deleted = row.deleted === 1;
   return {
     ownerPubky: row.owner_pubky,
     eventId: row.event_id,
@@ -3870,10 +3915,11 @@ function rowToLinkMessage(row: any): LinkMessage {
     direction: row.direction as LinkMessageDirection,
     kind: row.kind,
     rawJson: row.raw_json,
-    body: row.body,
+    body: deleted ? '' : row.body,
     sentAt: row.sent_at,
     receivedAt: row.received_at ?? null,
     deliveryState: row.delivery_state as LinkDeliveryState,
+    deleted,
   };
 }
 

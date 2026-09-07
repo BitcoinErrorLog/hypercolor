@@ -159,6 +159,9 @@ jest.mock('../../StorageService', () => ({
     deleteGroupSeenEventsForSender: jest.fn(),
     applyGroupMessageEdit: jest.fn(),
     tombstoneGroupMessage: jest.fn(),
+    persistControlSendIntent: jest.fn(),
+    finalizeControlSend: jest.fn(),
+    getChatDevicePrefs: jest.fn(),
     getHandshakeBudget: jest.fn(),
     upsertHandshakeBudget: jest.fn(),
     clearHandshakeBudget: jest.fn(),
@@ -248,6 +251,7 @@ type Db = {
   groupMessages: GroupMessage[];
   seenEvents: Set<string>;
   deferred: GroupDeferredEvent[];
+  controlQueue: Array<{ payload: string }>;
 };
 
 let db: Db;
@@ -280,6 +284,7 @@ function establishedLink(): LinkRecord {
     localReceiverPath: LINK_RECEIVER_PATH,
     remoteReceiverPath: LINK_RECEIVER_PATH,
     consecutiveFailures: 0,
+    chatKindsV: 1,
     createdAt: NOW,
     updatedAt: NOW,
   };
@@ -313,6 +318,14 @@ function wireInMemoryStorage(): void {
   mockedStorage.upsertHandshakeBudget.mockResolvedValue(undefined);
   mockedStorage.clearHandshakeBudget.mockResolvedValue(undefined);
   mockedStorage.hasQueueItem.mockResolvedValue(false);
+  mockedStorage.getChatDevicePrefs.mockResolvedValue({
+    receiptsEnabled: true,
+    typingEnabled: true,
+  });
+  mockedStorage.persistControlSendIntent.mockImplementation(async ({ queueItem }) => {
+    db.controlQueue.push({ payload: queueItem.payload });
+  });
+  mockedStorage.finalizeControlSend.mockResolvedValue(undefined);
   mockedStorage.listBlockedPeers.mockResolvedValue([]);
   mockedStorage.listBlockedPeerCleanupPending.mockResolvedValue([]);
 
@@ -521,6 +534,7 @@ describe('group accept gate', () => {
       groupMessages: [],
       seenEvents: new Set(),
       deferred: [],
+      controlQueue: [],
     };
     groupNotifications = [];
     unsubscribeGroupEvents = subscribeGroupEvents((ownerPubky, channelId) => {
@@ -712,6 +726,7 @@ describe('group accept gate', () => {
     expect(db.streamItems.filter(item => !item.processed)).toHaveLength(0);
     expect(db.streamItems.every(item => item.processed)).toBe(true);
     expect(groupNotifications).toEqual([{ ownerPubky: OWNER, channelId: CHANNEL_ID }]);
+    expect(db.controlQueue).toEqual([]);
   });
 
   it('on decline drops deferred and seen from that sender but keeps persisted group messages', async () => {

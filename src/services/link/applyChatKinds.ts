@@ -1,22 +1,27 @@
 import { v4 as uuidv4 } from 'uuid';
 import type { PubkyKey } from '../../types';
+import { CHAT_ATTACHMENT_KIND } from '../../types/attachment';
 import {
+  CHAT_MESSAGE_KIND,
   CHAT_REACTION_KIND,
   CHAT_RECEIPT_KIND,
   CHAT_TAG_KIND,
   buildDmConversationId,
 } from '../../types/link';
 import { GROUP_REACTION_KIND } from '../../types/group';
+import { isPaykitPaymentKind } from '../../types/payment';
 import {
   buildChatReceiptEnvelope,
   buildChatTagEnvelope,
-  normalizeChatTagLabel,
+  parseChatDeleteV0,
   parseChatReceiptV0,
   parseChatTagV0,
+  normalizeChatTagLabel,
   type ChatKindParseCtx,
   type ChatTagEnvelope,
 } from '../../types/chatKindValidation';
 import { StorageService } from '../StorageService';
+import { KeyStore } from '../KeyStore';
 import type { DeliveryQueueItem } from '../../types';
 
 export { parseChatReceiptV0, parseChatTagV0 };
@@ -73,6 +78,49 @@ export async function applyInboundTagOrReceipt(input: {
     return 'processed';
   }
   return 'unprocessed';
+}
+
+export async function applyInboundDelete(input: {
+  ownerPubky: PubkyKey;
+  senderPubky: PubkyKey;
+  peerPubky: PubkyKey;
+  rawJson: string;
+  peerTrust: 'accepted' | 'gated';
+}): Promise<'processed' | 'unprocessed'> {
+  const parsed = parseChatDeleteV0(input.rawJson, {
+    senderPubky: input.senderPubky,
+    ownerPubky: input.ownerPubky,
+    peerTrust: input.peerTrust,
+  });
+  if ('error' in parsed) {
+    if (parsed.error === 'unknown-kind' || parsed.error === 'gated-peer') return 'unprocessed';
+    return 'processed';
+  }
+  const target = await StorageService.getLinkMessageByEventId(
+    input.ownerPubky,
+    input.senderPubky,
+    parsed.ok.target_event_id,
+  );
+  if (!target) return 'processed';
+  if (target.senderPubky !== input.senderPubky) return 'processed';
+  if (isPaykitPaymentKind(target.kind)) return 'processed';
+  const redacted = JSON.stringify({
+    kind: target.kind === CHAT_ATTACHMENT_KIND ? CHAT_ATTACHMENT_KIND : CHAT_MESSAGE_KIND,
+    event_id: target.eventId,
+    sent_at: target.sentAt,
+    deleted: true,
+  });
+  await StorageService.tombstoneLinkMessage({
+    ownerPubky: input.ownerPubky,
+    peerPubky: input.peerPubky,
+    senderPubky: input.senderPubky,
+    eventId: target.eventId,
+    redactedRawJson: redacted,
+  });
+  if (target.kind === CHAT_ATTACHMENT_KIND) {
+    await KeyStore.deleteAttachmentSecret(input.ownerPubky, input.senderPubky, target.eventId);
+  }
+  return 'processed';
 }
 
 async function resolveReceiptAuthor(
