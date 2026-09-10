@@ -142,6 +142,10 @@ jest.mock('../../StorageService', () => ({
     saveLinkStreamItems: jest.fn(),
     getUnprocessedLinkStreamItems: jest.fn(),
     markLinkStreamItemProcessed: jest.fn(),
+    listPendingChatDeletes: jest.fn(),
+    deletePendingChatDelete: jest.fn(),
+    listPendingChatTags: jest.fn(),
+    deletePendingChatTag: jest.fn(),
     getLinkReadCursor: jest.fn(),
     setLinkReadCursor: jest.fn(),
     getChatDevicePrefs: jest.fn(),
@@ -525,6 +529,10 @@ describe('LinkService', () => {
     mockedStorage.markGroupEventSeen.mockResolvedValue(undefined);
     mockedStorage.hasLinkMessage.mockResolvedValue(false);
     mockedStorage.getUnprocessedLinkStreamItems.mockResolvedValue([]);
+    mockedStorage.listPendingChatDeletes.mockResolvedValue([]);
+    mockedStorage.deletePendingChatDelete.mockResolvedValue(undefined);
+    mockedStorage.listPendingChatTags.mockResolvedValue([]);
+    mockedStorage.deletePendingChatTag.mockResolvedValue(undefined);
     mockedStorage.incrementLinkConsecutiveFailures.mockResolvedValue(1);
     mockedStorage.getContact.mockResolvedValue(null);
     mockedStorage.getAllContacts.mockResolvedValue([]);
@@ -3571,6 +3579,13 @@ describe('LinkService', () => {
         }),
       );
       expect(mockedStorage.markLinkStreamItemProcessed).toHaveBeenCalledWith('sa');
+      expect(mockedStorage.listPendingChatDeletes).toHaveBeenCalledWith(
+        OWNER,
+        PEER,
+        PEER,
+        EVENT_ID,
+      );
+      expect(mockedStorage.listPendingChatTags).toHaveBeenCalledWith(OWNER, PEER, PEER, EVENT_ID);
       expect(received).toEqual([attRow]);
     });
 

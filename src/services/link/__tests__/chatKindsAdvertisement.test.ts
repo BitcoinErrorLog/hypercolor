@@ -94,6 +94,17 @@ describe('chat_kinds_v advertisement RMW', () => {
     expect(chatKindsAdvertiseRetryPending(OWNER)).toBe(true);
   });
 
+  it('keeps the published marker usable when the additive PUT fails', async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      text: async () => '{"noisePublicKey":"abc","keep":true}',
+    }) as unknown as typeof fetch;
+    mockedNative.putPublic.mockRejectedValue(new Error('network'));
+
+    await expect(putChatKindsVReceiverJson('alias', OWNER, 'abc')).resolves.toBeUndefined();
+    expect(chatKindsAdvertiseRetryPending(OWNER)).toBe(true);
+  });
+
   it('does not persist 0 over a stored v1 when the HTTP GET fails', async () => {
     mockedStorage.getLink.mockResolvedValue({
       chatKindsV: 1,

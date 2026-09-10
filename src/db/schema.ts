@@ -272,6 +272,50 @@ export const SCHEMA_V22_STATEMENTS: readonly string[] = [
 ];
 
 /**
+ * Schema v23 — durable receiver advertisement retries and bounded DM delete
+ * tombstones. Both records are owner-scoped and are consumed by the link
+ * lifecycle, never by an unbounded stream reparse.
+ */
+export const SCHEMA_V23_STATEMENTS: readonly string[] = [
+  `CREATE TABLE IF NOT EXISTS chat_kinds_advertise_retries (
+    owner_pubky       TEXT NOT NULL PRIMARY KEY,
+    session_alias     TEXT NOT NULL,
+    noise_public_key  TEXT NOT NULL,
+    next_retry_at     INTEGER NOT NULL,
+    attempts          INTEGER NOT NULL DEFAULT 0,
+    updated_at        INTEGER NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS chat_pending_tombstones (
+    owner_pubky       TEXT NOT NULL,
+    peer_pubky        TEXT NOT NULL,
+    sender_pubky      TEXT NOT NULL,
+    target_event_id   TEXT NOT NULL,
+    delete_event_id   TEXT NOT NULL,
+    raw_json          TEXT NOT NULL,
+    sent_at           INTEGER NOT NULL,
+    received_at       INTEGER NOT NULL,
+    expires_at        INTEGER NOT NULL,
+    PRIMARY KEY (owner_pubky, peer_pubky, sender_pubky, target_event_id, delete_event_id)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_chat_pending_tombstones_target
+    ON chat_pending_tombstones(owner_pubky, peer_pubky, sender_pubky, target_event_id, expires_at)`,
+  `CREATE TABLE IF NOT EXISTS chat_pending_tags (
+    owner_pubky       TEXT NOT NULL,
+    peer_pubky        TEXT NOT NULL,
+    sender_pubky      TEXT NOT NULL,
+    target_event_id   TEXT NOT NULL,
+    tag_event_id      TEXT NOT NULL,
+    raw_json          TEXT NOT NULL,
+    sent_at           INTEGER NOT NULL,
+    received_at       INTEGER NOT NULL,
+    expires_at        INTEGER NOT NULL,
+    PRIMARY KEY (owner_pubky, peer_pubky, sender_pubky, target_event_id, tag_event_id)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_chat_pending_tags_target
+    ON chat_pending_tags(owner_pubky, peer_pubky, sender_pubky, target_event_id, expires_at)`,
+];
+
+/**
  * Schema v15 — move the handshake advance budget off the `links` row.
  *
  * v14 put `pending_advances` / `next_advance_at` on `links`, which is deleted

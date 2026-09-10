@@ -1,5 +1,5 @@
 import React from 'react';
-import { AccessibilityInfo, PixelRatio, StyleSheet, Text } from 'react-native';
+import { AccessibilityInfo, Alert, PixelRatio, StyleSheet, Text } from 'react-native';
 import renderer, { act } from 'react-test-renderer';
 import {
   Avatar,
@@ -196,5 +196,52 @@ describe('ui primitives', () => {
     expect(StyleSheet.flatten(bubble?.props.style).borderBottomRightRadius).not.toBe(
       radius.bubbleTail,
     );
+  });
+
+  it('exposes unsend through the message action sheet', () => {
+    const onDelete = jest.fn();
+    const alert = jest.spyOn(Alert, 'alert').mockImplementation((_title, _message, buttons) => {
+      buttons?.find(button => button.text === 'Unsend')?.onPress?.();
+    });
+    let tree!: renderer.ReactTestRenderer;
+    act(() => {
+      tree = renderer.create(
+        <MessageBubble mine time="10:12 PM" copyBody="hello" onDelete={onDelete} testID="unsend">
+          <></>
+        </MessageBubble>,
+      );
+    });
+    act(() => {
+      tree.root
+        .findAllByProps({ testID: 'unsend' })
+        .find(node => node.props.onLongPress)
+        ?.props.onLongPress();
+    });
+    expect(onDelete).toHaveBeenCalledTimes(1);
+    alert.mockRestore();
+  });
+
+  it('exposes unsend for an attachment without adding a copy action', () => {
+    const onDelete = jest.fn();
+    const alert = jest.spyOn(Alert, 'alert').mockImplementation((_title, _message, buttons) => {
+      expect(buttons?.some(button => button.text === 'Copy message')).toBe(false);
+      buttons?.find(button => button.text === 'Unsend')?.onPress?.();
+    });
+    let tree!: renderer.ReactTestRenderer;
+    act(() => {
+      tree = renderer.create(
+        <MessageBubble mine time="10:12 PM" onDelete={onDelete} testID="attachmentUnsend">
+          <></>
+        </MessageBubble>,
+      );
+    });
+    act(() => {
+      tree.root
+        .findAllByProps({ testID: 'attachmentUnsend' })
+        .find(node => node.props.onLongPress)
+        ?.props.onLongPress();
+    });
+    expect(onDelete).toHaveBeenCalledTimes(1);
+    alert.mockRestore();
   });
 });

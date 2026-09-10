@@ -559,6 +559,11 @@ export default function ThreadScreen({ route }: Props) {
           await reloadEncrypted();
         })();
       }}
+      onUnsend={eventId => {
+        void LinkService.unsendDm(participantPubky, eventId)
+          .then(() => reloadEncrypted())
+          .catch(() => reloadEncrypted());
+      }}
       onRetryConnection={() => {
         void (async () => {
           try {
@@ -633,6 +638,7 @@ export function ThreadScreenContent({
   onRefresh,
   onEnableMessaging,
   onRetryFailed,
+  onUnsend,
   onRetryConnection,
   onCopyPubky,
   onTakeoverSuccess,
@@ -699,6 +705,7 @@ export function ThreadScreenContent({
   onRefresh?: () => void;
   onEnableMessaging: () => void;
   onRetryFailed: (eventId: string) => void;
+  onUnsend?: (eventId: string) => void;
   onRetryConnection: () => void;
   onCopyPubky: () => void;
   onTakeoverSuccess?: () => void;
@@ -827,6 +834,9 @@ export function ThreadScreenContent({
               showIncomingAvatar={!isMine && !grouped}
               senderName={identity.title}
               senderPubky={participantPubky}
+              {...(isMine && !item.message?.deleted && onUnsend
+                ? { onDelete: () => onUnsend(item.record.eventId) }
+                : {})}
             >
               <AttachmentBubble
                 record={item.record}
@@ -871,6 +881,9 @@ export function ThreadScreenContent({
                 authorPubky: item.message.senderPubky,
               })
             }
+            {...(isMine && !item.message.deleted && onUnsend
+              ? { onDelete: () => onUnsend(item.message.eventId) }
+              : {})}
             footer={
               <TagChips
                 tags={aggregateTags(
@@ -924,6 +937,7 @@ export function ThreadScreenContent({
       localPubky,
       onPaymentsChanged,
       onRetryFailed,
+      onUnsend,
       onReview,
       participantPubky,
       peerBlocked,

@@ -18,7 +18,11 @@ import { runMigrations } from '../../../db/migrations';
 import { openMemoryDb } from '../../../db/__tests__/betterSqliteAdapter';
 import { StorageService } from '../../StorageService';
 import { paintOwner } from '../../paintedOwner';
-import { applyInboundTagOrReceipt, applyInboundDelete } from '../applyChatKinds';
+import {
+  applyInboundTagOrReceipt,
+  applyInboundDelete,
+  applyPendingChatDeletesForTarget,
+} from '../applyChatKinds';
 import {
   CHAT_MESSAGE_KIND,
   CHAT_RECEIPT_KIND,
@@ -97,7 +101,7 @@ describe('applyChatKinds integration', () => {
     );
   });
 
-  it('defers a DM tag when the target is missing', async () => {
+  it('durably defers a DM tag when the target is missing', async () => {
     const built = buildChatTagEnvelope({
       eventId: TAG_EVENT,
       sentAt: 20,
@@ -113,10 +117,42 @@ describe('applyChatKinds integration', () => {
       peerTrust: 'accepted',
       kindHint: CHAT_TAG_KIND,
     });
-    expect(result).toBe('unprocessed');
+    expect(result).toBe('processed');
+    expect(await StorageService.listPendingChatTags(OWNER, PEER, PEER, TARGET)).toHaveLength(1);
     expect(await StorageService.listChatTagsForScope(OWNER, buildDmConversationId(PEER))).toEqual(
       [],
     );
+  });
+
+  it('retains a delete that arrives before its target and applies it once', async () => {
+    const deleteJson = JSON.stringify({
+      version: 1,
+      kind: 'chat.delete.v0',
+      event_id: '00000000-0000-4000-8000-0000000000cc',
+      sent_at: 20,
+      target_event_id: TARGET,
+    });
+    await expect(
+      applyInboundDelete({
+        ownerPubky: OWNER,
+        senderPubky: PEER,
+        peerPubky: PEER,
+        rawJson: deleteJson,
+        peerTrust: 'accepted',
+      }),
+    ).resolves.toBe('processed');
+    expect(await StorageService.listPendingChatDeletes(OWNER, PEER, PEER, TARGET)).toHaveLength(1);
+
+    await seedDm(PEER, PEER, TARGET);
+    await applyPendingChatDeletesForTarget({
+      ownerPubky: OWNER,
+      peerPubky: PEER,
+      senderPubky: PEER,
+      targetEventId: TARGET,
+    });
+    const row = await StorageService.getLinkMessageByEventId(OWNER, PEER, TARGET);
+    expect(row?.deleted).toBe(true);
+    expect(await StorageService.listPendingChatDeletes(OWNER, PEER, PEER, TARGET)).toEqual([]);
   });
 
   it('rejects a DM tag on a tombstoned target', async () => {

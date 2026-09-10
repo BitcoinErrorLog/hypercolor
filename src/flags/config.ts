@@ -50,6 +50,8 @@ export const GROUP_DEFERRED_QUOTA_PER_SENDER = 32;
  * recorded as seen so they cannot refill the quota by replay.
  */
 export const GROUP_DEFERRED_TTL_MS = 48 * 60 * 60 * 1000;
+export const DM_PENDING_TOMBSTONE_QUOTA_PER_SENDER = 32;
+export const DM_PENDING_TOMBSTONE_TTL_MS = 48 * 60 * 60 * 1000;
 
 /**
  * Max unprocessed *group-kind* `link_stream_items` kept per (owner, peer)

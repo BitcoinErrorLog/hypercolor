@@ -741,6 +741,71 @@ export const StorageService = {
     });
   },
 
+  async saveChatKindsAdvertiseRetry(input: {
+    ownerPubky: PubkyKey;
+    sessionAlias: string;
+    noisePublicKey: string;
+    nextRetryAt?: number;
+  }): Promise<void> {
+    await ownedWrite(input.ownerPubky, db => {
+      const ts = now();
+      db.executeSync(
+        `INSERT INTO chat_kinds_advertise_retries
+          (owner_pubky, session_alias, noise_public_key, next_retry_at, attempts, updated_at)
+         VALUES (?, ?, ?, ?, 0, ?)
+         ON CONFLICT(owner_pubky) DO UPDATE SET
+           session_alias = excluded.session_alias,
+           noise_public_key = excluded.noise_public_key,
+           next_retry_at = excluded.next_retry_at,
+           updated_at = excluded.updated_at`,
+        [input.ownerPubky, input.sessionAlias, input.noisePublicKey, input.nextRetryAt ?? ts, ts],
+      );
+    });
+  },
+
+  async getChatKindsAdvertiseRetry(ownerPubky: PubkyKey): Promise<{
+    ownerPubky: PubkyKey;
+    sessionAlias: string;
+    noisePublicKey: string;
+    nextRetryAt: number;
+    attempts: number;
+  } | null> {
+    const db = await getDb();
+    const row = db.executeSync('SELECT * FROM chat_kinds_advertise_retries WHERE owner_pubky = ?', [
+      ownerPubky,
+    ]).rows?.[0];
+    if (!row) return null;
+    return {
+      ownerPubky,
+      sessionAlias: String(row.session_alias),
+      noisePublicKey: String(row.noise_public_key),
+      nextRetryAt: Number(row.next_retry_at),
+      attempts: Number(row.attempts),
+    };
+  },
+
+  async recordChatKindsAdvertiseRetryFailure(
+    ownerPubky: PubkyKey,
+    nextRetryAt: number,
+  ): Promise<void> {
+    await ownedWrite(ownerPubky, db => {
+      db.executeSync(
+        `UPDATE chat_kinds_advertise_retries
+         SET attempts = attempts + 1, next_retry_at = ?, updated_at = ?
+         WHERE owner_pubky = ?`,
+        [nextRetryAt, now(), ownerPubky],
+      );
+    });
+  },
+
+  async clearChatKindsAdvertiseRetry(ownerPubky: PubkyKey): Promise<void> {
+    await ownedWrite(ownerPubky, db => {
+      db.executeSync('DELETE FROM chat_kinds_advertise_retries WHERE owner_pubky = ?', [
+        ownerPubky,
+      ]);
+    });
+  },
+
   // ── Link receivers (Paykit Encrypted Links) ───────────────────────────────
 
   async upsertLinkReceiver(receiver: LinkReceiverInput): Promise<void> {
@@ -1089,6 +1154,202 @@ export const StorageService = {
   async saveLinkMessage(message: LinkMessage): Promise<void> {
     await ownedWrite(message.ownerPubky, db => {
       insertLinkMessage(db, message);
+    });
+  },
+
+  async savePendingChatDelete(input: {
+    ownerPubky: PubkyKey;
+    peerPubky: PubkyKey;
+    senderPubky: PubkyKey;
+    targetEventId: string;
+    deleteEventId: string;
+    rawJson: string;
+    sentAt: number;
+    receivedAt: number;
+    ttlMs: number;
+    quota: number;
+  }): Promise<void> {
+    await ownedTransact(input.ownerPubky, db => {
+      const cutoff = now();
+      db.executeSync(
+        'DELETE FROM chat_pending_tombstones WHERE owner_pubky = ? AND expires_at <= ?',
+        [input.ownerPubky, cutoff],
+      );
+      const count = Number(
+        db.executeSync(
+          `SELECT COUNT(*) AS n FROM chat_pending_tombstones
+           WHERE owner_pubky = ? AND peer_pubky = ? AND sender_pubky = ?`,
+          [input.ownerPubky, input.peerPubky, input.senderPubky],
+        ).rows?.[0]?.n ?? 0,
+      );
+      if (count >= input.quota) {
+        db.executeSync(
+          `DELETE FROM chat_pending_tombstones
+           WHERE rowid = (
+             SELECT rowid FROM chat_pending_tombstones
+             WHERE owner_pubky = ? AND peer_pubky = ? AND sender_pubky = ?
+             ORDER BY received_at ASC, sent_at ASC LIMIT 1
+           )`,
+          [input.ownerPubky, input.peerPubky, input.senderPubky],
+        );
+      }
+      db.executeSync(
+        `INSERT OR IGNORE INTO chat_pending_tombstones
+          (owner_pubky, peer_pubky, sender_pubky, target_event_id, delete_event_id,
+           raw_json, sent_at, received_at, expires_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          input.ownerPubky,
+          input.peerPubky,
+          input.senderPubky,
+          input.targetEventId,
+          input.deleteEventId,
+          input.rawJson,
+          input.sentAt,
+          input.receivedAt,
+          cutoff + input.ttlMs,
+        ],
+      );
+    });
+  },
+
+  async listPendingChatDeletes(
+    ownerPubky: PubkyKey,
+    peerPubky: PubkyKey,
+    senderPubky: PubkyKey,
+    targetEventId: string,
+  ): Promise<Array<{ deleteEventId: string; rawJson: string }>> {
+    const db = await getDb();
+    const nowMs = now();
+    db.executeSync(
+      'DELETE FROM chat_pending_tombstones WHERE owner_pubky = ? AND expires_at <= ?',
+      [ownerPubky, nowMs],
+    );
+    const rows =
+      db.executeSync(
+        `SELECT delete_event_id, raw_json FROM chat_pending_tombstones
+       WHERE owner_pubky = ? AND peer_pubky = ? AND sender_pubky = ? AND target_event_id = ?
+       ORDER BY sent_at ASC`,
+        [ownerPubky, peerPubky, senderPubky, targetEventId],
+      ).rows ?? [];
+    return rows.map(row => ({
+      deleteEventId: String(row.delete_event_id),
+      rawJson: String(row.raw_json),
+    }));
+  },
+
+  async deletePendingChatDelete(
+    ownerPubky: PubkyKey,
+    peerPubky: PubkyKey,
+    senderPubky: PubkyKey,
+    targetEventId: string,
+    deleteEventId: string,
+  ): Promise<void> {
+    await ownedWrite(ownerPubky, db => {
+      db.executeSync(
+        `DELETE FROM chat_pending_tombstones
+         WHERE owner_pubky = ? AND peer_pubky = ? AND sender_pubky = ?
+           AND target_event_id = ? AND delete_event_id = ?`,
+        [ownerPubky, peerPubky, senderPubky, targetEventId, deleteEventId],
+      );
+    });
+  },
+
+  async savePendingChatTag(input: {
+    ownerPubky: PubkyKey;
+    peerPubky: PubkyKey;
+    senderPubky: PubkyKey;
+    targetEventId: string;
+    tagEventId: string;
+    rawJson: string;
+    sentAt: number;
+    receivedAt: number;
+    ttlMs: number;
+    quota: number;
+  }): Promise<void> {
+    await ownedTransact(input.ownerPubky, db => {
+      const cutoff = now();
+      db.executeSync('DELETE FROM chat_pending_tags WHERE owner_pubky = ? AND expires_at <= ?', [
+        input.ownerPubky,
+        cutoff,
+      ]);
+      const count = Number(
+        db.executeSync(
+          `SELECT COUNT(*) AS n FROM chat_pending_tags
+           WHERE owner_pubky = ? AND peer_pubky = ? AND sender_pubky = ?`,
+          [input.ownerPubky, input.peerPubky, input.senderPubky],
+        ).rows?.[0]?.n ?? 0,
+      );
+      if (count >= input.quota) {
+        db.executeSync(
+          `DELETE FROM chat_pending_tags
+           WHERE rowid = (
+             SELECT rowid FROM chat_pending_tags
+             WHERE owner_pubky = ? AND peer_pubky = ? AND sender_pubky = ?
+             ORDER BY received_at ASC, sent_at ASC LIMIT 1
+           )`,
+          [input.ownerPubky, input.peerPubky, input.senderPubky],
+        );
+      }
+      db.executeSync(
+        `INSERT OR IGNORE INTO chat_pending_tags
+          (owner_pubky, peer_pubky, sender_pubky, target_event_id, tag_event_id,
+           raw_json, sent_at, received_at, expires_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          input.ownerPubky,
+          input.peerPubky,
+          input.senderPubky,
+          input.targetEventId,
+          input.tagEventId,
+          input.rawJson,
+          input.sentAt,
+          input.receivedAt,
+          cutoff + input.ttlMs,
+        ],
+      );
+    });
+  },
+
+  async listPendingChatTags(
+    ownerPubky: PubkyKey,
+    peerPubky: PubkyKey,
+    senderPubky: PubkyKey,
+    targetEventId: string,
+  ): Promise<Array<{ tagEventId: string; rawJson: string }>> {
+    const db = await getDb();
+    const cutoff = now();
+    db.executeSync('DELETE FROM chat_pending_tags WHERE owner_pubky = ? AND expires_at <= ?', [
+      ownerPubky,
+      cutoff,
+    ]);
+    const rows =
+      db.executeSync(
+        `SELECT tag_event_id, raw_json FROM chat_pending_tags
+       WHERE owner_pubky = ? AND peer_pubky = ? AND sender_pubky = ? AND target_event_id = ?
+       ORDER BY sent_at ASC`,
+        [ownerPubky, peerPubky, senderPubky, targetEventId],
+      ).rows ?? [];
+    return rows.map(row => ({
+      tagEventId: String(row.tag_event_id),
+      rawJson: String(row.raw_json),
+    }));
+  },
+
+  async deletePendingChatTag(
+    ownerPubky: PubkyKey,
+    peerPubky: PubkyKey,
+    senderPubky: PubkyKey,
+    targetEventId: string,
+    tagEventId: string,
+  ): Promise<void> {
+    await ownedWrite(ownerPubky, db => {
+      db.executeSync(
+        `DELETE FROM chat_pending_tags
+         WHERE owner_pubky = ? AND peer_pubky = ? AND sender_pubky = ?
+           AND target_event_id = ? AND tag_event_id = ?`,
+        [ownerPubky, peerPubky, senderPubky, targetEventId, tagEventId],
+      );
     });
   },
 
@@ -1764,6 +2025,11 @@ export const StorageService = {
       db.executeSync('DELETE FROM chat_device_prefs WHERE owner_pubky = ?', [ownerPubky]);
       db.executeSync('DELETE FROM chat_pins WHERE owner_pubky = ?', [ownerPubky]);
       db.executeSync('DELETE FROM chat_group_invites WHERE owner_pubky = ?', [ownerPubky]);
+      db.executeSync('DELETE FROM chat_kinds_advertise_retries WHERE owner_pubky = ?', [
+        ownerPubky,
+      ]);
+      db.executeSync('DELETE FROM chat_pending_tombstones WHERE owner_pubky = ?', [ownerPubky]);
+      db.executeSync('DELETE FROM chat_pending_tags WHERE owner_pubky = ?', [ownerPubky]);
     });
   },
 
@@ -3593,7 +3859,13 @@ export const StorageService = {
       );
       for (const row of stream.rows ?? []) {
         const raw = String(row.raw_json ?? '');
-        if (!raw.includes(input.eventId)) continue;
+        let candidate: { event_id?: unknown; kind?: unknown } | null = null;
+        try {
+          candidate = JSON.parse(raw) as { event_id?: unknown };
+        } catch {
+          continue;
+        }
+        if (candidate?.event_id !== input.eventId) continue;
         db.executeSync(`UPDATE link_stream_items SET raw_json = ? WHERE id = ?`, [
           input.redactedRawJson,
           String(row.id),

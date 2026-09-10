@@ -27,6 +27,7 @@ export type MessageBubbleProps = {
   testID?: string;
   footer?: React.ReactNode;
   onTag?: () => void;
+  onDelete?: () => void;
 };
 
 export function MessageBubble({
@@ -46,8 +47,10 @@ export function MessageBubble({
   testID,
   footer = null,
   onTag,
+  onDelete,
 }: MessageBubbleProps) {
   const copyEnabled = Boolean(copyBody);
+  const actionEnabled = copyEnabled || Boolean(onTag) || Boolean(onDelete);
   const bubbleStyle = [
     styles.bubble,
     mine ? styles.mine : styles.theirs,
@@ -58,23 +61,27 @@ export function MessageBubble({
   const a11y = {
     ...(testID ? { testID } : {}),
     ...(accessibilityLabel ? { accessible: true as const, accessibilityLabel } : {}),
-    ...(copyEnabled
+    ...(actionEnabled
       ? {
-          accessibilityActions: onTag
-            ? [COPY_MESSAGE_A11Y_ACTION, TAG_MESSAGE_A11Y_ACTION]
-            : [COPY_MESSAGE_A11Y_ACTION],
-          onAccessibilityAction: (event: { nativeEvent: { actionName: string } }) => {
-            if (event.nativeEvent.actionName === 'tag') {
-              onTag?.();
-              return;
-            }
-            handleCopyAccessibilityAction(event.nativeEvent.actionName, copyBody ?? '');
-          },
-          onLongPress: () => presentMessageActionSheet(copyBody ?? '', onTag),
+          ...(copyEnabled
+            ? {
+                accessibilityActions: onTag
+                  ? [COPY_MESSAGE_A11Y_ACTION, TAG_MESSAGE_A11Y_ACTION]
+                  : [COPY_MESSAGE_A11Y_ACTION],
+                onAccessibilityAction: (event: { nativeEvent: { actionName: string } }) => {
+                  if (event.nativeEvent.actionName === 'tag') {
+                    onTag?.();
+                    return;
+                  }
+                  handleCopyAccessibilityAction(event.nativeEvent.actionName, copyBody ?? '');
+                },
+              }
+            : {}),
+          onLongPress: () => presentMessageActionSheet(copyBody ?? '', onTag, onDelete),
         }
       : {}),
   };
-  const Bubble = copyEnabled ? Pressable : View;
+  const Bubble = actionEnabled ? Pressable : View;
   return (
     <View
       style={[

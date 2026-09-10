@@ -2829,7 +2829,7 @@ describe('schema v21 — additive chat_kinds_v on links', () => {
       String(row.name),
     );
     expect(cols).toContain('chat_kinds_v');
-    expect(CURRENT_SCHEMA_VERSION).toBe(22);
+    expect(CURRENT_SCHEMA_VERSION).toBe(23);
     const prefs = db.executeSync(
       "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'chat_device_prefs'",
     );

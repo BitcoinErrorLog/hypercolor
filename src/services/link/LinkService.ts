@@ -41,6 +41,7 @@ import type { DeliveryQueueItem, PubkyKey } from '../../types';
 import {
   persistPeerChatKindsVFromMarker,
   putChatKindsVReceiverJson,
+  drainChatKindsAdvertiseRetry,
   resetChatKindsUpgradeReplayedForTests,
 } from './chatKindsAdvertisement';
 import { CHAT_KINDS_V, normalizeChatKindsV } from '../../types/receiverMarker';
@@ -57,6 +58,8 @@ import {
 import { applyGroupInbound } from '../group/applyGroupInbound';
 import {
   applyInboundDelete,
+  applyPendingChatDeletesForTarget,
+  applyPendingChatTagsForTarget,
   applyInboundTagOrReceipt,
   applyLocalTag,
   buildOutboundReceipt,
@@ -81,6 +84,7 @@ import { LinkSendError } from './LinkSendError';
 import { FollowsImportSettings } from '../contacts/followsImportSettings';
 import { opaquePeerId } from '../contacts/opaquePeerId';
 import { setReceiverRoleState, useReceiverRoleStore } from '../../stores/receiverRoleStore';
+import { buildChatDeleteEnvelope } from '../../types/chatKindValidation';
 import { COPY } from '../../copy/uxCopy';
 import { CONTACTS_COPY } from '../../ui/contacts/contactsCopy';
 import { stripSensitive } from '../../ui/sanitizedError';
@@ -756,6 +760,51 @@ export const LinkService = {
         body: envelope.body,
         sentAt: envelope.sent_at,
       });
+    });
+  },
+
+  async unsendDm(peerPubky: PubkyKey, eventId: string): Promise<void> {
+    return withQueue(peerPubky, async () => {
+      const owner = requireOwner();
+      const target = await StorageService.getLinkMessageByEventId(owner, owner, eventId);
+      if (!target || target.peerPubky !== peerPubky || target.deleted) {
+        throw new Error('Message is no longer available to unsend');
+      }
+      if (isPaykitPaymentKind(target.kind)) {
+        throw new Error('Payment messages cannot be unsent');
+      }
+      const built = buildChatDeleteEnvelope({
+        eventId: uuidv4(),
+        sentAt: Date.now(),
+        targetEventId: eventId,
+      });
+      const redacted = JSON.stringify({
+        kind: target.kind === CHAT_ATTACHMENT_KIND ? CHAT_ATTACHMENT_KIND : CHAT_MESSAGE_KIND,
+        event_id: target.eventId,
+        sent_at: target.sentAt,
+        deleted: true,
+      });
+      await StorageService.tombstoneLinkMessage({
+        ownerPubky: owner,
+        peerPubky,
+        senderPubky: owner,
+        eventId,
+        redactedRawJson: redacted,
+      });
+      if (target.kind === CHAT_ATTACHMENT_KIND) {
+        await KeyStore.deleteAttachmentSecret(owner, owner, eventId);
+        await StorageService.updateAttachmentResolve(owner, owner, eventId, {
+          resolveState: 'unavailable-from-backup',
+          localCachePath: null,
+        });
+      }
+      await dispatchControlPam(
+        owner,
+        peerPubky,
+        built.envelope.event_id,
+        built.json,
+        CHAT_DELETE_KIND,
+      );
     });
   },
 
@@ -1696,6 +1745,7 @@ async function provisionReceiver(
 
   if (published.kind === 'present' && published.noisePublicKey === noisePublicKey) {
     await putChatKindsVReceiverJson(sessionAlias, pubky, noisePublicKey);
+    await drainChatKindsAdvertiseRetry(pubky);
     await persistReceiverRow(
       pubky,
       receiverAlias,
@@ -1716,6 +1766,7 @@ async function provisionReceiver(
     throw error;
   }
   await persistReceiverRow(pubky, receiverAlias, receiverPath, true, 'active', noisePublicKey);
+  await drainChatKindsAdvertiseRetry(pubky);
   setReceiverRoleState('active', null);
   return { pubky, receiverPath, noisePublicKey, receiverRole: 'active' };
 }
@@ -3981,6 +4032,21 @@ async function routeUnprocessedStreamItems(
         rawJson: item.rawJson,
         receivedAt: item.receivedAt,
       });
+      const attachmentEnvelope = decodeAttachmentEnvelope(item.rawJson);
+      if (attachmentEnvelope) {
+        await applyPendingChatDeletesForTarget({
+          ownerPubky,
+          peerPubky,
+          senderPubky: peerPubky,
+          targetEventId: attachmentEnvelope.event_id,
+        });
+        await applyPendingChatTagsForTarget({
+          ownerPubky,
+          peerPubky,
+          senderPubky: peerPubky,
+          targetEventId: attachmentEnvelope.event_id,
+        });
+      }
       await StorageService.markLinkStreamItemProcessed(item.id);
       if (row) received.push(row);
       continue;
@@ -4069,6 +4135,18 @@ async function routeUnprocessedStreamItems(
       deliveryState: 'delivered',
     };
     await StorageService.saveLinkMessage(row);
+    await applyPendingChatDeletesForTarget({
+      ownerPubky,
+      peerPubky,
+      senderPubky: peerPubky,
+      targetEventId: row.eventId,
+    });
+    await applyPendingChatTagsForTarget({
+      ownerPubky,
+      peerPubky,
+      senderPubky: peerPubky,
+      targetEventId: row.eventId,
+    });
     await StorageService.markLinkStreamItemProcessed(item.id);
     received.push(row);
     deliveredDmIds.push(row.eventId);
@@ -4104,7 +4182,10 @@ async function deliverQueuedPayload(
     // this the same `rawJson` could go out twice.
     if (!(await StorageService.hasQueueItem(item.id))) return;
     if (payload.type === LINK_RETRY_PAYLOAD_TYPE) {
-      const control = payload.kind === CHAT_TAG_KIND || payload.kind === CHAT_RECEIPT_KIND;
+      const control =
+        payload.kind === CHAT_TAG_KIND ||
+        payload.kind === CHAT_RECEIPT_KIND ||
+        payload.kind === CHAT_DELETE_KIND;
       if (!control) {
         const row = await StorageService.getLinkMessage(
           payload.ownerPubky,
@@ -4122,7 +4203,10 @@ async function deliverQueuedPayload(
         }
       }
     } else {
-      const control = payload.kind === CHAT_TAG_KIND || payload.kind === CHAT_RECEIPT_KIND;
+      const control =
+        payload.kind === CHAT_TAG_KIND ||
+        payload.kind === CHAT_RECEIPT_KIND ||
+        payload.kind === CHAT_DELETE_KIND;
       if (!control) {
         const exists = await StorageService.hasGroupMessage(
           payload.ownerPubky,

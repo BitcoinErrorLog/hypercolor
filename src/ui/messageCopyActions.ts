@@ -9,14 +9,23 @@ export function presentMessageCopySheet(body: string): void {
   presentMessageActionSheet(body);
 }
 
-export function presentMessageActionSheet(body: string, onTag?: () => void): void {
+export function presentMessageActionSheet(
+  body: string | null,
+  onTag?: () => void,
+  onDelete?: () => void,
+): void {
   const buttons: Array<{ text: string; style?: 'cancel'; onPress?: () => void }> = [
     { text: COPY.cancel, style: 'cancel' },
   ];
   if (onTag) {
     buttons.push({ text: COPY.tagMessage, onPress: onTag });
   }
-  buttons.push({ text: COPY.copyMessage, onPress: () => copyText(body) });
+  if (onDelete) {
+    buttons.push({ text: COPY.unsendMessage, onPress: onDelete });
+  }
+  if (body) {
+    buttons.push({ text: COPY.copyMessage, onPress: () => copyText(body) });
+  }
   Alert.alert(COPY.copyMessage, undefined, buttons);
 }
 

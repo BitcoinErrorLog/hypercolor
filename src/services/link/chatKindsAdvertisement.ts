@@ -29,29 +29,59 @@ export async function putChatKindsVReceiverJson(
   ownerPubky: PubkyKey,
   noisePublicKey: string,
 ): Promise<void> {
-  const origin = await resolveHomeserverOrigin(ownerPubky);
-  const first = await getPublicReceiverJson(ownerPubky, origin);
-  if (first === null) {
-    advertiseRetryOwners.add(ownerPubky);
-    return;
-  }
-  const latest = await getPublicReceiverJson(ownerPubky, origin);
-  if (latest === null) {
-    advertiseRetryOwners.add(ownerPubky);
-    return;
-  }
-  const latestDoc = parseReceiverMarkerJson(latest);
-  if (latestDoc?.noisePublicKey && latestDoc.noisePublicKey !== noisePublicKey) {
-    advertiseRetryOwners.add(ownerPubky);
-    return;
-  }
-  const body = addChatKindsVToReceiverJson(latest);
-  if (body === null) {
+  try {
+    const origin = await resolveHomeserverOrigin(ownerPubky);
+    const first = await getPublicReceiverJson(ownerPubky, origin);
+    if (first === null) throw new Error('receiver.json GET failed');
+    const latest = await getPublicReceiverJson(ownerPubky, origin);
+    if (latest === null) {
+      throw new Error('receiver.json GET failed');
+    }
+    const latestDoc = parseReceiverMarkerJson(latest);
+    if (latestDoc?.noisePublicKey && latestDoc.noisePublicKey !== noisePublicKey) {
+      throw new Error('receiver.json belongs to another receiver');
+    }
+    const body = addChatKindsVToReceiverJson(latest);
+    if (body === null) {
+      advertiseRetryOwners.delete(ownerPubky);
+      if (typeof StorageService.clearChatKindsAdvertiseRetry === 'function') {
+        await StorageService.clearChatKindsAdvertiseRetry(ownerPubky);
+      }
+      return;
+    }
+    await PaykitLinkNative.putPublic(sessionAlias, receiverJsonPubkyUrl(ownerPubky), body, origin);
     advertiseRetryOwners.delete(ownerPubky);
-    return;
+    if (typeof StorageService.clearChatKindsAdvertiseRetry === 'function') {
+      await StorageService.clearChatKindsAdvertiseRetry(ownerPubky);
+    }
+  } catch {
+    advertiseRetryOwners.add(ownerPubky);
+    if (typeof StorageService.saveChatKindsAdvertiseRetry === 'function') {
+      try {
+        await StorageService.saveChatKindsAdvertiseRetry({
+          ownerPubky,
+          sessionAlias,
+          noisePublicKey,
+          nextRetryAt: Date.now(),
+        });
+      } catch {
+        // The volatile flag still drives a same-session retry.
+      }
+    }
   }
-  await PaykitLinkNative.putPublic(sessionAlias, receiverJsonPubkyUrl(ownerPubky), body, origin);
-  advertiseRetryOwners.delete(ownerPubky);
+}
+
+export async function drainChatKindsAdvertiseRetry(ownerPubky: PubkyKey): Promise<void> {
+  if (typeof StorageService.getChatKindsAdvertiseRetry !== 'function') return;
+  const retry = await StorageService.getChatKindsAdvertiseRetry(ownerPubky);
+  if (!retry || retry.nextRetryAt > Date.now()) return;
+  await putChatKindsVReceiverJson(retry.sessionAlias, ownerPubky, retry.noisePublicKey);
+  if (
+    advertiseRetryOwners.has(ownerPubky) &&
+    typeof StorageService.recordChatKindsAdvertiseRetryFailure === 'function'
+  ) {
+    await StorageService.recordChatKindsAdvertiseRetryFailure(ownerPubky, Date.now() + 30_000);
+  }
 }
 
 async function getPublicReceiverJson(pubky: PubkyKey, origin: string): Promise<string | null> {

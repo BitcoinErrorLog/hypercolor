@@ -217,6 +217,7 @@ export const COPY = {
   messageSearchTitle: 'Search messages',
   noSearchHits: 'No matching messages.',
   copyMessage: 'Copy message',
+  unsendMessage: 'Unsend',
   tagMessage: 'Tag',
   tagWithEmoji: 'Emoji',
   tagWithWord: 'Word tag',

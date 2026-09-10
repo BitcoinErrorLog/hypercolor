@@ -23,6 +23,10 @@ import {
 import { StorageService } from '../StorageService';
 import { KeyStore } from '../KeyStore';
 import type { DeliveryQueueItem } from '../../types';
+import {
+  DM_PENDING_TOMBSTONE_QUOTA_PER_SENDER,
+  DM_PENDING_TOMBSTONE_TTL_MS,
+} from '../../flags/config';
 
 export { parseChatReceiptV0, parseChatTagV0 };
 
@@ -101,7 +105,21 @@ export async function applyInboundDelete(input: {
     input.senderPubky,
     parsed.ok.target_event_id,
   );
-  if (!target) return 'processed';
+  if (!target) {
+    await StorageService.savePendingChatDelete({
+      ownerPubky: input.ownerPubky,
+      peerPubky: input.peerPubky,
+      senderPubky: input.senderPubky,
+      targetEventId: parsed.ok.target_event_id,
+      deleteEventId: parsed.ok.event_id,
+      rawJson: input.rawJson,
+      sentAt: parsed.ok.sent_at,
+      receivedAt: Date.now(),
+      ttlMs: DM_PENDING_TOMBSTONE_TTL_MS,
+      quota: DM_PENDING_TOMBSTONE_QUOTA_PER_SENDER,
+    });
+    return 'processed';
+  }
   if (target.senderPubky !== input.senderPubky) return 'processed';
   if (isPaykitPaymentKind(target.kind)) return 'processed';
   const redacted = JSON.stringify({
@@ -119,8 +137,46 @@ export async function applyInboundDelete(input: {
   });
   if (target.kind === CHAT_ATTACHMENT_KIND) {
     await KeyStore.deleteAttachmentSecret(input.ownerPubky, input.senderPubky, target.eventId);
+    if (typeof StorageService.updateAttachmentResolve === 'function') {
+      await StorageService.updateAttachmentResolve(
+        input.ownerPubky,
+        input.senderPubky,
+        target.eventId,
+        { resolveState: 'unavailable-from-backup', localCachePath: null },
+      );
+    }
   }
   return 'processed';
+}
+
+export async function applyPendingChatDeletesForTarget(input: {
+  ownerPubky: PubkyKey;
+  peerPubky: PubkyKey;
+  senderPubky: PubkyKey;
+  targetEventId: string;
+}): Promise<void> {
+  const pending = await StorageService.listPendingChatDeletes(
+    input.ownerPubky,
+    input.peerPubky,
+    input.senderPubky,
+    input.targetEventId,
+  );
+  for (const item of pending) {
+    const result = await applyInboundDelete({
+      ...input,
+      rawJson: item.rawJson,
+      peerTrust: 'accepted',
+    });
+    if (result === 'processed') {
+      await StorageService.deletePendingChatDelete(
+        input.ownerPubky,
+        input.peerPubky,
+        input.senderPubky,
+        input.targetEventId,
+        item.deleteEventId,
+      );
+    }
+  }
 }
 
 async function resolveReceiptAuthor(
@@ -240,7 +296,21 @@ async function applyTagEnvelope(
       envelope.target_author_pubky,
       envelope.target_event_id,
     );
-    if (!target) return 'deferred';
+    if (!target) {
+      await StorageService.savePendingChatTag({
+        ownerPubky,
+        peerPubky: dmPeerPubky ?? senderPubky,
+        senderPubky,
+        targetEventId: envelope.target_event_id,
+        tagEventId: envelope.event_id,
+        rawJson: JSON.stringify(envelope),
+        sentAt: envelope.sent_at,
+        receivedAt: Date.now(),
+        ttlMs: DM_PENDING_TOMBSTONE_TTL_MS,
+        quota: DM_PENDING_TOMBSTONE_QUOTA_PER_SENDER,
+      });
+      return 'applied';
+    }
     if (target.deleted) return 'rejected';
     if (target.conversationId !== expectedConversation) return 'rejected';
   }
@@ -297,6 +367,45 @@ export async function applyDeferredChatTag(event: {
   });
   if ('error' in parsed) return;
   await applyTagEnvelope(event.ownerPubky, event.senderPubky, parsed.ok);
+}
+
+export async function applyPendingChatTagsForTarget(input: {
+  ownerPubky: PubkyKey;
+  peerPubky: PubkyKey;
+  senderPubky: PubkyKey;
+  targetEventId: string;
+}): Promise<void> {
+  const pending = await StorageService.listPendingChatTags(
+    input.ownerPubky,
+    input.peerPubky,
+    input.senderPubky,
+    input.targetEventId,
+  );
+  for (const item of pending) {
+    const parsed = parseChatTagV0(item.rawJson, {
+      senderPubky: input.senderPubky,
+      ownerPubky: input.ownerPubky,
+      peerTrust: 'accepted',
+    });
+    if ('error' in parsed) {
+      await StorageService.deletePendingChatTag(
+        input.ownerPubky,
+        input.peerPubky,
+        input.senderPubky,
+        input.targetEventId,
+        item.tagEventId,
+      );
+      continue;
+    }
+    await applyTagEnvelope(input.ownerPubky, input.senderPubky, parsed.ok, input.peerPubky);
+    await StorageService.deletePendingChatTag(
+      input.ownerPubky,
+      input.peerPubky,
+      input.senderPubky,
+      input.targetEventId,
+      item.tagEventId,
+    );
+  }
 }
 
 export function controlRetryPayload(

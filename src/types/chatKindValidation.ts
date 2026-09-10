@@ -307,6 +307,32 @@ export function parseChatDeleteV0(
   };
 }
 
+export function buildChatDeleteEnvelope(input: {
+  eventId: string;
+  sentAt: number;
+  targetEventId: string;
+}): { envelope: ChatDeleteEnvelope; json: string } {
+  if (!isChatKindUuid(input.eventId)) throw new Error('chat.delete.v0 event_id must be a UUID');
+  if (!isChatKindUuid(input.targetEventId)) {
+    throw new Error('chat.delete.v0 target_event_id must be a UUID');
+  }
+  if (!isLinkSentAtUnixMs(input.sentAt)) {
+    throw new Error('chat.delete.v0 sent_at must be a positive Unix-millisecond integer');
+  }
+  const envelope: ChatDeleteEnvelope = {
+    version: 1,
+    kind: CHAT_DELETE_KIND,
+    event_id: input.eventId,
+    sent_at: input.sentAt,
+    target_event_id: input.targetEventId,
+  };
+  const json = JSON.stringify(envelope);
+  if (utf8Bytes(json) > LINK_MESSAGE_MAX_BYTES) {
+    throw new Error('chat.delete.v0 exceeds the serialized byte limit');
+  }
+  return { envelope, json };
+}
+
 export function buildChatTagEnvelope(input: {
   eventId: string;
   sentAt: number;
