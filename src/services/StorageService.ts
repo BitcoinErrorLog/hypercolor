@@ -50,6 +50,7 @@ import {
 } from '../flags/config';
 import type { AttachmentRecord, AttachmentResolveState } from '../types/attachment';
 import {
+  AttachmentError,
   CHAT_ATTACHMENT_KIND,
   decodePersistedAttachmentEnvelope,
   redactAttachmentRawJson,
@@ -127,22 +128,20 @@ async function ownedWrite<T>(expectedOwner: PubkyKey, fn: (db: SqlExecutor) => T
   return fn(db);
 }
 
-async function ownedTransact(
-  expectedOwner: PubkyKey,
-  fn: (db: SqlExecutor) => void,
-): Promise<void> {
+async function ownedTransact<T>(expectedOwner: PubkyKey, fn: (db: SqlExecutor) => T): Promise<T> {
   const db = await getDb();
   assertOwnerAtCommit(expectedOwner);
-  transact(db, () => fn(db));
+  return transact(db, () => fn(db));
 }
 /** Hostile peers can grow unapplied `payment_events` rows; keep the newest N per sender. */
 const PAYMENT_EVENTS_UNAPPLIED_KEEP_PER_SENDER = 100;
 
-function transact(db: SqlExecutor, fn: () => void): void {
+function transact<T>(db: SqlExecutor, fn: () => T): T {
   db.executeSync('BEGIN IMMEDIATE');
   try {
-    fn();
+    const result = fn();
     db.executeSync('COMMIT');
+    return result;
   } catch (err) {
     try {
       db.executeSync('ROLLBACK');
@@ -787,14 +786,19 @@ export const StorageService = {
   async recordChatKindsAdvertiseRetryFailure(
     ownerPubky: PubkyKey,
     nextRetryAt: number,
-  ): Promise<void> {
-    await ownedWrite(ownerPubky, db => {
+  ): Promise<number> {
+    return ownedWrite(ownerPubky, db => {
       db.executeSync(
         `UPDATE chat_kinds_advertise_retries
          SET attempts = attempts + 1, next_retry_at = ?, updated_at = ?
          WHERE owner_pubky = ?`,
         [nextRetryAt, now(), ownerPubky],
       );
+      const row = db.executeSync(
+        'SELECT attempts FROM chat_kinds_advertise_retries WHERE owner_pubky = ?',
+        [ownerPubky],
+      ).rows?.[0];
+      return Number(row?.attempts ?? 0);
     });
   },
 
@@ -1947,6 +1951,7 @@ export const StorageService = {
     }
 
     const failedServices: string[] = [];
+    const failedCachePaths: string[] = [];
     try {
       if (typeof KeyStore.deleteAttachmentSecrets === 'function') {
         const deleted = await KeyStore.deleteAttachmentSecrets(ownerPubky, refs);
@@ -1962,7 +1967,7 @@ export const StorageService = {
     try {
       await deleteCacheFiles(cachePaths);
     } catch {
-      // Cache wipe is best-effort.
+      failedCachePaths.push(...cachePaths);
     }
 
     const ts = now();
@@ -1973,6 +1978,14 @@ export const StorageService = {
             (owner_pubky, target_kind, target, created_at)
            VALUES (?, 'keystore', ?, ?)`,
           [ownerPubky, service, ts],
+        );
+      }
+      for (const path of [...new Set(failedCachePaths)]) {
+        db.executeSync(
+          `INSERT OR IGNORE INTO pending_cleanup
+            (owner_pubky, target_kind, target, created_at)
+           VALUES (?, 'cache', ?, ?)`,
+          [ownerPubky, path, ts],
         );
       }
       for (const id of ownerQueueIds) {
@@ -2069,6 +2082,35 @@ export const StorageService = {
         );
       }
     }
+  },
+
+  async journalAttachmentCacheCleanup(
+    ownerPubky: PubkyKey,
+    paths: readonly string[],
+  ): Promise<void> {
+    if (paths.length === 0) return;
+    await ownedTransact(ownerPubky, db => {
+      for (const path of new Set(paths)) {
+        db.executeSync(
+          `INSERT OR IGNORE INTO pending_cleanup
+            (owner_pubky, target_kind, target, created_at)
+           VALUES (?, 'cache', ?, ?)`,
+          [ownerPubky, path, now()],
+        );
+      }
+    });
+  },
+
+  async journalAttachmentKeyCleanup(ownerPubky: PubkyKey, service: string): Promise<void> {
+    if (service.length === 0) return;
+    await ownedTransact(ownerPubky, db => {
+      db.executeSync(
+        `INSERT OR IGNORE INTO pending_cleanup
+          (owner_pubky, target_kind, target, created_at)
+         VALUES (?, 'keystore', ?, ?)`,
+        [ownerPubky, service, now()],
+      );
+    });
   },
 
   async persistSignOutIncompleteJournal(
@@ -3220,6 +3262,22 @@ export const StorageService = {
     return row ? rowToPaymentRequest(row) : null;
   },
 
+  async getPaymentRequestByEventId(
+    ownerPubky: PubkyKey,
+    peerPubky: PubkyKey,
+    eventId: string,
+  ): Promise<PaymentRequestRecord | null> {
+    const db = await getDb();
+    const result = db.executeSync(
+      `SELECT * FROM payment_requests
+       WHERE owner_pubky = ? AND peer_pubky = ? AND event_id = ?
+       LIMIT 1`,
+      [ownerPubky, peerPubky, eventId],
+    );
+    const row = result.rows?.[0];
+    return row ? rowToPaymentRequest(row) : null;
+  },
+
   async listPaymentRequestsForPeer(
     ownerPubky: PubkyKey,
     peerPubky: PubkyKey,
@@ -3843,8 +3901,8 @@ export const StorageService = {
     senderPubky: PubkyKey;
     eventId: string;
     redactedRawJson: string;
-  }): Promise<void> {
-    await ownedTransact(input.ownerPubky, db => {
+  }): Promise<boolean> {
+    return ownedTransact(input.ownerPubky, db => {
       const ts = now();
       db.executeSync(
         `UPDATE link_messages
@@ -3852,6 +3910,8 @@ export const StorageService = {
          WHERE owner_pubky = ? AND sender_pubky = ? AND event_id = ?`,
         ['', '', input.redactedRawJson, ts, input.ownerPubky, input.senderPubky, input.eventId],
       );
+      const updated = Number(db.executeSync('SELECT changes() AS n').rows?.[0]?.n ?? 0) > 0;
+      if (!updated) return false;
       const stream = db.executeSync(
         `SELECT id, raw_json FROM link_stream_items
          WHERE owner_pubky = ? AND peer_pubky = ?`,
@@ -3876,6 +3936,7 @@ export const StorageService = {
          WHERE message_id = ? AND json_extract(payload, '$.ownerPubky') = ?`,
         [input.eventId, input.ownerPubky],
       );
+      return true;
     });
   },
 };
@@ -4383,10 +4444,14 @@ async function mutateOwnedQueueRow(
 function persistQueuePayload(payload: string): string {
   try {
     const parsed = JSON.parse(payload) as { kind?: unknown; rawJson?: unknown };
-    if (parsed.kind === CHAT_ATTACHMENT_KIND && typeof parsed.rawJson === 'string') {
+    if (parsed.kind === CHAT_ATTACHMENT_KIND) {
+      if (typeof parsed.rawJson !== 'string') {
+        throw new AttachmentError('validation', 'Cannot redact queued attachment JSON');
+      }
       return JSON.stringify({ ...parsed, rawJson: redactAttachmentRawJson(parsed.rawJson) });
     }
-  } catch {
+  } catch (err) {
+    if (err instanceof AttachmentError) throw err;
     return payload;
   }
   return payload;

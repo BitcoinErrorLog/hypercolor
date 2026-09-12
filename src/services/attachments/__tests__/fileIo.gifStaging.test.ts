@@ -10,7 +10,12 @@ jest.mock('expo-file-system/legacy', () => ({
   deleteAsync: jest.fn().mockResolvedValue(undefined),
 }));
 
-import { GIF_STAGING_MAX_AGE_MS, gifStagingDirectory, sweepStaleGifStaging } from '../fileIo';
+import {
+  GIF_STAGING_MAX_AGE_MS,
+  deleteCacheFiles,
+  gifStagingDirectory,
+  sweepStaleGifStaging,
+} from '../fileIo';
 
 const mockedFs = jest.requireMock('expo-file-system/legacy') as {
   getInfoAsync: jest.Mock;
@@ -66,5 +71,17 @@ describe('sweepStaleGifStaging', () => {
     await sweepStaleGifStaging(nowMs);
 
     expect(mockedFs.deleteAsync).toHaveBeenCalledWith(`${dir}/orphan.gif`, { idempotent: true });
+  });
+
+  it('uses idempotent unlink for missing files and propagates unlink failures', async () => {
+    await expect(
+      deleteCacheFiles(['file:///cache/missing', 'file:///cache/thumb']),
+    ).resolves.toBeUndefined();
+    expect(mockedFs.deleteAsync).toHaveBeenNthCalledWith(1, 'file:///cache/missing', {
+      idempotent: true,
+    });
+
+    mockedFs.deleteAsync.mockRejectedValueOnce(new Error('unlink failed'));
+    await expect(deleteCacheFiles(['file:///cache/failing'])).rejects.toThrow('unlink failed');
   });
 });

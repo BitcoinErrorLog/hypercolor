@@ -22,6 +22,7 @@ import {
 } from '../../types/chatKindValidation';
 import { StorageService } from '../StorageService';
 import { KeyStore } from '../KeyStore';
+import { cachePathsForAttachment, deleteCacheFiles } from '../attachments/fileIo';
 import type { DeliveryQueueItem } from '../../types';
 import {
   DM_PENDING_TOMBSTONE_QUOTA_PER_SENDER,
@@ -31,6 +32,7 @@ import {
 export { parseChatReceiptV0, parseChatTagV0 };
 
 const LINK_RETRY_PAYLOAD_TYPE = 'link.chat.message';
+export type InboundDeleteResult = 'applied' | 'deferred' | 'rejected' | 'unprocessed';
 
 export async function applyInboundTagOrReceipt(input: {
   ownerPubky: PubkyKey;
@@ -90,7 +92,8 @@ export async function applyInboundDelete(input: {
   peerPubky: PubkyKey;
   rawJson: string;
   peerTrust: 'accepted' | 'gated';
-}): Promise<'processed' | 'unprocessed'> {
+}): Promise<InboundDeleteResult> {
+  if (input.senderPubky !== input.peerPubky) return 'rejected';
   const parsed = parseChatDeleteV0(input.rawJson, {
     senderPubky: input.senderPubky,
     ownerPubky: input.ownerPubky,
@@ -98,7 +101,7 @@ export async function applyInboundDelete(input: {
   });
   if ('error' in parsed) {
     if (parsed.error === 'unknown-kind' || parsed.error === 'gated-peer') return 'unprocessed';
-    return 'processed';
+    return 'rejected';
   }
   const target = await StorageService.getLinkMessageByEventId(
     input.ownerPubky,
@@ -106,6 +109,21 @@ export async function applyInboundDelete(input: {
     parsed.ok.target_event_id,
   );
   if (!target) {
+    const conflictingTarget = await StorageService.getLinkMessageByEventId(
+      input.ownerPubky,
+      input.ownerPubky,
+      parsed.ok.target_event_id,
+    );
+    if (conflictingTarget) return 'rejected';
+    if (
+      await StorageService.getPaymentRequestByEventId(
+        input.ownerPubky,
+        input.senderPubky,
+        parsed.ok.target_event_id,
+      )
+    ) {
+      return 'rejected';
+    }
     await StorageService.savePendingChatDelete({
       ownerPubky: input.ownerPubky,
       peerPubky: input.peerPubky,
@@ -118,25 +136,70 @@ export async function applyInboundDelete(input: {
       ttlMs: DM_PENDING_TOMBSTONE_TTL_MS,
       quota: DM_PENDING_TOMBSTONE_QUOTA_PER_SENDER,
     });
-    return 'processed';
+    return 'deferred';
   }
-  if (target.senderPubky !== input.senderPubky) return 'processed';
-  if (isPaykitPaymentKind(target.kind)) return 'processed';
+  if (target.senderPubky !== input.senderPubky) return 'rejected';
+  if (isPaykitPaymentKind(target.kind)) return 'rejected';
   const redacted = JSON.stringify({
     kind: target.kind === CHAT_ATTACHMENT_KIND ? CHAT_ATTACHMENT_KIND : CHAT_MESSAGE_KIND,
     event_id: target.eventId,
     sent_at: target.sentAt,
     deleted: true,
   });
-  await StorageService.tombstoneLinkMessage({
+  const tombstoned = await StorageService.tombstoneLinkMessage({
     ownerPubky: input.ownerPubky,
     peerPubky: input.peerPubky,
     senderPubky: input.senderPubky,
     eventId: target.eventId,
     redactedRawJson: redacted,
   });
+  if (!tombstoned) {
+    await StorageService.savePendingChatDelete({
+      ownerPubky: input.ownerPubky,
+      peerPubky: input.peerPubky,
+      senderPubky: input.senderPubky,
+      targetEventId: target.eventId,
+      deleteEventId: parsed.ok.event_id,
+      rawJson: input.rawJson,
+      sentAt: parsed.ok.sent_at,
+      receivedAt: Date.now(),
+      ttlMs: DM_PENDING_TOMBSTONE_TTL_MS,
+      quota: DM_PENDING_TOMBSTONE_QUOTA_PER_SENDER,
+    });
+    return 'deferred';
+  }
   if (target.kind === CHAT_ATTACHMENT_KIND) {
-    await KeyStore.deleteAttachmentSecret(input.ownerPubky, input.senderPubky, target.eventId);
+    const keyService = KeyStore.attachmentKeyService(
+      input.ownerPubky,
+      input.senderPubky,
+      target.eventId,
+    );
+    let keyDeleted = false;
+    try {
+      keyDeleted = await KeyStore.deleteAttachmentSecret(
+        input.ownerPubky,
+        input.senderPubky,
+        target.eventId,
+      );
+    } catch {
+      keyDeleted = false;
+    }
+    if (!keyDeleted) {
+      await StorageService.journalAttachmentKeyCleanup(input.ownerPubky, keyService);
+    }
+    const attachment = await StorageService.getAttachment(
+      input.ownerPubky,
+      input.senderPubky,
+      target.eventId,
+    );
+    if (attachment) {
+      const paths = cachePathsForAttachment(attachment);
+      try {
+        await deleteCacheFiles(paths);
+      } catch {
+        await StorageService.journalAttachmentCacheCleanup(input.ownerPubky, paths);
+      }
+    }
     if (typeof StorageService.updateAttachmentResolve === 'function') {
       await StorageService.updateAttachmentResolve(
         input.ownerPubky,
@@ -146,7 +209,7 @@ export async function applyInboundDelete(input: {
       );
     }
   }
-  return 'processed';
+  return 'applied';
 }
 
 export async function applyPendingChatDeletesForTarget(input: {
@@ -167,7 +230,7 @@ export async function applyPendingChatDeletesForTarget(input: {
       rawJson: item.rawJson,
       peerTrust: 'accepted',
     });
-    if (result === 'processed') {
+    if (result !== 'deferred') {
       await StorageService.deletePendingChatDelete(
         input.ownerPubky,
         input.peerPubky,

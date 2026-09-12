@@ -205,7 +205,9 @@ export function redactAttachmentEnvelope(envelope: ChatAttachmentEnvelope): Chat
 
 export function redactAttachmentRawJson(rawJson: string): string {
   const envelope = decodePersistedAttachmentEnvelope(rawJson) ?? decodeAttachmentEnvelope(rawJson);
-  if (!envelope) return rawJson;
+  if (!envelope) {
+    throw new AttachmentError('validation', 'Cannot redact chat.attachment.v0 JSON');
+  }
   return JSON.stringify(redactAttachmentEnvelope(envelope));
 }
 

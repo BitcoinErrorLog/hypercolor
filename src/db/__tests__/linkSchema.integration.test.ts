@@ -2836,6 +2836,39 @@ describe('schema v21 — additive chat_kinds_v on links', () => {
     expect(prefs.rows).toHaveLength(1);
   });
 
+  it('preserves retry attempts while replacing the owner alias', async () => {
+    const db = openMemoryDb();
+    openDbs.push(db);
+    setDbForTests(db);
+    await runMigrations(db);
+
+    await StorageService.saveChatKindsAdvertiseRetry({
+      ownerPubky: OWNER,
+      sessionAlias: 'old-alias',
+      noisePublicKey: 'noise',
+      nextRetryAt: 1,
+    });
+    expect(await StorageService.recordChatKindsAdvertiseRetryFailure(OWNER, 2)).toBe(1);
+
+    await StorageService.saveChatKindsAdvertiseRetry({
+      ownerPubky: OWNER,
+      sessionAlias: 'new-alias',
+      noisePublicKey: 'noise',
+      nextRetryAt: 3,
+    });
+
+    expect(await StorageService.getChatKindsAdvertiseRetry(OWNER)).toEqual(
+      expect.objectContaining({
+        ownerPubky: OWNER,
+        sessionAlias: 'new-alias',
+        attempts: 1,
+        nextRetryAt: 3,
+      }),
+    );
+    await StorageService.clearChatKindsAdvertiseRetry(OWNER);
+    expect(await StorageService.getChatKindsAdvertiseRetry(OWNER)).toBeNull();
+  });
+
   it('wipes v21 chat tables on clearAccountData', async () => {
     const db = openMemoryDb();
     openDbs.push(db);

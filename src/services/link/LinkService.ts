@@ -77,6 +77,7 @@ import {
 } from '../../types/attachment';
 import { applyAttachmentInbound } from '../attachments/applyAttachmentInbound';
 import { reconstructAttachmentWireJson } from '../attachments/redaction';
+import { cachePathsForAttachment, deleteCacheFiles } from '../attachments/fileIo';
 import { applyPaymentInbound } from '../payments/applyPaymentInbound';
 import { isPaykitPaymentKind } from '../../types/payment';
 import { shouldDropOversizedKnownInbound } from './inboundEnvelope';
@@ -773,6 +774,24 @@ export const LinkService = {
       if (isPaykitPaymentKind(target.kind)) {
         throw new Error('Payment messages cannot be unsent');
       }
+      const attachment =
+        target.kind === CHAT_ATTACHMENT_KIND
+          ? await StorageService.getAttachment(owner, owner, eventId)
+          : null;
+      const attachmentCachePaths = attachment ? cachePathsForAttachment(attachment) : [];
+      if (target.kind === CHAT_ATTACHMENT_KIND) {
+        const deleted = await KeyStore.deleteAttachmentSecret(owner, owner, eventId);
+        if (deleted === false) {
+          throw new Error('Attachment key cleanup failed; message was not unsent');
+        }
+        if (attachment) {
+          try {
+            await deleteCacheFiles(attachmentCachePaths);
+          } catch {
+            await StorageService.journalAttachmentCacheCleanup(owner, attachmentCachePaths);
+          }
+        }
+      }
       const built = buildChatDeleteEnvelope({
         eventId: uuidv4(),
         sentAt: Date.now(),
@@ -791,8 +810,7 @@ export const LinkService = {
         eventId,
         redactedRawJson: redacted,
       });
-      if (target.kind === CHAT_ATTACHMENT_KIND) {
-        await KeyStore.deleteAttachmentSecret(owner, owner, eventId);
+      if (attachment) {
         await StorageService.updateAttachmentResolve(owner, owner, eventId, {
           resolveState: 'unavailable-from-backup',
           localCachePath: null,
@@ -1745,7 +1763,7 @@ async function provisionReceiver(
 
   if (published.kind === 'present' && published.noisePublicKey === noisePublicKey) {
     await putChatKindsVReceiverJson(sessionAlias, pubky, noisePublicKey);
-    await drainChatKindsAdvertiseRetry(pubky);
+    await drainChatKindsAdvertiseRetry(pubky, sessionAlias);
     await persistReceiverRow(
       pubky,
       receiverAlias,
@@ -1766,7 +1784,7 @@ async function provisionReceiver(
     throw error;
   }
   await persistReceiverRow(pubky, receiverAlias, receiverPath, true, 'active', noisePublicKey);
-  await drainChatKindsAdvertiseRetry(pubky);
+  await drainChatKindsAdvertiseRetry(pubky, sessionAlias);
   setReceiverRoleState('active', null);
   return { pubky, receiverPath, noisePublicKey, receiverRole: 'active' };
 }
@@ -1869,6 +1887,7 @@ async function publishTakeoverReceiver(
   const noisePublicKey = await PaykitLinkNative.getReceiverPublicKey(existing.receiverAlias);
   await PaykitLinkNative.publishReceiverMarker(sessionAlias, existing.receiverAlias, receiverPath);
   await putChatKindsVReceiverJson(sessionAlias, pubky, noisePublicKey);
+  await drainChatKindsAdvertiseRetry(pubky, sessionAlias);
   await persistReceiverRow(
     pubky,
     existing.receiverAlias,
@@ -4070,7 +4089,7 @@ async function routeUnprocessedStreamItems(
         rawJson: item.rawJson,
         peerTrust,
       });
-      if (result === 'processed') {
+      if (result !== 'unprocessed') {
         await StorageService.markLinkStreamItemProcessed(item.id);
       }
       continue;

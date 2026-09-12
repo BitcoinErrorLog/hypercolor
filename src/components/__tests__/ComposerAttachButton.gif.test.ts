@@ -69,4 +69,20 @@ describe('sendGifAttachment staging', () => {
     expect(staged.startsWith('file:///cache/hypercolor-gif/')).toBe(true);
     expect(mockedFs.deleteAsync).toHaveBeenCalledWith(staged, { idempotent: true });
   });
+
+  it('keeps send success when staging cleanup fails', async () => {
+    jest.mocked(AttachmentService.sendAttachment).mockResolvedValue({} as never);
+    mockedFs.deleteAsync.mockRejectedValueOnce(new Error('cleanup failed'));
+
+    await expect(sendGifAttachment(target, 'ok1')).resolves.toEqual({ ok: true });
+  });
+
+  it('surfaces send failure when staging cleanup succeeds', async () => {
+    jest.mocked(AttachmentService.sendAttachment).mockRejectedValue(new Error('send failed'));
+
+    await expect(sendGifAttachment(target, 'ok1')).resolves.toEqual({
+      ok: false,
+      notice: { message: 'send failed' },
+    });
+  });
 });

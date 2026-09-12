@@ -208,6 +208,63 @@ describe('attachment security (sqlite)', () => {
     }
   });
 
+  it('rejects malformed known attachment payloads at every durable message boundary', async () => {
+    const malformed = JSON.stringify({ kind: CHAT_ATTACHMENT_KIND, key: LIVE_KEY });
+    const message = {
+      ownerPubky: OWNER,
+      eventId: EVENT,
+      conversationId: `dm:${PEER_A}`,
+      peerPubky: PEER_A,
+      senderPubky: OWNER,
+      direction: 'sent' as const,
+      kind: CHAT_ATTACHMENT_KIND,
+      rawJson: malformed,
+      body: '[attachment]',
+      sentAt: NOW,
+      receivedAt: null,
+      deliveryState: 'sending' as const,
+    };
+
+    await expect(
+      StorageService.saveLinkStreamItems([
+        {
+          id: 'malformed-stream',
+          ownerPubky: OWNER,
+          peerPubky: PEER_A,
+          kind: CHAT_ATTACHMENT_KIND,
+          rawJson: malformed,
+          receivedAt: NOW,
+        },
+      ]),
+    ).rejects.toMatchObject({ name: 'AttachmentError', code: 'validation' });
+    await expect(StorageService.saveLinkMessage(message)).rejects.toMatchObject({
+      name: 'AttachmentError',
+      code: 'validation',
+    });
+    await expect(
+      StorageService.persistLinkSendIntent({
+        message,
+        queueItem: {
+          id: 'malformed-queue',
+          messageId: EVENT,
+          recipientPubky: PEER_A,
+          payload: JSON.stringify({
+            type: LINK_RETRY_PAYLOAD_TYPE,
+            ownerPubky: OWNER,
+            peerPubky: PEER_A,
+            senderPubky: OWNER,
+            kind: CHAT_ATTACHMENT_KIND,
+            eventId: EVENT,
+            rawJson: malformed,
+          }),
+          attempts: 0,
+          nextRetryAt: NOW,
+          createdAt: NOW,
+        },
+      }),
+    ).rejects.toMatchObject({ name: 'AttachmentError', code: 'validation' });
+  });
+
   it('reconstructs the live wire JSON from the redacted copy + KeyStore', async () => {
     await KeyStore.setAttachmentSecret(OWNER, OWNER, EVENT, {
       key: LIVE_KEY,

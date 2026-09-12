@@ -98,6 +98,10 @@ export async function sendGifAttachment(
     await writeFileFromStandardBase64(uri, b64);
     return await sendAttachment(target, uri, fetched.contentType);
   } finally {
-    await deleteCacheFiles([uri]);
+    try {
+      await deleteCacheFiles([uri]);
+    } catch {
+      // Stale GIF staging is cleaned by the existing sweep on the next send.
+    }
   }
 }

@@ -43,6 +43,7 @@ import { applyAttachmentInbound } from '../../attachments/applyAttachmentInbound
 import { applyPaymentInbound } from '../../payments/applyPaymentInbound';
 import { FollowsImportSettings } from '../../contacts/followsImportSettings';
 import { LinkSendError } from '../LinkSendError';
+import * as ChatKindsAdvertisement from '../chatKindsAdvertisement';
 import { PAYKIT_PAYMENT_REQUEST_KIND } from '../../../types/payment';
 import { GROUP_MESSAGE_KIND } from '../../../types/group';
 import {
@@ -50,6 +51,7 @@ import {
   ATTACHMENT_KEY_PLACEHOLDER,
   CHAT_ATTACHMENT_KIND,
 } from '../../../types/attachment';
+import { cachePathsForAttachment, deleteCacheFiles } from '../../attachments/fileIo';
 import {
   finishConnectDelegation,
   resetConnectDelegationForTests,
@@ -142,6 +144,7 @@ jest.mock('../../StorageService', () => ({
     saveLinkStreamItems: jest.fn(),
     getUnprocessedLinkStreamItems: jest.fn(),
     markLinkStreamItemProcessed: jest.fn(),
+    savePendingChatDelete: jest.fn(),
     listPendingChatDeletes: jest.fn(),
     deletePendingChatDelete: jest.fn(),
     listPendingChatTags: jest.fn(),
@@ -160,7 +163,9 @@ jest.mock('../../StorageService', () => ({
     markGroupEventSeen: jest.fn(),
     listDeliveryQueue: jest.fn(),
     listPaymentRequestsWithPendingEvent: jest.fn().mockResolvedValue([]),
+    getPaymentRequestByEventId: jest.fn(),
     getLinkMessageByEventId: jest.fn(),
+    tombstoneLinkMessage: jest.fn(),
     getGroupMember: jest.fn(),
     getGroupMessage: jest.fn(),
     listGroupMessages: jest.fn().mockResolvedValue([]),
@@ -206,7 +211,14 @@ jest.mock('../../StorageService', () => ({
     hasAttachment: jest.fn(),
     updateAttachmentResolve: jest.fn(),
     updateAttachmentDelivery: jest.fn(),
+    journalAttachmentCacheCleanup: jest.fn(),
   },
+}));
+
+jest.mock('../../../db', () => ({
+  getDb: jest.fn().mockResolvedValue({
+    executeSync: jest.fn(),
+  }),
 }));
 
 jest.mock('../../group/applyGroupInbound', () => ({
@@ -215,6 +227,11 @@ jest.mock('../../group/applyGroupInbound', () => ({
 
 jest.mock('../../attachments/applyAttachmentInbound', () => ({
   applyAttachmentInbound: jest.fn().mockResolvedValue(null),
+}));
+
+jest.mock('../../attachments/fileIo', () => ({
+  cachePathsForAttachment: jest.fn(() => []),
+  deleteCacheFiles: jest.fn().mockResolvedValue(undefined),
 }));
 
 jest.mock('../../payments/applyPaymentInbound', () => ({
@@ -246,6 +263,7 @@ jest.mock('../../KeyStore', () => ({
     setAttachmentSecret: jest.fn(),
     getAttachmentSecret: jest.fn(),
     deleteAttachmentSecrets: jest.fn(),
+    deleteAttachmentSecret: jest.fn(),
   },
 }));
 
@@ -526,9 +544,11 @@ describe('LinkService', () => {
     mockedStorage.listDeliveryQueue.mockResolvedValue([]);
     mockedStorage.listPaymentRequestsWithPendingEvent.mockResolvedValue([]);
     mockedStorage.retryPendingCleanup.mockResolvedValue(undefined);
+    mockedStorage.journalAttachmentCacheCleanup.mockResolvedValue(undefined);
     mockedStorage.markGroupEventSeen.mockResolvedValue(undefined);
     mockedStorage.hasLinkMessage.mockResolvedValue(false);
     mockedStorage.getUnprocessedLinkStreamItems.mockResolvedValue([]);
+    mockedStorage.savePendingChatDelete.mockResolvedValue(undefined);
     mockedStorage.listPendingChatDeletes.mockResolvedValue([]);
     mockedStorage.deletePendingChatDelete.mockResolvedValue(undefined);
     mockedStorage.listPendingChatTags.mockResolvedValue([]);
@@ -901,6 +921,9 @@ describe('LinkService', () => {
         receiverAlias: 'recv-new',
         noisePublicKey: 'noise-pk',
       });
+      const drainSpy = jest
+        .spyOn(ChatKindsAdvertisement, 'drainChatKindsAdvertiseRetry')
+        .mockResolvedValue(undefined);
 
       const flow = await LinkService.enable();
       expect(flow.authorizationUrl).toBe('pubkyauth://grant');
@@ -934,6 +957,8 @@ describe('LinkService', () => {
         expect.stringContaining('"chat_kinds_v":1'),
         'https://homeserver.example',
       );
+      expect(drainSpy).toHaveBeenCalledWith(OWNER, 'alias-2');
+      drainSpy.mockRestore();
       const aliasOrder = mockedStorage.upsertLinkReceiver.mock.invocationCallOrder[0]!;
       const publishOrder = mockedNative.publishReceiverMarker.mock.invocationCallOrder[0]!;
       expect(aliasOrder).toBeLessThan(publishOrder);
@@ -3367,6 +3392,49 @@ describe('LinkService', () => {
   });
 
   describe('syncInbox', () => {
+    it('settles a racing delete stream item while retaining its pending tombstone', async () => {
+      givenEstablishedLink();
+      const deleteJson = JSON.stringify({
+        version: 1,
+        kind: 'chat.delete.v0',
+        event_id: '00000000-0000-4000-8000-0000000000dd',
+        sent_at: NOW,
+        target_event_id: EVENT_ID,
+      });
+      mockedNative.receivePrivateMessages.mockResolvedValue({
+        messages: [],
+        snapshot: 'est-2',
+      });
+      mockedStorage.getUnprocessedLinkStreamItems.mockResolvedValue([
+        {
+          id: 's-racing-delete',
+          ownerPubky: OWNER,
+          peerPubky: PEER,
+          kind: 'chat.delete.v0',
+          rawJson: deleteJson,
+          receivedAt: NOW,
+          processed: false,
+        },
+      ]);
+      mockedStorage.getLinkMessageByEventId.mockResolvedValue({
+        ...sendingRow({ senderPubky: PEER, direction: 'received' }),
+        eventId: EVENT_ID,
+      });
+      mockedStorage.tombstoneLinkMessage.mockResolvedValue(false);
+
+      await expect(LinkService.syncInbox([PEER])).resolves.toEqual([]);
+
+      expect(mockedStorage.savePendingChatDelete).toHaveBeenCalledWith(
+        expect.objectContaining({
+          ownerPubky: OWNER,
+          peerPubky: PEER,
+          senderPubky: PEER,
+          targetEventId: EVENT_ID,
+        }),
+      );
+      expect(mockedStorage.markLinkStreamItemProcessed).toHaveBeenCalledWith('s-racing-delete');
+    });
+
     it('persists stream items before the snapshot and routes known kinds', async () => {
       givenEstablishedLink();
       const EVT_NEW = '00000000-0000-4000-8000-00000000000a';
@@ -4947,6 +5015,138 @@ describe('LinkService', () => {
         expect.objectContaining({
           queueItem: expect.objectContaining({
             payload: expect.stringContaining(CHAT_RECEIPT_KIND),
+          }),
+        }),
+      );
+    });
+  });
+
+  describe('attachment unsend cleanup', () => {
+    function givenAttachmentMessage(): string[] {
+      const localCachePath = `file:///cache/hypercolor-attachments/${OWNER}/${OWNER}/${EVENT_ID}`;
+      mockedStorage.getLinkMessageByEventId.mockResolvedValue({
+        ownerPubky: OWNER,
+        eventId: EVENT_ID,
+        conversationId: CONVERSATION_ID,
+        peerPubky: PEER,
+        senderPubky: OWNER,
+        direction: 'sent',
+        kind: CHAT_ATTACHMENT_KIND,
+        rawJson: '{}',
+        body: '[attachment]',
+        sentAt: NOW,
+        receivedAt: null,
+        deliveryState: 'sent',
+        deleted: false,
+      });
+      mockedStorage.getAttachment.mockResolvedValue({
+        ownerPubky: OWNER,
+        eventId: EVENT_ID,
+        conversationId: CONVERSATION_ID,
+        channelId: null,
+        senderPubky: OWNER,
+        direction: 'sent',
+        location: `pubky://${OWNER}/pub/hypercolor.app/v1/attachments/${EVENT_ID}`,
+        keyRef: `att:${OWNER}:${OWNER}:${EVENT_ID}`,
+        contentType: 'image/jpeg',
+        size: 12,
+        thumbnailLocation: null,
+        localCachePath,
+        createdAt: NOW,
+        updatedAt: NOW,
+        deliveryState: 'sent',
+        resolveState: 'ready',
+      });
+      const paths = [
+        `file:///cache/hypercolor-attachments/${OWNER}/${OWNER}/${EVENT_ID}`,
+        `file:///cache/hypercolor-attachments/${OWNER}/${OWNER}/${EVENT_ID}.thumb`,
+        localCachePath,
+        `${localCachePath}.thumb`,
+      ];
+      jest.mocked(cachePathsForAttachment).mockReturnValue(paths);
+      return paths;
+    }
+
+    it('journals cache cleanup failure and still tombstones and dispatches deletion', async () => {
+      const paths = givenAttachmentMessage();
+      givenEstablishedLink();
+      mockedKeyStore.deleteAttachmentSecret.mockResolvedValue(true);
+      mockedStorage.tombstoneLinkMessage.mockResolvedValue(true);
+      jest.mocked(deleteCacheFiles).mockRejectedValueOnce(new Error('unlink failed'));
+
+      await expect(LinkService.unsendDm(PEER, EVENT_ID)).resolves.toBeUndefined();
+
+      expect(mockedKeyStore.deleteAttachmentSecret).toHaveBeenCalledWith(OWNER, OWNER, EVENT_ID);
+      expect(deleteCacheFiles).toHaveBeenCalledWith(paths);
+      expect(mockedStorage.journalAttachmentCacheCleanup).toHaveBeenCalledWith(OWNER, paths);
+      expect(mockedStorage.tombstoneLinkMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          ownerPubky: OWNER,
+          peerPubky: PEER,
+          senderPubky: OWNER,
+          eventId: EVENT_ID,
+        }),
+      );
+      expect(mockedStorage.updateAttachmentResolve).toHaveBeenCalledWith(OWNER, OWNER, EVENT_ID, {
+        resolveState: 'unavailable-from-backup',
+        localCachePath: null,
+      });
+      expect(mockedStorage.persistControlSendIntent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          ownerPubky: OWNER,
+          queueItem: expect.objectContaining({
+            payload: expect.stringMatching(/"kind":"chat\.delete\.v0"/),
+          }),
+        }),
+      );
+    });
+
+    it('aborts before tombstone when attachment key deletion fails', async () => {
+      givenAttachmentMessage();
+      mockedKeyStore.deleteAttachmentSecret.mockResolvedValue(false);
+
+      await expect(LinkService.unsendDm(PEER, EVENT_ID)).rejects.toThrow(
+        'Attachment key cleanup failed; message was not unsent',
+      );
+
+      expect(deleteCacheFiles).not.toHaveBeenCalled();
+      expect(mockedStorage.journalAttachmentCacheCleanup).not.toHaveBeenCalled();
+      expect(mockedStorage.tombstoneLinkMessage).not.toHaveBeenCalled();
+      expect(mockedStorage.updateAttachmentResolve).not.toHaveBeenCalled();
+      expect(mockedStorage.persistControlSendIntent).not.toHaveBeenCalled();
+    });
+
+    it('deletes an attachment key without a row and aborts before tombstone', async () => {
+      givenAttachmentMessage();
+      mockedStorage.getAttachment.mockResolvedValue(null);
+      mockedKeyStore.deleteAttachmentSecret.mockResolvedValue(false);
+
+      await expect(LinkService.unsendDm(PEER, EVENT_ID)).rejects.toThrow(
+        'Attachment key cleanup failed; message was not unsent',
+      );
+
+      expect(mockedKeyStore.deleteAttachmentSecret).toHaveBeenCalledWith(OWNER, OWNER, EVENT_ID);
+      expect(deleteCacheFiles).not.toHaveBeenCalled();
+      expect(mockedStorage.tombstoneLinkMessage).not.toHaveBeenCalled();
+      expect(mockedStorage.persistControlSendIntent).not.toHaveBeenCalled();
+    });
+
+    it('clears attachment cache metadata when tombstone loses a concurrent race', async () => {
+      givenAttachmentMessage();
+      givenEstablishedLink();
+      mockedKeyStore.deleteAttachmentSecret.mockResolvedValue(true);
+      mockedStorage.tombstoneLinkMessage.mockResolvedValue(false);
+
+      await expect(LinkService.unsendDm(PEER, EVENT_ID)).resolves.toBeUndefined();
+
+      expect(mockedStorage.updateAttachmentResolve).toHaveBeenCalledWith(OWNER, OWNER, EVENT_ID, {
+        resolveState: 'unavailable-from-backup',
+        localCachePath: null,
+      });
+      expect(mockedStorage.persistControlSendIntent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          queueItem: expect.objectContaining({
+            payload: expect.stringMatching(/"kind":"chat\.delete\.v0"/),
           }),
         }),
       );

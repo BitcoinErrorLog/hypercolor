@@ -376,6 +376,42 @@ describe('owner-conditional persist at commit time', () => {
     expect(await StorageService.getMessageRequest(OTHER, PEER)).toBeNull();
   });
 
+  it('does not journal attachment cache cleanup after owner rotation', async () => {
+    const path = 'file:///cache/stale-owner.bin';
+    const stall = installGetDbStall();
+    stall.armNth(1);
+    const pending = StorageService.journalAttachmentCacheCleanup(OWNER, [path]);
+    await stall.waiting;
+    switchPaintedOwner();
+    stall.release();
+
+    await expect(pending).rejects.toEqual(
+      expect.objectContaining({ name: 'LinkSendError', code: 'owner-changed' }),
+    );
+    expect(
+      db?.executeSync(
+        `SELECT owner_pubky, target_kind, target
+         FROM pending_cleanup
+         WHERE target_kind = 'cache' AND target = ?`,
+        [path],
+      ).rows,
+    ).toEqual([]);
+  });
+
+  it('journals deduplicated attachment cache cleanup paths for the owner', async () => {
+    const path = 'file:///cache/attachment.bin';
+    await StorageService.journalAttachmentCacheCleanup(OWNER, [path, path]);
+
+    expect(
+      db?.executeSync(
+        `SELECT owner_pubky, target_kind, target
+         FROM pending_cleanup
+         WHERE target_kind = 'cache' AND target = ?`,
+        [path],
+      ).rows,
+    ).toEqual([{ owner_pubky: OWNER, target_kind: 'cache', target: path }]);
+  });
+
   it('keeps a declined row when sendDm switches during the promotion getDb', async () => {
     await StorageService.upsertMessageRequest({
       ownerPubky: OWNER,

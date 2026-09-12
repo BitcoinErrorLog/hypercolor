@@ -14,6 +14,9 @@ import { PaykitLinkNative, type ReceiverMarker } from './PaykitLinkNative';
 
 const chatKindsUpgradeReplayed = new Set<string>();
 const advertiseRetryOwners = new Set<string>();
+const MAX_ADVERTISE_RETRY_ATTEMPTS = 10;
+const ADVERTISE_RETRY_BASE_MS = 15_000;
+const ADVERTISE_RETRY_MAX_MS = 30 * 60 * 1000;
 
 export function resetChatKindsUpgradeReplayedForTests(): void {
   chatKindsUpgradeReplayed.clear();
@@ -29,40 +32,20 @@ export async function putChatKindsVReceiverJson(
   ownerPubky: PubkyKey,
   noisePublicKey: string,
 ): Promise<void> {
-  try {
-    const origin = await resolveHomeserverOrigin(ownerPubky);
-    const first = await getPublicReceiverJson(ownerPubky, origin);
-    if (first === null) throw new Error('receiver.json GET failed');
-    const latest = await getPublicReceiverJson(ownerPubky, origin);
-    if (latest === null) {
-      throw new Error('receiver.json GET failed');
-    }
-    const latestDoc = parseReceiverMarkerJson(latest);
-    if (latestDoc?.noisePublicKey && latestDoc.noisePublicKey !== noisePublicKey) {
-      throw new Error('receiver.json belongs to another receiver');
-    }
-    const body = addChatKindsVToReceiverJson(latest);
-    if (body === null) {
-      advertiseRetryOwners.delete(ownerPubky);
-      if (typeof StorageService.clearChatKindsAdvertiseRetry === 'function') {
-        await StorageService.clearChatKindsAdvertiseRetry(ownerPubky);
-      }
-      return;
-    }
-    await PaykitLinkNative.putPublic(sessionAlias, receiverJsonPubkyUrl(ownerPubky), body, origin);
-    advertiseRetryOwners.delete(ownerPubky);
-    if (typeof StorageService.clearChatKindsAdvertiseRetry === 'function') {
-      await StorageService.clearChatKindsAdvertiseRetry(ownerPubky);
-    }
-  } catch {
-    advertiseRetryOwners.add(ownerPubky);
+  const outcome = await advertiseChatKindsVReceiverJson(sessionAlias, ownerPubky, noisePublicKey);
+  if (outcome === 'success' || outcome === 'terminal') {
+    await clearAdvertiseRetry(ownerPubky);
+    return;
+  }
+  advertiseRetryOwners.add(ownerPubky);
+  if (outcome === 'transient') {
     if (typeof StorageService.saveChatKindsAdvertiseRetry === 'function') {
       try {
         await StorageService.saveChatKindsAdvertiseRetry({
           ownerPubky,
           sessionAlias,
           noisePublicKey,
-          nextRetryAt: Date.now(),
+          nextRetryAt: Date.now() + ADVERTISE_RETRY_BASE_MS,
         });
       } catch {
         // The volatile flag still drives a same-session retry.
@@ -71,16 +54,103 @@ export async function putChatKindsVReceiverJson(
   }
 }
 
-export async function drainChatKindsAdvertiseRetry(ownerPubky: PubkyKey): Promise<void> {
+export async function drainChatKindsAdvertiseRetry(
+  ownerPubky: PubkyKey,
+  activeSessionAlias?: string,
+): Promise<void> {
   if (typeof StorageService.getChatKindsAdvertiseRetry !== 'function') return;
   const retry = await StorageService.getChatKindsAdvertiseRetry(ownerPubky);
-  if (!retry || retry.nextRetryAt > Date.now()) return;
-  await putChatKindsVReceiverJson(retry.sessionAlias, ownerPubky, retry.noisePublicKey);
+  if (!retry) return;
   if (
-    advertiseRetryOwners.has(ownerPubky) &&
-    typeof StorageService.recordChatKindsAdvertiseRetryFailure === 'function'
+    retry.ownerPubky !== ownerPubky ||
+    !activeSessionAlias ||
+    retry.attempts >= MAX_ADVERTISE_RETRY_ATTEMPTS
   ) {
-    await StorageService.recordChatKindsAdvertiseRetryFailure(ownerPubky, Date.now() + 30_000);
+    await clearAdvertiseRetry(ownerPubky);
+    return;
+  }
+  if (retry.nextRetryAt > Date.now()) return;
+
+  if (retry.sessionAlias !== activeSessionAlias) {
+    if (typeof StorageService.saveChatKindsAdvertiseRetry !== 'function') {
+      await clearAdvertiseRetry(ownerPubky);
+      return;
+    }
+    await StorageService.saveChatKindsAdvertiseRetry({
+      ownerPubky,
+      sessionAlias: activeSessionAlias,
+      noisePublicKey: retry.noisePublicKey,
+      nextRetryAt: retry.nextRetryAt,
+    });
+  }
+
+  const outcome = await advertiseChatKindsVReceiverJson(
+    activeSessionAlias,
+    ownerPubky,
+    retry.noisePublicKey,
+  );
+  if (outcome === 'success' || outcome === 'terminal') {
+    await clearAdvertiseRetry(ownerPubky);
+    return;
+  }
+  if (typeof StorageService.recordChatKindsAdvertiseRetryFailure === 'function') {
+    const nextAttempts = await StorageService.recordChatKindsAdvertiseRetryFailure(
+      ownerPubky,
+      Date.now() + retryDelayMs(retry.attempts),
+    );
+    if (nextAttempts >= MAX_ADVERTISE_RETRY_ATTEMPTS) {
+      await clearAdvertiseRetry(ownerPubky);
+    }
+  }
+}
+
+type AdvertiseOutcome = 'success' | 'transient' | 'terminal';
+
+async function advertiseChatKindsVReceiverJson(
+  sessionAlias: string,
+  ownerPubky: PubkyKey,
+  noisePublicKey: string,
+): Promise<AdvertiseOutcome> {
+  try {
+    const origin = await resolveHomeserverOrigin(ownerPubky);
+    const first = await getPublicReceiverJson(ownerPubky, origin);
+    if (first === null) return 'transient';
+    const latest = await getPublicReceiverJson(ownerPubky, origin);
+    if (latest === null) return 'transient';
+    const latestDoc = parseReceiverMarkerJson(latest);
+    if (latestDoc?.noisePublicKey && latestDoc.noisePublicKey !== noisePublicKey) {
+      return 'terminal';
+    }
+    const body = addChatKindsVToReceiverJson(latest);
+    if (body === null) return 'success';
+    await PaykitLinkNative.putPublic(sessionAlias, receiverJsonPubkyUrl(ownerPubky), body, origin);
+    return 'success';
+  } catch (error) {
+    if (isTerminalAdvertiseError(error)) return 'terminal';
+    return 'transient';
+  }
+}
+
+function isTerminalAdvertiseError(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null) return false;
+  const code = (error as { code?: unknown }).code;
+  return (
+    code === 'auth' ||
+    code === 'validation' ||
+    code === 'protocol' ||
+    code === 'consumed' ||
+    code === 'invalid_alias'
+  );
+}
+
+function retryDelayMs(attempts: number): number {
+  return Math.min(ADVERTISE_RETRY_BASE_MS * 2 ** attempts, ADVERTISE_RETRY_MAX_MS);
+}
+
+async function clearAdvertiseRetry(ownerPubky: PubkyKey): Promise<void> {
+  advertiseRetryOwners.delete(ownerPubky);
+  if (typeof StorageService.clearChatKindsAdvertiseRetry === 'function') {
+    await StorageService.clearChatKindsAdvertiseRetry(ownerPubky);
   }
 }
 

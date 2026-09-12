@@ -177,10 +177,6 @@ export async function deleteCacheFiles(
 ): Promise<void> {
   for (const path of paths) {
     if (!path) continue;
-    try {
-      await FileSystem.deleteAsync(path, { idempotent: true });
-    } catch {
-      // Best-effort cache wipe.
-    }
+    await FileSystem.deleteAsync(path, { idempotent: true });
   }
 }

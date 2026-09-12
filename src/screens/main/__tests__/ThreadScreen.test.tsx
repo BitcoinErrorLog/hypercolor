@@ -6,6 +6,8 @@ import { CONTACTS_COPY } from '../../../ui/contacts/contactsCopy';
 import { COPY } from '../../../copy/uxCopy';
 import { ThreadScreenContent } from '../ThreadScreen';
 import type { Contact } from '../../../types';
+import { CHAT_ATTACHMENT_KIND } from '../../../types/attachment';
+import type { PaymentRequestRecord } from '../../../types/payment';
 import { useReceiverRoleStore } from '../../../stores/receiverRoleStore';
 import { LinkService } from '../../../services/link/LinkService';
 
@@ -78,6 +80,30 @@ jest.mock('../../../stores/authStore', () => ({
 const OWNER = 'operrr8wsbpr3ue9d4qj41ge1kcc6r7fdiy6o3ugjrrhi4y77rdo';
 const PEER = 'pxnu33x7jtpx9ar1ytsi4yxbp6a5o36gwhffs8zoxmbuptici1jy';
 const noop = () => undefined;
+
+function paymentRecord(direction: 'sent' | 'received'): PaymentRequestRecord {
+  return {
+    ownerPubky: OWNER,
+    peerPubky: PEER,
+    direction,
+    paymentRequestId: `payment-${direction}`,
+    eventId: `payment-event-${direction}`,
+    amountValue: '1',
+    amountAsset: 'btc',
+    paymentReference: 'payment',
+    endpointIds: [],
+    expiresAt: null,
+    status: 'pending',
+    createdAt: 1,
+    updatedAt: 1,
+    proofJson: null,
+    reason: null,
+    pendingEventId: null,
+    displayedPaymentHash: null,
+    proofVerified: null,
+    invoiceReused: false,
+  };
+}
 
 function contentProps(
   overrides: Partial<React.ComponentProps<typeof ThreadScreenContent>> = {},
@@ -439,6 +465,80 @@ describe('ThreadScreenContent blocked send', () => {
     );
     expect(JSON.stringify(tree.toJSON())).toContain(COPY.delivered);
     expect(tree.root.findByProps({ testID: 'tagChip-ok' })).toBeTruthy();
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('does not expose actions for sent or received payment bubbles', async () => {
+    const tree = await render(
+      <ThreadScreenContent
+        {...contentProps({
+          payments: [paymentRecord('sent'), paymentRecord('received')],
+        })}
+      />,
+    );
+    const paymentBubbles = tree.root.findAllByProps({ testID: 'threadPaymentBubble' });
+    expect(paymentBubbles.every(node => node.props.onLongPress === undefined)).toBe(true);
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('retains Unsend actions for owned text and attachment bubbles', async () => {
+    const onUnsend = jest.fn();
+    const attachmentEventId = 'attachment-event';
+    const tree = await render(
+      <ThreadScreenContent
+        {...contentProps({
+          onUnsend,
+          linkMessages: [
+            {
+              ...contentProps().linkMessages[0]!,
+              kind: 'chat.message.v0',
+              eventId: 'text-event',
+              body: 'owned text',
+            },
+            {
+              ...contentProps().linkMessages[0]!,
+              kind: CHAT_ATTACHMENT_KIND,
+              eventId: attachmentEventId,
+              body: '',
+            },
+          ],
+          attachments: [
+            {
+              ownerPubky: OWNER,
+              eventId: attachmentEventId,
+              conversationId: `dm:${PEER}`,
+              channelId: null,
+              senderPubky: OWNER,
+              direction: 'sent',
+              location: '/pub/hypercolor.app/v1/attachments/attachment-event',
+              keyRef: 'key-ref',
+              contentType: 'text/plain',
+              size: 1,
+              thumbnailLocation: null,
+              localCachePath: null,
+              createdAt: 1,
+              updatedAt: 1,
+              deliveryState: 'sent',
+              resolveState: 'ready',
+            },
+          ],
+        })}
+      />,
+    );
+    expect(
+      tree.root
+        .findAllByProps({ testID: 'threadBubbleMine' })
+        .some(node => node.props.onLongPress !== undefined),
+    ).toBe(true);
+    expect(
+      tree.root
+        .findAllByProps({ testID: 'threadAttachmentBubbleMine' })
+        .some(node => node.props.onLongPress !== undefined),
+    ).toBe(true);
     await act(async () => {
       tree.unmount();
     });

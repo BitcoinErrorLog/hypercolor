@@ -171,6 +171,12 @@ describe('attachment wire contracts', () => {
     );
   });
 
+  it('rejects malformed known attachment JSON instead of returning it intact', () => {
+    expect(() =>
+      redactAttachmentRawJson('{"kind":"chat.attachment.v0","key":"plaintext"}'),
+    ).toThrow(AttachmentError);
+  });
+
   it('exposes typed AttachmentError codes', () => {
     const err = new AttachmentError('too-large', 'too big');
     expect(err.code).toBe('too-large');
