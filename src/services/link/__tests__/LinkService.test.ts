@@ -498,7 +498,7 @@ describe('LinkService', () => {
     mockedNative.getReceiverPublicKey.mockResolvedValue(PEER_NOISE);
     mockedNative.getReceiverMarker.mockImplementation(async (who: string) => {
       if (who === OWNER) return null;
-      return { noisePublicKey: PEER_NOISE, capabilitiesJson: '{}' };
+      return { noisePublicKey: PEER_NOISE };
     });
     mockedKeyStore.getPubky.mockReturnValue(OWNER);
     mockedKeyStore.isInitialized.mockReturnValue(true);
@@ -604,7 +604,6 @@ describe('LinkService', () => {
       mockedNative.getReceiverPublicKey.mockResolvedValue('local-noise-pk');
       mockedNative.getReceiverMarker.mockResolvedValue({
         noisePublicKey: 'foreign-noise-pk',
-        capabilitiesJson: '{}',
       });
       mockedNative.removeReceiverMarker.mockClear();
 
@@ -622,7 +621,6 @@ describe('LinkService', () => {
       mockedNative.getReceiverPublicKey.mockResolvedValue(PEER_NOISE);
       mockedNative.getReceiverMarker.mockResolvedValue({
         noisePublicKey: PEER_NOISE,
-        capabilitiesJson: '{}',
       });
       mockedNative.closeLink.mockClear();
       mockedNative.removeReceiverMarker.mockClear();
@@ -905,10 +903,18 @@ describe('LinkService', () => {
   describe('enable (Ring path)', () => {
     it('starts a combined Paykit + Hypercolor write grant, then provisions a native-owned receiver', async () => {
       mockedStorage.getLinkReceiver.mockResolvedValue(null);
-      global.fetch = jest.fn().mockResolvedValue({
-        ok: true,
-        text: async () => '{"noisePublicKey":"noise-pk","capabilities":{"privatePayments":true}}',
-      }) as unknown as typeof fetch;
+      global.fetch = jest
+        .fn()
+        .mockResolvedValueOnce({ status: 404, ok: false, text: async () => '' })
+        .mockResolvedValueOnce({
+          status: 200,
+          ok: true,
+          text: async () =>
+            '{"version":1,"kind":"hypercolor.receiver.capabilities","receiver_path":"hypercolor/wallet","chat_kinds_v":1}',
+        }) as unknown as typeof fetch;
+      mockedNative.getReceiverMarker
+        .mockResolvedValueOnce(null)
+        .mockResolvedValue({ noisePublicKey: 'noise-pk' });
       mockedNative.startAuthFlow.mockResolvedValue({
         flowId: 'flow-1',
         authorizationUrl: 'pubkyauth://grant',
@@ -953,8 +959,8 @@ describe('LinkService', () => {
       );
       expect(mockedNative.putPublic).toHaveBeenCalledWith(
         'alias-2',
-        `pubky://${OWNER}/pub/paykit.app/v0/receiver.json`,
-        expect.stringContaining('"chat_kinds_v":1'),
+        `pubky://${OWNER}/pub/hypercolor.app/v1/receivers/${'noise-pk'}/capabilities.json`,
+        '{"version":1,"kind":"hypercolor.receiver.capabilities","receiver_path":"hypercolor/wallet","chat_kinds_v":1}',
         'https://homeserver.example',
       );
       expect(drainSpy).toHaveBeenCalledWith(OWNER, 'alias-2');
@@ -1572,9 +1578,9 @@ describe('LinkService', () => {
       mockedNative.getReceiverPublicKey.mockResolvedValue('local-noise-pk');
       mockedNative.getReceiverMarker.mockImplementation(async (who: string) => {
         if (who === OWNER) {
-          return { noisePublicKey: 'foreign-noise-pk', capabilitiesJson: '{}' };
+          return { noisePublicKey: 'foreign-noise-pk' };
         }
-        return { noisePublicKey: PEER_NOISE, capabilitiesJson: '{}' };
+        return { noisePublicKey: PEER_NOISE };
       });
       mockedNative.probeInboundLink.mockResolvedValue({ result: 'none' });
 
@@ -1592,7 +1598,7 @@ describe('LinkService', () => {
         if (who === OWNER) {
           throw { code: 'network', message: 'offline' };
         }
-        return { noisePublicKey: PEER_NOISE, capabilitiesJson: '{}' };
+        return { noisePublicKey: PEER_NOISE };
       });
       mockedNative.probeInboundLink.mockResolvedValue({ result: 'none' });
 
@@ -1744,10 +1750,10 @@ describe('LinkService', () => {
 
     it('does not stamp a later owner when a hung own-marker GET settles after sign-out', async () => {
       jest.useFakeTimers({ doNotFake: ['Date'] });
-      const hung = deferred<{ noisePublicKey: string; capabilitiesJson: string }>();
+      const hung = deferred<{ noisePublicKey: string }>();
       mockedNative.getReceiverMarker.mockImplementation(async (who: string) => {
         if (who === OWNER) return hung.promise;
-        return { noisePublicKey: PEER_NOISE, capabilitiesJson: '{}' };
+        return { noisePublicKey: PEER_NOISE };
       });
       mockedNative.probeInboundLink.mockResolvedValue({ result: 'none' });
       try {
@@ -1758,7 +1764,7 @@ describe('LinkService', () => {
         paintOwner(OTHER_OWNER);
         mockedKeyStore.getPubky.mockReturnValue(OTHER_OWNER);
         useReceiverRoleStore.getState().reset();
-        hung.resolve({ noisePublicKey: 'foreign-noise-pk', capabilitiesJson: '{}' });
+        hung.resolve({ noisePublicKey: 'foreign-noise-pk' });
         await Promise.resolve();
         await Promise.resolve();
         expect(useReceiverRoleStore.getState().role).not.toBe('standby');
@@ -1818,7 +1824,7 @@ describe('LinkService', () => {
       mockedNative.restoreLink.mockResolvedValue({ linkId: 'est-live' });
       mockedNative.getReceiverMarker.mockImplementation(async (who: string) => {
         if (who === OWNER) return null;
-        return { noisePublicKey: 'rolled-back-pk', capabilitiesJson: '{}' };
+        return { noisePublicKey: 'rolled-back-pk' };
       });
       mockedNative.probeInboundLink.mockResolvedValue({
         result: 'pending',
@@ -1860,7 +1866,7 @@ describe('LinkService', () => {
       mockedNative.restoreLink.mockResolvedValue({ linkId: 'est-live' });
       mockedNative.getReceiverMarker.mockImplementation(async (who: string) => {
         if (who === OWNER) return null;
-        return { noisePublicKey: 'new-peer-pk', capabilitiesJson: '{}' };
+        return { noisePublicKey: 'new-peer-pk' };
       });
       mockedNative.probeInboundLink.mockResolvedValue({
         result: 'pending',
@@ -1913,7 +1919,7 @@ describe('LinkService', () => {
       mockedNative.restoreLink.mockResolvedValue({ linkId: 'est-live' });
       mockedNative.getReceiverMarker.mockImplementation(async (who: string) => {
         if (who === OWNER) return null;
-        return { noisePublicKey: 'new-peer-pk', capabilitiesJson: '{}' };
+        return { noisePublicKey: 'new-peer-pk' };
       });
       mockedNative.probeInboundLink.mockResolvedValue({
         result: 'pending',
@@ -1952,7 +1958,7 @@ describe('LinkService', () => {
       mockedNative.restoreLink.mockResolvedValue({ linkId: 'est-live' });
       mockedNative.getReceiverMarker.mockImplementation(async (who: string) => {
         if (who === OWNER) return null;
-        return { noisePublicKey: 'new-peer-pk', capabilitiesJson: '{}' };
+        return { noisePublicKey: 'new-peer-pk' };
       });
       mockedNative.probeInboundLink.mockResolvedValue({
         result: 'pending',
@@ -2000,7 +2006,7 @@ describe('LinkService', () => {
       mockedNative.restoreLink.mockResolvedValue({ linkId: 'est-live' });
       mockedNative.getReceiverMarker.mockImplementation(async (who: string) => {
         if (who === OWNER) return null;
-        return { noisePublicKey: 'new-peer-pk', capabilitiesJson: '{}' };
+        return { noisePublicKey: 'new-peer-pk' };
       });
       mockedNative.probeInboundLink.mockResolvedValue({ result: 'none' });
       mockedStorage.recordLastSeenPeerMarkerPk.mockImplementation(async (_o, _p, pk) => {
@@ -2051,7 +2057,7 @@ describe('LinkService', () => {
         mockedNative.restoreLink.mockResolvedValue({ linkId: `est-${cycle - 1}` });
         mockedNative.getReceiverMarker.mockImplementation(async (who: string) => {
           if (who === OWNER) return null;
-          return { noisePublicKey: newPk, capabilitiesJson: '{}' };
+          return { noisePublicKey: newPk };
         });
         mockedNative.probeInboundLink.mockResolvedValue({
           result: 'pending',
@@ -2106,7 +2112,7 @@ describe('LinkService', () => {
       mockedNative.restoreLink.mockResolvedValue({ linkId: 'est-live' });
       mockedNative.getReceiverMarker.mockImplementation(async (who: string) => {
         if (who === OWNER) return null;
-        return { noisePublicKey: 'new-peer-pk', capabilitiesJson: '{}' };
+        return { noisePublicKey: 'new-peer-pk' };
       });
       mockedNative.probeInboundLink.mockResolvedValue({
         result: 'pending',
@@ -2167,7 +2173,7 @@ describe('LinkService', () => {
       mockedNative.restoreLink.mockResolvedValue({ linkId: 'est-live' });
       mockedNative.getReceiverMarker.mockImplementation(async (who: string) => {
         if (who === OWNER) return null;
-        return { noisePublicKey: 'new-peer-pk', capabilitiesJson: '{}' };
+        return { noisePublicKey: 'new-peer-pk' };
       });
       mockedStorage.getMessageRequest.mockResolvedValue({
         ownerPubky: OWNER,
@@ -2234,7 +2240,7 @@ describe('LinkService', () => {
       mockedNative.restoreLink.mockResolvedValue({ linkId: 'est-live' });
       mockedNative.getReceiverMarker.mockImplementation(async (who: string) => {
         if (who === OWNER) return null;
-        return { noisePublicKey: 'new-peer-pk', capabilitiesJson: '{}' };
+        return { noisePublicKey: 'new-peer-pk' };
       });
       mockedStorage.getMessageRequest.mockResolvedValue({
         ownerPubky: OWNER,
@@ -2303,7 +2309,7 @@ describe('LinkService', () => {
       mockedNative.restoreLink.mockResolvedValue({ linkId: 'est-live' });
       mockedNative.getReceiverMarker.mockImplementation(async (who: string) => {
         if (who === OWNER) return null;
-        return { noisePublicKey: 'new-peer-pk', capabilitiesJson: '{}' };
+        return { noisePublicKey: 'new-peer-pk' };
       });
       mockedNative.probeInboundLink.mockResolvedValue({
         result: 'pending',
@@ -2343,7 +2349,7 @@ describe('LinkService', () => {
       mockedNative.restoreLink.mockResolvedValue({ linkId: 'est-live' });
       mockedNative.getReceiverMarker.mockImplementation(async (who: string) => {
         if (who === OWNER) return null;
-        return { noisePublicKey: 'new-peer-pk', capabilitiesJson: '{}' };
+        return { noisePublicKey: 'new-peer-pk' };
       });
       mockedNative.probeInboundLink.mockResolvedValue({
         result: 'pending',
@@ -2377,7 +2383,7 @@ describe('LinkService', () => {
       mockedNative.restoreLink.mockResolvedValue({ linkId: 'est-live' });
       mockedNative.getReceiverMarker.mockImplementation(async (who: string) => {
         if (who === OWNER) return null;
-        return { noisePublicKey: 'new-peer-pk', capabilitiesJson: '{}' };
+        return { noisePublicKey: 'new-peer-pk' };
       });
       mockedNative.probeInboundLink.mockResolvedValue({
         result: 'established',
@@ -2459,7 +2465,7 @@ describe('LinkService', () => {
       mockedNative.restoreLink.mockResolvedValue({ linkId: 'est-live' });
       mockedNative.getReceiverMarker.mockImplementation(async (who: string) => {
         if (who === OWNER) return null;
-        return { noisePublicKey: 'new-peer-pk', capabilitiesJson: '{}' };
+        return { noisePublicKey: 'new-peer-pk' };
       });
       mockedNative.probeInboundLink.mockRejectedValue({
         code: 'protocol',
@@ -2487,7 +2493,7 @@ describe('LinkService', () => {
       mockedNative.restoreLink.mockResolvedValue({ linkId: 'est-live' });
       mockedNative.getReceiverMarker.mockImplementation(async (who: string) => {
         if (who === OWNER) return null;
-        return { noisePublicKey: 'new-peer-pk', capabilitiesJson: '{}' };
+        return { noisePublicKey: 'new-peer-pk' };
       });
       mockedNative.probeInboundLink.mockResolvedValue({
         result: 'pending',
@@ -2523,7 +2529,7 @@ describe('LinkService', () => {
       mockedNative.restoreLink.mockResolvedValue({ linkId: 'est-live' });
       mockedNative.getReceiverMarker.mockImplementation(async (who: string) => {
         if (who === OWNER) return null;
-        return { noisePublicKey: 'new-peer-pk', capabilitiesJson: '{}' };
+        return { noisePublicKey: 'new-peer-pk' };
       });
       mockedNative.probeInboundLink.mockResolvedValue({
         result: 'pending',
@@ -2564,7 +2570,7 @@ describe('LinkService', () => {
       mockedNative.restoreLink.mockResolvedValue({ linkId: 'est-live' });
       mockedNative.getReceiverMarker.mockImplementation(async (who: string) => {
         if (who === OWNER) return null;
-        return { noisePublicKey: 'old-peer-pk', capabilitiesJson: '{}' };
+        return { noisePublicKey: 'old-peer-pk' };
       });
       mockedNative.receivePrivateMessages.mockResolvedValue({ messages: [], snapshot: 'est-old' });
 
@@ -2593,7 +2599,7 @@ describe('LinkService', () => {
       mockedNative.restoreLink.mockResolvedValue({ linkId: 'est-live' });
       mockedNative.getReceiverMarker.mockImplementation(async (who: string) => {
         if (who === OWNER) return null;
-        return { noisePublicKey: 'new-peer-pk', capabilitiesJson: '{}' };
+        return { noisePublicKey: 'new-peer-pk' };
       });
       mockedNative.probeInboundLink.mockResolvedValue({ result: 'none' });
       mockedNative.receivePrivateMessages.mockResolvedValue({ messages: [], snapshot: 'est-old' });
@@ -2765,7 +2771,7 @@ describe('LinkService', () => {
       const state = givenResponderHandshake();
       mockedNative.getReceiverMarker.mockImplementation(async (who: string) => {
         if (who === OWNER) return null;
-        return { noisePublicKey: 're-enrolled-noise-pk', capabilitiesJson: '{}' };
+        return { noisePublicKey: 're-enrolled-noise-pk' };
       });
       mockedNative.probeInboundLink.mockResolvedValue({
         result: 'established',
@@ -2828,7 +2834,7 @@ describe('LinkService', () => {
       const state = givenResponderHandshake();
       mockedNative.getReceiverMarker.mockImplementation(async (who: string) => {
         if (who === OWNER) return null;
-        return { noisePublicKey: 're-enrolled-noise-pk', capabilitiesJson: '{}' };
+        return { noisePublicKey: 're-enrolled-noise-pk' };
       });
       mockedNative.probeInboundLink.mockResolvedValue({
         result: 'pending',
@@ -3036,7 +3042,6 @@ describe('LinkService', () => {
         .mockResolvedValue({ status: 'pending', snapshot: 'hs-fresh-2' });
       mockedNative.getReceiverMarker.mockResolvedValue({
         noisePublicKey: 'new-key',
-        capabilitiesJson: '{}',
       });
       mockedNative.initiateLink.mockResolvedValue({ linkId: 'fresh-hs', snapshot: 'hs-fresh' });
       mockedNative.clearLinkOutbox.mockResolvedValue(0);
@@ -3244,7 +3249,7 @@ describe('LinkService', () => {
         });
         mockedKeyStore.getPubky.mockReturnValue(OTHER_OWNER);
         await LinkService.signinWithSecret('owner-b-secret');
-        return { noisePublicKey: PEER_NOISE, capabilitiesJson: '{}' };
+        return { noisePublicKey: PEER_NOISE };
       });
 
       await expect(LinkService.sendDm(PEER, 'hello')).rejects.toEqual(
@@ -4299,7 +4304,7 @@ describe('LinkService', () => {
       mockedStorage.listDeliveryQueue.mockResolvedValue([queuedItem]);
       mockedNative.getReceiverMarker.mockImplementation(async (who: string) => {
         if (who === OWNER) return null;
-        return { noisePublicKey: 're-enrolled-noise-pk', capabilitiesJson: '{}' };
+        return { noisePublicKey: 're-enrolled-noise-pk' };
       });
       mockedNative.probeInboundLink.mockResolvedValue({ result: 'none' });
 
@@ -4788,7 +4793,6 @@ describe('LinkService', () => {
       mockedNative.getReceiverPublicKey.mockResolvedValue(PEER_NOISE);
       mockedNative.getReceiverMarker.mockResolvedValue({
         noisePublicKey: PEER_NOISE,
-        capabilitiesJson: '{}',
       });
       mockedStorage.listDeliveryQueue.mockResolvedValue([
         {
@@ -4962,9 +4966,13 @@ describe('LinkService', () => {
     it('persists chat_kinds_v from a fetched peer marker', async () => {
       mockedNative.getReceiverMarker.mockResolvedValue({
         noisePublicKey: PEER_NOISE,
-        capabilitiesJson: '{}',
-        chatKindsV: 1,
       });
+      global.fetch = jest.fn().mockResolvedValue({
+        status: 200,
+        ok: true,
+        text: async () =>
+          '{"version":1,"kind":"hypercolor.receiver.capabilities","receiver_path":"hypercolor/wallet","chat_kinds_v":1}',
+      }) as unknown as typeof fetch;
       givenEstablishedLink();
       mockedStorage.getLink.mockResolvedValue(
         storedLink({
@@ -4982,9 +4990,13 @@ describe('LinkService', () => {
     it('replays read receipts once when chat_kinds_v flips 0 to 1', async () => {
       mockedNative.getReceiverMarker.mockResolvedValue({
         noisePublicKey: PEER_NOISE,
-        capabilitiesJson: '{}',
-        chatKindsV: 1,
       });
+      global.fetch = jest.fn().mockResolvedValue({
+        status: 200,
+        ok: true,
+        text: async () =>
+          '{"version":1,"kind":"hypercolor.receiver.capabilities","receiver_path":"hypercolor/wallet","chat_kinds_v":1}',
+      }) as unknown as typeof fetch;
       givenEstablishedLink();
       mockedStorage.getLink.mockResolvedValue(
         storedLink({

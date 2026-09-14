@@ -619,14 +619,7 @@ class PaykitLinkModule: NSObject, RCTInvalidating {
                 ) else {
                     return NSNull()
                 }
-                var payload: [String: Any] = [
-                    "noisePublicKey": marker.noisePublicKey,
-                    "capabilitiesJson": try Self.capabilitiesJson(marker.capabilities),
-                ]
-                for (key, value) in Self.chatKindsVMap(from: marker) {
-                    payload[key] = value
-                }
-                return payload
+                return ["noisePublicKey": marker.noisePublicKey]
             } catch {
                 if Self.paykitCode(error) == "not_found" {
                     return NSNull()
@@ -1650,31 +1643,6 @@ class PaykitLinkModule: NSObject, RCTInvalidating {
         guard let text = value as? String else { return nil }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
-    }
-
-    private static func capabilitiesJson(_ capabilities: ChatReceiverCapabilities) throws -> String {
-        let object: [String: Bool] = [
-            "privatePayments": capabilities.privatePayments,
-            "paymentRequests": capabilities.paymentRequests,
-            "receipts": capabilities.receipts,
-            "outgoingPayments": capabilities.outgoingPayments,
-        ]
-        let data = try JSONSerialization.data(withJSONObject: object, options: [])
-        guard let json = String(data: data, encoding: .utf8) else {
-            throw PaykitLinkBridgeError(code: "protocol", message: "failed to encode capabilities")
-        }
-        return json
-    }
-
-    private static func chatKindsVMap(from marker: ChatReceiverMarker) -> [String: Int] {
-        let mirror = Mirror(reflecting: marker)
-        for child in mirror.children {
-            if child.label == "chatKindsV" || child.label == "chat_kinds_v",
-               let value = child.value as? Int {
-                return ["chatKindsV": value]
-            }
-        }
-        return [:]
     }
 
     private static func paykitCode(_ error: Error) -> String? {

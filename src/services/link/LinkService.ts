@@ -1721,12 +1721,10 @@ async function provisionReceiver(
   const existing = await StorageService.getLinkReceiver(pubky);
   let receiverAlias: string;
   let noisePublicKey: string;
-  let rollbackOnFailure = true;
   if (existing) {
     try {
       receiverAlias = existing.receiverAlias;
       noisePublicKey = await PaykitLinkNative.getReceiverPublicKey(receiverAlias);
-      rollbackOnFailure = !existing.markerPublished;
     } catch (err) {
       if (!isUnusableReceiverAliasError(err)) throw err;
       await StorageService.deleteLinkReceiver(pubky);
@@ -1744,7 +1742,6 @@ async function provisionReceiver(
   try {
     published = await inspectOwnPublishedMarker(pubky, receiverPath);
   } catch (error) {
-    if (rollbackOnFailure) await rollbackUnpublishedReceiver(pubky);
     throw error;
   }
 
@@ -1778,12 +1775,12 @@ async function provisionReceiver(
 
   try {
     await PaykitLinkNative.publishReceiverMarker(sessionAlias, receiverAlias, receiverPath);
-    await putChatKindsVReceiverJson(sessionAlias, pubky, noisePublicKey);
   } catch (error) {
-    if (rollbackOnFailure) await rollbackUnpublishedReceiver(pubky);
+    await persistReceiverRow(pubky, receiverAlias, receiverPath, false, 'active', null);
     throw error;
   }
   await persistReceiverRow(pubky, receiverAlias, receiverPath, true, 'active', noisePublicKey);
+  await putChatKindsVReceiverJson(sessionAlias, pubky, noisePublicKey);
   await drainChatKindsAdvertiseRetry(pubky, sessionAlias);
   setReceiverRoleState('active', null);
   return { pubky, receiverPath, noisePublicKey, receiverRole: 'active' };
@@ -1859,14 +1856,6 @@ async function persistReceiverRow(
     receiverRole,
     lastSeenOwnMarkerPk,
   });
-}
-
-async function rollbackUnpublishedReceiver(ownerPubky: PubkyKey): Promise<void> {
-  try {
-    await StorageService.deleteLinkReceiver(ownerPubky);
-  } catch {
-    // Best effort.
-  }
 }
 
 async function publishTakeoverReceiver(

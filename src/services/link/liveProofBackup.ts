@@ -1,4 +1,4 @@
-import { CHAT_MESSAGE_KIND } from '../../types/link';
+import { CHAT_MESSAGE_KIND, LINK_RECEIVER_PATH } from '../../types/link';
 import { EMPTY_PAYMENT_RECORD_EXTRAS } from '../../types/payment';
 import { BackupService } from '../backup/BackupService';
 import { KeyStore } from '../KeyStore';
@@ -218,14 +218,14 @@ export async function runBackupLiveProof(
           status: 'established',
           snapshot: SNAPSHOT_MARKER,
           remoteNoisePublicKey: 'noise-b',
-          localReceiverPath: '/pub/paykit.app/v0/receiver.json',
-          remoteReceiverPath: '/pub/paykit.app/v0/receiver.json',
+          localReceiverPath: LINK_RECEIVER_PATH,
+          remoteReceiverPath: LINK_RECEIVER_PATH,
           consecutiveFailures: 0,
         });
         await storage.upsertLinkReceiver({
           ownerPubky: pubkyA,
           receiverAlias: RECEIVER_ALIAS_MARKER,
-          receiverPath: '/pub/paykit.app/v0/receiver.json',
+          receiverPath: LINK_RECEIVER_PATH,
           markerPublished: true,
         });
         return 'seeded';

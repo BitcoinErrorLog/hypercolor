@@ -159,7 +159,6 @@ describe('declined peer outbound (real LinkService + storage)', () => {
     });
     mockedNative.getReceiverMarker.mockResolvedValue({
       noisePublicKey: PEER_NOISE,
-      capabilitiesJson: '{}',
     });
     mockedNative.sendPrivateMessageJson.mockResolvedValue({ snapshot: 'est-out' });
     mockedNative.receivePrivateMessages.mockResolvedValue({ messages: [], snapshot: 'est-in' });

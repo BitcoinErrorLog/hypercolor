@@ -95,7 +95,7 @@ const PEER = 'z'.repeat(52);
 const ATTACHMENT_ID = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
 const EVENT_ID = '00000000-0000-4000-8000-000000000001';
 const CHANNEL_ID = '00000000-0000-4000-8000-0000000000aa';
-const FILE_URI = 'file:///tmp/photo.jpg';
+const FILE_URI = 'file:///fixtures/photo.jpg';
 const PLAIN_STD = 'cGxhaW50ZXh0';
 const MAIN_KEY = 'K'.repeat(43);
 const MAIN_NONCE = 'N'.repeat(32);
@@ -256,7 +256,7 @@ describe('AttachmentService', () => {
         algorithm: ATTACHMENT_ALGORITHM,
       });
     mockedManipulate.mockResolvedValue({
-      uri: 'file:///tmp/thumb.jpg',
+      uri: 'file:///fixtures/thumb.jpg',
       width: 96,
       height: 96,
       base64: 'dGh1bWI=',

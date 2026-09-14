@@ -47,7 +47,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.util.concurrent.CancellationException as JavaCancellationException
-import org.json.JSONObject
 
 class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaModule(reactContext) {
     private val job = SupervisorJob()
@@ -434,11 +433,6 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
                 }
                 resolveMap(promise) {
                     putString("noisePublicKey", marker.noisePublicKey)
-                    putString("capabilitiesJson", capabilitiesJson(marker.capabilities))
-                    val chatKindsV = chatKindsVFromMarker(marker)
-                    if (chatKindsV != null) {
-                        putInt("chatKindsV", chatKindsV)
-                    }
                 }
             } catch (error: PaykitException) {
                 if (ffiCode(error) == "not_found") {
@@ -1167,30 +1161,6 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
     private fun optionalText(value: String?): String? {
         val trimmed = value?.trim().orEmpty()
         return trimmed.ifEmpty { null }
-    }
-
-    private fun capabilitiesJson(capabilities: ChatReceiverCapabilities): String {
-        return JSONObject()
-            .put("privatePayments", capabilities.privatePayments)
-            .put("paymentRequests", capabilities.paymentRequests)
-            .put("receipts", capabilities.receipts)
-            .put("outgoingPayments", capabilities.outgoingPayments)
-            .toString()
-    }
-
-    private fun chatKindsVFromMarker(marker: Any): Int? {
-        return try {
-            val method = marker.javaClass.methods.firstOrNull {
-                it.parameterCount == 0 && (
-                    it.name.equals("getChatKindsV", ignoreCase = true) ||
-                        it.name.equals("chatKindsV", ignoreCase = true)
-                    )
-            } ?: return null
-            val value = method.invoke(marker) as? Number ?: return null
-            value.toInt()
-        } catch (_: Exception) {
-            null
-        }
     }
 
     // Inline so callers may invoke suspend functions inside the builder lambda

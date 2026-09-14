@@ -115,6 +115,11 @@ jest.mock('../../StorageService', () => ({
     saveLinkStreamItems: jest.fn(),
     getUnprocessedLinkStreamItems: jest.fn(),
     markLinkStreamItemProcessed: jest.fn(),
+    savePendingChatDelete: jest.fn(),
+    listPendingChatDeletes: jest.fn(),
+    deletePendingChatDelete: jest.fn(),
+    listPendingChatTags: jest.fn(),
+    deletePendingChatTag: jest.fn(),
     deleteLinkStreamItemsForPeer: jest.fn(),
     deleteLinkMessagesForPeer: jest.fn(),
     countLinkMessagesForPeer: jest.fn(),
@@ -516,6 +521,11 @@ function wireInMemoryStorage(): void {
     }
     db.seenEvents = next;
   });
+  mockedStorage.savePendingChatDelete.mockResolvedValue(undefined);
+  mockedStorage.listPendingChatDeletes.mockResolvedValue([]);
+  mockedStorage.deletePendingChatDelete.mockResolvedValue(undefined);
+  mockedStorage.listPendingChatTags.mockResolvedValue([]);
+  mockedStorage.deletePendingChatTag.mockResolvedValue(undefined);
 }
 
 describe('group accept gate', () => {
@@ -552,7 +562,6 @@ describe('group accept gate', () => {
     mockedNative.restoreLink.mockResolvedValue({ linkId: 'restored-1' });
     mockedNative.getReceiverMarker.mockResolvedValue({
       noisePublicKey: PEER_NOISE,
-      capabilitiesJson: '{}',
     });
     mockedNative.getReceiverPublicKey.mockResolvedValue(PEER_NOISE);
     mockedNative.probeInboundLink.mockResolvedValue({

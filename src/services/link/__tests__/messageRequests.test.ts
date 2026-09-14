@@ -80,6 +80,11 @@ jest.mock('../../StorageService', () => ({
     saveLinkStreamItems: jest.fn(),
     getUnprocessedLinkStreamItems: jest.fn(),
     markLinkStreamItemProcessed: jest.fn(),
+    savePendingChatDelete: jest.fn(),
+    listPendingChatDeletes: jest.fn(),
+    deletePendingChatDelete: jest.fn(),
+    listPendingChatTags: jest.fn(),
+    deletePendingChatTag: jest.fn(),
     getLinkReadCursor: jest.fn(),
     setLinkReadCursor: jest.fn(),
     clearAccountData: jest.fn(),
@@ -227,7 +232,6 @@ describe('LinkService message requests', () => {
     mockedNative.clearLinkOutbox.mockResolvedValue(0);
     mockedNative.getReceiverMarker.mockResolvedValue({
       noisePublicKey: PEER_NOISE,
-      capabilitiesJson: '{}',
     });
     mockedNative.getReceiverPublicKey.mockResolvedValue(PEER_NOISE);
     mockedNative.probeInboundLink.mockResolvedValue({
@@ -265,6 +269,11 @@ describe('LinkService message requests', () => {
     mockedStorage.listBlockedPeers.mockResolvedValue([]);
     mockedStorage.listBlockedPeerCleanupPending.mockResolvedValue([]);
     mockedStorage.getHandshakeBudget.mockResolvedValue(null);
+    mockedStorage.savePendingChatDelete.mockResolvedValue(undefined);
+    mockedStorage.listPendingChatDeletes.mockResolvedValue([]);
+    mockedStorage.deletePendingChatDelete.mockResolvedValue(undefined);
+    mockedStorage.listPendingChatTags.mockResolvedValue([]);
+    mockedStorage.deletePendingChatTag.mockResolvedValue(undefined);
     mockedRetryQueue.getDue.mockResolvedValue([]);
 
     await LinkService.clearSession();
@@ -299,7 +308,7 @@ describe('LinkService message requests', () => {
       if (peer === slowPeer) {
         return new Promise(() => {});
       }
-      return { noisePublicKey: PEER_NOISE, capabilitiesJson: '{}' };
+      return { noisePublicKey: PEER_NOISE };
     });
     mockedNative.probeInboundLink.mockImplementation(async (_session, _receiver, peer) => {
       if (peer === PEER) {

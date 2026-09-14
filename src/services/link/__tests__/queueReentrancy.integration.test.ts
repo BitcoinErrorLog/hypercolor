@@ -165,7 +165,6 @@ describe('v1 receipt emit queue re-entrancy (real sqlite)', () => {
     });
     mockedNative.getReceiverMarker.mockResolvedValue({
       noisePublicKey: PEER_NOISE,
-      capabilitiesJson: '{}',
     });
     mockedNative.sendPrivateMessageJson.mockResolvedValue({ snapshot: 'est-out' });
     mockedNative.receivePrivateMessages.mockResolvedValue({ messages: [], snapshot: 'est-in' });

@@ -1,0 +1,1 @@
+{"version":1,"kind":"paykit.receiver","receiver_path":"hypercolor/wallet","capabilities":{"private_payments":true,"payment_requests":false,"receipts":false,"outgoing_payments":false},"noise_public_key":"ufibwbmed6jeq9k4p583go95wofakh9fwpp4k734trq79pd9u1uy"}

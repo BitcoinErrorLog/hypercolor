@@ -1,106 +1,103 @@
-/**
- * Additive receiver.json advertisement for chat kinds v1 (kinds-v1.md R7).
- * `chat_kinds_v` is a top-level integer; absent or 0 means pre-v1.
- * Unknown fields on the marker document are ignored.
- */
-
 export const CHAT_KINDS_V = 1;
 export const CHAT_KINDS_V_KEY = 'chat_kinds_v';
-/** Public document used to advertise v1 (additive; not the Paykit FFI marker struct). */
-export const RECEIVER_JSON_STORAGE_PATH = '/pub/paykit.app/v0/receiver.json';
+export const HYPERCOLOR_RECEIVER_PATH = 'hypercolor/wallet';
+export const HYPERCOLOR_CAPABILITIES_PATH_PREFIX = '/pub/hypercolor.app/v1/receivers/';
+export const LEGACY_RECEIVER_JSON_STORAGE_PATH = '/pub/paykit.app/v0/receiver.json';
+export const MAX_CAPABILITIES_BYTES = 512;
 
-export function receiverJsonPubkyUrl(ownerPubky: string): string {
-  return `pubky://${ownerPubky}${RECEIVER_JSON_STORAGE_PATH}`;
+export function capabilityPubkyUrl(ownerPubky: string, noisePublicKey: string): string {
+  return `pubky://${ownerPubky}${HYPERCOLOR_CAPABILITIES_PATH_PREFIX}${noisePublicKey}/capabilities.json`;
 }
 
-/** Absent, non-finite, or below 1 → 0 (pre-v1). */
+export function legacyReceiverJsonPubkyUrl(ownerPubky: string): string {
+  return `pubky://${ownerPubky}${LEGACY_RECEIVER_JSON_STORAGE_PATH}`;
+}
+
+export type ParsedCapabilityDocument = { chatKindsV: number };
+
 export function normalizeChatKindsV(value: unknown): number {
-  if (typeof value === 'number' && Number.isFinite(value)) {
-    return value >= 1 ? Math.floor(value) : 0;
-  }
-  if (typeof value === 'string' && value.trim() !== '') {
-    const n = Number(value);
-    if (Number.isFinite(n)) return n >= 1 ? Math.floor(n) : 0;
-  }
-  return 0;
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 1 ? value : 0;
 }
 
-export type ParsedReceiverMarkerDoc = {
-  chatKindsV: number;
-  noisePublicKey: string | null;
-};
-
-/**
- * Parse a receiver.json body. Unknown keys are ignored. Missing
- * `chat_kinds_v` is pre-v1 (0).
- */
-export function parseReceiverMarkerJson(raw: string): ParsedReceiverMarkerDoc | null {
-  let parsed: unknown;
+function parseObject(raw: string, maxBytes?: number): Record<string, unknown> | null {
+  if (maxBytes !== undefined && Buffer.byteLength(raw, 'utf8') > maxBytes) return null;
   try {
-    parsed = JSON.parse(raw) as unknown;
+    const parsed: unknown = JSON.parse(raw);
+    const objects: Set<string>[] = [];
+    let inString = false;
+    let escaped = false;
+    let token = '';
+    for (let i = 0; i < raw.length; i += 1) {
+      const char = raw[i];
+      if (inString) {
+        if (escaped) {
+          token += char;
+          escaped = false;
+        } else if (char === '\\') {
+          token += char;
+          escaped = true;
+        } else if (char === '"') {
+          inString = false;
+          let j = i + 1;
+          while (/\s/.test(raw[j] ?? '')) j += 1;
+          if (raw[j] === ':') {
+            const key = JSON.parse(`${token}"`) as string;
+            const current = objects.at(-1);
+            if (current?.has(key)) return null;
+            current?.add(key);
+          }
+          token = '';
+        } else {
+          token += char;
+        }
+        continue;
+      }
+      if (char === '"') {
+        inString = true;
+        token = '"';
+      } else if (char === '{') {
+        objects.push(new Set());
+      } else if (char === '}') {
+        objects.pop();
+      }
+    }
+    return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null;
   } catch {
     return null;
   }
-  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    return null;
-  }
-  const rec = parsed as Record<string, unknown>;
-  const noise =
-    typeof rec.noisePublicKey === 'string'
-      ? rec.noisePublicKey
-      : typeof rec.noise_public_key === 'string'
-        ? rec.noise_public_key
-        : null;
-  return {
-    chatKindsV: normalizeChatKindsV(rec[CHAT_KINDS_V_KEY]),
-    noisePublicKey: noise && noise.length > 0 ? noise : null,
-  };
 }
 
-export function buildReceiverMarkerPutBody(input: { noisePublicKey: string }): string {
+export function parseCapabilityDocument(raw: string): ParsedCapabilityDocument | null {
+  if (Buffer.byteLength(raw, 'utf8') > MAX_CAPABILITIES_BYTES) return null;
+  const parsed = parseObject(raw, MAX_CAPABILITIES_BYTES);
+  if (!parsed || Object.keys(parsed).length !== 4) return null;
+  if (
+    parsed.version !== 1 ||
+    parsed.kind !== 'hypercolor.receiver.capabilities' ||
+    parsed.receiver_path !== HYPERCOLOR_RECEIVER_PATH ||
+    normalizeChatKindsV(parsed[CHAT_KINDS_V_KEY]) < 1
+  ) {
+    return null;
+  }
+  return { chatKindsV: parsed[CHAT_KINDS_V_KEY] as number };
+}
+
+export function buildCapabilityDocument(): string {
   return JSON.stringify({
-    noisePublicKey: input.noisePublicKey,
+    version: 1,
+    kind: 'hypercolor.receiver.capabilities',
+    receiver_path: HYPERCOLOR_RECEIVER_PATH,
     [CHAT_KINDS_V_KEY]: CHAT_KINDS_V,
   });
 }
 
-/**
- * Additive RMW: keep every existing field (including unknown keys) and only
- * insert `chat_kinds_v` when it is absent. Returns null when `raw` is not a
- * JSON object — callers must not PUT a partial replacement.
- */
-export function addChatKindsVToReceiverJson(raw: string): string | null {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw) as unknown;
-  } catch {
-    return null;
-  }
-  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    return null;
-  }
-  const rec = parsed as Record<string, unknown>;
-  if (rec[CHAT_KINDS_V_KEY] === CHAT_KINDS_V) return raw;
-  const trimmed = raw.trim();
-  if (!trimmed.startsWith('{') || !trimmed.endsWith('}')) return null;
-  if (Object.prototype.hasOwnProperty.call(rec, CHAT_KINDS_V_KEY)) {
-    return JSON.stringify({ ...rec, [CHAT_KINDS_V_KEY]: CHAT_KINDS_V });
-  }
-  const inner = trimmed.slice(1, -1).trim();
-  if (inner.length === 0) return `{"${CHAT_KINDS_V_KEY}":${CHAT_KINDS_V}}`;
-  const withoutTrailingComma = inner.endsWith(',') ? inner.slice(0, -1) : inner;
-  return `{${withoutTrailingComma},"${CHAT_KINDS_V_KEY}":${CHAT_KINDS_V}}`;
+export function parseLegacyChatKindsV(raw: string): number {
+  return parseLegacyChatKindsVDetailed(raw) ?? 0;
 }
 
-export function chatKindsVFromMarker(marker: {
-  chatKindsV?: unknown;
-  capabilitiesJson?: string;
-}): number {
-  const direct = normalizeChatKindsV(marker.chatKindsV);
-  if (direct >= 1) return direct;
-  if (typeof marker.capabilitiesJson === 'string' && marker.capabilitiesJson.length > 0) {
-    const parsed = parseReceiverMarkerJson(marker.capabilitiesJson);
-    if (parsed && parsed.chatKindsV >= 1) return parsed.chatKindsV;
-  }
-  return 0;
+export function parseLegacyChatKindsVDetailed(raw: string): number | null {
+  const parsed = parseObject(raw);
+  return parsed ? normalizeChatKindsV(parsed[CHAT_KINDS_V_KEY]) : null;
 }

@@ -223,7 +223,6 @@ describe('inbound deny is authoritative', () => {
     mockedNative.clearLinkOutbox.mockResolvedValue(0);
     mockedNative.getReceiverMarker.mockResolvedValue({
       noisePublicKey: PEER_NOISE,
-      capabilitiesJson: '{}',
     });
     mockedNative.getReceiverPublicKey.mockResolvedValue(PEER_NOISE);
     mockedNative.probeInboundLink.mockResolvedValue({

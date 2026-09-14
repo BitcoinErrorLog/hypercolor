@@ -1,12 +1,13 @@
 import type { PubkyKey } from '../../types';
 import {
   CHAT_KINDS_V,
-  RECEIVER_JSON_STORAGE_PATH,
-  addChatKindsVToReceiverJson,
-  chatKindsVFromMarker,
+  HYPERCOLOR_RECEIVER_PATH,
+  LEGACY_RECEIVER_JSON_STORAGE_PATH,
+  buildCapabilityDocument,
+  capabilityPubkyUrl,
   normalizeChatKindsV,
-  parseReceiverMarkerJson,
-  receiverJsonPubkyUrl,
+  parseCapabilityDocument,
+  parseLegacyChatKindsVDetailed,
 } from '../../types/receiverMarker';
 import { resolveHomeserverOrigin } from '../homeserverOrigin';
 import { StorageService } from '../StorageService';
@@ -23,33 +24,27 @@ export function resetChatKindsUpgradeReplayedForTests(): void {
   advertiseRetryOwners.clear();
 }
 
-export function chatKindsAdvertiseRetryPending(ownerPubky: PubkyKey): boolean {
-  return advertiseRetryOwners.has(ownerPubky);
-}
-
 export async function putChatKindsVReceiverJson(
   sessionAlias: string,
   ownerPubky: PubkyKey,
   noisePublicKey: string,
 ): Promise<void> {
-  const outcome = await advertiseChatKindsVReceiverJson(sessionAlias, ownerPubky, noisePublicKey);
+  const outcome = await advertiseCapability(sessionAlias, ownerPubky, noisePublicKey);
   if (outcome === 'success' || outcome === 'terminal') {
     await clearAdvertiseRetry(ownerPubky);
     return;
   }
   advertiseRetryOwners.add(ownerPubky);
-  if (outcome === 'transient') {
-    if (typeof StorageService.saveChatKindsAdvertiseRetry === 'function') {
-      try {
-        await StorageService.saveChatKindsAdvertiseRetry({
-          ownerPubky,
-          sessionAlias,
-          noisePublicKey,
-          nextRetryAt: Date.now() + ADVERTISE_RETRY_BASE_MS,
-        });
-      } catch {
-        // The volatile flag still drives a same-session retry.
-      }
+  if (typeof StorageService.saveChatKindsAdvertiseRetry === 'function') {
+    try {
+      await StorageService.saveChatKindsAdvertiseRetry({
+        ownerPubky,
+        sessionAlias,
+        noisePublicKey,
+        nextRetryAt: Date.now() + ADVERTISE_RETRY_BASE_MS,
+      });
+    } catch {
+      // The volatile flag still drives a same-session retry.
     }
   }
 }
@@ -62,72 +57,91 @@ export async function drainChatKindsAdvertiseRetry(
   const retry = await StorageService.getChatKindsAdvertiseRetry(ownerPubky);
   if (!retry) return;
   if (
-    retry.ownerPubky !== ownerPubky ||
     !activeSessionAlias ||
+    retry.ownerPubky !== ownerPubky ||
     retry.attempts >= MAX_ADVERTISE_RETRY_ATTEMPTS
   ) {
     await clearAdvertiseRetry(ownerPubky);
     return;
   }
   if (retry.nextRetryAt > Date.now()) return;
-
-  if (retry.sessionAlias !== activeSessionAlias) {
-    if (typeof StorageService.saveChatKindsAdvertiseRetry !== 'function') {
-      await clearAdvertiseRetry(ownerPubky);
-      return;
-    }
+  const alias = activeSessionAlias;
+  if (
+    retry.sessionAlias !== alias &&
+    typeof StorageService.saveChatKindsAdvertiseRetry === 'function'
+  ) {
     await StorageService.saveChatKindsAdvertiseRetry({
       ownerPubky,
-      sessionAlias: activeSessionAlias,
+      sessionAlias: alias,
       noisePublicKey: retry.noisePublicKey,
       nextRetryAt: retry.nextRetryAt,
     });
   }
-
-  const outcome = await advertiseChatKindsVReceiverJson(
-    activeSessionAlias,
-    ownerPubky,
-    retry.noisePublicKey,
-  );
+  const outcome = await advertiseCapability(alias, ownerPubky, retry.noisePublicKey);
   if (outcome === 'success' || outcome === 'terminal') {
     await clearAdvertiseRetry(ownerPubky);
     return;
   }
   if (typeof StorageService.recordChatKindsAdvertiseRetryFailure === 'function') {
-    const nextAttempts = await StorageService.recordChatKindsAdvertiseRetryFailure(
+    const attempts = await StorageService.recordChatKindsAdvertiseRetryFailure(
       ownerPubky,
       Date.now() + retryDelayMs(retry.attempts),
     );
-    if (nextAttempts >= MAX_ADVERTISE_RETRY_ATTEMPTS) {
-      await clearAdvertiseRetry(ownerPubky);
-    }
+    if (attempts >= MAX_ADVERTISE_RETRY_ATTEMPTS) await clearAdvertiseRetry(ownerPubky);
   }
 }
 
 type AdvertiseOutcome = 'success' | 'transient' | 'terminal';
+type PublicDocument = { status: number; body: string | null };
 
-async function advertiseChatKindsVReceiverJson(
+async function advertiseCapability(
   sessionAlias: string,
   ownerPubky: PubkyKey,
   noisePublicKey: string,
 ): Promise<AdvertiseOutcome> {
   try {
     const origin = await resolveHomeserverOrigin(ownerPubky);
-    const first = await getPublicReceiverJson(ownerPubky, origin);
-    if (first === null) return 'transient';
-    const latest = await getPublicReceiverJson(ownerPubky, origin);
-    if (latest === null) return 'transient';
-    const latestDoc = parseReceiverMarkerJson(latest);
-    if (latestDoc?.noisePublicKey && latestDoc.noisePublicKey !== noisePublicKey) {
-      return 'terminal';
+    const url = capabilityPubkyUrl(ownerPubky, noisePublicKey);
+    const current = await getPublicDocument(ownerPubky, new URL(url).pathname, origin);
+    if (current === null) return 'transient';
+    if (current.status >= 200 && current.status < 300 && current.body !== null) {
+      const parsed = parseCapabilityDocument(current.body);
+      // Unlike web's PUBLISH_UNKNOWN, invalid own-path capability documents are terminal here because retrying cannot advertise an incorrect capability.
+      if (!parsed) return 'terminal';
+      if (parsed.chatKindsV >= CHAT_KINDS_V) return 'success';
+    } else if (current.status !== 404 && current.status !== 410) {
+      return current.status >= 500 ? 'transient' : 'terminal';
     }
-    const body = addChatKindsVToReceiverJson(latest);
-    if (body === null) return 'success';
-    await PaykitLinkNative.putPublic(sessionAlias, receiverJsonPubkyUrl(ownerPubky), body, origin);
-    return 'success';
+    const marker = await PaykitLinkNative.getReceiverMarker(ownerPubky, HYPERCOLOR_RECEIVER_PATH);
+    if (!marker || marker.noisePublicKey !== noisePublicKey) return 'terminal';
+    await PaykitLinkNative.putPublic(sessionAlias, url, buildCapabilityDocument(), origin);
+    const reconciled = await getPublicDocument(ownerPubky, new URL(url).pathname, origin);
+    const markerAfter = await PaykitLinkNative.getReceiverMarker(
+      ownerPubky,
+      HYPERCOLOR_RECEIVER_PATH,
+    );
+    const reconciledCapability = reconciled?.body ? parseCapabilityDocument(reconciled.body) : null;
+    if (
+      reconciledCapability &&
+      reconciledCapability.chatKindsV >= CHAT_KINDS_V &&
+      markerAfter?.noisePublicKey === noisePublicKey
+    ) {
+      return 'success';
+    }
+    if (
+      reconciled === null ||
+      reconciled.status === 404 ||
+      reconciled.status === 410 ||
+      reconciled.status >= 500
+    ) {
+      return 'transient';
+    }
+    if (reconciled.status >= 200 && reconciled.status < 300 && !reconciledCapability) {
+      return 'transient';
+    }
+    return 'terminal';
   } catch (error) {
-    if (isTerminalAdvertiseError(error)) return 'terminal';
-    return 'transient';
+    return isTerminalAdvertiseError(error) ? 'terminal' : 'transient';
   }
 }
 
@@ -154,29 +168,51 @@ async function clearAdvertiseRetry(ownerPubky: PubkyKey): Promise<void> {
   }
 }
 
-async function getPublicReceiverJson(pubky: PubkyKey, origin: string): Promise<string | null> {
+async function getPublicDocument(
+  ownerPubky: PubkyKey,
+  path: string,
+  origin: string,
+): Promise<PublicDocument | null> {
   if (typeof fetch !== 'function') return null;
   try {
-    const url = `${origin.replace(/\/+$/, '')}${RECEIVER_JSON_STORAGE_PATH}?pubky-host=${pubky}`;
-    const res = await fetch(url);
-    if (!res.ok) return null;
-    return await res.text();
+    const res = await fetch(`${origin.replace(/\/+$/, '')}${path}?pubky-host=${ownerPubky}`);
+    return { status: res.status, body: res.ok ? await res.text() : null };
   } catch {
     return null;
   }
 }
 
 export type ChatKindsVResolution =
-  | { source: 'marker' | 'http'; value: number }
+  | { source: 'http' | 'legacy'; value: number }
   | { source: 'unavailable' };
 
-async function fetchPeerReceiverJsonChatKindsV(peerPubky: PubkyKey): Promise<ChatKindsVResolution> {
+async function fetchPeerCapability(
+  peerPubky: PubkyKey,
+  noisePublicKey: string,
+): Promise<ChatKindsVResolution> {
   const origin = await resolveHomeserverOrigin(peerPubky);
-  const text = await getPublicReceiverJson(peerPubky, origin);
-  if (text === null) return { source: 'unavailable' };
-  const parsed = parseReceiverMarkerJson(text);
-  if (!parsed) return { source: 'unavailable' };
-  return { source: 'http', value: parsed.chatKindsV };
+  const capability = await getPublicDocument(
+    peerPubky,
+    new URL(capabilityPubkyUrl(peerPubky, noisePublicKey)).pathname,
+    origin,
+  );
+  if (capability === null || (capability.status >= 500 && capability.status <= 599))
+    return { source: 'unavailable' };
+  if (capability.status >= 200 && capability.status < 300 && capability.body !== null) {
+    const parsed = parseCapabilityDocument(capability.body);
+    return parsed ? { source: 'http', value: parsed.chatKindsV } : { source: 'http', value: 0 };
+  }
+  if (capability.status !== 404 && capability.status !== 410) return { source: 'http', value: 0 };
+  const legacy = await getPublicDocument(peerPubky, LEGACY_RECEIVER_JSON_STORAGE_PATH, origin);
+  if (legacy === null || legacy.status >= 500) return { source: 'unavailable' };
+  if (legacy.status === 404 || legacy.status === 410) return { source: 'legacy', value: 0 };
+  if (legacy.status < 200 || legacy.status >= 300 || legacy.body === null) {
+    return { source: 'unavailable' };
+  }
+  const legacyChatKindsV = parseLegacyChatKindsVDetailed(legacy.body);
+  return legacyChatKindsV === null
+    ? { source: 'unavailable' }
+    : { source: 'legacy', value: legacyChatKindsV };
 }
 
 export async function resolvePeerChatKindsV(
@@ -184,17 +220,14 @@ export async function resolvePeerChatKindsV(
   marker: ReceiverMarker,
 ): Promise<number> {
   const detailed = await resolvePeerChatKindsVDetailed(peerPubky, marker);
-  if (detailed.source === 'unavailable') return 0;
-  return detailed.value;
+  return detailed.source === 'unavailable' ? 0 : detailed.value;
 }
 
 export async function resolvePeerChatKindsVDetailed(
   peerPubky: PubkyKey,
   marker: ReceiverMarker,
 ): Promise<ChatKindsVResolution> {
-  const fromMarker = chatKindsVFromMarker(marker);
-  if (fromMarker >= 1) return { source: 'marker', value: fromMarker };
-  return fetchPeerReceiverJsonChatKindsV(peerPubky);
+  return fetchPeerCapability(peerPubky, marker.noisePublicKey);
 }
 
 export async function persistPeerChatKindsVFromMarker(
@@ -205,20 +238,20 @@ export async function persistPeerChatKindsVFromMarker(
 ): Promise<number> {
   const resolved = await resolvePeerChatKindsVDetailed(peerPubky, marker);
   const stored = await StorageService.getLink(ownerPubky, peerPubky);
-  const prev = stored ? normalizeChatKindsV(stored.chatKindsV) : 0;
-  if (resolved.source === 'unavailable') {
-    return prev;
-  }
+  const previous = stored ? normalizeChatKindsV(stored.chatKindsV) : 0;
+  if (resolved.source === 'unavailable') return previous;
   const next = resolved.value;
   if (stored && typeof StorageService.recordPeerChatKindsV === 'function') {
     await StorageService.recordPeerChatKindsV(ownerPubky, peerPubky, next);
   }
   const upgradeKey = `${ownerPubky}:${peerPubky}`;
-  if (prev < CHAT_KINDS_V && next >= CHAT_KINDS_V && !chatKindsUpgradeReplayed.has(upgradeKey)) {
+  if (
+    previous < CHAT_KINDS_V &&
+    next >= CHAT_KINDS_V &&
+    !chatKindsUpgradeReplayed.has(upgradeKey)
+  ) {
     chatKindsUpgradeReplayed.add(upgradeKey);
-    queueMicrotask(() => {
-      void onUpgrade(ownerPubky, peerPubky);
-    });
+    queueMicrotask(() => void onUpgrade(ownerPubky, peerPubky));
   }
   return next;
 }

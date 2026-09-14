@@ -108,9 +108,6 @@ export interface RestoredSession {
 
 export interface ReceiverMarker {
   noisePublicKey: string;
-  capabilitiesJson: string;
-  /** Additive receiver.json advertisement; absent/0 = pre-v1. */
-  chatKindsV?: number;
 }
 
 export interface LinkInitiateResult {

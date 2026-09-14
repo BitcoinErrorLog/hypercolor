@@ -315,7 +315,6 @@ describe('owner-conditional persist at commit time', () => {
       // PEER_NOISE stub made ensureLink treat that send as a marker mismatch
       // and return before sendPrivateMessageJson, so the getDb stall never armed.
       noisePublicKey: who === PEER_B ? 'noise-b' : PEER_NOISE,
-      capabilitiesJson: '{}',
     }));
     mockedNative.sendPrivateMessageJson.mockResolvedValue({ snapshot: 'est-out' });
     mockedNative.receivePrivateMessages.mockResolvedValue({ messages: [], snapshot: 'est-in' });

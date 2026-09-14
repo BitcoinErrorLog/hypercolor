@@ -145,8 +145,8 @@ function mockNativeHappyPath(): void {
     .mockResolvedValueOnce({ receiverAlias: 'recv-b', noisePublicKey: 'noise-b' });
   mockedNative.publishReceiverMarker.mockResolvedValue(undefined);
   mockedNative.getReceiverMarker.mockImplementation(async peer => {
-    if (peer === PUBKY_B) return { noisePublicKey: 'noise-b', capabilitiesJson: '{}' };
-    return { noisePublicKey: 'noise-a', capabilitiesJson: '{}' };
+    if (peer === PUBKY_B) return { noisePublicKey: 'noise-b' };
+    return { noisePublicKey: 'noise-a' };
   });
   mockedNative.initiateLink.mockResolvedValue({ linkId: 'link-a', snapshot: 'snap-a' });
   mockedNative.advanceHandshake.mockResolvedValue({ status: 'established', snapshot: 'est-a' });

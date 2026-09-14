@@ -30,10 +30,12 @@ describe('native auth-flow source pin', () => {
     expect(IOS_MODULE).toContain('auth_flow_cancelled');
   });
 
-  it('plumbs chatKindsV from the FFI marker instead of hardcoding 0', () => {
-    expect(ANDROID_MODULE).toContain('fun chatKindsVFromMarker');
-    expect(ANDROID_MODULE).not.toContain('putInt("chatKindsV", 0)');
-    expect(IOS_MODULE).toContain('func chatKindsVMap(from marker: ChatReceiverMarker)');
-    expect(IOS_MODULE).not.toContain('"chatKindsV": 0');
+  it('returns only typed production marker fields', () => {
+    expect(ANDROID_MODULE).not.toContain('chatKindsVFromMarker');
+    expect(ANDROID_MODULE).not.toContain('chatKindsV');
+    expect(ANDROID_MODULE).not.toContain('capabilitiesJson');
+    expect(IOS_MODULE).not.toContain('chatKindsVMap');
+    expect(IOS_MODULE).not.toContain('chatKindsV');
+    expect(IOS_MODULE).not.toContain('Mirror(reflecting: marker)');
   });
 });
