@@ -39,8 +39,8 @@ import {
 } from '../../types/link';
 import type { DeliveryQueueItem, PubkyKey } from '../../types';
 import {
+  enqueueChatKindsAdvertisement,
   persistPeerChatKindsVFromMarker,
-  putChatKindsVReceiverJson,
   drainChatKindsAdvertiseRetry,
   resetChatKindsUpgradeReplayedForTests,
 } from './chatKindsAdvertisement';
@@ -1097,7 +1097,7 @@ export const LinkService = {
    */
   async drainRetries(): Promise<void> {
     const previous = drainInFlight ?? Promise.resolve();
-    const next = previous.then(drainDueRetries, drainDueRetries);
+    const next = previous.then(drainAllRetries, drainAllRetries);
     const tracked = next.catch(() => undefined);
     drainInFlight = tracked;
     try {
@@ -1759,8 +1759,7 @@ async function provisionReceiver(
   }
 
   if (published.kind === 'present' && published.noisePublicKey === noisePublicKey) {
-    await putChatKindsVReceiverJson(sessionAlias, pubky, noisePublicKey);
-    await drainChatKindsAdvertiseRetry(pubky, sessionAlias);
+    await enqueueChatKindsAdvertisement(sessionAlias, pubky, noisePublicKey);
     await persistReceiverRow(
       pubky,
       receiverAlias,
@@ -1770,6 +1769,7 @@ async function provisionReceiver(
       published.noisePublicKey,
     );
     setReceiverRoleState('active', null);
+    scheduleChatKindsAdvertisement(pubky, sessionAlias);
     return { pubky, receiverPath, noisePublicKey, receiverRole: 'active' };
   }
 
@@ -1780,9 +1780,9 @@ async function provisionReceiver(
     throw error;
   }
   await persistReceiverRow(pubky, receiverAlias, receiverPath, true, 'active', noisePublicKey);
-  await putChatKindsVReceiverJson(sessionAlias, pubky, noisePublicKey);
-  await drainChatKindsAdvertiseRetry(pubky, sessionAlias);
+  await enqueueChatKindsAdvertisement(sessionAlias, pubky, noisePublicKey);
   setReceiverRoleState('active', null);
+  scheduleChatKindsAdvertisement(pubky, sessionAlias);
   return { pubky, receiverPath, noisePublicKey, receiverRole: 'active' };
 }
 
@@ -1875,8 +1875,6 @@ async function publishTakeoverReceiver(
   }
   const noisePublicKey = await PaykitLinkNative.getReceiverPublicKey(existing.receiverAlias);
   await PaykitLinkNative.publishReceiverMarker(sessionAlias, existing.receiverAlias, receiverPath);
-  await putChatKindsVReceiverJson(sessionAlias, pubky, noisePublicKey);
-  await drainChatKindsAdvertiseRetry(pubky, sessionAlias);
   await persistReceiverRow(
     pubky,
     existing.receiverAlias,
@@ -1886,8 +1884,14 @@ async function publishTakeoverReceiver(
     noisePublicKey,
   );
   setReceiverRoleState('active', reason === 'reenable' ? COPY.reenableToast : COPY.takeoverToast);
+  await enqueueChatKindsAdvertisement(sessionAlias, pubky, noisePublicKey);
+  scheduleChatKindsAdvertisement(pubky, sessionAlias);
   await restartUnestablishedLinksAfterTakeover(pubky);
   return { pubky, receiverPath, noisePublicKey, receiverRole: 'active' };
+}
+
+function scheduleChatKindsAdvertisement(ownerPubky: PubkyKey, sessionAlias: string): void {
+  void drainChatKindsAdvertiseRetry(ownerPubky, sessionAlias).catch(() => undefined);
 }
 
 /**
@@ -4169,6 +4173,18 @@ async function routeUnprocessedStreamItems(
 }
 
 // ─── Retry / recover internals ────────────────────────────────────────────────
+
+async function drainAllRetries(): Promise<void> {
+  const activeSession = session;
+  if (activeSession) {
+    try {
+      await drainChatKindsAdvertiseRetry(activeSession.pubky, activeSession.alias);
+    } catch (err) {
+      console.warn('[LinkService] capability advertisement retry drain failed:', errorMessage(err));
+    }
+  }
+  await drainDueRetries();
+}
 
 async function drainDueRetries(): Promise<void> {
   const due = await RetryQueue.getDue();

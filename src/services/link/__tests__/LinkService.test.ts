@@ -116,6 +116,10 @@ jest.mock('../../StorageService', () => ({
   StorageService: {
     upsertLinkReceiver: jest.fn(),
     getLinkReceiver: jest.fn(),
+    getChatKindsAdvertiseRetry: jest.fn(),
+    saveChatKindsAdvertiseRetry: jest.fn(),
+    recordChatKindsAdvertiseRetryFailure: jest.fn(),
+    clearChatKindsAdvertiseRetry: jest.fn(),
     upsertLink: jest.fn(),
     upsertArchivedLink: jest.fn(),
     getArchivedLink: jest.fn(),
@@ -957,11 +961,13 @@ describe('LinkService', () => {
         'recv-new',
         LINK_RECEIVER_PATH,
       );
-      expect(mockedNative.putPublic).toHaveBeenCalledWith(
-        'alias-2',
-        `pubky://${OWNER}/pub/hypercolor.app/v1/receivers/${'noise-pk'}/capabilities.json`,
-        '{"version":1,"kind":"hypercolor.receiver.capabilities","receiver_path":"hypercolor/wallet","chat_kinds_v":1}',
-        'https://homeserver.example',
+      expect(mockedStorage.saveChatKindsAdvertiseRetry).toHaveBeenCalledWith(
+        expect.objectContaining({
+          ownerPubky: OWNER,
+          sessionAlias: 'alias-2',
+          noisePublicKey: 'noise-pk',
+          nextRetryAt: expect.any(Number),
+        }),
       );
       expect(drainSpy).toHaveBeenCalledWith(OWNER, 'alias-2');
       drainSpy.mockRestore();
@@ -974,6 +980,49 @@ describe('LinkService', () => {
         noisePublicKey: 'noise-pk',
         receiverRole: 'active',
       });
+    });
+
+    it('resolves after marker confirmation when capability GET remains pending', async () => {
+      jest.useFakeTimers();
+      mockedStorage.getLinkReceiver.mockResolvedValue(null);
+      mockedStorage.getChatKindsAdvertiseRetry.mockResolvedValue({
+        ownerPubky: OWNER,
+        sessionAlias: 'alias-2',
+        noisePublicKey: 'noise-pk',
+        nextRetryAt: 0,
+        attempts: 0,
+      });
+      global.fetch = jest.fn(() => new Promise(() => undefined)) as unknown as typeof fetch;
+      mockedNative.getReceiverMarker
+        .mockResolvedValueOnce(null)
+        .mockResolvedValue({ noisePublicKey: 'noise-pk' });
+      mockedNative.startAuthFlow.mockResolvedValue({
+        flowId: 'flow-1',
+        authorizationUrl: 'pubkyauth://grant',
+      });
+      mockedNative.awaitAuthApproval.mockResolvedValue({
+        sessionAlias: 'alias-2',
+        pubky: OWNER,
+      });
+      mockedNative.generateReceiverKey.mockResolvedValue({
+        receiverAlias: 'recv-new',
+        noisePublicKey: 'noise-pk',
+      });
+
+      const flow = await LinkService.enable();
+      await expect(flow.awaitEnabled()).resolves.toEqual(
+        expect.objectContaining({ receiverRole: 'active', noisePublicKey: 'noise-pk' }),
+      );
+      expect(mockedStorage.saveChatKindsAdvertiseRetry).toHaveBeenCalledWith(
+        expect.objectContaining({
+          ownerPubky: OWNER,
+          sessionAlias: 'alias-2',
+          noisePublicKey: 'noise-pk',
+          nextRetryAt: expect.any(Number),
+        }),
+      );
+      await jest.advanceTimersByTimeAsync(15_000);
+      jest.useRealTimers();
     });
 
     it('does not persist KeyStore when adoptAuthSession rejects', async () => {
@@ -4200,6 +4249,78 @@ describe('LinkService', () => {
       nextRetryAt: NOW,
       createdAt: NOW,
     };
+
+    it('retries and clears a due capability advertisement on the periodic retry tick', async () => {
+      jest.useFakeTimers({ doNotFake: ['Date'] });
+      const flush = async (): Promise<void> => {
+        for (let turn = 0; turn < 50; turn += 1) await Promise.resolve();
+      };
+      mockedStorage.getChatKindsAdvertiseRetry.mockResolvedValue({
+        ownerPubky: OWNER,
+        sessionAlias: SESSION_ALIAS,
+        noisePublicKey: PEER_NOISE,
+        nextRetryAt: NOW - 1,
+        attempts: 0,
+      });
+      global.fetch = jest.fn().mockResolvedValue({
+        status: 200,
+        ok: true,
+        text: async () =>
+          '{"version":1,"kind":"hypercolor.receiver.capabilities","receiver_path":"hypercolor/wallet","chat_kinds_v":1}',
+      }) as unknown as typeof fetch;
+
+      const stop = startLinkRetryDrain(30_000);
+      try {
+        jest.advanceTimersByTime(30_000);
+        await flush();
+
+        expect(mockedStorage.clearChatKindsAdvertiseRetry).toHaveBeenCalledWith(OWNER);
+        expect(global.fetch).toHaveBeenCalledTimes(1);
+      } finally {
+        stop();
+        jest.useRealTimers();
+      }
+    });
+
+    it('does not retry a capability advertisement before its scheduled time', async () => {
+      mockedStorage.getChatKindsAdvertiseRetry.mockResolvedValue({
+        ownerPubky: OWNER,
+        sessionAlias: SESSION_ALIAS,
+        noisePublicKey: PEER_NOISE,
+        nextRetryAt: NOW + 1,
+        attempts: 0,
+      });
+
+      await LinkService.drainRetries();
+
+      expect(global.fetch).not.toHaveBeenCalled();
+      expect(mockedStorage.clearChatKindsAdvertiseRetry).not.toHaveBeenCalled();
+    });
+
+    it('does not retry another owner’s capability advertisement', async () => {
+      mockedStorage.getChatKindsAdvertiseRetry.mockImplementation(async owner =>
+        owner === OWNER
+          ? {
+              ownerPubky: OWNER,
+              sessionAlias: SESSION_ALIAS,
+              noisePublicKey: PEER_NOISE,
+              nextRetryAt: NOW - 1,
+              attempts: 0,
+            }
+          : null,
+      );
+      await LinkService.clearSession();
+      mockedNative.signinWithSecret.mockResolvedValue({
+        sessionAlias: 'other-session',
+        pubky: OTHER_OWNER,
+      });
+      await LinkService.signinWithSecret('other-owner-secret');
+
+      await LinkService.drainRetries();
+
+      expect(global.fetch).not.toHaveBeenCalled();
+      expect(mockedStorage.clearChatKindsAdvertiseRetry).not.toHaveBeenCalled();
+    });
 
     /** Runs one tick with the clock moved to this link's next due instant. */
     it('does not write Noise message 1 when a tick hits a protocol error', async () => {

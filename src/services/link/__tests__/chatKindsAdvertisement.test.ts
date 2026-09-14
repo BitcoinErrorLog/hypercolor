@@ -160,4 +160,51 @@ describe('key-bound capability advertisement', () => {
     );
     expect(mockedStorage.clearChatKindsAdvertiseRetry).toHaveBeenCalledWith(OWNER);
   });
+
+  it('records a transient failure after a bounded capability GET timeout', async () => {
+    jest.useFakeTimers();
+    mockedStorage.getChatKindsAdvertiseRetry.mockResolvedValue({
+      ownerPubky: OWNER,
+      sessionAlias: 'alias',
+      noisePublicKey: marker.noisePublicKey,
+      nextRetryAt: 0,
+      attempts: 0,
+    });
+    mockedStorage.recordChatKindsAdvertiseRetryFailure.mockResolvedValue(1);
+    global.fetch = jest.fn(() => new Promise(() => undefined)) as unknown as typeof fetch;
+
+    const drain = drainChatKindsAdvertiseRetry(OWNER, 'alias');
+    await Promise.resolve();
+    await Promise.resolve();
+    await jest.advanceTimersByTimeAsync(15_000);
+    await drain;
+
+    expect(mockedStorage.recordChatKindsAdvertiseRetryFailure).toHaveBeenCalledWith(
+      OWNER,
+      expect.any(Number),
+    );
+    const nextRetryAt = mockedStorage.recordChatKindsAdvertiseRetryFailure.mock.calls[0]?.[1];
+    expect(nextRetryAt).toBe(Date.now() + 15_000);
+    expect(mockedStorage.clearChatKindsAdvertiseRetry).not.toHaveBeenCalled();
+    jest.useRealTimers();
+  });
+
+  it('clears the retry after an asynchronous capability success without changing marker state', async () => {
+    mockedStorage.getChatKindsAdvertiseRetry.mockResolvedValue({
+      ownerPubky: OWNER,
+      sessionAlias: 'alias',
+      noisePublicKey: marker.noisePublicKey,
+      nextRetryAt: 0,
+      attempts: 1,
+    });
+    global.fetch = jest
+      .fn()
+      .mockResolvedValue(response(200, buildCapabilityDocument())) as unknown as typeof fetch;
+
+    await drainChatKindsAdvertiseRetry(OWNER, 'alias');
+
+    expect(mockedStorage.clearChatKindsAdvertiseRetry).toHaveBeenCalledWith(OWNER);
+    expect(mockedNative.getReceiverMarker).not.toHaveBeenCalled();
+    expect(mockedNative.putPublic).not.toHaveBeenCalled();
+  });
 });

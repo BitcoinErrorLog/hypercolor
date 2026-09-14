@@ -18,6 +18,13 @@ const advertiseRetryOwners = new Set<string>();
 const MAX_ADVERTISE_RETRY_ATTEMPTS = 10;
 const ADVERTISE_RETRY_BASE_MS = 15_000;
 const ADVERTISE_RETRY_MAX_MS = 30 * 60 * 1000;
+const CAPABILITY_NETWORK_TIMEOUT_MS = 15_000;
+
+class CapabilityTimeoutError extends Error {
+  constructor() {
+    super('capability request timed out');
+  }
+}
 
 export function resetChatKindsUpgradeReplayedForTests(): void {
   chatKindsUpgradeReplayed.clear();
@@ -44,8 +51,27 @@ export async function putChatKindsVReceiverJson(
         nextRetryAt: Date.now() + ADVERTISE_RETRY_BASE_MS,
       });
     } catch {
-      // The volatile flag still drives a same-session retry.
+      // The volatile flag records the in-process failure; automatic retry needs the durable row.
     }
+  }
+}
+
+export async function enqueueChatKindsAdvertisement(
+  sessionAlias: string,
+  ownerPubky: PubkyKey,
+  noisePublicKey: string,
+): Promise<void> {
+  advertiseRetryOwners.add(ownerPubky);
+  if (typeof StorageService.saveChatKindsAdvertiseRetry !== 'function') return;
+  try {
+    await StorageService.saveChatKindsAdvertiseRetry({
+      ownerPubky,
+      sessionAlias,
+      noisePublicKey,
+      nextRetryAt: Date.now(),
+    });
+  } catch {
+    // Advertising remains non-authoritative if durable retry persistence is unavailable.
   }
 }
 
@@ -100,7 +126,7 @@ async function advertiseCapability(
   noisePublicKey: string,
 ): Promise<AdvertiseOutcome> {
   try {
-    const origin = await resolveHomeserverOrigin(ownerPubky);
+    const origin = await withCapabilityTimeout(resolveHomeserverOrigin(ownerPubky));
     const url = capabilityPubkyUrl(ownerPubky, noisePublicKey);
     const current = await getPublicDocument(ownerPubky, new URL(url).pathname, origin);
     if (current === null) return 'transient';
@@ -112,13 +138,16 @@ async function advertiseCapability(
     } else if (current.status !== 404 && current.status !== 410) {
       return current.status >= 500 ? 'transient' : 'terminal';
     }
-    const marker = await PaykitLinkNative.getReceiverMarker(ownerPubky, HYPERCOLOR_RECEIVER_PATH);
+    const marker = await withCapabilityTimeout(
+      PaykitLinkNative.getReceiverMarker(ownerPubky, HYPERCOLOR_RECEIVER_PATH),
+    );
     if (!marker || marker.noisePublicKey !== noisePublicKey) return 'terminal';
-    await PaykitLinkNative.putPublic(sessionAlias, url, buildCapabilityDocument(), origin);
+    await withCapabilityTimeout(
+      PaykitLinkNative.putPublic(sessionAlias, url, buildCapabilityDocument(), origin),
+    );
     const reconciled = await getPublicDocument(ownerPubky, new URL(url).pathname, origin);
-    const markerAfter = await PaykitLinkNative.getReceiverMarker(
-      ownerPubky,
-      HYPERCOLOR_RECEIVER_PATH,
+    const markerAfter = await withCapabilityTimeout(
+      PaykitLinkNative.getReceiverMarker(ownerPubky, HYPERCOLOR_RECEIVER_PATH),
     );
     const reconciledCapability = reconciled?.body ? parseCapabilityDocument(reconciled.body) : null;
     if (
@@ -174,11 +203,35 @@ async function getPublicDocument(
   origin: string,
 ): Promise<PublicDocument | null> {
   if (typeof fetch !== 'function') return null;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), CAPABILITY_NETWORK_TIMEOUT_MS);
   try {
-    const res = await fetch(`${origin.replace(/\/+$/, '')}${path}?pubky-host=${ownerPubky}`);
-    return { status: res.status, body: res.ok ? await res.text() : null };
+    const res = await withCapabilityTimeout(
+      fetch(`${origin.replace(/\/+$/, '')}${path}?pubky-host=${ownerPubky}`, {
+        signal: controller.signal,
+      }),
+    );
+    return {
+      status: res.status,
+      body: res.ok ? await withCapabilityTimeout(res.text()) : null,
+    };
   } catch {
     return null;
+  } finally {
+    controller.abort();
+    clearTimeout(timer);
+  }
+}
+
+async function withCapabilityTimeout<T>(work: Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new CapabilityTimeoutError()), CAPABILITY_NETWORK_TIMEOUT_MS);
+  });
+  try {
+    return await Promise.race([work, timeout]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
   }
 }
 
@@ -190,7 +243,12 @@ async function fetchPeerCapability(
   peerPubky: PubkyKey,
   noisePublicKey: string,
 ): Promise<ChatKindsVResolution> {
-  const origin = await resolveHomeserverOrigin(peerPubky);
+  let origin: string;
+  try {
+    origin = await withCapabilityTimeout(resolveHomeserverOrigin(peerPubky));
+  } catch {
+    return { source: 'unavailable' };
+  }
   const capability = await getPublicDocument(
     peerPubky,
     new URL(capabilityPubkyUrl(peerPubky, noisePublicKey)).pathname,
