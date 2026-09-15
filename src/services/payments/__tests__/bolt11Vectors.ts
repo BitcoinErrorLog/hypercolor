@@ -1,13 +1,13 @@
-/** light-bolt11-decoder fixture (mainnet, 20u = 0.00002 BTC). */
+/** LDK test fixture (mainnet, 100u = 0.0001 BTC). */
 export const MAINNET_BOLT11_20U =
-  'lnbc20u1p3y0x3hpp5743k2g0fsqqxj7n8qzuhns5gmkk4djeejk3wkp64ppevgekvc0jsdqcve5kzar2v9nr5gpqd4hkuetesp5ez2g297jduwc20t6lmqlsg3man0vf2jfd8ar9fh8fhn2g8yttfkqxqy9gcqcqzys9qrsgqrzjqtx3k77yrrav9hye7zar2rtqlfkytl094dsp0ms5majzth6gt7ca6uhdkxl983uywgqqqqlgqqqvx5qqjqrzjqd98kxkpyw0l9tyy8r8q57k7zpy9zjmh6sez752wj6gcumqnj3yxzhdsmg6qq56utgqqqqqqqqqqqeqqjq7jd56882gtxhrjm03c93aacyfy306m4fq0tskf83c0nmet8zc2lxyyg3saz8x6vwcp26xnrlagf9semau3qm2glysp7sv95693fphvsp54l567';
+  'lnbc100u1p38tg4pdqlf9h8vmmfvdjjqer9wd3hy6tsw35k7msnp4qvwaqdzmlur2m5hea2da3c4zhwhyxrgxe49yrq854vqw4kckrtvygpp58qkwaky9l09g332372qnr8kcdafvrf7re9z0l5vw9xa2kvdhglfqsp5axgjhklwf08jg7w57wvlk8yksgttcxkl7rjmjy8zqzpxslme5xcs9qyysgqcqpcrzjqve0ahnleay8csatqrugw062f43cyxhxq4gj6c4a2fgr5alr84a3wp66yqqqslcqqqqqqqlgqqqqqqqqfqfjudghme9fqk4mrqmw9n2g44navk3dnvn4en8yxxf7fcwhk7wp884j43etfyc5vzp2ss6g2dgrr285kd0lmsa5mjtnzd4d583rfjl3gpprr8ru';
 
-export const MAINNET_BOLT11_20U_MSAT = '2000000';
-export const MAINNET_BOLT11_20U_BTC = '0.00002';
+export const MAINNET_BOLT11_20U_MSAT = '10000000';
+export const MAINNET_BOLT11_20U_BTC = '0.0001';
 export const MAINNET_BOLT11_20U_HASH =
-  'f5636521e98000697a6700b979c288ddad56cb3995a2eb07550872c466ccc3e5';
-export const MAINNET_BOLT11_20U_EXPIRY_SECONDS = 172800;
-export const MAINNET_BOLT11_20U_TIMESTAMP = 1648859703;
+  '382ceed885fbca88c551f281319ed86f52c1a7c3c944ffd18e29baab31b747d2';
+export const MAINNET_BOLT11_20U_EXPIRY_SECONDS = 3600;
+export const MAINNET_BOLT11_20U_TIMESTAMP = 1651876513;
 
 /** bitcoinjs/bolt11 fixture — amountless mainnet. */
 export const MAINNET_BOLT11_AMOUNTLESS =
