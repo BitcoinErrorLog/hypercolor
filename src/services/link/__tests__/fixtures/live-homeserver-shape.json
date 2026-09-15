@@ -1,0 +1,19 @@
+{
+  "captured": "2026-09-15",
+  "source": "gate-final/REPORT.md:51-145",
+  "redacted": true,
+  "directory": {
+    "pubky": "utqz4n6twf6rt654i4uzmzyq4am9uk5efbc8fdzifa9ms61e551o",
+    "path": "/pub/paykit/v0/private/hypercolor/wallet/messages/11945cabc84152103ed9b1cf70787b52c0d50933751bb226a80295b3a70e86ba",
+    "status": 404
+  },
+  "peer": {
+    "pubky": "p1pkr5ubjrobfssa4szeuz5cgouwmioek9mquoyb6bo5fioqw3o",
+    "slots": {
+      "0": 404,
+      "1": 200,
+      "3": 404
+    },
+    "pathTemplate": "/pub/paykit/v0/private/hypercolor/wallet/messages/11945cabc84152103ed9b1cf70787b52c0d50933751bb226a80295b3a70e86ba/<slot>?pubky-host=<pubky>"
+  }
+}

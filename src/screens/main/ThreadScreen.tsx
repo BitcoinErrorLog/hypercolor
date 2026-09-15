@@ -576,7 +576,7 @@ export default function ThreadScreen({ route }: Props) {
           try {
             await LinkService.retryPeerSends(participantPubky);
           } catch {
-            // Status reload below still surfaces the current link state.
+            Alert.alert(COPY.reconnectRequired, COPY.reconnectFailed);
           }
           await reloadEncrypted();
         })();
@@ -1024,7 +1024,7 @@ export function ThreadScreenContent({
               {identity.subtitle}
             </Text>
           ) : null}
-          {linkLabel && linkStatus !== 'error' ? (
+          {linkLabel && linkStatus !== 'error' && linkStatus !== 'reconnect_required' ? (
             <Text testID="threadLinkStatus" style={styles.linkStatus}>
               {linkLabel}
             </Text>
@@ -1035,6 +1035,11 @@ export function ThreadScreenContent({
             </Text>
           ) : null}
         </TouchableOpacity>
+        {linkStatus === 'reconnect_required' ? (
+          <Text testID="threadLinkStatus" style={styles.linkStatus}>
+            {COPY.reconnectUnavailable}
+          </Text>
+        ) : null}
         {linkStatus === 'error' ? (
           <TouchableOpacity
             testID="threadLinkRetry"

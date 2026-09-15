@@ -322,6 +322,7 @@ export interface PaykitLinkNativeApi {
   ): Promise<LinkRestoreResult>;
   sendPrivateMessageJson(linkId: string, rawJson: string): Promise<LinkSendResult>;
   receivePrivateMessages(linkId: string): Promise<LinkReceiveResult>;
+  /** Legacy boundary retained for compatibility; LinkService never calls it. */
   clearLinkOutbox(
     sessionAlias: string,
     receiverAlias: string,

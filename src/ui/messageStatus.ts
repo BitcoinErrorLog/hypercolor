@@ -9,6 +9,9 @@ export type OutboundStatusWord =
   | typeof COPY.offline
   | typeof COPY.needsEnable
   | typeof COPY.connectionChangedRetry
+  | typeof COPY.reconnectRequired
+  | typeof COPY.reconnectUnavailable
+  | typeof COPY.restoring
   | typeof COPY.delivered
   | typeof COPY.read;
 
@@ -53,6 +56,10 @@ export function formatLinkStatus(status: LinkStatus | null | undefined): Outboun
       return COPY.queued;
     case 'error':
       return COPY.connectionChangedRetry;
+    case 'reconnect_required':
+      return COPY.reconnectUnavailable;
+    case 'restoring':
+      return COPY.restoring;
     case 'native-missing':
     case 'ready':
     case 'message-request':

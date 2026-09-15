@@ -315,6 +315,17 @@ export const SCHEMA_V23_STATEMENTS: readonly string[] = [
     ON chat_pending_tags(owner_pubky, peer_pubky, sender_pubky, target_event_id, expires_at)`,
 ];
 
+/** Schema v24 — durable, redacted established-link recovery state. */
+export const SCHEMA_V24_STATEMENTS: readonly string[] = [
+  `ALTER TABLE links ADD COLUMN reconnect_error_category TEXT`,
+  `ALTER TABLE links ADD COLUMN reconnect_required_at INTEGER`,
+];
+
+/** Schema v25 — redacted per-item inbound routing failures. */
+export const SCHEMA_V25_STATEMENTS: readonly string[] = [
+  `ALTER TABLE link_stream_items ADD COLUMN processing_error_category TEXT`,
+];
+
 /**
  * Schema v15 — move the handshake advance budget off the `links` row.
  *

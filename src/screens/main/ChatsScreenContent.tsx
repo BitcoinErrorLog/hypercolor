@@ -28,6 +28,7 @@ export type ChatsScreenContentProps = {
   onRetry: () => void;
   onCopyMyPubky: () => void;
   onShareMyPubky: () => void;
+  reconnectRequiredPeers?: ReadonlySet<string>;
   nicknames?: Record<string, string>;
   listFilter?: ChatListFilter;
   onChangeFilter?: (filter: ChatListFilter) => void;
@@ -50,6 +51,7 @@ export function ChatsScreenContent({
   onRetry,
   onCopyMyPubky,
   onShareMyPubky,
+  reconnectRequiredPeers = new Set<string>(),
   nicknames = {},
   listFilter = 'inbox',
   onChangeFilter,
@@ -68,26 +70,30 @@ export function ChatsScreenContent({
             : null,
       );
       const unread = item.unreadCount > 0;
+      const reconnectRequired = reconnectRequiredPeers.has(item.participantPubky);
       return (
         <ListRow
           testID="chatRow"
           accessibilityLabel={identity.title}
           title={identity.title}
           subtitle={
-            identity.subtitle
-              ? `${identity.subtitle} · ${item.lastMessage || COPY.noMessagesYet}`
-              : item.lastMessage || COPY.noMessagesYet
+            reconnectRequired
+              ? COPY.reconnectUnavailable
+              : identity.subtitle
+                ? `${identity.subtitle} · ${item.lastMessage || COPY.noMessagesYet}`
+                : item.lastMessage || COPY.noMessagesYet
           }
           meta={item.lastMessageAt ? formatRelativeTime(item.lastMessageAt, nowMs) : undefined}
           badge={item.unreadCount}
           unread={unread}
           leading={<Avatar name={identity.title} pubky={item.participantPubky} size="md" />}
+          trailing={null}
           hideDivider={false}
           onPress={() => onOpenThread(item)}
         />
       );
     },
-    [contacts, nicknames, nowMs, onOpenThread],
+    [contacts, nicknames, nowMs, onOpenThread, reconnectRequiredPeers],
   );
 
   const requestsRow = (

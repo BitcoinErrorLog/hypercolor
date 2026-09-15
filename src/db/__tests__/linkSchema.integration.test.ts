@@ -2829,7 +2829,11 @@ describe('schema v21 — additive chat_kinds_v on links', () => {
       String(row.name),
     );
     expect(cols).toContain('chat_kinds_v');
-    expect(CURRENT_SCHEMA_VERSION).toBe(23);
+    expect(CURRENT_SCHEMA_VERSION).toBe(25);
+    const streamCols = (db.executeSync('PRAGMA table_info(link_stream_items)').rows ?? []).map(
+      row => String(row.name),
+    );
+    expect(streamCols).toContain('processing_error_category');
     const prefs = db.executeSync(
       "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'chat_device_prefs'",
     );

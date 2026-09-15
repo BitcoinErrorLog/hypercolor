@@ -34,6 +34,9 @@ export default function ChatsScreen() {
   const [listFilter, setListFilter] = useState<ChatListFilter>('inbox');
   const [searchOpen, setSearchOpen] = useState(false);
   const [listError, setListError] = useState<string | null>(null);
+  const [reconnectRequiredPeers, setReconnectRequiredPeers] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
 
   const loadLocal = useCallback(async () => {
     if (!ownerPubky) {
@@ -49,7 +52,19 @@ export default function ChatsScreen() {
         StorageService.getNicknamesForOwner(ownerPubky),
         StorageService.listThreadLocalPrefs(ownerPubky),
       ]);
-      setConversations(filterDmConversations(rows));
+      const visibleRows = filterDmConversations(rows);
+      setConversations(visibleRows);
+      const statuses = await Promise.all(
+        visibleRows.map(
+          async row =>
+            [row.participantPubky, await LinkService.getLinkStatus(row.participantPubky)] as const,
+        ),
+      );
+      setReconnectRequiredPeers(
+        new Set(
+          statuses.filter(([, status]) => status === 'reconnect_required').map(([peer]) => peer),
+        ),
+      );
       setPendingRequestCount(pending);
       const map: Record<string, Contact> = {};
       for (const person of people) map[person.pubky] = person;
@@ -112,6 +127,7 @@ export default function ChatsScreen() {
         showEnableCta={showEnableCta}
         listError={listError}
         onOpenThread={handlePress}
+        reconnectRequiredPeers={reconnectRequiredPeers}
         onOpenRequests={() => nav.navigate('MessageRequests')}
         onNewChat={() => nav.navigate('ContactSearch')}
         onEnableMessaging={() => nav.navigate('EnableMessaging')}

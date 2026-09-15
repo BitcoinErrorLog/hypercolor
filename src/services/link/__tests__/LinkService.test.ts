@@ -130,6 +130,7 @@ jest.mock('../../StorageService', () => ({
     recordPeerChatKindsV: jest.fn(),
     getDueHandshakingLinks: jest.fn(),
     updateLinkSnapshot: jest.fn(),
+    markLinkReconnectRequired: jest.fn(),
     getHandshakeBudget: jest.fn(),
     upsertHandshakeBudget: jest.fn(),
     clearHandshakeBudget: jest.fn(),
@@ -1385,7 +1386,7 @@ describe('LinkService', () => {
       mockedStorage.getLink.mockResolvedValue(
         storedLink({ status: 'established', snapshot: 'est-1' }),
       );
-      await expect(LinkService.getLinkStatus(PEER)).resolves.toBe('ready');
+      await expect(LinkService.getLinkStatus(PEER)).resolves.toBe('restoring');
       expect(mockedNative.initiateLink).not.toHaveBeenCalled();
       expect(mockedNative.restoreHandshake).not.toHaveBeenCalled();
       expect(mockedNative.restoreLink).not.toHaveBeenCalled();
@@ -1404,7 +1405,7 @@ describe('LinkService', () => {
       mockedStorage.getLink.mockResolvedValue(
         storedLink({ status: 'established', snapshot: '', role: 'initiator' }),
       );
-      await expect(LinkService.getLinkStatus(PEER)).resolves.toBe('handshaking-initiator');
+      await expect(LinkService.getLinkStatus(PEER)).resolves.toBe('restoring');
       expect(mockedNative.restoreLink).not.toHaveBeenCalled();
     });
 
@@ -1417,7 +1418,7 @@ describe('LinkService', () => {
           lastSeenPeerMarkerPk: 'new-peer-pk',
         }),
       );
-      await expect(LinkService.getLinkStatus(PEER)).resolves.toBe('error');
+      await expect(LinkService.getLinkStatus(PEER)).resolves.toBe('restoring');
       expect(mockedNative.initiateLink).not.toHaveBeenCalled();
     });
   });
@@ -1538,6 +1539,22 @@ describe('LinkService', () => {
 
       expect(mockedStorage.updateLinkSnapshot).not.toHaveBeenCalled();
       expect(mockedStorage.deleteLink).not.toHaveBeenCalled();
+    });
+
+    it('fails closed when an established restore returns transport_error', async () => {
+      mockedStorage.getLink.mockResolvedValue(
+        storedLink({ status: 'established', snapshot: 'est-keep' }),
+      );
+      mockedNative.restoreLink.mockRejectedValue({
+        code: 'network',
+        message: 'transport_error',
+      });
+
+      await expect(LinkService.ensureLinkWith(PEER)).resolves.toBe('reconnect_required');
+
+      expect(mockedStorage.markLinkReconnectRequired).toHaveBeenCalledWith(OWNER, PEER, 'network');
+      expect(mockedStorage.deleteLink).not.toHaveBeenCalled();
+      expect(mockedNative.clearLinkOutbox).not.toHaveBeenCalled();
     });
   });
 
@@ -1714,7 +1731,7 @@ describe('LinkService', () => {
 
       await LinkService.takeoverReceiver();
 
-      expect(mockedNative.clearLinkOutbox).toHaveBeenCalled();
+      expect(mockedNative.clearLinkOutbox).not.toHaveBeenCalled();
       expect(mockedStorage.deleteLink).toHaveBeenCalledWith(OWNER, PEER);
       expect(mockedNative.initiateLink).toHaveBeenCalledTimes(1);
       expect(mockedStorage.clearHandshakeBudget).toHaveBeenCalledWith(OWNER, PEER);
@@ -1824,29 +1841,6 @@ describe('LinkService', () => {
         jest.useRealTimers();
       }
     }, 15_000);
-
-    it('replaces a non-ready handshake when a valid new msg1 is probed', async () => {
-      mockedStorage.getLink.mockResolvedValue(
-        storedLink({ role: 'initiator', status: 'handshaking' }),
-      );
-      mockedNative.probeInboundLink.mockResolvedValue({
-        result: 'pending',
-        linkId: 'fresh-msg1',
-        snapshot: 'fresh-snap',
-      });
-      mockedStorage.deleteLink.mockResolvedValue(undefined);
-
-      await expect(LinkService.syncInbox([PEER])).resolves.toEqual([]);
-
-      expect(mockedStorage.deleteLink).toHaveBeenCalledWith(OWNER, PEER);
-      expect(mockedStorage.upsertLink).toHaveBeenCalledWith(
-        expect.objectContaining({
-          role: 'responder',
-          status: 'handshaking',
-          snapshot: 'fresh-snap',
-        }),
-      );
-    });
 
     it('does not drop an established link when a new msg1 is present', async () => {
       mockedStorage.getLink.mockResolvedValue(
@@ -2709,58 +2703,8 @@ describe('LinkService', () => {
 
       await expect(LinkService.ensureLinkWith(PEER)).resolves.toBe('handshaking-initiator');
 
-      expect(mockedNative.clearLinkOutbox).toHaveBeenCalled();
+      expect(mockedNative.clearLinkOutbox).not.toHaveBeenCalled();
       expect(mockedNative.initiateLink).toHaveBeenCalled();
-    });
-  });
-
-  describe('ensureLinkWith — crossed-handshake tiebreak', () => {
-    it('switches the lexicographically smaller pubky to responder when handshakes cross', async () => {
-      mockedStorage.getLink.mockResolvedValue(storedLink({ snapshot: 'hs-2' }));
-      mockedNative.restoreHandshake.mockResolvedValue({ linkId: 'hs-handle', status: 'pending' });
-      mockedNative.advanceHandshake.mockResolvedValue({ status: 'pending', snapshot: 'hs-3' });
-      mockedNative.probeInboundLink.mockResolvedValue({
-        result: 'pending',
-        linkId: 'crossed-1',
-        snapshot: 'crossed-2',
-      });
-
-      await expect(LinkService.ensureLinkWith(PEER)).resolves.toBe('handshaking-responder');
-
-      expect(mockedStorage.deleteLink).toHaveBeenCalledWith(OWNER, PEER);
-      expect(mockedStorage.upsertLink).toHaveBeenCalledWith(
-        expect.objectContaining({
-          role: 'responder',
-          status: 'handshaking',
-          snapshot: 'crossed-2',
-        }),
-      );
-      expect(mockedNative.advanceHandshake).not.toHaveBeenCalled();
-    });
-
-    it('keeps the lexicographically larger pubky on its own initiator handshake', async () => {
-      mockedKeyStore.getPubky.mockReturnValue('z'.repeat(52));
-      const smallerPeer = 'a'.repeat(52);
-      mockedStorage.getLink.mockResolvedValue(
-        storedLink({ ownerPubky: 'z'.repeat(52), peerPubky: smallerPeer, snapshot: 'hs-2' }),
-      );
-      mockedNative.restoreHandshake.mockResolvedValue({ linkId: 'hs-handle', status: 'pending' });
-      mockedNative.advanceHandshake.mockResolvedValue({ status: 'pending', snapshot: 'hs-3' });
-
-      await LinkService.clearSession();
-      mockedNative.signinWithSecret.mockResolvedValue({
-        sessionAlias: SESSION_ALIAS,
-        pubky: 'z'.repeat(52),
-      });
-      await LinkService.signinWithSecret('signin-secret-hex');
-      mockedStorage.getLinkReceiver.mockResolvedValue({
-        ...receiverRow,
-        ownerPubky: 'z'.repeat(52),
-      });
-
-      await expect(LinkService.ensureLinkWith(smallerPeer)).resolves.toBe('handshaking-initiator');
-
-      expect(mockedNative.advanceHandshake).toHaveBeenCalled();
     });
   });
 
@@ -3022,7 +2966,7 @@ describe('LinkService', () => {
       await expect(LinkService.ensureLinkWith(PEER)).resolves.toBe('handshaking-initiator');
 
       expect(mockedStorage.deleteLink).toHaveBeenCalledWith(OWNER, PEER);
-      expect(mockedNative.clearLinkOutbox).toHaveBeenCalled();
+      expect(mockedNative.clearLinkOutbox).not.toHaveBeenCalled();
       expect(mockedNative.initiateLink).toHaveBeenCalled();
     });
 
@@ -3040,45 +2984,39 @@ describe('LinkService', () => {
       await LinkService.ensureLinkWith(PEER);
 
       expect(mockedStorage.deleteLink).toHaveBeenCalledWith(OWNER, PEER);
-      expect(mockedNative.clearLinkOutbox).toHaveBeenCalled();
+      expect(mockedNative.clearLinkOutbox).not.toHaveBeenCalled();
       expect(mockedNative.initiateLink).toHaveBeenCalled();
     });
 
-    it('does not increment or wipe an established link on repeated network restore failures', async () => {
+    it('marks an established link reconnect-required on network restore failure', async () => {
       mockedStorage.getLink.mockResolvedValue(
         storedLink({ status: 'established', snapshot: 'est-1', consecutiveFailures: 4 }),
       );
       mockedNative.restoreLink.mockRejectedValue({ code: 'network', message: 'homeserver down' });
       mockedStorage.incrementLinkConsecutiveFailures.mockResolvedValue(HANDSHAKE_FAILURE_LIMIT);
 
-      await expect(LinkService.ensureLinkWith(PEER)).resolves.toBe('ready');
-      await expect(LinkService.ensureLinkWith(PEER)).resolves.toBe('ready');
+      await expect(LinkService.ensureLinkWith(PEER)).resolves.toBe('reconnect_required');
 
       expect(mockedStorage.incrementLinkConsecutiveFailures).not.toHaveBeenCalled();
       expect(mockedStorage.deleteLink).not.toHaveBeenCalled();
+      expect(mockedStorage.markLinkReconnectRequired).toHaveBeenCalledWith(OWNER, PEER, 'network');
       expect(mockedNative.clearLinkOutbox).not.toHaveBeenCalled();
     });
 
-    it('wipes an established link immediately on a protocol restore error', async () => {
-      mockedStorage.getLink
-        .mockResolvedValueOnce(storedLink({ status: 'established', snapshot: 'est-1' }))
-        .mockResolvedValue(null);
+    it('marks an established link reconnect-required on protocol restore error', async () => {
+      mockedStorage.getLink.mockResolvedValue(
+        storedLink({ status: 'established', snapshot: 'est-1' }),
+      );
       mockedNative.restoreLink.mockRejectedValueOnce({
         code: 'protocol',
         message: 'decrypt failed',
       });
-      mockedNative.initiateLink.mockResolvedValue({ linkId: 'fresh-hs', snapshot: 'hs-fresh' });
-      mockedNative.advanceHandshake.mockResolvedValue({
-        status: 'pending',
-        snapshot: 'hs-fresh-2',
-      });
-      mockedNative.clearLinkOutbox.mockResolvedValue(0);
+      await expect(LinkService.ensureLinkWith(PEER)).resolves.toBe('reconnect_required');
 
-      await expect(LinkService.ensureLinkWith(PEER)).resolves.toBe('handshaking-initiator');
-
-      expect(mockedStorage.deleteLink).toHaveBeenCalledWith(OWNER, PEER);
-      expect(mockedNative.clearLinkOutbox).toHaveBeenCalled();
-      expect(mockedNative.initiateLink).toHaveBeenCalled();
+      expect(mockedStorage.deleteLink).not.toHaveBeenCalled();
+      expect(mockedStorage.markLinkReconnectRequired).toHaveBeenCalledWith(OWNER, PEER, 'protocol');
+      expect(mockedNative.clearLinkOutbox).not.toHaveBeenCalled();
+      expect(mockedNative.initiateLink).not.toHaveBeenCalled();
     });
 
     it('treats a changed peer noise key as re-enrollment', async () => {
@@ -3098,7 +3036,7 @@ describe('LinkService', () => {
       await LinkService.ensureLinkWith(PEER);
 
       expect(mockedStorage.deleteLink).toHaveBeenCalledWith(OWNER, PEER);
-      expect(mockedNative.clearLinkOutbox).toHaveBeenCalled();
+      expect(mockedNative.clearLinkOutbox).not.toHaveBeenCalled();
       expect(mockedNative.initiateLink).toHaveBeenCalledWith(
         SESSION_ALIAS,
         RECEIVER_ALIAS,

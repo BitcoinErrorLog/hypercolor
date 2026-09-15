@@ -19,6 +19,7 @@ import type {
   LinkMessageDirection,
   LinkReceiver,
   LinkReceiverInput,
+  LinkReconnectErrorCategory,
   LinkRecord,
   LinkRecordInput,
   LinkRole,
@@ -864,8 +865,9 @@ export const StorageService = {
         `INSERT INTO links
           (owner_pubky, peer_pubky, role, status, snapshot,
            remote_noise_public_key, local_receiver_path, remote_receiver_path,
-           consecutive_failures, last_seen_peer_marker_pk, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           consecutive_failures, reconnect_error_category, reconnect_required_at,
+           last_seen_peer_marker_pk, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(owner_pubky, peer_pubky) DO UPDATE SET
            role                    = excluded.role,
            status                  = excluded.status,
@@ -874,6 +876,8 @@ export const StorageService = {
            local_receiver_path     = excluded.local_receiver_path,
            remote_receiver_path    = excluded.remote_receiver_path,
            consecutive_failures    = excluded.consecutive_failures,
+           reconnect_error_category = excluded.reconnect_error_category,
+           reconnect_required_at   = excluded.reconnect_required_at,
            last_seen_peer_marker_pk = COALESCE(excluded.last_seen_peer_marker_pk, last_seen_peer_marker_pk),
            updated_at              = excluded.updated_at`,
         [
@@ -886,6 +890,8 @@ export const StorageService = {
           link.localReceiverPath,
           link.remoteReceiverPath,
           link.consecutiveFailures,
+          link.reconnectErrorCategory ?? null,
+          link.reconnectRequiredAt ?? null,
           link.lastSeenPeerMarkerPk ?? null,
           now(),
           now(),
@@ -1046,9 +1052,28 @@ export const StorageService = {
     await ownedWrite(ownerPubky, db => {
       db.executeSync(
         `UPDATE links
-         SET snapshot = ?, status = ?, consecutive_failures = 0, updated_at = ?
+         SET snapshot = ?, status = ?, consecutive_failures = 0,
+             reconnect_error_category = NULL, reconnect_required_at = NULL, updated_at = ?
          WHERE owner_pubky = ? AND peer_pubky = ?`,
         [snapshot, status, now(), ownerPubky, peerPubky],
+      );
+    });
+  },
+
+  async markLinkReconnectRequired(
+    ownerPubky: PubkyKey,
+    peerPubky: PubkyKey,
+    category: LinkReconnectErrorCategory,
+  ): Promise<void> {
+    await ownedWrite(ownerPubky, db => {
+      db.executeSync(
+        `UPDATE links
+         SET status = 'reconnect_required',
+             reconnect_error_category = ?,
+             reconnect_required_at = ?,
+             updated_at = ?
+         WHERE owner_pubky = ? AND peer_pubky = ?`,
+        [category, now(), now(), ownerPubky, peerPubky],
       );
     });
   },
@@ -1592,8 +1617,18 @@ export const StorageService = {
       for (const item of items) {
         db.executeSync(
           `INSERT OR IGNORE INTO link_stream_items
-            (id, owner_pubky, peer_pubky, kind, raw_json, received_at, processed, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, 0, ?)`,
+            (
+              id,
+              owner_pubky,
+              peer_pubky,
+              kind,
+              raw_json,
+              received_at,
+              processed,
+              processing_error_category,
+              created_at
+            )
+           VALUES (?, ?, ?, ?, ?, ?, 0, NULL, ?)`,
           [
             item.id,
             item.ownerPubky,
@@ -1622,13 +1657,21 @@ export const StorageService = {
     return (result.rows ?? []).map(rowToLinkStreamItem);
   },
 
-  async markLinkStreamItemProcessed(id: string): Promise<void> {
+  async markLinkStreamItemProcessed(
+    id: string,
+    processingErrorCategory: LinkReconnectErrorCategory | null = null,
+  ): Promise<void> {
     const db = await getDb();
     const owner = db.executeSync('SELECT owner_pubky FROM link_stream_items WHERE id = ?', [id])
       .rows?.[0]?.owner_pubky;
     if (typeof owner !== 'string' || owner.length === 0) return;
     await ownedWrite(owner, writeDb => {
-      writeDb.executeSync('UPDATE link_stream_items SET processed = 1 WHERE id = ?', [id]);
+      writeDb.executeSync(
+        `UPDATE link_stream_items
+         SET processed = 1, processing_error_category = ?
+         WHERE id = ?`,
+        [processingErrorCategory, id],
+      );
     });
   },
 
@@ -4230,6 +4273,16 @@ function rowToLink(row: any): LinkRecord {
     consecutiveFailures: row.consecutive_failures,
     lastSeenPeerMarkerPk:
       typeof row.last_seen_peer_marker_pk === 'string' ? row.last_seen_peer_marker_pk : null,
+    reconnectErrorCategory:
+      row.reconnect_error_category === 'network' ||
+      row.reconnect_error_category === 'protocol' ||
+      row.reconnect_error_category === 'unknown'
+        ? row.reconnect_error_category
+        : null,
+    reconnectRequiredAt:
+      row.reconnect_required_at === null || row.reconnect_required_at === undefined
+        ? null
+        : Number(row.reconnect_required_at),
     chatKindsV: Number(row.chat_kinds_v) >= 1 ? Math.floor(Number(row.chat_kinds_v)) : 0,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -4266,6 +4319,13 @@ function rowToLinkStreamItem(row: any): LinkStreamItem {
     rawJson: row.raw_json,
     receivedAt: row.received_at,
     processed: row.processed === 1,
+    processingErrorCategory:
+      row.processing_error_category === 'network' ||
+      row.processing_error_category === 'protocol' ||
+      row.processing_error_category === 'application' ||
+      row.processing_error_category === 'unknown'
+        ? row.processing_error_category
+        : null,
   };
 }
 

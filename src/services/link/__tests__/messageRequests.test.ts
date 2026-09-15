@@ -58,10 +58,12 @@ jest.mock('../../StorageService', () => ({
     upsertLinkReceiver: jest.fn(),
     getLinkReceiver: jest.fn(),
     upsertLink: jest.fn(),
+    upsertArchivedLink: jest.fn(),
     getLink: jest.fn(),
     getAllLinks: jest.fn(),
     recordLastSeenPeerMarkerPk: jest.fn(),
     updateLinkSnapshot: jest.fn(),
+    markLinkReconnectRequired: jest.fn(),
     getHandshakeBudget: jest.fn(),
     upsertHandshakeBudget: jest.fn(),
     clearHandshakeBudget: jest.fn(),
@@ -570,7 +572,7 @@ describe('LinkService message requests', () => {
 
     await LinkService.declineMessageRequest(PEER);
 
-    expect(mockedNative.clearLinkOutbox).toHaveBeenCalled();
+    expect(mockedNative.clearLinkOutbox).not.toHaveBeenCalled();
     expect(mockedStorage.deleteLink).toHaveBeenCalledWith(OWNER, PEER);
     expect(mockedStorage.deleteLinkStreamItemsForPeer).toHaveBeenCalledWith(OWNER, PEER);
     expect(mockedStorage.deleteLinkMessagesForPeer).toHaveBeenCalledWith(OWNER, PEER);
@@ -632,7 +634,7 @@ describe('LinkService message requests', () => {
     expect(mockedStorage.saveLinkMessage).not.toHaveBeenCalled();
     expect(mockedNative.receivePrivateMessages).not.toHaveBeenCalled();
     expect(mockedNative.probeInboundLink).not.toHaveBeenCalled();
-    expect(mockedNative.clearLinkOutbox).toHaveBeenCalled();
+    expect(mockedNative.clearLinkOutbox).not.toHaveBeenCalled();
   });
 
   it('refuses to accept a previously declined request', async () => {

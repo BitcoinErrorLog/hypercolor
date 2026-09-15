@@ -68,6 +68,10 @@ export const COPY = {
   queuedWaitingSubtitle: 'Waiting for the other person — retrying if they switched devices.',
   queuedStandbySubtitle: 'Not receiving on this device — tap Receive on this device to continue.',
   connectionChangedRetry: 'Connection changed — tap to retry',
+  reconnectRequired: 'Reconnect required',
+  reconnectUnavailable: 'Connection lost — re-linking will be available in the next update.',
+  reconnectFailed: 'Reconnect failed.',
+  restoring: 'Restoring…',
   standbyComposerNotice:
     "This device isn't receiving new chats. Receive on this device to start this conversation.",
   messagingUnavailable: 'Encrypted messaging is unavailable in this build.',
