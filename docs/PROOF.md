@@ -2,7 +2,7 @@
 
 Date: 2026-08-30
 Status: **required for M7**. M0–M6 implementation may stay shipped; a feature is not *proven* until the matching row below is green.
-Repo: `/Users/johncarvalho/work/hypercolor` (`BitcoinErrorLog/hypercolor`)
+Repo: `<repo>` (`BitcoinErrorLog/hypercolor`)
 Plan: `.cursor/plans/pubky_chat_app_plan_7137e0a5.plan.md` (M7)
 
 ## Org safety (including OpenCode/Kimi)
@@ -151,7 +151,7 @@ Debug signup uses `signupWithSecret` / `signinWithSecret` and `provisionHarnessR
 Tokens are single-use staging signup tokens. Never commit them. Identity secrets are optional 64-char hex; if omitted the app generates them and the flow copies the values from `debugSignupPubky` / `debugSignupSecretValue`.
 
 ```bash
-cd /Users/johncarvalho/work/hypercolor
+cd <repo>
 maestro test .maestro/p7-product.yaml \
   -e HOMESERVER_PUBKY='<staging homeserver pubky>' \
   -e SIGNUP_TOKEN_A='<single-use>' \

@@ -68,6 +68,26 @@ react {
  */
 def enableMinifyInReleaseBuilds = (findProperty('android.enableMinifyInReleaseBuilds') ?: false).toBoolean()
 
+def releaseKeystoreProperties = new Properties()
+def releaseKeystorePropertiesFile = rootProject.file('keystore.properties')
+if (releaseKeystorePropertiesFile.isFile()) {
+    releaseKeystorePropertiesFile.withInputStream { releaseKeystoreProperties.load(it) }
+}
+
+def releaseSigningValue = { String propertyName, String environmentName ->
+    releaseKeystoreProperties.getProperty(propertyName) ?: System.getenv(environmentName)
+}
+def releaseStoreFile = releaseSigningValue('storeFile', 'HYPERCOLOR_RELEASE_STORE_FILE')
+def releaseStorePassword = releaseSigningValue('storePassword', 'HYPERCOLOR_RELEASE_STORE_PASSWORD')
+def releaseKeyAlias = releaseSigningValue('keyAlias', 'HYPERCOLOR_RELEASE_KEY_ALIAS')
+def releaseKeyPassword = releaseSigningValue('keyPassword', 'HYPERCOLOR_RELEASE_KEY_PASSWORD')
+def releaseSigningConfigured = [releaseStoreFile, releaseStorePassword, releaseKeyAlias, releaseKeyPassword].every { it }
+if (!releaseSigningConfigured && gradle.startParameter.taskNames.any { it.endsWith(':assembleRelease') || it == 'assembleRelease' }) {
+    throw new GradleException(
+        'Release signing is not configured. Provide android/keystore.properties or all HYPERCOLOR_RELEASE_* environment variables; release builds never use the debug keystore.',
+    )
+}
+
 /**
  * The preferred build flavor of JavaScriptCore (JSC)
  *
@@ -92,8 +112,8 @@ android {
         applicationId "com.hypercolor"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0"
+        versionCode 2
+        versionName "1.0.1"
 
         buildConfigField "String", "REACT_NATIVE_RELEASE_LEVEL", "\"${findProperty('reactNativeReleaseLevel') ?: 'stable'}\""
     }
@@ -110,9 +130,15 @@ android {
             signingConfig signingConfigs.debug
         }
         release {
-            // Caution! In production, you need to generate your own keystore file.
-            // see https://reactnative.dev/docs/signed-apk-android.
-            signingConfig signingConfigs.debug
+            if (releaseSigningConfigured) {
+                signingConfigs.create('release') {
+                    storeFile file(releaseStoreFile)
+                    storePassword releaseStorePassword
+                    keyAlias releaseKeyAlias
+                    keyPassword releaseKeyPassword
+                }
+                signingConfig signingConfigs.release
+            }
             def enableShrinkResources = findProperty('android.enableShrinkResourcesInReleaseBuilds') ?: 'false'
             shrinkResources enableShrinkResources.toBoolean()
             minifyEnabled enableMinifyInReleaseBuilds
@@ -129,6 +155,23 @@ android {
     }
     androidResources {
         ignoreAssetsPattern '!.svn:!.git:!.ds_store:!*.scc:!CVS:!thumbs.db:!picasa.ini:!*~'
+    }
+}
+
+if (!releaseSigningConfigured) {
+    tasks.matching { it.name == 'assembleRelease' }.configureEach {
+        doFirst {
+            throw new GradleException(
+                'Release signing is not configured. Provide android/keystore.properties or all HYPERCOLOR_RELEASE_* environment variables; release builds never use the debug keystore.',
+            )
+        }
+    }
+    tasks.matching { it.name == 'preReleaseBuild' }.configureEach {
+        doFirst {
+            throw new GradleException(
+                'Release signing is not configured. Provide android/keystore.properties or all HYPERCOLOR_RELEASE_* environment variables; release builds never use the debug keystore.',
+            )
+        }
     }
 }
 
