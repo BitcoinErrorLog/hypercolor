@@ -562,7 +562,14 @@ export default function ThreadScreen({ route }: Props) {
       onUnsend={eventId => {
         void LinkService.unsendDm(participantPubky, eventId)
           .then(() => reloadEncrypted())
-          .catch(() => reloadEncrypted());
+          .catch(err => {
+            const sanitized = sanitizeError(
+              err instanceof Error ? err : COPY.couldNotDeleteMessage,
+              COPY.couldNotDeleteMessage,
+            );
+            Alert.alert(COPY.unsendMessage, sanitized.message);
+            return reloadEncrypted();
+          });
       }}
       onRetryConnection={() => {
         void (async () => {

@@ -17,6 +17,11 @@ export function TagPickerSheet({
   onPick: (label: string) => void;
 }) {
   const [word, setWord] = useState('');
+  const normalizedWord = normalizeChatTagLabel(word);
+  const wordError =
+    word.length > 0 && normalizedWord === null
+      ? 'Use 1–32 lowercase letters, numbers, or underscores.'
+      : null;
   const [emojiOpen, setEmojiOpen] = useState(false);
   if (!visible) return null;
   return (
@@ -46,23 +51,26 @@ export function TagPickerSheet({
           placeholderTextColor={color.textSecondary}
           autoCapitalize="none"
           autoCorrect={false}
+          accessibilityHint={wordError ?? undefined}
           style={styles.input}
         />
         <TouchableOpacity
           testID="tagPickerSubmitWord"
           accessibilityRole="button"
           accessibilityLabel={COPY.addTag}
+          accessibilityState={{ disabled: !normalizedWord }}
           hitSlop={HIT_SLOP_44}
           onPress={() => {
-            const label = normalizeChatTagLabel(word);
-            if (!label) return;
+            if (!normalizedWord) return;
             setWord('');
-            onPick(label);
+            onPick(normalizedWord);
           }}
-          style={[styles.submit, minHitStyle]}
+          disabled={!normalizedWord}
+          style={[styles.submit, !normalizedWord ? styles.submitDisabled : null, minHitStyle]}
         >
           <Text style={styles.submitText}>{COPY.addTag}</Text>
         </TouchableOpacity>
+        {wordError ? <Text style={styles.error}>{wordError}</Text> : null}
       </SheetChrome>
       <EmojiPickerSheet
         visible={emojiOpen}
@@ -100,4 +108,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   submitText: { color: color.textOnBrand, fontSize: typeRole.body.fontSize },
+  submitDisabled: { opacity: 0.5 },
+  error: { color: color.danger, fontSize: typeRole.caption.fontSize, marginBottom: space.md },
 });

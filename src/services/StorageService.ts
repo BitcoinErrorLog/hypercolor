@@ -1463,13 +1463,13 @@ export const StorageService = {
       beforeMs !== undefined
         ? db.executeSync(
             `SELECT * FROM link_messages
-             WHERE owner_pubky = ? AND conversation_id = ? AND sent_at < ?
+             WHERE owner_pubky = ? AND conversation_id = ? AND deleted = 0 AND sent_at < ?
              ORDER BY sent_at DESC LIMIT ?`,
             [ownerPubky, conversationId, beforeMs, limit],
           )
         : db.executeSync(
             `SELECT * FROM link_messages
-             WHERE owner_pubky = ? AND conversation_id = ?
+             WHERE owner_pubky = ? AND conversation_id = ? AND deleted = 0
              ORDER BY sent_at DESC LIMIT ?`,
             [ownerPubky, conversationId, limit],
           );

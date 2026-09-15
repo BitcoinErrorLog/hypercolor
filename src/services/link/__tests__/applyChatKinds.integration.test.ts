@@ -92,6 +92,32 @@ async function seedDm(conversationPeer: string, sender: string, eventId: string)
 }
 
 describe('applyChatKinds integration', () => {
+  it('processes an invalid stored tag without persisting a row', async () => {
+    const rawJson = JSON.stringify({
+      version: 1,
+      kind: CHAT_TAG_KIND,
+      event_id: TAG_EVENT,
+      sent_at: 20,
+      target_event_id: TARGET,
+      target_author_pubky: OWNER,
+      label: 'final-tag',
+      op: 'add',
+    });
+
+    await expect(
+      applyInboundTagOrReceipt({
+        ownerPubky: OWNER,
+        senderPubky: PEER,
+        rawJson,
+        peerTrust: 'accepted',
+        kindHint: CHAT_TAG_KIND,
+      }),
+    ).resolves.toBe('processed');
+    expect(await StorageService.listChatTagsForScope(OWNER, buildDmConversationId(PEER))).toEqual(
+      [],
+    );
+  });
+
   it('rejects a DM tag whose target lives in another thread', async () => {
     await seedDm(OTHER, OWNER, TARGET);
     const built = buildChatTagEnvelope({
@@ -472,10 +498,8 @@ describe('applyChatKinds integration', () => {
     expect(tomb?.body).toBe('');
     expect(JSON.parse(tomb?.rawJson ?? '{}').deleted).toBe(true);
     expect(
-      (
-        await StorageService.getLinkMessagesForConversation(OWNER, buildDmConversationId(PEER), 10)
-      )[0]?.body,
-    ).toBe('');
+      await StorageService.getLinkMessagesForConversation(OWNER, buildDmConversationId(PEER), 10),
+    ).toEqual([]);
     const stream = await StorageService.getUnprocessedLinkStreamItems(OWNER, PEER);
     expect(stream.every(row => !row.rawJson.includes('secret-body'))).toBe(true);
     expect(await StorageService.hasQueueItemForMessage(TARGET)).toBe(false);
@@ -553,10 +577,8 @@ describe('applyChatKinds integration', () => {
     expect(deleteCacheFiles).toHaveBeenCalledWith([`cache:${TARGET}`]);
     expect((await StorageService.getLinkMessageByEventId(OWNER, PEER, TARGET))?.deleted).toBe(true);
     expect(
-      (
-        await StorageService.getLinkMessagesForConversation(OWNER, buildDmConversationId(PEER), 10)
-      )[0]?.body,
-    ).toBe('');
+      await StorageService.getLinkMessagesForConversation(OWNER, buildDmConversationId(PEER), 10),
+    ).toEqual([]);
     const pendingCleanup =
       (await getDb()).executeSync(
         `SELECT owner_pubky, target_kind, target FROM pending_cleanup WHERE owner_pubky = ?`,
