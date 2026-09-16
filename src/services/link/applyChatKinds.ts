@@ -73,6 +73,15 @@ export async function applyInboundTagOrReceipt(input: {
         input.senderPubky,
       );
       if (!author || author === input.senderPubky) continue;
+      const target = envelope.channel_id
+        ? await StorageService.getGroupMessage(
+            input.ownerPubky,
+            envelope.channel_id,
+            author,
+            eventId,
+          )
+        : await StorageService.getLinkMessageByEventId(input.ownerPubky, author, eventId);
+      if (target?.deleted || target?.deliveryState === 'unsent') continue;
       await StorageService.applyMonotonicDelivery({
         ownerPubky: input.ownerPubky,
         authorPubky: author,

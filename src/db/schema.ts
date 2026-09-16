@@ -1010,7 +1010,7 @@ export const SCHEMA_V4_STATEMENTS: readonly string[] = [
     body            TEXT    NOT NULL,
     sent_at         INTEGER NOT NULL,
     received_at     INTEGER,
-    delivery_state  TEXT    NOT NULL,              -- 'sending' | 'sent' | 'delivered' | 'read' | 'failed'
+    delivery_state  TEXT    NOT NULL,              -- 'sending' | 'sent' | 'delivered' | 'read' | 'failed' | 'unsent'
     created_at      INTEGER NOT NULL,
     updated_at      INTEGER NOT NULL,
     PRIMARY KEY (owner_pubky, sender_pubky, kind, event_id)
@@ -1135,7 +1135,7 @@ export const SCHEMA_V3_STATEMENTS: readonly string[] = [
     body            TEXT    NOT NULL,
     sent_at         INTEGER NOT NULL,              -- sender wall clock (Unix ms)
     received_at     INTEGER,                       -- local arrival time; NULL for sent messages
-    delivery_state  TEXT    NOT NULL,              -- 'sending' | 'sent' | 'delivered' | 'read'
+    delivery_state  TEXT    NOT NULL,              -- 'sending' | 'sent' | 'delivered' | 'read' | 'failed' | 'unsent'
     created_at      INTEGER NOT NULL,
     updated_at      INTEGER NOT NULL
   )`,

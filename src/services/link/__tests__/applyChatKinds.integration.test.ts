@@ -365,6 +365,39 @@ describe('applyChatKinds integration', () => {
     expect(row?.deliveryState).toBe('sent');
   });
 
+  it('keeps an own tombstone terminal when a late receipt arrives', async () => {
+    await seedDm(PEER, OWNER, TARGET);
+    await StorageService.tombstoneLinkMessage({
+      ownerPubky: OWNER,
+      peerPubky: PEER,
+      senderPubky: OWNER,
+      eventId: TARGET,
+      redactedRawJson: JSON.stringify({
+        kind: CHAT_MESSAGE_KIND,
+        event_id: TARGET,
+        deleted: true,
+      }),
+    });
+    const built = buildChatReceiptEnvelope({
+      eventId: TAG_EVENT,
+      sentAt: 20,
+      status: 'read',
+      eventIds: [TARGET],
+    });
+
+    await applyInboundTagOrReceipt({
+      ownerPubky: OWNER,
+      senderPubky: PEER,
+      rawJson: built.json,
+      peerTrust: 'accepted',
+      kindHint: CHAT_RECEIPT_KIND,
+    });
+
+    expect(await StorageService.getLinkMessageByEventId(OWNER, OWNER, TARGET)).toEqual(
+      expect.objectContaining({ deleted: true, deliveryState: 'unsent' }),
+    );
+  });
+
   it('ignores a group receipt from a removed member', async () => {
     const channelId = buildPrivateChannelId(OWNER, TARGET);
     await StorageService.upsertGroupChannel({

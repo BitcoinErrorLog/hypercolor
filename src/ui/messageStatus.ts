@@ -20,11 +20,13 @@ export type OutboundStatusWord =
 export function formatDeliveryState(
   state: LinkDeliveryState | string,
   receiptsEnabled = true,
-): OutboundStatusWord {
+): OutboundStatusWord | null {
   if (!receiptsEnabled && (state === 'delivered' || state === 'read')) {
     return COPY.sent;
   }
   switch (state) {
+    case 'unsent':
+      return null;
     case 'sending':
       return COPY.queued;
     case 'failed':

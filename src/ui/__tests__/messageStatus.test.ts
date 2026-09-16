@@ -26,9 +26,10 @@ describe('formatDeliveryState', () => {
     expect(formatDeliveryState('read')).toBe(COPY.read);
     expect(formatDeliveryState('delivered', false)).toBe(COPY.sent);
     expect(formatDeliveryState('read', false)).toBe(COPY.sent);
+    expect(formatDeliveryState('unsent')).toBeNull();
     for (const state of ['sending', 'sent', 'failed', 'delivered', 'read', 'unknown']) {
       const label = formatDeliveryState(state);
-      expect(OUTBOUND_WORDS.has(label)).toBe(true);
+      expect(label === null || OUTBOUND_WORDS.has(label)).toBe(true);
     }
   });
 });
