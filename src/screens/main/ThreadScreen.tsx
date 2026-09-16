@@ -849,7 +849,7 @@ export function ThreadScreenContent({
                 record={item.record}
                 isMine={isMine}
                 onRetrySend={
-                  retryableEventIds.has(item.record.eventId)
+                  !item.message?.deleted && retryableEventIds.has(item.record.eventId)
                     ? () => onRetryFailed(item.record.eventId)
                     : undefined
                 }
@@ -867,21 +867,30 @@ export function ThreadScreenContent({
             mine={isMine}
             time={formatTime(item.message.sentAt)}
             status={
-              isMine ? formatDeliveryState(item.message.deliveryState, receiptsEnabled) : null
+              isMine && !item.message.deleted
+                ? formatDeliveryState(item.message.deliveryState, receiptsEnabled)
+                : null
             }
             statusTextVisible={
               isMine &&
+              !item.message.deleted &&
               receiptsEnabled &&
               (item.message.deliveryState === 'delivered' || item.message.deliveryState === 'read')
             }
-            failed={item.message.deliveryState === 'failed'}
+            failed={!item.message.deleted && item.message.deliveryState === 'failed'}
             grouped={grouped}
             lastInGroup={lastInGroup}
             showIncomingAvatar={!isMine && !grouped}
             senderName={identity.title}
             senderPubky={participantPubky}
-            accessibilityLabel={item.message.body}
-            copyBody={item.message.body}
+            accessibilityLabel={
+              item.message.deleted
+                ? isMine
+                  ? 'Message unsent'
+                  : 'Message deleted'
+                : item.message.body
+            }
+            copyBody={item.message.deleted ? null : item.message.body}
             onTag={() =>
               onRequestTag?.({
                 eventId: item.message.eventId,
@@ -911,10 +920,19 @@ export function ThreadScreenContent({
             }
           >
             <MarkdownText
-              source={item.message.body}
+              source={
+                item.message.deleted
+                  ? isMine
+                    ? 'Message unsent'
+                    : 'Message deleted'
+                  : item.message.body
+              }
               color={isMine ? color.textOnBrand : color.textPrimary}
             />
-            {isMine && item.message.deliveryState === 'failed' && !peerBlocked ? (
+            {isMine &&
+            !item.message.deleted &&
+            item.message.deliveryState === 'failed' &&
+            !peerBlocked ? (
               retryableEventIds.has(item.message.eventId) ? (
                 <TouchableOpacity
                   accessibilityRole="button"

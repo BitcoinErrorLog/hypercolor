@@ -661,9 +661,11 @@ export function ChannelScreenContent({
       const isMine = item.senderPubky === localPubky;
       const fanout = fanoutByEvent.get(item.eventId);
       const statusTextVisible =
-        isMine && !isPublic && fanout ? fanout.some(outcome => outcome.status !== 'sent') : false;
+        isMine && !isPublic && !item.deleted && fanout
+          ? fanout.some(outcome => outcome.status !== 'sent')
+          : false;
       const outboundLabel =
-        isMine && !isPublic
+        isMine && !isPublic && !item.deleted
           ? fanout && fanout.length > 0
             ? formatGroupFanoutAggregate(fanout, memberNames)
             : formatDeliveryState(item.deliveryState, receiptsEnabled)
@@ -688,7 +690,7 @@ export function ChannelScreenContent({
             time={formatTime(item.sentAt)}
             status={outboundLabel}
             statusTextVisible={statusTextVisible}
-            failed={item.deliveryState === 'failed'}
+            failed={!item.deleted && item.deliveryState === 'failed'}
             senderName={senderName}
             senderPubky={item.senderPubky}
             showIncomingAvatar={!isMine && !grouped}
@@ -712,7 +714,7 @@ export function ChannelScreenContent({
                 record={attachment}
                 isMine={isMine}
                 onRetrySend={
-                  retryableEventIds.has(attachment.eventId)
+                  !item.deleted && retryableEventIds.has(attachment.eventId)
                     ? () => onRetryFailed(attachment.eventId)
                     : undefined
                 }
@@ -724,7 +726,7 @@ export function ChannelScreenContent({
               />
             )}
             {item.editedAt ? <Text style={styles.time}>edited</Text> : null}
-            {isMine && !isPublic && item.deliveryState === 'failed' ? (
+            {isMine && !item.deleted && !isPublic && item.deliveryState === 'failed' ? (
               retryableEventIds.has(item.eventId) ? (
                 <TouchableOpacity
                   accessibilityRole="button"

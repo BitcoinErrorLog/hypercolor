@@ -419,7 +419,7 @@ export type LinkMessageDirection = 'sent' | 'received';
  * a native send attempt fails or when the retry queue permanently drops an
  * outbound item.
  */
-export type LinkDeliveryState = 'sending' | 'sent' | 'delivered' | 'read' | 'failed';
+export type LinkDeliveryState = 'sending' | 'sent' | 'delivered' | 'read' | 'failed' | 'unsent';
 
 // ─── Storage row shapes ─────────────────────────────────────────────────────
 

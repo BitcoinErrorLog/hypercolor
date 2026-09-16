@@ -1418,7 +1418,8 @@ export const StorageService = {
       db.executeSync(
         `UPDATE link_messages
          SET delivery_state = 'sent', updated_at = ?
-         WHERE owner_pubky = ? AND sender_pubky = ? AND kind = ? AND event_id = ?`,
+         WHERE owner_pubky = ? AND sender_pubky = ? AND kind = ? AND event_id = ?
+           AND deleted = 0 AND delivery_state != 'unsent'`,
         [ts, input.ownerPubky, input.senderPubky, input.kind, input.eventId],
       );
       db.executeSync(
@@ -3924,11 +3925,12 @@ export const StorageService = {
       const ts = now();
       if (input.channelId) {
         const row = db.executeSync(
-          `SELECT delivery_state FROM group_messages
+          `SELECT delivery_state, deleted FROM group_messages
            WHERE owner_pubky = ? AND channel_id = ? AND sender_pubky = ? AND event_id = ?
            LIMIT 1`,
           [input.ownerPubky, input.channelId, input.authorPubky, input.eventId],
         ).rows?.[0];
+        if (row && Number(row.deleted) === 1) return;
         const next = nextDeliveryState(row ? String(row.delivery_state) : null, input.status);
         if (!next) return;
         db.executeSync(
@@ -3939,11 +3941,12 @@ export const StorageService = {
         return;
       }
       const row = db.executeSync(
-        `SELECT delivery_state, kind FROM link_messages
+        `SELECT delivery_state, deleted, kind FROM link_messages
          WHERE owner_pubky = ? AND sender_pubky = ? AND event_id = ?
          LIMIT 1`,
         [input.ownerPubky, input.authorPubky, input.eventId],
       ).rows?.[0];
+      if (row && (Number(row.deleted) === 1 || String(row.delivery_state) === 'unsent')) return;
       const next = nextDeliveryState(row ? String(row.delivery_state) : null, input.status);
       if (!next) return;
       db.executeSync(
@@ -3968,9 +3971,23 @@ export const StorageService = {
       const ts = now();
       db.executeSync(
         `UPDATE link_messages
-         SET deleted = 1, body = ?, body_search = ?, raw_json = ?, updated_at = ?
+         SET deleted = 1,
+             delivery_state = CASE
+               WHEN sender_pubky = ? AND direction = 'sent' THEN 'unsent'
+               ELSE delivery_state
+             END,
+             body = ?, body_search = ?, raw_json = ?, updated_at = ?
          WHERE owner_pubky = ? AND sender_pubky = ? AND event_id = ?`,
-        ['', '', input.redactedRawJson, ts, input.ownerPubky, input.senderPubky, input.eventId],
+        [
+          input.ownerPubky,
+          '',
+          '',
+          input.redactedRawJson,
+          ts,
+          input.ownerPubky,
+          input.senderPubky,
+          input.eventId,
+        ],
       );
       const updated = Number(db.executeSync('SELECT changes() AS n').rows?.[0]?.n ?? 0) > 0;
       if (!updated) return false;
@@ -4042,6 +4059,8 @@ export type ChatTagRow = {
 
 function deliveryRank(state: string | null): number {
   switch (state) {
+    case 'unsent':
+      return 4;
     case 'sending':
       return 0;
     case 'sent':

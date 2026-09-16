@@ -248,7 +248,7 @@ describe('unsendDm with real SQLite storage', () => {
       await expect(LinkService.unsendDm(PEER, EVENT_ID)).resolves.toBeUndefined();
 
       expect(await StorageService.getLinkMessageByEventId(OWNER, OWNER, EVENT_ID)).toEqual(
-        expect.objectContaining({ deleted: true, body: '' }),
+        expect.objectContaining({ deleted: true, body: '', deliveryState: 'unsent' }),
       );
       expect(
         await StorageService.getLinkMessagesForConversation(OWNER, buildDmConversationId(PEER)),
@@ -265,7 +265,7 @@ describe('unsendDm with real SQLite storage', () => {
     expect(await StorageService.listDeliveryQueue()).toEqual([]);
 
     expect(await StorageService.getLinkMessageByEventId(OWNER, OWNER, EVENT_ID)).toEqual(
-      expect.objectContaining({ deleted: true, body: '' }),
+      expect.objectContaining({ deleted: true, body: '', deliveryState: 'unsent' }),
     );
     expect(await StorageService.getAttachment(OWNER, OWNER, EVENT_ID)).toEqual(
       expect.objectContaining({ resolveState: 'unavailable-from-backup', localCachePath: null }),
@@ -330,6 +330,57 @@ describe('unsendDm with real SQLite storage', () => {
     expect(await StorageService.listDeliveryQueue()).toEqual([]);
   });
 
+  it('does not recover a stale queued tombstone', async () => {
+    await StorageService.saveLinkMessage({
+      ownerPubky: OWNER,
+      eventId: EVENT_ID,
+      conversationId: buildDmConversationId(PEER),
+      peerPubky: PEER,
+      senderPubky: OWNER,
+      direction: 'sent',
+      kind: CHAT_MESSAGE_KIND,
+      rawJson: JSON.stringify({ kind: CHAT_MESSAGE_KIND, event_id: EVENT_ID, body: 'unsent' }),
+      body: 'unsent',
+      sentAt: NOW,
+      receivedAt: null,
+      deliveryState: 'sending',
+    });
+    await StorageService.tombstoneLinkMessage({
+      ownerPubky: OWNER,
+      peerPubky: PEER,
+      senderPubky: OWNER,
+      eventId: EVENT_ID,
+      redactedRawJson: JSON.stringify({
+        kind: CHAT_MESSAGE_KIND,
+        event_id: EVENT_ID,
+        deleted: true,
+      }),
+    });
+    await StorageService.enqueue({
+      id: 'stale-tombstone-queue',
+      messageId: EVENT_ID,
+      recipientPubky: PEER,
+      payload: JSON.stringify({
+        type: 'link.chat.message',
+        ownerPubky: OWNER,
+        peerPubky: PEER,
+        senderPubky: OWNER,
+        kind: CHAT_MESSAGE_KIND,
+        eventId: EVENT_ID,
+        rawJson: '{}',
+      }),
+      attempts: 0,
+      nextRetryAt: NOW,
+      createdAt: NOW,
+    });
+    mockedNative.sendPrivateMessageJson.mockClear();
+
+    await LinkService.recoverPendingSends();
+
+    expect(mockedNative.sendPrivateMessageJson).not.toHaveBeenCalled();
+    expect(await StorageService.listDeliveryQueue()).toHaveLength(1);
+  });
+
   it('still dispatches the queued delete when journaling cleanup fails', async () => {
     await seedAttachmentMessage();
     mockedKeyStore.deleteAttachmentSecret.mockResolvedValue(false);
@@ -378,6 +429,9 @@ describe('unsendDm with real SQLite storage', () => {
         deleted: true,
       }),
     });
+    expect(await StorageService.getLinkMessageByEventId(OWNER, OWNER, LATEST_EVENT_ID)).toEqual(
+      expect.objectContaining({ deleted: true, deliveryState: 'unsent' }),
+    );
     await StorageService.tombstoneLinkMessage({
       ownerPubky: OWNER,
       peerPubky: PEER,
@@ -389,6 +443,9 @@ describe('unsendDm with real SQLite storage', () => {
         deleted: true,
       }),
     });
+    expect(await StorageService.getLinkMessageByEventId(OWNER, PEER, RECEIVED_EVENT_ID)).toEqual(
+      expect.objectContaining({ deleted: true, deliveryState: 'sent' }),
+    );
 
     await expect(StorageService.listLinkConversations(OWNER)).resolves.toEqual([
       expect.objectContaining({
