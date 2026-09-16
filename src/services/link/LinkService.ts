@@ -781,50 +781,87 @@ export const LinkService = {
           ? await StorageService.getAttachment(owner, owner, eventId)
           : null;
       const attachmentCachePaths = attachment ? cachePathsForAttachment(attachment) : [];
-      if (target.kind === CHAT_ATTACHMENT_KIND) {
-        const deleted = await KeyStore.deleteAttachmentSecret(owner, owner, eventId);
-        if (deleted === false) {
-          throw new Error('Attachment key cleanup failed; message was not unsent');
-        }
-        if (attachment) {
-          try {
-            await deleteCacheFiles(attachmentCachePaths);
-          } catch {
-            await StorageService.journalAttachmentCacheCleanup(owner, attachmentCachePaths);
-          }
-        }
-      }
+      const attachmentKeyService =
+        target.kind === CHAT_ATTACHMENT_KIND
+          ? KeyStore.attachmentKeyService(owner, owner, eventId)
+          : undefined;
       const built = buildChatDeleteEnvelope({
         eventId: uuidv4(),
         sentAt: Date.now(),
         targetEventId: eventId,
       });
-      const redacted = JSON.stringify({
-        kind: target.kind === CHAT_ATTACHMENT_KIND ? CHAT_ATTACHMENT_KIND : CHAT_MESSAGE_KIND,
-        event_id: target.eventId,
-        sent_at: target.sentAt,
-        deleted: true,
-      });
-      await StorageService.tombstoneLinkMessage({
-        ownerPubky: owner,
-        peerPubky,
-        senderPubky: owner,
-        eventId,
-        redactedRawJson: redacted,
-      });
-      if (attachment) {
-        await StorageService.updateAttachmentResolve(owner, owner, eventId, {
-          resolveState: 'unavailable-from-backup',
-          localCachePath: null,
-        });
-      }
-      await dispatchControlPam(
+      const queueItem = queueItemForPeer(
         owner,
         peerPubky,
         built.envelope.event_id,
         built.json,
         CHAT_DELETE_KIND,
       );
+      const redacted = JSON.stringify({
+        kind: target.kind === CHAT_ATTACHMENT_KIND ? CHAT_ATTACHMENT_KIND : CHAT_MESSAGE_KIND,
+        event_id: target.eventId,
+        sent_at: target.sentAt,
+        deleted: true,
+      });
+      const tombstoned = await StorageService.tombstoneLinkMessage({
+        ownerPubky: owner,
+        peerPubky,
+        senderPubky: owner,
+        eventId,
+        redactedRawJson: redacted,
+        ...(attachmentKeyService ? { attachmentKeyService } : {}),
+        ...(attachment ? { attachmentCachePaths } : {}),
+        controlQueueItem: queueItem,
+      });
+      if (!tombstoned) {
+        throw new Error('Message is no longer available to unsend');
+      }
+      let cleanupError: unknown = null;
+      if (attachmentKeyService) {
+        let deleted = false;
+        try {
+          deleted = await KeyStore.deleteAttachmentSecret(owner, owner, eventId);
+        } catch {
+          deleted = false;
+        }
+        if (deleted) {
+          try {
+            await StorageService.completePendingCleanup(owner, 'keystore', attachmentKeyService);
+          } catch (err) {
+            cleanupError ??= err;
+          }
+        } else {
+          try {
+            await StorageService.journalAttachmentKeyCleanup(owner, attachmentKeyService);
+          } catch (err) {
+            cleanupError ??= err;
+          }
+        }
+      }
+      if (attachment) {
+        let cacheCleanupFailed = false;
+        try {
+          await deleteCacheFiles(attachmentCachePaths);
+          for (const path of attachmentCachePaths) {
+            try {
+              await StorageService.completePendingCleanup(owner, 'cache', path);
+            } catch (err) {
+              cleanupError ??= err;
+            }
+          }
+        } catch {
+          cacheCleanupFailed = true;
+        }
+        if (cacheCleanupFailed || cleanupError) {
+          try {
+            await StorageService.journalAttachmentCacheCleanup(owner, attachmentCachePaths);
+          } catch (err) {
+            cleanupError ??= err;
+          }
+        }
+      }
+      await dispatchPersistedControlPam(owner, peerPubky, queueItem, CHAT_DELETE_KIND, built.json);
+      if (cleanupError) throw cleanupError;
     });
   },
 
@@ -1356,7 +1393,7 @@ export const LinkService = {
   },
 
   /**
-   * Declines a message request: close the link, clear the outbox, drop
+   * Declines a message request: retire the local link state, drop
    * held stream/message rows, drop that sender's `group_deferred_events`
    * and `group_seen_events`, and persist `declined`.
    *
@@ -3394,11 +3431,11 @@ async function handleLinkFailure(
 
 /**
  * Protocol/decrypt error, or N consecutive handshake (not established-network)
- * failures: delete the link row, clear the outbox, and restart a fresh
- * handshake. If the peer marker's noise key changed, this is re-enrollment.
+ * failures: retire the local link state and restart a fresh handshake. If the
+ * peer marker's noise key changed, this is re-enrollment.
  *
  * Restarting is gated on the caller's {@link LinkIntent}. When the caller
- * forbids initiating (periodic tick, inbox sync) the wipe still happens and
+ * forbids initiating (periodic tick, inbox sync) local retirement still happens and
  * this returns `idle` or `error` — the row and its dead outbox are gone, so the
  * peer's own message 1 can be adopted on the next sync, and the user's next
  * send or thread open initiates. Nothing is left wedged; only the timer is
@@ -4579,6 +4616,19 @@ async function dispatchControlPamLocked(
   rawJson: string,
   kind: string,
 ): Promise<void> {
+  const item = queueItemForPeer(ownerPubky, peerPubky, eventId, rawJson, kind);
+  if (typeof StorageService.persistControlSendIntent !== 'function') return;
+  await StorageService.persistControlSendIntent({ ownerPubky, queueItem: item });
+  await dispatchPersistedControlPam(ownerPubky, peerPubky, item, kind, rawJson);
+}
+
+async function dispatchPersistedControlPam(
+  ownerPubky: PubkyKey,
+  peerPubky: PubkyKey,
+  item: DeliveryQueueItem,
+  kind: string,
+  rawJson: string,
+): Promise<void> {
   abortIfOwnerChanged(ownerPubky);
   let outcome: EnsureOutcome;
   try {
@@ -4587,13 +4637,16 @@ async function dispatchControlPamLocked(
     outcome = 'handshaking-initiator';
   }
   abortIfOwnerChanged(ownerPubky);
-  const item = queueItemForPeer(ownerPubky, peerPubky, eventId, rawJson, kind);
-  if (typeof StorageService.persistControlSendIntent !== 'function') return;
-  await StorageService.persistControlSendIntent({ ownerPubky, queueItem: item });
   if (outcome !== 'ready') return;
   try {
     const handle = requireEstablishedHandle(ownerPubky, peerPubky);
-    const wireJson = await wireJsonForNativeSend(kind, rawJson, ownerPubky, ownerPubky, eventId);
+    const wireJson = await wireJsonForNativeSend(
+      kind,
+      rawJson,
+      ownerPubky,
+      ownerPubky,
+      item.messageId,
+    );
     const { snapshot } = await PaykitLinkNative.sendPrivateMessageJson(handle, wireJson);
     await StorageService.finalizeControlSend({
       ownerPubky,

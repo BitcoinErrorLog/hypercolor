@@ -606,3 +606,23 @@ describe('KeyStore MMKV key migration', () => {
     expect(mockKeychainStore.get(MMKV_GENERATION_SERVICE)).toBe('v2-hkdf');
   });
 });
+
+describe('KeyStore attachment cleanup ownership', () => {
+  beforeEach(resetMocks);
+
+  it('rejects non-attachment and cross-owner service names', async () => {
+    const owner = 'a'.repeat(52);
+    const otherOwner = 'b'.repeat(52);
+    const { initKeyStore, deleteAttachmentSecretByService } = await freshKeyStore();
+    await initKeyStore();
+    const crossOwner = `hypercolor-attachment-key:${otherOwner}:sender:event`;
+    const unrelated = 'some-other-keystore-service';
+    mockKeychainStore.set(crossOwner, 'secret');
+    mockKeychainStore.set(unrelated, 'secret');
+
+    await expect(deleteAttachmentSecretByService(owner, crossOwner)).resolves.toBe(false);
+    await expect(deleteAttachmentSecretByService(owner, unrelated)).resolves.toBe(false);
+    expect(mockKeychainStore.has(crossOwner)).toBe(true);
+    expect(mockKeychainStore.has(unrelated)).toBe(true);
+  });
+});

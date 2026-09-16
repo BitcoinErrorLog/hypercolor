@@ -76,8 +76,14 @@ export function TagPickerSheet({
         visible={emojiOpen}
         onClose={() => setEmojiOpen(false)}
         onPick={glyph => {
+          const normalizedGlyph = normalizeChatTagLabel(glyph);
+          if (!normalizedGlyph) {
+            setWord(glyph);
+            setEmojiOpen(false);
+            return;
+          }
           setEmojiOpen(false);
-          onPick(glyph);
+          onPick(normalizedGlyph);
         }}
       />
     </>

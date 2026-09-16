@@ -9,7 +9,6 @@ const OUTBOUND_WORDS = new Set([
   COPY.offline,
   COPY.needsEnable,
   COPY.connectionChangedRetry,
-  COPY.reconnectRequired,
   COPY.reconnectUnavailable,
   COPY.restoring,
   COPY.delivered,

@@ -140,6 +140,15 @@ export async function applyInboundDelete(input: {
   }
   if (target.senderPubky !== input.senderPubky) return 'rejected';
   if (isPaykitPaymentKind(target.kind)) return 'rejected';
+  const attachment =
+    target.kind === CHAT_ATTACHMENT_KIND
+      ? await StorageService.getAttachment(input.ownerPubky, input.senderPubky, target.eventId)
+      : null;
+  const attachmentKeyService =
+    target.kind === CHAT_ATTACHMENT_KIND
+      ? KeyStore.attachmentKeyService(input.ownerPubky, input.senderPubky, target.eventId)
+      : undefined;
+  const attachmentCachePaths = attachment ? cachePathsForAttachment(attachment) : [];
   const redacted = JSON.stringify({
     kind: target.kind === CHAT_ATTACHMENT_KIND ? CHAT_ATTACHMENT_KIND : CHAT_MESSAGE_KIND,
     event_id: target.eventId,
@@ -152,6 +161,8 @@ export async function applyInboundDelete(input: {
     senderPubky: input.senderPubky,
     eventId: target.eventId,
     redactedRawJson: redacted,
+    ...(attachmentKeyService ? { attachmentKeyService } : {}),
+    ...(attachment ? { attachmentCachePaths } : {}),
   });
   if (!tombstoned) {
     await StorageService.savePendingChatDelete({
@@ -169,11 +180,6 @@ export async function applyInboundDelete(input: {
     return 'deferred';
   }
   if (target.kind === CHAT_ATTACHMENT_KIND) {
-    const keyService = KeyStore.attachmentKeyService(
-      input.ownerPubky,
-      input.senderPubky,
-      target.eventId,
-    );
     let keyDeleted = false;
     try {
       keyDeleted = await KeyStore.deleteAttachmentSecret(
@@ -185,28 +191,26 @@ export async function applyInboundDelete(input: {
       keyDeleted = false;
     }
     if (!keyDeleted) {
-      await StorageService.journalAttachmentKeyCleanup(input.ownerPubky, keyService);
+      await StorageService.journalAttachmentKeyCleanup(input.ownerPubky, attachmentKeyService!);
+    } else if (typeof StorageService.completePendingCleanup === 'function') {
+      await StorageService.completePendingCleanup(
+        input.ownerPubky,
+        'keystore',
+        attachmentKeyService!,
+      );
     }
-    const attachment = await StorageService.getAttachment(
-      input.ownerPubky,
-      input.senderPubky,
-      target.eventId,
-    );
     if (attachment) {
       const paths = cachePathsForAttachment(attachment);
       try {
         await deleteCacheFiles(paths);
+        if (typeof StorageService.completePendingCleanup === 'function') {
+          for (const path of paths) {
+            await StorageService.completePendingCleanup(input.ownerPubky, 'cache', path);
+          }
+        }
       } catch {
         await StorageService.journalAttachmentCacheCleanup(input.ownerPubky, paths);
       }
-    }
-    if (typeof StorageService.updateAttachmentResolve === 'function') {
-      await StorageService.updateAttachmentResolve(
-        input.ownerPubky,
-        input.senderPubky,
-        target.eventId,
-        { resolveState: 'unavailable-from-backup', localCachePath: null },
-      );
     }
   }
   return 'applied';

@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { v4 as uuidv4 } from 'uuid';
 import {
   HANDSHAKE_ADVANCE_BATCH_LIMIT,
@@ -217,6 +219,8 @@ jest.mock('../../StorageService', () => ({
     updateAttachmentResolve: jest.fn(),
     updateAttachmentDelivery: jest.fn(),
     journalAttachmentCacheCleanup: jest.fn(),
+    journalAttachmentKeyCleanup: jest.fn(),
+    completePendingCleanup: jest.fn(),
   },
 }));
 
@@ -269,6 +273,10 @@ jest.mock('../../KeyStore', () => ({
     getAttachmentSecret: jest.fn(),
     deleteAttachmentSecrets: jest.fn(),
     deleteAttachmentSecret: jest.fn(),
+    attachmentKeyService: jest.fn(
+      (owner: string, sender: string, eventId: string) =>
+        `hypercolor-attachment-key:${owner}:${sender}:${eventId}`,
+    ),
   },
 }));
 
@@ -482,6 +490,11 @@ function expectedJson(eventId = EVENT_ID, body = 'hello'): string {
 }
 
 describe('LinkService', () => {
+  it('keeps native outbox clearing out of local link recovery', () => {
+    const source = readFileSync(resolve(__dirname, '../LinkService.ts'), 'utf8');
+    expect(source).not.toContain('clearLinkOutbox(');
+  });
+
   beforeEach(async () => {
     jest.resetAllMocks();
     resetLinkServiceHarnessState();
@@ -507,6 +520,10 @@ describe('LinkService', () => {
     });
     mockedKeyStore.getPubky.mockReturnValue(OWNER);
     mockedKeyStore.isInitialized.mockReturnValue(true);
+    mockedKeyStore.attachmentKeyService.mockImplementation(
+      (owner: string, sender: string, eventId: string) =>
+        `hypercolor-attachment-key:${owner}:${sender}:${eventId}`,
+    );
     mockedKeyStore.getLinkSession.mockReturnValue(null);
     mockedKeyStore.setLinkSession.mockImplementation((alias: string) => {
       mockedKeyStore.getLinkSession.mockReturnValue(alias);
@@ -550,6 +567,9 @@ describe('LinkService', () => {
     mockedStorage.listPaymentRequestsWithPendingEvent.mockResolvedValue([]);
     mockedStorage.retryPendingCleanup.mockResolvedValue(undefined);
     mockedStorage.journalAttachmentCacheCleanup.mockResolvedValue(undefined);
+    mockedStorage.journalAttachmentKeyCleanup.mockResolvedValue(undefined);
+    mockedStorage.completePendingCleanup.mockResolvedValue(undefined);
+    mockedStorage.tombstoneLinkMessage.mockResolvedValue(true);
     mockedStorage.markGroupEventSeen.mockResolvedValue(undefined);
     mockedStorage.hasLinkMessage.mockResolvedValue(false);
     mockedStorage.getUnprocessedLinkStreamItems.mockResolvedValue([]);
@@ -5156,49 +5176,53 @@ describe('LinkService', () => {
           peerPubky: PEER,
           senderPubky: OWNER,
           eventId: EVENT_ID,
+          attachmentKeyService: `hypercolor-attachment-key:${OWNER}:${OWNER}:${EVENT_ID}`,
+          attachmentCachePaths: paths,
         }),
       );
-      expect(mockedStorage.updateAttachmentResolve).toHaveBeenCalledWith(OWNER, OWNER, EVENT_ID, {
-        resolveState: 'unavailable-from-backup',
-        localCachePath: null,
-      });
-      expect(mockedStorage.persistControlSendIntent).toHaveBeenCalledWith(
+      expect(mockedStorage.tombstoneLinkMessage.mock.invocationCallOrder[0]).toBeLessThan(
+        mockedKeyStore.deleteAttachmentSecret.mock.invocationCallOrder[0]!,
+      );
+      expect(mockedKeyStore.deleteAttachmentSecret.mock.invocationCallOrder[0]!).toBeLessThan(
+        jest.mocked(deleteCacheFiles).mock.invocationCallOrder[0]!,
+      );
+      expect(mockedStorage.tombstoneLinkMessage).toHaveBeenCalledWith(
         expect.objectContaining({
-          ownerPubky: OWNER,
-          queueItem: expect.objectContaining({
+          controlQueueItem: expect.objectContaining({
             payload: expect.stringMatching(/"kind":"chat\.delete\.v0"/),
           }),
         }),
       );
     });
 
-    it('aborts before tombstone when attachment key deletion fails', async () => {
+    it('tombstones before journaling attachment key cleanup failure', async () => {
       givenAttachmentMessage();
       mockedKeyStore.deleteAttachmentSecret.mockResolvedValue(false);
 
-      await expect(LinkService.unsendDm(PEER, EVENT_ID)).rejects.toThrow(
-        'Attachment key cleanup failed; message was not unsent',
-      );
+      await expect(LinkService.unsendDm(PEER, EVENT_ID)).resolves.toBeUndefined();
 
-      expect(deleteCacheFiles).not.toHaveBeenCalled();
+      expect(deleteCacheFiles).toHaveBeenCalled();
       expect(mockedStorage.journalAttachmentCacheCleanup).not.toHaveBeenCalled();
-      expect(mockedStorage.tombstoneLinkMessage).not.toHaveBeenCalled();
+      expect(mockedStorage.tombstoneLinkMessage).toHaveBeenCalled();
+      expect(mockedKeyStore.deleteAttachmentSecret).toHaveBeenCalledWith(OWNER, OWNER, EVENT_ID);
+      expect(mockedStorage.journalAttachmentKeyCleanup).toHaveBeenCalledWith(
+        OWNER,
+        `hypercolor-attachment-key:${OWNER}:${OWNER}:${EVENT_ID}`,
+      );
       expect(mockedStorage.updateAttachmentResolve).not.toHaveBeenCalled();
       expect(mockedStorage.persistControlSendIntent).not.toHaveBeenCalled();
     });
 
-    it('deletes an attachment key without a row and aborts before tombstone', async () => {
+    it('attempts key deletion even without a local attachment row', async () => {
       givenAttachmentMessage();
       mockedStorage.getAttachment.mockResolvedValue(null);
       mockedKeyStore.deleteAttachmentSecret.mockResolvedValue(false);
 
-      await expect(LinkService.unsendDm(PEER, EVENT_ID)).rejects.toThrow(
-        'Attachment key cleanup failed; message was not unsent',
-      );
+      await expect(LinkService.unsendDm(PEER, EVENT_ID)).resolves.toBeUndefined();
 
       expect(mockedKeyStore.deleteAttachmentSecret).toHaveBeenCalledWith(OWNER, OWNER, EVENT_ID);
       expect(deleteCacheFiles).not.toHaveBeenCalled();
-      expect(mockedStorage.tombstoneLinkMessage).not.toHaveBeenCalled();
+      expect(mockedStorage.tombstoneLinkMessage).toHaveBeenCalled();
       expect(mockedStorage.persistControlSendIntent).not.toHaveBeenCalled();
     });
 
@@ -5208,19 +5232,15 @@ describe('LinkService', () => {
       mockedKeyStore.deleteAttachmentSecret.mockResolvedValue(true);
       mockedStorage.tombstoneLinkMessage.mockResolvedValue(false);
 
-      await expect(LinkService.unsendDm(PEER, EVENT_ID)).resolves.toBeUndefined();
-
-      expect(mockedStorage.updateAttachmentResolve).toHaveBeenCalledWith(OWNER, OWNER, EVENT_ID, {
-        resolveState: 'unavailable-from-backup',
-        localCachePath: null,
-      });
-      expect(mockedStorage.persistControlSendIntent).toHaveBeenCalledWith(
-        expect.objectContaining({
-          queueItem: expect.objectContaining({
-            payload: expect.stringMatching(/"kind":"chat\.delete\.v0"/),
-          }),
-        }),
+      await expect(LinkService.unsendDm(PEER, EVENT_ID)).rejects.toThrow(
+        'Message is no longer available to unsend',
       );
+
+      expect(mockedStorage.updateAttachmentResolve).not.toHaveBeenCalled();
+      expect(mockedStorage.persistControlSendIntent).not.toHaveBeenCalled();
+      expect(mockedKeyStore.deleteAttachmentSecret).not.toHaveBeenCalled();
+      expect(deleteCacheFiles).not.toHaveBeenCalled();
+      expect(mockedNative.sendPrivateMessageJson).not.toHaveBeenCalled();
     });
   });
 

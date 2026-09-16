@@ -795,6 +795,7 @@ export async function deleteAttachmentSecretByService(
   ownerPubky: string,
   service: string,
 ): Promise<boolean> {
+  if (!service.startsWith(`${ATTACHMENT_KEY_SERVICE_PREFIX}:${ownerPubky}:`)) return false;
   requireStore('deleteAttachmentSecretByService');
   try {
     await Keychain.resetGenericPassword({ service });

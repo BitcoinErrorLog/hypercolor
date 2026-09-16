@@ -5,28 +5,30 @@ import {
   type TipEndpointRecord,
 } from '../../types/payment';
 import {
-  MAINNET_BOLT11_20U,
-  MAINNET_BOLT11_20U_BTC,
-  MAINNET_BOLT11_20U_HASH,
   MAINNET_BOLT11_AMOUNTLESS,
+  MAINNET_BOLT11_SPEC_2500U,
   MAINNET_P2TR,
 } from '../../services/payments/__tests__/bolt11Vectors';
 import { formatPaymentDisplayText } from '../../utils/displaySanitize';
+import { decodeBolt11Invoice } from '../../utils/bolt11';
 import { PAYMENT_COMPOSE_DEFAULT_AMOUNT, mapPaymentReview } from '../paymentReview';
 
 const PEER = 'b'.repeat(52);
+const PAYMENT_REVIEW_BOLT11 = MAINNET_BOLT11_SPEC_2500U;
+const PAYMENT_REVIEW_AMOUNT_BTC = '0.0025';
+const PAYMENT_REVIEW_PAYMENT_HASH = decodeBolt11Invoice(PAYMENT_REVIEW_BOLT11).paymentHash;
 
 function endpoint(partial: Partial<TipEndpointRecord> = {}): TipEndpointRecord {
   return {
     ownerPubky: 'a'.repeat(52),
     peerPubky: PEER,
     identifier: ENDPOINT_LIGHTNING_BOLT11,
-    payload: MAINNET_BOLT11_20U,
+    payload: PAYMENT_REVIEW_BOLT11,
     updatedAt: 1,
     validationStatus: 'valid',
-    invoiceAmount: MAINNET_BOLT11_20U_BTC,
+    invoiceAmount: PAYMENT_REVIEW_AMOUNT_BTC,
     invoiceExpiresAt: Date.now() + 60_000,
-    paymentHash: MAINNET_BOLT11_20U_HASH,
+    paymentHash: PAYMENT_REVIEW_PAYMENT_HASH,
     ...partial,
   };
 }
@@ -53,14 +55,14 @@ describe('mapPaymentReview', () => {
     const dest = endpoint();
     const view = mapPaymentReview({
       ...BASE,
-      requestAmountBtc: MAINNET_BOLT11_20U_BTC,
+      requestAmountBtc: PAYMENT_REVIEW_AMOUNT_BTC,
       endpoint: dest,
       destinations: [dest],
     });
     expect(view.recipientTitle).toBe('Ada');
     expect(view.recipientPubky).toBe(PEER);
-    expect(view.amountText).toContain(MAINNET_BOLT11_20U_BTC);
-    expect(view.invoiceAmountText).toContain(MAINNET_BOLT11_20U_BTC);
+    expect(view.amountText).toContain(PAYMENT_REVIEW_AMOUNT_BTC);
+    expect(view.invoiceAmountText).toContain(PAYMENT_REVIEW_AMOUNT_BTC);
     expect(view.referenceText).toBe(formatPaymentDisplayText('invoice-1'));
     expect(view.uri).toMatch(/^lightning:/);
     expect(view.networkText).toBe(COPY.networkLightningMainnet);
@@ -68,7 +70,7 @@ describe('mapPaymentReview', () => {
     expect(view.primaryAction).toBe('open');
     expect(view.primaryEnabled).toBe(true);
     expect(view.primaryOutline).toBe(false);
-    expect(view.paymentHash).toBe(MAINNET_BOLT11_20U_HASH);
+    expect(view.paymentHash).toBe(PAYMENT_REVIEW_PAYMENT_HASH);
   });
 
   it('keeps the primary enabled but outlined on an amount mismatch and still exposes the hash', () => {
@@ -86,14 +88,14 @@ describe('mapPaymentReview', () => {
     expect(view.primaryEnabled).toBe(true);
     expect(view.primaryOutline).toBe(true);
     expect(view.uri).toMatch(/^lightning:/);
-    expect(view.paymentHash).toBe(MAINNET_BOLT11_20U_HASH);
+    expect(view.paymentHash).toBe(PAYMENT_REVIEW_PAYMENT_HASH);
   });
 
   it('does not flag numeric-equivalent amounts as a mismatch', () => {
     const dest = endpoint();
     const view = mapPaymentReview({
       ...BASE,
-      requestAmountBtc: '0.000020',
+      requestAmountBtc: '0.002500',
       endpoint: dest,
       destinations: [dest],
     });
@@ -141,7 +143,7 @@ describe('mapPaymentReview', () => {
     const dest = endpoint();
     const view = mapPaymentReview({
       ...BASE,
-      requestAmountBtc: MAINNET_BOLT11_20U_BTC,
+      requestAmountBtc: PAYMENT_REVIEW_AMOUNT_BTC,
       endpoint: dest,
       destinations: [dest],
       walletUnavailable: true,
@@ -159,7 +161,7 @@ describe('mapPaymentReview', () => {
     const dest = endpoint();
     const view = mapPaymentReview({
       ...BASE,
-      requestAmountBtc: MAINNET_BOLT11_20U_BTC,
+      requestAmountBtc: PAYMENT_REVIEW_AMOUNT_BTC,
       endpoint: dest,
       destinations: [dest],
       walletUnavailable: false,
@@ -296,7 +298,7 @@ describe('mapPaymentReview', () => {
     const raw = 'pay \u202Eevil\u202C invoice';
     const view = mapPaymentReview({
       ...BASE,
-      requestAmountBtc: MAINNET_BOLT11_20U_BTC,
+      requestAmountBtc: PAYMENT_REVIEW_AMOUNT_BTC,
       reference: raw,
       endpoint: dest,
       destinations: [dest],

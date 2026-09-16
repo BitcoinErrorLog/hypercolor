@@ -7,6 +7,7 @@ import {
   parseChatTagV0,
   parseChatDeleteV0,
   rejectLwwSentAtSkew,
+  isEmojiGraphemeLabel,
   serializedUtf8Bytes,
 } from '../chatKindValidation';
 import { CHAT_RECEIPT_KIND, CHAT_TAG_KIND, LINK_MESSAGE_MAX_BYTES } from '../link';
@@ -184,5 +185,23 @@ describe('chat.tag.v0 / chat.receipt.v0 spec vectors', () => {
       eventIds: [b, a, a],
     });
     expect(built.envelope.event_ids).toEqual([a, b]);
+  });
+
+  it('accepts supported multi-codepoint emoji when Segmenter is unavailable', () => {
+    const segmenter = Intl.Segmenter;
+    Object.defineProperty(Intl, 'Segmenter', { configurable: true, value: undefined });
+    try {
+      expect(['👍', '❤️', '👨‍👩‍👧‍👦', '🏳️‍🌈', '🇺🇸', '🏴󠁧󠁢󠁳󠁣󠁴󠁿'].map(isEmojiGraphemeLabel)).toEqual([
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+      ]);
+      expect(['👍👍', 'hello', '👨‍👩‍👧‍👦x'].map(isEmojiGraphemeLabel)).toEqual([false, false, false]);
+    } finally {
+      Object.defineProperty(Intl, 'Segmenter', { configurable: true, value: segmenter });
+    }
   });
 });

@@ -120,19 +120,35 @@ export function isChatKindPubky(value: string): boolean {
 }
 
 function graphemeCount(value: string): number {
-  if (typeof Intl !== 'undefined' && 'Segmenter' in Intl) {
+  if (typeof Intl !== 'undefined' && typeof Intl.Segmenter === 'function') {
     return [...new Intl.Segmenter('en', { granularity: 'grapheme' }).segment(value)].length;
   }
   return Array.from(value).length;
 }
 
+const EMOJI_COMPONENT = String.raw`\p{Extended_Pictographic}(?:\uFE0F|\p{Emoji_Modifier})?`;
+const EMOJI_SEQUENCE = new RegExp(
+  String.raw`^(?:` +
+    String.raw`\p{Regional_Indicator}{2}|` +
+    String.raw`\u{1F3F4}(?:[\u{E0020}-\u{E007E}])+\u{E007F}|` +
+    String.raw`${EMOJI_COMPONENT}(?:\u200D${EMOJI_COMPONENT})*` +
+    String.raw`)$`,
+  'u',
+);
+
 export function isEmojiGraphemeLabel(value: string): boolean {
+  if (typeof Intl === 'undefined' || typeof Intl.Segmenter !== 'function') {
+    return EMOJI_SEQUENCE.test(value);
+  }
   if (graphemeCount(value) !== 1) return false;
   if (WORD_LABEL.test(value)) return false;
   return /\p{Extended_Pictographic}|\p{Emoji_Presentation}/u.test(value);
 }
 
-/** NFC-trim; one emoji grapheme or `/^[a-z0-9_]{1,32}$/`; UTF-8 ≤ 32. */
+/** NFC-trim; one emoji grapheme or `/^[a-z0-9_]{1,32}$/`; UTF-8 ≤ 32.
+ * Without `Intl.Segmenter`, the conservative fallback accepts only emoji
+ * sequences made from pictographs, ZWJ, variation selectors, skin tones,
+ * regional indicators, or subdivision tags. */
 export function normalizeChatTagLabel(raw: unknown): string | null {
   if (typeof raw !== 'string') return null;
   const label = raw.normalize('NFC').trim();

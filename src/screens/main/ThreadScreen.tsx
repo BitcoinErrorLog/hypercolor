@@ -576,7 +576,7 @@ export default function ThreadScreen({ route }: Props) {
           try {
             await LinkService.retryPeerSends(participantPubky);
           } catch {
-            Alert.alert(COPY.reconnectRequired, COPY.reconnectFailed);
+            Alert.alert(COPY.retrySendsFailedTitle, COPY.retrySendsFailed);
           }
           await reloadEncrypted();
         })();

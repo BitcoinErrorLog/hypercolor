@@ -10,6 +10,7 @@ jest.mock('../../KeyStore', () => ({
     deleteAttachmentSecrets: jest.fn().mockResolvedValue([]),
     clearAttachmentSecretsForOwner: jest.fn().mockResolvedValue([]),
     deleteAttachmentSecret: jest.fn().mockResolvedValue(true),
+    deleteAttachmentSecretByService: jest.fn().mockResolvedValue(true),
     attachmentKeyService: (owner: string, sender: string, eventId: string) =>
       `hypercolor-attachment-key:${owner}:${sender}:${eventId}`,
   },
@@ -509,7 +510,7 @@ describe('applyChatKinds integration', () => {
     expect(backed?.rawJson.includes('secret-body')).toBe(false);
   });
 
-  it('journals a failed attachment key deletion after tombstoning and cleans its cache', async () => {
+  it('journals failed attachment cleanup after tombstoning and sweeps it on startup', async () => {
     const attachmentPath = `pubky://${PEER}/pub/hypercolor.app/v1/attachments/${TARGET}`;
     await StorageService.saveLinkMessage({
       ownerPubky: OWNER,
@@ -557,6 +558,7 @@ describe('applyChatKinds integration', () => {
     jest
       .mocked(KeyStore.deleteAttachmentSecret)
       .mockRejectedValueOnce(new Error('keystore unavailable'));
+    jest.mocked(deleteCacheFiles).mockRejectedValueOnce(new Error('cache unavailable'));
 
     const result = await applyInboundDelete({
       ownerPubky: OWNER,
@@ -584,13 +586,18 @@ describe('applyChatKinds integration', () => {
         `SELECT owner_pubky, target_kind, target FROM pending_cleanup WHERE owner_pubky = ?`,
         [OWNER],
       ).rows ?? [];
-    expect(
-      pendingCleanup[0] as { owner_pubky: string; target_kind: string; target: string },
-    ).toEqual({
-      owner_pubky: OWNER,
-      target_kind: 'keystore',
-      target: `hypercolor-attachment-key:${OWNER}:${PEER}:${TARGET}`,
-    });
+    expect(pendingCleanup).toEqual(
+      expect.arrayContaining([
+        {
+          owner_pubky: OWNER,
+          target_kind: 'keystore',
+          target: `hypercolor-attachment-key:${OWNER}:${PEER}:${TARGET}`,
+        },
+        { owner_pubky: OWNER, target_kind: 'cache', target: `cache:${TARGET}` },
+      ]),
+    );
+    await StorageService.retryPendingCleanup();
+    expect((await getDb()).executeSync('SELECT * FROM pending_cleanup').rows ?? []).toEqual([]);
     paintOwner(OTHER);
     await expect(
       StorageService.journalAttachmentKeyCleanup(
@@ -602,7 +609,7 @@ describe('applyChatKinds integration', () => {
       (await getDb()).executeSync(`SELECT target FROM pending_cleanup WHERE owner_pubky = ?`, [
         OWNER,
       ]).rows,
-    ).toEqual([{ target: `hypercolor-attachment-key:${OWNER}:${PEER}:${TARGET}` }]);
+    ).toEqual([]);
   });
 
   it('keeps successful attachment key deletion idempotent without journaling', async () => {

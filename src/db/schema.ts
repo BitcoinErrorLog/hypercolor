@@ -893,7 +893,7 @@ export const SCHEMA_V6_STATEMENTS: readonly string[] = [
  * `message_requests` is the WoT gate: inbound links from peers who are not
  * mutual/following and who are below the trust threshold sit here as
  * pending until the user accepts (promote to a normal conversation) or
- * declines (wipe the link + clear the outbox).
+ * declines (retire the local link state).
  *
  * Superseded by v6 for the contacts primary key and the threads FK.
  */

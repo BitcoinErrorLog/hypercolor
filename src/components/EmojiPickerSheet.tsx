@@ -5,6 +5,7 @@ import { HIT_SLOP_44 } from '../ui/hitTarget';
 import { color, measure, radius, space, typeRole } from '../theme';
 import { COPY } from '../copy/uxCopy';
 import { SheetChrome } from '../ui/primitives/SheetChrome';
+import { normalizeChatTagLabel } from '../types/chatKindValidation';
 
 export function EmojiPickerSheet({
   visible,
@@ -18,8 +19,9 @@ export function EmojiPickerSheet({
   const [query, setQuery] = useState('');
   const items = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return BUNDLED_EMOJI;
-    return BUNDLED_EMOJI.filter(entry => entry.names.some(name => name.includes(q)));
+    const validEmoji = BUNDLED_EMOJI.filter(entry => normalizeChatTagLabel(entry.glyph) !== null);
+    if (!q) return validEmoji;
+    return validEmoji.filter(entry => entry.names.some(name => name.includes(q)));
   }, [query]);
 
   return (

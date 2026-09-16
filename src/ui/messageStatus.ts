@@ -9,7 +9,6 @@ export type OutboundStatusWord =
   | typeof COPY.offline
   | typeof COPY.needsEnable
   | typeof COPY.connectionChangedRetry
-  | typeof COPY.reconnectRequired
   | typeof COPY.reconnectUnavailable
   | typeof COPY.restoring
   | typeof COPY.delivered

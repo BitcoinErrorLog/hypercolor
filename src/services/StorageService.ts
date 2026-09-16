@@ -347,6 +347,7 @@ export const StorageService = {
          FROM link_messages
         WHERE owner_pubky = ?
           AND kind IN ('chat.message.v0', 'pubky_app.dm.v0')
+          AND deleted = 0
           AND body_search LIKE ? ESCAPE '\\'
         ORDER BY sent_at DESC
         LIMIT ?`,
@@ -1515,6 +1516,7 @@ export const StorageService = {
                 SELECT COUNT(*) FROM link_messages u
                  WHERE u.owner_pubky = m.owner_pubky
                    AND u.conversation_id = m.conversation_id
+                   AND u.deleted = 0
                    AND u.direction = 'received'
                    AND u.sent_at > COALESCE(c.last_read_at, 0)
               ) AS unread_count
@@ -1526,6 +1528,7 @@ export const StorageService = {
             SELECT m2.rowid FROM link_messages m2
              WHERE m2.owner_pubky = m.owner_pubky
                AND m2.conversation_id = m.conversation_id
+               AND m2.deleted = 0
              ORDER BY m2.sent_at DESC, m2.event_id DESC
              LIMIT 1
           )
@@ -2125,6 +2128,19 @@ export const StorageService = {
         );
       }
     }
+  },
+
+  async completePendingCleanup(
+    ownerPubky: PubkyKey,
+    targetKind: 'cache' | 'keystore',
+    target: string,
+  ): Promise<void> {
+    await ownedTransact(ownerPubky, db => {
+      db.executeSync(
+        'DELETE FROM pending_cleanup WHERE owner_pubky = ? AND target_kind = ? AND target = ?',
+        [ownerPubky, targetKind, target],
+      );
+    });
   },
 
   async journalAttachmentCacheCleanup(
@@ -3944,6 +3960,9 @@ export const StorageService = {
     senderPubky: PubkyKey;
     eventId: string;
     redactedRawJson: string;
+    attachmentKeyService?: string;
+    attachmentCachePaths?: readonly string[];
+    controlQueueItem?: DeliveryQueueItem;
   }): Promise<boolean> {
     return ownedTransact(input.ownerPubky, db => {
       const ts = now();
@@ -3955,6 +3974,31 @@ export const StorageService = {
       );
       const updated = Number(db.executeSync('SELECT changes() AS n').rows?.[0]?.n ?? 0) > 0;
       if (!updated) return false;
+      if (input.controlQueueItem) {
+        insertQueueItem(db, input.controlQueueItem, input.ownerPubky);
+      }
+      if (input.attachmentKeyService) {
+        db.executeSync(
+          `INSERT OR IGNORE INTO pending_cleanup
+            (owner_pubky, target_kind, target, created_at)
+           VALUES (?, 'keystore', ?, ?)`,
+          [input.ownerPubky, input.attachmentKeyService, ts],
+        );
+      }
+      for (const path of new Set(input.attachmentCachePaths ?? [])) {
+        db.executeSync(
+          `INSERT OR IGNORE INTO pending_cleanup
+            (owner_pubky, target_kind, target, created_at)
+           VALUES (?, 'cache', ?, ?)`,
+          [input.ownerPubky, path, ts],
+        );
+      }
+      db.executeSync(
+        `UPDATE attachments
+         SET resolve_state = 'unavailable-from-backup', local_cache_path = NULL, updated_at = ?
+         WHERE owner_pubky = ? AND sender_pubky = ? AND event_id = ?`,
+        [ts, input.ownerPubky, input.senderPubky, input.eventId],
+      );
       const stream = db.executeSync(
         `SELECT id, raw_json FROM link_stream_items
          WHERE owner_pubky = ? AND peer_pubky = ?`,
@@ -4276,6 +4320,7 @@ function rowToLink(row: any): LinkRecord {
     reconnectErrorCategory:
       row.reconnect_error_category === 'network' ||
       row.reconnect_error_category === 'protocol' ||
+      row.reconnect_error_category === 'application' ||
       row.reconnect_error_category === 'unknown'
         ? row.reconnect_error_category
         : null,
