@@ -1,0 +1,36 @@
+Third-party component: Paykit Android AAR (`paykit-release.aar`)
+
+- Source repository: https://github.com/BitcoinErrorLog/paykit-rs-official
+- Branch: feat/chat-ffi
+- Commit: 9b7de03df3843e536d676423f4398d05e4974cc8
+- Upstream: https://github.com/pubky/paykit-rs
+- Artifact SHA-256: d1e63d0b02ed8bc89c6dca91df29bfd0b8f49d08e5c19814bb257874c1c06ef8
+- License: MIT (SPDX: MIT)
+
+Verified 2026-09-21 from:
+- https://github.com/BitcoinErrorLog/paykit-rs-official/blob/9b7de03df3843e536d676423f4398d05e4974cc8/LICENSE
+- https://github.com/pubky/paykit-rs/blob/master/LICENSE
+
+Both files are identical MIT text:
+
+MIT License
+
+Copyright (c) 2025 Synonym
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
