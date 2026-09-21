@@ -68,6 +68,7 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
     private val sessions = ConcurrentHashMap<String, ChatSession>()
     private val flows = AuthFlowCancelRegistry<ChatAuthFlow>()
     private val handles = ConcurrentHashMap<String, LinkHandle>()
+    private val linkOpMutexes = ConcurrentHashMap<String, Mutex>()
     private val keepalive = AuthKeepaliveCoordinator(
         ops = object : AuthKeepaliveOps {
             override fun start(instanceToken: Long) {
@@ -763,12 +764,15 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
     @ReactMethod
     fun sendPrivateMessageJson(linkId: String, rawJson: String, promise: Promise) {
         launch(promise) {
-            val handle = handle(requireText(linkId, "linkId"))
-            val link = (handle.kind as? LinkKind.Established)?.link
-                ?: throw PaykitLinkBridgeError("validation", "linkId is not an established link")
-            link.sendPrivateApplicationMessageJson(requireText(rawJson, "rawJson"))
-            resolveMap(promise) {
-                putString("snapshot", store.encryptSnapshot(link.snapshot(), handle.context.asLink()))
+            val id = requireText(linkId, "linkId")
+            linkOpMutex(id).withLock {
+                val handle = handle(id)
+                val link = (handle.kind as? LinkKind.Established)?.link
+                    ?: throw PaykitLinkBridgeError("validation", "linkId is not an established link")
+                link.sendPrivateApplicationMessageJson(requireText(rawJson, "rawJson"))
+                resolveMap(promise) {
+                    putString("snapshot", store.encryptSnapshot(link.snapshot(), handle.context.asLink()))
+                }
             }
         }
     }
@@ -776,23 +780,26 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
     @ReactMethod
     fun receivePrivateMessages(linkId: String, promise: Promise) {
         launch(promise) {
-            val handle = handle(requireText(linkId, "linkId"))
-            val link = (handle.kind as? LinkKind.Established)?.link
-                ?: throw PaykitLinkBridgeError("validation", "linkId is not an established link")
-            val inbound = link.receivePrivateApplicationMessages()
-            val messages = Arguments.createArray()
-            inbound.forEach { message ->
-                messages.pushMap(
-                    Arguments.createMap().apply {
-                        message.version?.let { putInt("version", it.toInt()) } ?: putNull("version")
-                        message.kind?.let { putString("kind", it) } ?: putNull("kind")
-                        putString("rawJson", message.rawJson)
-                    },
-                )
-            }
-            resolveMap(promise) {
-                putArray("messages", messages)
-                putString("snapshot", store.encryptSnapshot(link.snapshot(), handle.context.asLink()))
+            val id = requireText(linkId, "linkId")
+            linkOpMutex(id).withLock {
+                val handle = handle(id)
+                val link = (handle.kind as? LinkKind.Established)?.link
+                    ?: throw PaykitLinkBridgeError("validation", "linkId is not an established link")
+                val inbound = link.receivePrivateApplicationMessages()
+                val messages = Arguments.createArray()
+                inbound.forEach { message ->
+                    messages.pushMap(
+                        Arguments.createMap().apply {
+                            message.version?.let { putInt("version", it.toInt()) } ?: putNull("version")
+                            message.kind?.let { putString("kind", it) } ?: putNull("kind")
+                            putString("rawJson", message.rawJson)
+                        },
+                    )
+                }
+                resolveMap(promise) {
+                    putArray("messages", messages)
+                    putString("snapshot", store.encryptSnapshot(link.snapshot(), handle.context.asLink()))
+                }
             }
         }
     }
@@ -830,9 +837,13 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
     @ReactMethod
     fun closeLink(linkId: String, promise: Promise) {
         launch(promise) {
-            val handle = handles.remove(requireText(linkId, "linkId"))
-            val link = (handle?.kind as? LinkKind.Established)?.link
-            link?.closeLink()
+            val id = requireText(linkId, "linkId")
+            linkOpMutex(id).withLock {
+                val handle = handles.remove(id)
+                val link = (handle?.kind as? LinkKind.Established)?.link
+                link?.closeLink()
+            }
+            linkOpMutexes.remove(id)
             promise.resolve(null)
         }
     }
@@ -1042,6 +1053,9 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
     private fun handle(linkId: String): LinkHandle {
         return handles[linkId] ?: throw PaykitLinkBridgeError("validation", "unknown linkId")
     }
+
+    private fun linkOpMutex(linkId: String): Mutex =
+        linkOpMutexes.getOrPut(linkId) { Mutex() }
 
     private suspend fun linkArgs(
         sessionAlias: String,

@@ -72,6 +72,7 @@ const COARSE_NATIVE_MESSAGES: Record<LinkNativeErrorCode, string> = {
 };
 
 const TRANSIENT_FFI_CODES = new Set(['in_flight', 'parked_result_conflict']);
+const TRANSIENT_FFI_RE = /in[_]?flight|parked[_]?result[_]?conflict/i;
 
 function mapBridgeCode(code: unknown): LinkNativeErrorCode | null {
   if (typeof code !== 'string') return null;
@@ -80,10 +81,45 @@ function mapBridgeCode(code: unknown): LinkNativeErrorCode | null {
   return null;
 }
 
+function thrownBlob(err: unknown): string {
+  if (typeof err === 'string') return err;
+  if (typeof err !== 'object' || err === null) {
+    try {
+      return String(err);
+    } catch {
+      return '';
+    }
+  }
+  const rec = err as {
+    code?: unknown;
+    userInfo?: { code?: unknown };
+    name?: unknown;
+    message?: unknown;
+    cause?: unknown;
+  };
+  const parts = [
+    typeof rec.name === 'string' ? rec.name : '',
+    typeof rec.message === 'string' ? rec.message : '',
+    typeof rec.code === 'string' ? rec.code : '',
+    typeof rec.userInfo?.code === 'string' ? rec.userInfo.code : '',
+  ];
+  try {
+    parts.push(String(err));
+  } catch {
+    // ignore
+  }
+  if (typeof rec.cause === 'string') parts.push(rec.cause);
+  return parts.join(' ');
+}
+
 export function toLinkNativeError(err: unknown): LinkNativeError {
   // Already a typed error: created by this wrapper or by the native bridge,
   // which sends only coarse static messages.
   if (isLinkNativeError(err)) return err;
+  const blob = thrownBlob(err);
+  if (TRANSIENT_FFI_RE.test(blob)) {
+    return { code: 'unavailable', message: COARSE_NATIVE_MESSAGES.unavailable };
+  }
   if (typeof err === 'object' && err !== null) {
     const rec = err as {
       code?: unknown;
@@ -97,7 +133,7 @@ export function toLinkNativeError(err: unknown): LinkNativeError {
     }
     const name = typeof rec.name === 'string' ? rec.name : '';
     const message = typeof rec.message === 'string' ? rec.message : '';
-    if (TRANSIENT_FFI_CODES.has(name) || /in_flight|parked_result_conflict/i.test(`${name} ${message}`)) {
+    if (TRANSIENT_FFI_CODES.has(name) || TRANSIENT_FFI_RE.test(`${name} ${message}`)) {
       return { code: 'unavailable', message: COARSE_NATIVE_MESSAGES.unavailable };
     }
   }
@@ -388,6 +424,20 @@ function requireModule(): Record<string, (...args: unknown[]) => unknown> {
   return PaykitLinkModule as Record<string, (...args: unknown[]) => unknown>;
 }
 
+const linkOps = new Map<string, Promise<unknown>>();
+
+async function withLinkOp<T>(linkId: string, operation: () => Promise<T>): Promise<T> {
+  const previous = linkOps.get(linkId) ?? Promise.resolve();
+  const next = previous.then(operation, operation);
+  const tracked = next.catch(() => undefined);
+  linkOps.set(linkId, tracked);
+  try {
+    return await next;
+  } finally {
+    if (linkOps.get(linkId) === tracked) linkOps.delete(linkId);
+  }
+}
+
 async function invoke<T>(method: string, ...args: unknown[]): Promise<T> {
   const mod = requireModule();
   const fn = mod[method];
@@ -399,6 +449,10 @@ async function invoke<T>(method: string, ...args: unknown[]): Promise<T> {
   } catch (err) {
     throw toLinkNativeError(err);
   }
+}
+
+async function invokeLinkOp<T>(linkId: string, method: string, ...args: unknown[]): Promise<T> {
+  return withLinkOp(linkId, () => invoke<T>(method, linkId, ...args));
 }
 
 export const PaykitLinkNative: PaykitLinkNativeApi = {
@@ -575,11 +629,11 @@ export const PaykitLinkNative: PaykitLinkNativeApi = {
   },
 
   sendPrivateMessageJson(linkId: string, rawJson: string): Promise<LinkSendResult> {
-    return invoke('sendPrivateMessageJson', linkId, rawJson);
+    return invokeLinkOp(linkId, 'sendPrivateMessageJson', rawJson);
   },
 
   receivePrivateMessages(linkId: string): Promise<LinkReceiveResult> {
-    return invoke('receivePrivateMessages', linkId);
+    return invokeLinkOp(linkId, 'receivePrivateMessages');
   },
 
   clearLinkOutbox(
@@ -602,7 +656,7 @@ export const PaykitLinkNative: PaykitLinkNativeApi = {
   },
 
   closeLink(linkId: string): Promise<void> {
-    return invoke('closeLink', linkId);
+    return invokeLinkOp(linkId, 'closeLink');
   },
 
   putPublic(

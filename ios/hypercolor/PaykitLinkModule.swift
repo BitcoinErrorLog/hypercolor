@@ -11,6 +11,14 @@ struct PaykitLinkBridgeError: Error {
     let message: String
 }
 
+/// Serializes EncryptedLink send/receive/close so wasm/FFI in_flight
+/// cannot fire from overlapping Hypercolor calls on the same handle.
+private actor PaykitLinkOpGate {
+    func run<T>(_ body: () async throws -> T) async throws -> T {
+        try await body()
+    }
+}
+
 /// File-level wrappers so the RCT method names do not shadow the UniFFI free functions.
 private enum PaykitAttachmentAead {
     static func generateKey() -> String {
@@ -55,6 +63,8 @@ class PaykitLinkModule: NSObject, RCTInvalidating {
     private var awaitTasks: [String: Task<Void, Never>] = [:]
     private var leaseSeq: UInt64 = 0
     private var handles: [String: LinkHandle] = [:]
+    /// Serializes EncryptedLink send/receive/close per live handle.
+    private var linkOpGates: [String: PaykitLinkOpGate] = [:]
     /// Sticky after `invalidate()` / `deinit`. Start/await/cancel reject
     /// `unavailable`. In-flight owners fail closed and never persist.
     private var bridgeTornDown = false
@@ -959,13 +969,16 @@ class PaykitLinkModule: NSObject, RCTInvalidating {
         rejecter reject: @escaping RCTPromiseRejectBlock
     ) {
         runAsync(resolve, reject) {
-            let handle = try self.handle(try Self.requireText(linkId, name: "linkId"))
-            guard case let .link(link) = handle.kind else {
-                throw PaykitLinkBridgeError(code: "validation", message: "linkId is not an established link")
+            let id = try Self.requireText(linkId, name: "linkId")
+            return try await self.linkOpGate(id).run {
+                let handle = try self.handle(id)
+                guard case let .link(link) = handle.kind else {
+                    throw PaykitLinkBridgeError(code: "validation", message: "linkId is not an established link")
+                }
+                try await link.sendPrivateApplicationMessageJson(rawJson: try Self.requireText(rawJson, name: "rawJson"))
+                let snapshot = try await link.snapshot()
+                return ["snapshot": try PaykitSnapshotAead.encrypt(snapshot, context: handle.context.asLink())]
             }
-            try await link.sendPrivateApplicationMessageJson(rawJson: try Self.requireText(rawJson, name: "rawJson"))
-            let snapshot = try await link.snapshot()
-            return ["snapshot": try PaykitSnapshotAead.encrypt(snapshot, context: handle.context.asLink())]
         }
     }
 
@@ -975,26 +988,29 @@ class PaykitLinkModule: NSObject, RCTInvalidating {
         rejecter reject: @escaping RCTPromiseRejectBlock
     ) {
         runAsync(resolve, reject) {
-            let handle = try self.handle(try Self.requireText(linkId, name: "linkId"))
-            guard case let .link(link) = handle.kind else {
-                throw PaykitLinkBridgeError(code: "validation", message: "linkId is not an established link")
-            }
-            let inbound = try await link.receivePrivateApplicationMessages()
-            let snapshot = try await link.snapshot()
-            let messages: [[String: Any]] = inbound.map { message in
-                var row: [String: Any] = ["rawJson": message.rawJson]
-                if let version = message.version {
-                    row["version"] = Int(version)
-                } else {
-                    row["version"] = NSNull()
+            let id = try Self.requireText(linkId, name: "linkId")
+            return try await self.linkOpGate(id).run {
+                let handle = try self.handle(id)
+                guard case let .link(link) = handle.kind else {
+                    throw PaykitLinkBridgeError(code: "validation", message: "linkId is not an established link")
                 }
-                row["kind"] = message.kind ?? NSNull()
-                return row
+                let inbound = try await link.receivePrivateApplicationMessages()
+                let snapshot = try await link.snapshot()
+                let messages: [[String: Any]] = inbound.map { message in
+                    var row: [String: Any] = ["rawJson": message.rawJson]
+                    if let version = message.version {
+                        row["version"] = Int(version)
+                    } else {
+                        row["version"] = NSNull()
+                    }
+                    row["kind"] = message.kind ?? NSNull()
+                    return row
+                }
+                return [
+                    "messages": messages,
+                    "snapshot": try PaykitSnapshotAead.encrypt(snapshot, context: handle.context.asLink()),
+                ]
             }
-            return [
-                "messages": messages,
-                "snapshot": try PaykitSnapshotAead.encrypt(snapshot, context: handle.context.asLink()),
-            ]
         }
     }
 
@@ -1035,11 +1051,14 @@ class PaykitLinkModule: NSObject, RCTInvalidating {
     ) {
         runAsync(resolve, reject) {
             let id = try Self.requireText(linkId, name: "linkId")
-            let handle = self.lock.withLock { self.handles.removeValue(forKey: id) }
-            if case let .link(link) = handle?.kind {
-                try await link.closeLink()
+            return try await self.linkOpGate(id).run {
+                let handle = self.lock.withLock { self.handles.removeValue(forKey: id) }
+                if case let .link(link) = handle?.kind {
+                    try await link.closeLink()
+                }
+                self.lock.withLock { _ = self.linkOpGates.removeValue(forKey: id) }
+                return NSNull()
             }
-            return NSNull()
         }
     }
 
@@ -1515,6 +1534,17 @@ class PaykitLinkModule: NSObject, RCTInvalidating {
             throw PaykitLinkBridgeError(code: "validation", message: "unknown linkId")
         }
         return handle
+    }
+
+    private func linkOpGate(_ linkId: String) -> PaykitLinkOpGate {
+        lock.withLock {
+            if let existing = linkOpGates[linkId] {
+                return existing
+            }
+            let created = PaykitLinkOpGate()
+            linkOpGates[linkId] = created
+            return created
+        }
     }
 
     private func linkArgs(

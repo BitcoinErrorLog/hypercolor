@@ -56,5 +56,13 @@ describe('toLinkNativeError', () => {
       code: 'unavailable',
       message: 'unavailable',
     });
+    expect(toLinkNativeError('protocol/in_flight')).toEqual({
+      code: 'unavailable',
+      message: 'unavailable',
+    });
+    expect(toLinkNativeError(new Error('ParkedResultConflict'))).toEqual({
+      code: 'unavailable',
+      message: 'unavailable',
+    });
   });
 });
