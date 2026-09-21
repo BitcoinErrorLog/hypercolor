@@ -61,6 +61,9 @@
     "zustand": "^5.0.11"
   },
   "private": true,
+  "engines": {
+    "node": ">=22"
+  },
   "devDependencies": {
     "@resvg/resvg-js": "^2.6.2",
     "@types/better-sqlite3": "^9.6.0",

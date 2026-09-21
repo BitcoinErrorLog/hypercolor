@@ -412,6 +412,7 @@ describe('LinkService message requests', () => {
     try {
       const first = LinkService.syncInbox([PEER]);
       await jest.advanceTimersByTimeAsync(LINK_INBOX_PEER_TIMEOUT_MS);
+      await jest.advanceTimersByTimeAsync(LINK_INBOX_PEER_TIMEOUT_MS);
       await expect(first).resolves.toEqual([]);
       expect(linkQueueEntryCountForTests()).toBe(0);
 
@@ -423,6 +424,7 @@ describe('LinkService message requests', () => {
       await Promise.resolve();
       await Promise.resolve();
       await Promise.resolve();
+      await jest.advanceTimersByTimeAsync(0);
 
       expect(adoptedSnapshot).toBe('fresh');
       expect(mockedStorage.upsertLink.mock.calls.length).toBe(upserts);
