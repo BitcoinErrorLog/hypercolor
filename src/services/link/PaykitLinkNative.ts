@@ -71,17 +71,34 @@ const COARSE_NATIVE_MESSAGES: Record<LinkNativeErrorCode, string> = {
   auth_flow_cancelled: 'auth flow cancelled',
 };
 
+const TRANSIENT_FFI_CODES = new Set(['in_flight', 'parked_result_conflict']);
+
+function mapBridgeCode(code: unknown): LinkNativeErrorCode | null {
+  if (typeof code !== 'string') return null;
+  if (TRANSIENT_FFI_CODES.has(code)) return 'unavailable';
+  if (isLinkNativeErrorCode(code)) return code;
+  return null;
+}
+
 export function toLinkNativeError(err: unknown): LinkNativeError {
   // Already a typed error: created by this wrapper or by the native bridge,
   // which sends only coarse static messages.
   if (isLinkNativeError(err)) return err;
   if (typeof err === 'object' && err !== null) {
-    const rec = err as { code?: unknown; userInfo?: { code?: unknown } };
-    if (isLinkNativeErrorCode(rec.code)) {
-      return { code: rec.code, message: COARSE_NATIVE_MESSAGES[rec.code] };
+    const rec = err as {
+      code?: unknown;
+      userInfo?: { code?: unknown };
+      name?: unknown;
+      message?: unknown;
+    };
+    const mapped = mapBridgeCode(rec.code) ?? mapBridgeCode(rec.userInfo?.code);
+    if (mapped) {
+      return { code: mapped, message: COARSE_NATIVE_MESSAGES[mapped] };
     }
-    if (isLinkNativeErrorCode(rec.userInfo?.code)) {
-      return { code: rec.userInfo.code, message: COARSE_NATIVE_MESSAGES[rec.userInfo.code] };
+    const name = typeof rec.name === 'string' ? rec.name : '';
+    const message = typeof rec.message === 'string' ? rec.message : '';
+    if (TRANSIENT_FFI_CODES.has(name) || /in_flight|parked_result_conflict/i.test(`${name} ${message}`)) {
+      return { code: 'unavailable', message: COARSE_NATIVE_MESSAGES.unavailable };
     }
   }
   return { code: 'protocol', message: COARSE_NATIVE_MESSAGES.protocol };

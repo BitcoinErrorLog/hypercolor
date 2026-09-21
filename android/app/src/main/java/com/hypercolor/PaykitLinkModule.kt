@@ -1221,14 +1221,7 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
         return code.all { it in 'a'..'z' || it == '_' }
     }
 
-    private fun mapFfiCode(code: String): String = when (code) {
-        "transport_error", "send_failed", "receive_failed", "auth_flow_failed" -> "network"
-        "signin_failed", "signup_failed", "session_restore_failed", "capabilities_missing" -> "auth"
-        "validation" -> "validation"
-        "consumed" -> "consumed"
-        "auth_flow_cancelled" -> "auth_flow_cancelled"
-        else -> "protocol"
-    }
+    private fun mapFfiCode(code: String): String = mapPaykitFfiCode(code)
 
     private fun staticMessage(code: String): String = when (code) {
         "network" -> "network error"
@@ -1239,6 +1232,20 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
         "auth_flow_cancelled" -> "auth flow cancelled"
         else -> "protocol error"
     }
+}
+
+internal fun mapPaykitFfiCode(code: String): String = when (code) {
+    "transport_error", "send_failed", "receive_failed", "auth_flow_failed" -> "network"
+    "signin_failed", "signup_failed", "session_restore_failed", "capabilities_missing" -> "auth"
+    "validation" -> "validation"
+    "consumed" -> "consumed"
+    "auth_flow_cancelled" -> "auth_flow_cancelled"
+    // EncryptedLink concurrency: another send/receive is in flight, or a
+    // parked send of a different payload has not settled. These are
+    // transient — retry the same JSON; do not coarsen to protocol (which
+    // drops the live handle and forces restore while the FFI send is live).
+    "in_flight", "parked_result_conflict" -> "unavailable"
+    else -> "protocol"
 }
 
 private const val PAYKIT_LINK_LOG_TAG = "PaykitLink"

@@ -38,4 +38,23 @@ describe('toLinkNativeError', () => {
     });
     expect(toLinkNativeError(undefined)).toEqual({ code: 'protocol', message: 'protocol error' });
   });
+
+  it('maps EncryptedLink in_flight and parked_result_conflict to unavailable', () => {
+    expect(toLinkNativeError({ code: 'in_flight', message: 'send already in flight' })).toEqual({
+      code: 'unavailable',
+      message: 'unavailable',
+    });
+    expect(toLinkNativeError({ code: 'parked_result_conflict' })).toEqual({
+      code: 'unavailable',
+      message: 'unavailable',
+    });
+    expect(toLinkNativeError({ userInfo: { code: 'in_flight' } })).toEqual({
+      code: 'unavailable',
+      message: 'unavailable',
+    });
+    expect(toLinkNativeError(Object.assign(new Error('parked_result_conflict'), { name: 'parked_result_conflict' }))).toEqual({
+      code: 'unavailable',
+      message: 'unavailable',
+    });
+  });
 });

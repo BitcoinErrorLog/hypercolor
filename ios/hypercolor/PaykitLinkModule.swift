@@ -1729,6 +1729,8 @@ class PaykitLinkModule: NSObject, RCTInvalidating {
             return "consumed"
         case "auth_flow_cancelled":
             return "auth_flow_cancelled"
+        case "in_flight", "parked_result_conflict":
+            return "unavailable"
         default:
             return "protocol"
         }

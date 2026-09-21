@@ -5503,6 +5503,25 @@ describe('LinkService', () => {
       expect(mockedNative.deletePublic).not.toHaveBeenCalled();
     });
 
+    it('defers in_flight control without dropping the live handle', async () => {
+      givenEstablishedLink();
+      mockedStorage.getLinkMessageByEventId.mockResolvedValue(ownedMessage());
+      mockedStorage.tombstoneLinkMessage.mockResolvedValue(true);
+      pinDeleteEventId();
+      mockedNative.sendPrivateMessageJson.mockRejectedValue({
+        code: 'unavailable',
+        message: 'unavailable',
+      });
+
+      await expect(LinkService.unsendDm(PEER, EVENT_ID)).resolves.toBeUndefined();
+
+      expect(mockedRetryQueue.defer).toHaveBeenCalled();
+      expect(mockedRetryQueue.recordFailure).not.toHaveBeenCalled();
+      expect(mockedNative.closeLink).not.toHaveBeenCalled();
+      expect(mockedStorage.finalizeControlSend).not.toHaveBeenCalled();
+      expect(mockedNative.deletePublic).not.toHaveBeenCalled();
+    });
+
     it('resends a deferred control PAM once the link is ready', async () => {
       givenEstablishedLink();
       const item = controlItem(LINK_CONTROL_PAYLOAD_TYPE, 2);
