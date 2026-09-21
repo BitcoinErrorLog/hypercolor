@@ -224,7 +224,7 @@ describe('unsendDm with real SQLite storage', () => {
   });
 
   it.each(['sent', 'sending'] as const)(
-    'tombstones and hides an own %s text message from the thread query',
+    'tombstones an own %s text message and keeps the redacted row in the thread query',
     async deliveryState => {
       await StorageService.saveLinkMessage({
         ownerPubky: OWNER,
@@ -252,7 +252,14 @@ describe('unsendDm with real SQLite storage', () => {
       );
       expect(
         await StorageService.getLinkMessagesForConversation(OWNER, buildDmConversationId(PEER)),
-      ).toEqual([]);
+      ).toEqual([
+        expect.objectContaining({
+          eventId: EVENT_ID,
+          deleted: true,
+          body: '',
+          deliveryState: 'unsent',
+        }),
+      ]);
     },
   );
 
@@ -324,6 +331,9 @@ describe('unsendDm with real SQLite storage', () => {
     expect(await StorageService.listDeliveryQueue()).toHaveLength(1);
 
     mockedNative.sendPrivateMessageJson.mockResolvedValue({ snapshot: 'est-3' });
+    // holdControlPam defers with the 15s attempt-0 backoff; the frozen NOW
+    // clock must advance or getDue will not return the durable intent.
+    jest.spyOn(Date, 'now').mockReturnValue(NOW + 15_000);
     await LinkService.drainRetries();
 
     expect(mockedNative.sendPrivateMessageJson).toHaveBeenCalledTimes(2);

@@ -1485,18 +1485,21 @@ export const StorageService = {
     limit = 50,
     beforeMs?: number,
   ): Promise<LinkMessage[]> {
+    // Tombstones stay in the thread (body already redacted) so the UI can
+    // render "Message unsent" / "Message deleted". Inbox last-message and
+    // unread counts still skip deleted rows.
     const db = await getDb();
     const result =
       beforeMs !== undefined
         ? db.executeSync(
             `SELECT * FROM link_messages
-             WHERE owner_pubky = ? AND conversation_id = ? AND deleted = 0 AND sent_at < ?
+             WHERE owner_pubky = ? AND conversation_id = ? AND sent_at < ?
              ORDER BY sent_at DESC LIMIT ?`,
             [ownerPubky, conversationId, beforeMs, limit],
           )
         : db.executeSync(
             `SELECT * FROM link_messages
-             WHERE owner_pubky = ? AND conversation_id = ? AND deleted = 0
+             WHERE owner_pubky = ? AND conversation_id = ?
              ORDER BY sent_at DESC LIMIT ?`,
             [ownerPubky, conversationId, limit],
           );

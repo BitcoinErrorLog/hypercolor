@@ -533,7 +533,7 @@ describe('applyChatKinds integration', () => {
     expect(JSON.parse(tomb?.rawJson ?? '{}').deleted).toBe(true);
     expect(
       await StorageService.getLinkMessagesForConversation(OWNER, buildDmConversationId(PEER), 10),
-    ).toEqual([]);
+    ).toEqual([expect.objectContaining({ eventId: TARGET, deleted: true, body: '' })]);
     const stream = await StorageService.getUnprocessedLinkStreamItems(OWNER, PEER);
     expect(stream.every(row => !row.rawJson.includes('secret-body'))).toBe(true);
     expect(await StorageService.hasQueueItemForMessage(TARGET)).toBe(false);
@@ -613,7 +613,7 @@ describe('applyChatKinds integration', () => {
     expect((await StorageService.getLinkMessageByEventId(OWNER, PEER, TARGET))?.deleted).toBe(true);
     expect(
       await StorageService.getLinkMessagesForConversation(OWNER, buildDmConversationId(PEER), 10),
-    ).toEqual([]);
+    ).toEqual([expect.objectContaining({ eventId: TARGET, deleted: true })]);
     const pendingCleanup =
       (await getDb()).executeSync(
         `SELECT owner_pubky, target_kind, target FROM pending_cleanup WHERE owner_pubky = ?`,
