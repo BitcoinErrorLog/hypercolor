@@ -9,6 +9,7 @@ import {
   LINK_INBOX_PEER_TIMEOUT_MS,
   LINK_RETRY_DRAIN_INTERVAL_MS,
   LINK_RETRY_PAYLOAD_TYPE,
+  LINK_CONTROL_PAYLOAD_TYPE,
   LINK_GROUP_FANOUT_PAYLOAD_TYPE,
   LINK_RETRY_TICK_PHASE_TIMEOUT_MS,
   PEER_MARKER_REFRESH_TTL_MS,
@@ -29,6 +30,7 @@ import { useReceiverRoleStore } from '../../../stores/receiverRoleStore';
 import { wireSignOutMarkerMocks } from '../../__tests__/wireSignOutMarkerMocks';
 import {
   CHAT_MESSAGE_KIND,
+  CHAT_DELETE_KIND,
   CHAT_RECEIPT_KIND,
   LINK_MESSAGE_MAX_BYTES,
   LINK_RECEIVER_PATH,
@@ -5408,6 +5410,180 @@ describe('LinkService', () => {
       expect(mockedKeyStore.deleteAttachmentSecret).not.toHaveBeenCalled();
       expect(deleteCacheFiles).not.toHaveBeenCalled();
       expect(mockedNative.sendPrivateMessageJson).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('control PAM durability', () => {
+    const deleteEventId = '00000000-0000-4000-8000-0000000000de';
+    const deleteJson = JSON.stringify({
+      version: 1,
+      kind: CHAT_DELETE_KIND,
+      event_id: deleteEventId,
+      sent_at: NOW,
+      target_event_id: EVENT_ID,
+    });
+
+    function ownedMessage() {
+      return {
+        ownerPubky: OWNER,
+        eventId: EVENT_ID,
+        conversationId: CONVERSATION_ID,
+        peerPubky: PEER,
+        senderPubky: OWNER,
+        direction: 'sent' as const,
+        kind: CHAT_MESSAGE_KIND,
+        rawJson: '{}',
+        body: 'secret',
+        sentAt: NOW,
+        receivedAt: null,
+        deliveryState: 'sent' as const,
+        deleted: false,
+      };
+    }
+
+    function controlItem(type: string, attempts = 0) {
+      return {
+        id: 'q-control',
+        messageId: deleteEventId,
+        recipientPubky: PEER,
+        payload: JSON.stringify({
+          type,
+          ownerPubky: OWNER,
+          peerPubky: PEER,
+          senderPubky: OWNER,
+          kind: CHAT_DELETE_KIND,
+          eventId: deleteEventId,
+          rawJson: deleteJson,
+        }),
+        attempts,
+        nextRetryAt: NOW,
+        createdAt: NOW,
+      };
+    }
+
+    function pinDeleteEventId() {
+      mockedUuid.mockReset();
+      mockedUuid.mockReturnValue(deleteEventId);
+    }
+
+    it('sends chat.delete.v0 on a healthy established link', async () => {
+      givenEstablishedLink();
+      mockedStorage.getLinkMessageByEventId.mockResolvedValue(ownedMessage());
+      mockedStorage.tombstoneLinkMessage.mockResolvedValue(true);
+      pinDeleteEventId();
+      mockedNative.sendPrivateMessageJson.mockResolvedValue({ snapshot: 'est-2' });
+
+      await expect(LinkService.unsendDm(PEER, EVENT_ID)).resolves.toBeUndefined();
+
+      expect(mockedNative.sendPrivateMessageJson).toHaveBeenCalledWith('handle-1', deleteJson);
+      expect(mockedStorage.finalizeControlSend).toHaveBeenCalledWith(
+        expect.objectContaining({ ownerPubky: OWNER, peerPubky: PEER }),
+      );
+      expect(mockedRetryQueue.defer).not.toHaveBeenCalled();
+      expect(mockedNative.deletePublic).not.toHaveBeenCalled();
+    });
+
+    it('defers a protocol-failed delete PAM and never drops it', async () => {
+      givenEstablishedLink();
+      mockedStorage.getLinkMessageByEventId.mockResolvedValue(ownedMessage());
+      mockedStorage.tombstoneLinkMessage.mockResolvedValue(true);
+      pinDeleteEventId();
+      mockedNative.sendPrivateMessageJson.mockRejectedValue({
+        code: 'protocol',
+        message: 'protocol error',
+      });
+
+      await expect(LinkService.unsendDm(PEER, EVENT_ID)).resolves.toBeUndefined();
+
+      expect(mockedStorage.finalizeControlSend).not.toHaveBeenCalled();
+      expect(mockedRetryQueue.recordFailure).not.toHaveBeenCalled();
+      expect(mockedStorage.failLinkMessageAndDequeue).not.toHaveBeenCalled();
+      expect(mockedRetryQueue.defer).toHaveBeenCalled();
+      expect(mockedNative.closeLink).toHaveBeenCalled();
+      expect(mockedNative.deletePublic).not.toHaveBeenCalled();
+    });
+
+    it('resends a deferred control PAM once the link is ready', async () => {
+      givenEstablishedLink();
+      const item = controlItem(LINK_CONTROL_PAYLOAD_TYPE, 2);
+      mockedRetryQueue.getDue.mockResolvedValue([item]);
+      mockedStorage.hasQueueItem.mockResolvedValue(true);
+      mockedNative.sendPrivateMessageJson.mockResolvedValue({ snapshot: 'est-3' });
+
+      await LinkService.drainRetries();
+
+      expect(mockedNative.sendPrivateMessageJson).toHaveBeenCalledWith('handle-1', deleteJson);
+      expect(mockedStorage.finalizeControlSend).toHaveBeenCalledWith(
+        expect.objectContaining({ queueId: 'q-control', snapshot: 'est-3' }),
+      );
+      expect(mockedStorage.finalizeLinkSend).not.toHaveBeenCalled();
+      expect(mockedRetryQueue.recordSuccess).toHaveBeenCalledWith('q-control');
+      expect(mockedRetryQueue.recordFailure).not.toHaveBeenCalled();
+    });
+
+    it('treats a legacy link.chat.message delete payload as control', async () => {
+      givenEstablishedLink();
+      mockedRetryQueue.getDue.mockResolvedValue([controlItem(LINK_RETRY_PAYLOAD_TYPE, 1)]);
+      mockedStorage.hasQueueItem.mockResolvedValue(true);
+      mockedNative.sendPrivateMessageJson.mockResolvedValue({ snapshot: 'est-legacy' });
+
+      await LinkService.drainRetries();
+
+      expect(mockedStorage.finalizeControlSend).toHaveBeenCalledWith(
+        expect.objectContaining({ queueId: 'q-control' }),
+      );
+      expect(mockedStorage.finalizeLinkSend).not.toHaveBeenCalled();
+      expect(mockedRetryQueue.recordSuccess).toHaveBeenCalledWith('q-control');
+    });
+
+    it('holds a delete PAM while reconnect_required and sends after restore', async () => {
+      givenReconnectRequiredLink();
+      mockedStorage.getLinkMessageByEventId.mockResolvedValue(ownedMessage());
+      mockedStorage.tombstoneLinkMessage.mockResolvedValue(true);
+      pinDeleteEventId();
+
+      await expect(LinkService.unsendDm(PEER, EVENT_ID)).resolves.toBeUndefined();
+
+      expect(mockedNative.sendPrivateMessageJson).not.toHaveBeenCalled();
+      expect(mockedRetryQueue.defer).toHaveBeenCalled();
+      expect(mockedRetryQueue.recordFailure).not.toHaveBeenCalled();
+      expect(mockedNative.deletePublic).not.toHaveBeenCalled();
+
+      givenEstablishedLink();
+      mockedRetryQueue.getDue.mockResolvedValue([controlItem(LINK_CONTROL_PAYLOAD_TYPE, 0)]);
+      mockedStorage.hasQueueItem.mockResolvedValue(true);
+      mockedNative.sendPrivateMessageJson.mockResolvedValue({ snapshot: 'est-ready' });
+      mockedRetryQueue.defer.mockClear();
+
+      await LinkService.drainRetries();
+
+      expect(mockedNative.sendPrivateMessageJson).toHaveBeenCalledTimes(1);
+      expect(mockedStorage.finalizeControlSend).toHaveBeenCalled();
+      expect(mockedRetryQueue.recordSuccess).toHaveBeenCalled();
+    });
+
+    it('does not send a queued control PAM after the owner changes', async () => {
+      givenEstablishedLink();
+      mockedRetryQueue.getDue.mockResolvedValue([
+        {
+          ...controlItem(LINK_CONTROL_PAYLOAD_TYPE),
+          payload: JSON.stringify({
+            type: LINK_CONTROL_PAYLOAD_TYPE,
+            ownerPubky: OTHER_OWNER,
+            peerPubky: PEER,
+            senderPubky: OTHER_OWNER,
+            kind: CHAT_DELETE_KIND,
+            eventId: deleteEventId,
+            rawJson: deleteJson,
+          }),
+        },
+      ]);
+
+      await LinkService.drainRetries();
+
+      expect(mockedNative.sendPrivateMessageJson).not.toHaveBeenCalled();
+      expect(mockedRetryQueue.defer).not.toHaveBeenCalled();
+      expect(mockedRetryQueue.recordFailure).not.toHaveBeenCalled();
     });
   });
 

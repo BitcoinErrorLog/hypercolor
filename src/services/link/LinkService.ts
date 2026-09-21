@@ -124,6 +124,7 @@ import {
 
 /** Discriminator for this transport's items in the shared `delivery_queue`. */
 export const LINK_RETRY_PAYLOAD_TYPE = 'link.chat.message';
+export const LINK_CONTROL_PAYLOAD_TYPE = 'link.chat.control';
 
 export { LINK_GROUP_FANOUT_PAYLOAD_TYPE };
 
@@ -244,6 +245,16 @@ interface LinkRetryPayload {
   rawJson: string;
 }
 
+interface ControlRetryPayload {
+  type: typeof LINK_CONTROL_PAYLOAD_TYPE;
+  ownerPubky: PubkyKey;
+  peerPubky: PubkyKey;
+  senderPubky: PubkyKey;
+  kind: string;
+  eventId: string;
+  rawJson: string;
+}
+
 interface GroupFanoutRetryPayload {
   type: typeof LINK_GROUP_FANOUT_PAYLOAD_TYPE;
   ownerPubky: PubkyKey;
@@ -255,7 +266,7 @@ interface GroupFanoutRetryPayload {
   rawJson: string;
 }
 
-type AnyLinkRetryPayload = LinkRetryPayload | GroupFanoutRetryPayload;
+type AnyLinkRetryPayload = LinkRetryPayload | GroupFanoutRetryPayload | ControlRetryPayload;
 
 type ActiveSession = { alias: string; pubky: string };
 type LiveHandle =
@@ -4270,43 +4281,33 @@ async function deliverQueuedPayload(
     // message row exists, which stays true after a successful send, so without
     // this the same `rawJson` could go out twice.
     if (!(await StorageService.hasQueueItem(item.id))) return;
-    if (payload.type === LINK_RETRY_PAYLOAD_TYPE) {
-      const control =
-        payload.kind === CHAT_TAG_KIND ||
-        payload.kind === CHAT_RECEIPT_KIND ||
-        payload.kind === CHAT_DELETE_KIND;
-      if (!control) {
-        const row = await StorageService.getLinkMessage(
-          payload.ownerPubky,
-          payload.senderPubky,
-          payload.kind,
-          payload.eventId,
-        );
-        if (!row) {
-          await RetryQueue.recordSuccess(item.id);
-          return;
-        }
-        if (!isRetryableDeliveryState(row.deliveryState)) {
-          await RetryQueue.recordSuccess(item.id);
-          return;
-        }
+    if (payload.type === LINK_CONTROL_PAYLOAD_TYPE) {
+      // Control PAMs have no message-row delivery state. Stay owed until sent.
+    } else if (payload.type === LINK_RETRY_PAYLOAD_TYPE) {
+      const row = await StorageService.getLinkMessage(
+        payload.ownerPubky,
+        payload.senderPubky,
+        payload.kind,
+        payload.eventId,
+      );
+      if (!row) {
+        await RetryQueue.recordSuccess(item.id);
+        return;
+      }
+      if (!isRetryableDeliveryState(row.deliveryState)) {
+        await RetryQueue.recordSuccess(item.id);
+        return;
       }
     } else {
-      const control =
-        payload.kind === CHAT_TAG_KIND ||
-        payload.kind === CHAT_RECEIPT_KIND ||
-        payload.kind === CHAT_DELETE_KIND;
-      if (!control) {
-        const exists = await StorageService.hasGroupMessage(
-          payload.ownerPubky,
-          payload.channelId,
-          payload.senderPubky,
-          payload.eventId,
-        );
-        if (!exists) {
-          await RetryQueue.recordSuccess(item.id);
-          return;
-        }
+      const exists = await StorageService.hasGroupMessage(
+        payload.ownerPubky,
+        payload.channelId,
+        payload.senderPubky,
+        payload.eventId,
+      );
+      if (!exists) {
+        await RetryQueue.recordSuccess(item.id);
+        return;
       }
     }
 
@@ -4315,6 +4316,10 @@ async function deliverQueuedPayload(
       outcome = await ensureLinkLocked(payload.peerPubky, 'queued', false, payload.ownerPubky);
     } catch (err) {
       if (err instanceof LinkSendError && err.code === 'owner-changed') return;
+      if (payload.type === LINK_CONTROL_PAYLOAD_TYPE) {
+        await holdControlPam(item, payload.ownerPubky, payload.peerPubky, err);
+        return;
+      }
       if (isTransientLinkError(err)) {
         await RetryQueue.defer(item.id, item.attempts);
         return;
@@ -4324,11 +4329,19 @@ async function deliverQueuedPayload(
     }
 
     if (outcome === 'denied') {
+      if (payload.type === LINK_CONTROL_PAYLOAD_TYPE) {
+        await holdControlPam(item, payload.ownerPubky, payload.peerPubky, outcome);
+        return;
+      }
       await dropQueuedPayloadDenied(item, payload);
       return;
     }
 
     if (outcome === 'deny-unavailable' || outcome !== 'ready') {
+      if (payload.type === LINK_CONTROL_PAYLOAD_TYPE) {
+        await holdControlPam(item, payload.ownerPubky, payload.peerPubky, outcome);
+        return;
+      }
       await RetryQueue.defer(item.id, item.attempts);
       return;
     }
@@ -4356,6 +4369,13 @@ async function deliverQueuedPayload(
           senderPubky: payload.senderPubky,
           kind: payload.kind,
         });
+      } else if (payload.type === LINK_CONTROL_PAYLOAD_TYPE) {
+        await StorageService.finalizeControlSend({
+          ownerPubky: payload.ownerPubky,
+          peerPubky: payload.peerPubky,
+          snapshot,
+          queueId: item.id,
+        });
       } else {
         await StorageService.finalizeLinkSend({
           ownerPubky: payload.ownerPubky,
@@ -4370,6 +4390,10 @@ async function deliverQueuedPayload(
       await RetryQueue.recordSuccess(item.id);
     } catch (err) {
       if (err instanceof LinkSendError && err.code === 'owner-changed') return;
+      if (payload.type === LINK_CONTROL_PAYLOAD_TYPE) {
+        await holdControlPam(item, payload.ownerPubky, payload.peerPubky, err);
+        return;
+      }
       if (isTransientLinkError(err)) {
         await RetryQueue.defer(item.id, item.attempts);
         return;
@@ -4444,6 +4468,10 @@ async function dropQueuedPayloadPermanently(
   payload: AnyLinkRetryPayload,
 ): Promise<void> {
   abortIfOwnerChanged(payload.ownerPubky);
+  if (payload.type === LINK_CONTROL_PAYLOAD_TYPE) {
+    await holdControlPam(item, payload.ownerPubky, payload.peerPubky, 'permanent-drop-blocked');
+    return;
+  }
   if (payload.type === LINK_GROUP_FANOUT_PAYLOAD_TYPE && RetryQueue.wouldDrop(item.attempts)) {
     await StorageService.completeGroupFanoutRecipient({
       ownerPubky: payload.ownerPubky,
@@ -4691,11 +4719,16 @@ async function dispatchPersistedControlPam(
   let outcome: EnsureOutcome;
   try {
     outcome = await ensureLinkLocked(peerPubky, 'user', false, ownerPubky);
-  } catch {
-    outcome = 'handshaking-initiator';
+  } catch (err) {
+    if (err instanceof LinkSendError && err.code === 'owner-changed') throw err;
+    await holdControlPam(item, ownerPubky, peerPubky, err);
+    return;
   }
   abortIfOwnerChanged(ownerPubky);
-  if (outcome !== 'ready') return;
+  if (outcome !== 'ready') {
+    await holdControlPam(item, ownerPubky, peerPubky, outcome);
+    return;
+  }
   try {
     const handle = requireEstablishedHandle(ownerPubky, peerPubky);
     const wireJson = await wireJsonForNativeSend(
@@ -4706,6 +4739,7 @@ async function dispatchPersistedControlPam(
       item.messageId,
     );
     const { snapshot } = await PaykitLinkNative.sendPrivateMessageJson(handle, wireJson);
+    abortIfOwnerChanged(ownerPubky);
     await StorageService.finalizeControlSend({
       ownerPubky,
       peerPubky,
@@ -4714,6 +4748,7 @@ async function dispatchPersistedControlPam(
     });
   } catch (err) {
     if (err instanceof LinkSendError && err.code === 'owner-changed') throw err;
+    await holdControlPam(item, ownerPubky, peerPubky, err);
   }
 }
 
@@ -4864,6 +4899,20 @@ function parseRetryPayload(payload: string): AnyLinkRetryPayload | null {
       rawJson: candidate.rawJson,
     };
   }
+  if (
+    candidate.type === LINK_CONTROL_PAYLOAD_TYPE ||
+    (candidate.type === LINK_RETRY_PAYLOAD_TYPE && isLegacyControlKind(candidate.kind))
+  ) {
+    return {
+      type: LINK_CONTROL_PAYLOAD_TYPE,
+      ownerPubky: candidate.ownerPubky,
+      peerPubky: candidate.peerPubky,
+      senderPubky: candidate.senderPubky,
+      kind: candidate.kind,
+      eventId: candidate.eventId,
+      rawJson: candidate.rawJson,
+    };
+  }
   if (candidate.type !== LINK_RETRY_PAYLOAD_TYPE) return null;
   return {
     type: LINK_RETRY_PAYLOAD_TYPE,
@@ -4935,6 +4984,32 @@ async function closeQuietly(linkId: string): Promise<void> {
   } catch (err) {
     if (isLinkNativeError(err) && err.code === 'unavailable') throw err;
   }
+}
+
+async function dropLiveHandleQuietly(ownerPubky: PubkyKey, peerPubky: PubkyKey): Promise<void> {
+  const key = linkKey(ownerPubky, peerPubky);
+  const live = liveHandles.get(key);
+  if (!live) return;
+  liveHandles.delete(key);
+  await closeQuietly(live.linkId);
+}
+
+function isLegacyControlKind(kind: string): boolean {
+  return kind === CHAT_DELETE_KIND || kind === CHAT_TAG_KIND || kind === CHAT_RECEIPT_KIND;
+}
+
+async function holdControlPam(
+  item: DeliveryQueueItem,
+  ownerPubky: PubkyKey,
+  peerPubky: PubkyKey,
+  reason: unknown,
+): Promise<void> {
+  const detail = typeof reason === 'string' ? reason : errorMessage(reason);
+  console.warn(`[LinkService] Control PAM send deferred for ${peerPubky}:`, detail);
+  if (isLinkNativeError(reason) && reason.code === 'protocol') {
+    await dropLiveHandleQuietly(ownerPubky, peerPubky);
+  }
+  await RetryQueue.defer(item.id, item.attempts);
 }
 
 const SIGN_OUT_MARKER_WRITE_FAILED = 'sign-out marker write failed';

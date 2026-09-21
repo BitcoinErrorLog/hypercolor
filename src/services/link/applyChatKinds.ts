@@ -31,7 +31,7 @@ import {
 
 export { parseChatReceiptV0, parseChatTagV0 };
 
-const LINK_RETRY_PAYLOAD_TYPE = 'link.chat.message';
+const LINK_CONTROL_PAYLOAD_TYPE = 'link.chat.control';
 export type InboundDeleteResult = 'applied' | 'deferred' | 'rejected' | 'unprocessed';
 
 export async function applyInboundTagOrReceipt(input: {
@@ -492,7 +492,7 @@ export function controlRetryPayload(
   kind: string,
 ): Record<string, string> {
   return {
-    type: LINK_RETRY_PAYLOAD_TYPE,
+    type: LINK_CONTROL_PAYLOAD_TYPE,
     ownerPubky,
     peerPubky,
     senderPubky: ownerPubky,
