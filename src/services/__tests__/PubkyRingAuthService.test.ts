@@ -18,21 +18,33 @@ jest.mock('../KeyStore', () => ({
   },
 }));
 
-jest.mock('../link/PaykitLinkNative', () => {
-  const actual = jest.requireActual('../link/PaykitLinkNative') as typeof import('../link/PaykitLinkNative');
-  return {
-    ...actual,
-    PaykitLinkNative: {
-      isAvailable: jest.fn(() => false),
-      startAuthFlow: jest.fn(),
-      awaitAuthApproval: jest.fn(),
-      cancelAuthFlow: jest.fn(),
-      stopAuthKeepalive: jest.fn(),
-      signOutSession: jest.fn(),
-      sessionCapabilities: jest.fn(),
-    },
-  };
-});
+jest.mock('../link/PaykitLinkNative', () => ({
+  isLinkNativeError: (err: unknown) => {
+    if (typeof err !== 'object' || err === null) return false;
+    const code = (err as { code?: unknown }).code;
+    return (
+      typeof code === 'string' &&
+      [
+        'network',
+        'auth',
+        'protocol',
+        'consumed',
+        'validation',
+        'unavailable',
+        'auth_flow_cancelled',
+      ].includes(code)
+    );
+  },
+  PaykitLinkNative: {
+    isAvailable: jest.fn(() => false),
+    startAuthFlow: jest.fn(),
+    awaitAuthApproval: jest.fn(),
+    cancelAuthFlow: jest.fn(),
+    stopAuthKeepalive: jest.fn(),
+    signOutSession: jest.fn(),
+    sessionCapabilities: jest.fn(),
+  },
+}));
 
 jest.mock('../link/LinkService', () => ({
   LinkService: {
@@ -42,6 +54,8 @@ jest.mock('../link/LinkService', () => ({
   },
 }));
 
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { Linking } from 'react-native';
 import { KeyStore } from '../KeyStore';
 import {
@@ -61,7 +75,7 @@ import { PaykitLinkNative } from '../link/PaykitLinkNative';
 import { LinkService } from '../link/LinkService';
 
 const OWNER_A = 'gcumbhd7sqit6nn457jxmrwqx9pyymqwamnarekgo3xppqo6a19o';
-const OWNER_B = 'ybndrfg8ejkmcpqxot1uwisza345h769ybndrfg8ejkmcpqxot1u';
+const OWNER_B = 'operrr8wsbpr3ue9d4qj41ge1kcc6r7fdiy6o3ugjrrhi4y77rdo';
 const ORIGIN = 'https://homeserver.staging.pubky.app';
 const AUTH_SECRET = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
 const AUTH_RELAY = 'https://httprelay.pubky.app/link/';
@@ -125,7 +139,10 @@ describe('PubkyRingAuthService pubkyauth ceremony', () => {
       capabilities: RING_GRANT_CAPABILITIES,
       origin: ORIGIN,
     });
-    jest.mocked(LinkService.adoptApprovedSession).mockResolvedValue(undefined);
+    jest.mocked(LinkService.adoptApprovedSession).mockResolvedValue({
+      alias: 'alias-a',
+      pubky: OWNER_A,
+    });
     jest.mocked(LinkService.provisionReceiverAfterConnect).mockResolvedValue({
       pubky: OWNER_A,
       receiverPath: 'hypercolor/wallet',
@@ -242,7 +259,10 @@ describe('PubkyRingAuthService pubkyauth ceremony', () => {
       sessionAlias: 'alias-fresh',
     });
     expect(LinkService.adoptApprovedSession).not.toHaveBeenCalled();
-    await expect(confirmFreshIdentity()).resolves.toMatchObject({ kind: 'adopted', pubky: OWNER_A });
+    await expect(confirmFreshIdentity()).resolves.toMatchObject({
+      kind: 'adopted',
+      pubky: OWNER_A,
+    });
     expect(LinkService.adoptApprovedSession).toHaveBeenCalledWith('alias-fresh', OWNER_A);
   });
 
@@ -286,10 +306,7 @@ describe('PubkyRingAuthService pubkyauth ceremony', () => {
   });
 
   it('does not persist the authorization URL in KeyStore', () => {
-    const source = jest.requireActual('node:fs').readFileSync(
-      require('node:path').join(__dirname, '../PubkyRingAuthService.ts'),
-      'utf8',
-    ) as string;
+    const source = readFileSync(join(__dirname, '../PubkyRingAuthService.ts'), 'utf8');
     expect(source).not.toMatch(/setPendingRingHandoff/);
     expect(source).not.toMatch(/authorizationUrl.*MMKV|AsyncStorage/);
   });

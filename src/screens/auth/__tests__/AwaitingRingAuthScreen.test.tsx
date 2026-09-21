@@ -32,6 +32,24 @@ jest.mock('../../../utils/copyText', () => ({
   copyText: (...args: unknown[]) => mockSetString(...args),
 }));
 
+jest.mock('../../../stores/authStore', () => {
+  const setAuthenticated = jest.fn();
+  const store = { setAuthenticated };
+  const useAuthStore = (selector: (s: typeof store) => unknown) => selector(store);
+  useAuthStore.getState = () => store;
+  return { useAuthStore };
+});
+
+jest.mock('../../../services/link/LinkService', () => ({
+  LinkService: {
+    provisionReceiverAfterConnect: jest.fn().mockResolvedValue({
+      pubky: 'gcumbhd7sqit6nn457jxmrwqx9pyymqwamnarekgo3xppqo6a19o',
+      receiverPath: 'hypercolor/wallet',
+      noisePublicKey: 'noise',
+    }),
+  },
+}));
+
 jest.mock('../../../services/PubkyRingAuthService', () => ({
   PubkyRingAuthService: {
     cancelPendingDelegation: jest.fn().mockResolvedValue(undefined),

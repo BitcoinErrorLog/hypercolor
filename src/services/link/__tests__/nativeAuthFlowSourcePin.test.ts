@@ -52,9 +52,9 @@ describe('native auth-flow source pin', () => {
     expect(IOS_MODULE).toContain('func sessionForCapabilityInspect(');
     expect(IOS_MODULE).toContain('func pinnedHomeserverOrigin(');
     expect(IOS_MODULE).toContain('try await self.sessionForCapabilityInspect(');
-    expect(IOS_MODULE.indexOf('pinnedHomeserverOrigin(owner: owner, jsHint: origin)')).toBeGreaterThan(
-      -1,
-    );
+    expect(
+      IOS_MODULE.indexOf('pinnedHomeserverOrigin(owner: owner, jsHint: origin)'),
+    ).toBeGreaterThan(-1);
     expect(IOS_MODULE.indexOf('pinnedHomeserverOrigin(owner: owner, jsHint: origin)')).toBeLessThan(
       IOS_MODULE.indexOf('forHTTPHeaderField: "Cookie"'),
     );

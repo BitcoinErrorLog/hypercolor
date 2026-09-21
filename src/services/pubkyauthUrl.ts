@@ -1,7 +1,4 @@
-import {
-  RING_GRANT_CAPABILITIES,
-  capabilitiesCoverRingGrant,
-} from '../types/link';
+import { RING_GRANT_CAPABILITIES, capabilitiesCoverRingGrant } from '../types/link';
 
 export const ALLOWED_PUBKYAUTH_RELAY_HOST = 'httprelay.pubky.app';
 

@@ -22,11 +22,7 @@ describe('parsePubkyauthAuthorizationUrl', () => {
   });
 
   it('rejects a non-https or non-allowlisted relay', () => {
-    expect(() => assertAllowedPubkyauthRelay('http://httprelay.pubky.app/link/')).toThrow(
-      'https',
-    );
-    expect(() => assertAllowedPubkyauthRelay('https://evil.example/link/')).toThrow(
-      'allowlisted',
-    );
+    expect(() => assertAllowedPubkyauthRelay('http://httprelay.pubky.app/link/')).toThrow('https');
+    expect(() => assertAllowedPubkyauthRelay('https://evil.example/link/')).toThrow('allowlisted');
   });
 });

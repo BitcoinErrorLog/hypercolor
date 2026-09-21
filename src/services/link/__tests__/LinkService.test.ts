@@ -95,6 +95,7 @@ jest.mock('../PaykitLinkNative', () => ({
     closeLink: jest.fn(),
     putPublic: jest.fn(),
     deletePublic: jest.fn(),
+    sessionCapabilities: jest.fn(),
   },
   isLinkNativeError: (err: unknown) => {
     if (typeof err !== 'object' || err === null) return false;
@@ -261,6 +262,7 @@ jest.mock('../../KeyStore', () => ({
   KeyStore: {
     getPubky: jest.fn(),
     setPubky: jest.fn(),
+    setHomeserver: jest.fn(),
     getLinkSession: jest.fn(),
     setLinkSession: jest.fn(),
     deleteLinkSession: jest.fn(),
@@ -548,6 +550,10 @@ describe('LinkService', () => {
     mockedNative.clearAllNativeSecrets.mockResolvedValue(undefined);
     mockedNative.stopAuthKeepalive.mockResolvedValue(undefined);
     mockedNative.cancelAuthFlow.mockResolvedValue(undefined);
+    mockedNative.sessionCapabilities.mockResolvedValue({
+      capabilities: '/pub/paykit/:rw,/pub/hypercolor.app/v1/:rw',
+      origin: 'https://homeserver.example',
+    });
     mockedNative.closeLink.mockResolvedValue(undefined);
     mockedNative.probeInboundLink.mockResolvedValue({ result: 'none' });
     mockedNative.getReceiverPublicKey.mockResolvedValue(PEER_NOISE);

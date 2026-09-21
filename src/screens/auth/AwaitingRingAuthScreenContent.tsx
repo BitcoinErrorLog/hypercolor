@@ -130,7 +130,9 @@ export function AwaitingRingAuthScreenContent({
               <Button
                 testID="awaitingRingAuthConfirm"
                 label={COPY.confirmThisIdentity}
-                onPress={onConfirmIdentity}
+                onPress={() => {
+                  onConfirmIdentity?.();
+                }}
               />
             </View>
           ) : null}

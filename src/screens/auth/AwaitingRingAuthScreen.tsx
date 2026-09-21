@@ -107,33 +107,39 @@ export default function AwaitingRingAuthScreen() {
     [applyAdopted],
   );
 
-  const watchApproval = useCallback(async (generation: number) => {
-    watchGenRef.current = generation;
-    try {
-      const result = await PubkyRingAuthService.watchPendingApproval();
-      if (watchGenRef.current !== generation) return;
-      if (result.kind === 'confirm') {
-        setConfirmPubky(result.pubky);
-        setPhase('confirm');
-        return;
+  const watchApproval = useCallback(
+    async (generation: number) => {
+      watchGenRef.current = generation;
+      try {
+        const result = await PubkyRingAuthService.watchPendingApproval();
+        if (watchGenRef.current !== generation) return;
+        if (result.kind === 'confirm') {
+          setConfirmPubky(result.pubky);
+          setPhase('confirm');
+          return;
+        }
+        applyAdopted(result.pubky, result.homeserver);
+      } catch (err) {
+        if (watchGenRef.current !== generation) return;
+        if (handleProvisionFailure(err)) return;
+        if (PubkyRingAuthService.isStaleDelegationRequestError(err)) return;
+        const sanitized = sanitizeError(err, COPY.couldNotCompleteAuthorization);
+        if (
+          PubkyRingAuthService.isExpiredDelegationError(err) ||
+          sanitized.category === 'expired'
+        ) {
+          setPhase('expired');
+        } else if (sanitized.category === 'denied') {
+          setPhase('denied');
+        } else if (sanitized.category === 'offline' || sanitized.category === 'network') {
+          setPhase('offline');
+        } else {
+          setPhase('denied');
+        }
       }
-      applyAdopted(result.pubky, result.homeserver);
-    } catch (err) {
-      if (watchGenRef.current !== generation) return;
-      if (handleProvisionFailure(err)) return;
-      if (PubkyRingAuthService.isStaleDelegationRequestError(err)) return;
-      const sanitized = sanitizeError(err, COPY.couldNotCompleteAuthorization);
-      if (PubkyRingAuthService.isExpiredDelegationError(err) || sanitized.category === 'expired') {
-        setPhase('expired');
-      } else if (sanitized.category === 'denied') {
-        setPhase('denied');
-      } else if (sanitized.category === 'offline' || sanitized.category === 'network') {
-        setPhase('offline');
-      } else {
-        setPhase('denied');
-      }
-    }
-  }, [applyAdopted, handleProvisionFailure]);
+    },
+    [applyAdopted, handleProvisionFailure],
+  );
 
   const startNewDelegation = useCallback(async () => {
     const token = tryBeginConnectDelegation();
