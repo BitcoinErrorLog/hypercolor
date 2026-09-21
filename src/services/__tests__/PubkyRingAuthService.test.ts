@@ -250,6 +250,19 @@ describe('PubkyRingAuthService pubkyauth ceremony', () => {
     expect(KeyStore.getPubky()).toBe(OWNER_A);
   });
 
+  it('revokes an unconfirmed fresh alias when a new authorization is minted', async () => {
+    const first = await mintFlow();
+    first.approval.resolve({ sessionAlias: 'alias-fresh', pubky: OWNER_A });
+    await expect(watchPendingApproval()).resolves.toMatchObject({
+      kind: 'confirm',
+      sessionAlias: 'alias-fresh',
+    });
+    await mintFlow();
+    expect(LinkService.signOutSessionQuiet).toHaveBeenCalledWith('alias-fresh');
+    expect(LinkService.adoptApprovedSession).not.toHaveBeenCalled();
+    expect(KeyStore.setPubky).not.toHaveBeenCalled();
+  });
+
   it('requires Confirm before KeyStore commit on a fresh Welcome identity', async () => {
     const { approval } = await mintFlow();
     approval.resolve({ sessionAlias: 'alias-fresh', pubky: OWNER_A });

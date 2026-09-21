@@ -240,10 +240,20 @@ async function adoptAndProvision(
 export async function requestDelegation(_deviceId?: string): Promise<DelegationRequest> {
   const myGen = ++delegationGeneration;
   const previousFlowId = _pending?.flowId ?? null;
+  const previousAwait = _pending?.awaitPromise;
+  const previousConfirm = _pendingConfirm;
   if (previousFlowId) {
     void disposeAuthFlow(previousFlowId);
   }
+  if (previousAwait) {
+    void previousAwait
+      .then(session => LinkService.signOutSessionQuiet(session.sessionAlias))
+      .catch(() => undefined);
+  }
   _pendingConfirm = null;
+  if (previousConfirm) {
+    await revokeUncommittedAlias(previousConfirm.sessionAlias);
+  }
 
   if (!PaykitLinkNative.isAvailable()) {
     throw new Error(COPY.couldNotStartAuthorization);
@@ -427,6 +437,9 @@ export async function rejectFreshIdentity(): Promise<void> {
   const confirm = _pendingConfirm;
   _pendingConfirm = null;
   if (!confirm) return;
+  if (_pending?.generation === confirm.generation) {
+    _pending = null;
+  }
   await revokeUncommittedAlias(confirm.sessionAlias);
 }
 
