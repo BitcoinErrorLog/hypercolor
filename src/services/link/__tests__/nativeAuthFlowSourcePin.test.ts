@@ -38,4 +38,25 @@ describe('native auth-flow source pin', () => {
     expect(IOS_MODULE).not.toContain('chatKindsV');
     expect(IOS_MODULE).not.toContain('Mirror(reflecting: marker)');
   });
+
+  it('pins F1 origin before Cookie and F7 pending inspect', () => {
+    expect(ANDROID_MODULE).toContain('fun pinnedHomeserverOrigin(');
+    expect(ANDROID_MODULE).toContain('fun sessionForCapabilityInspect(');
+    expect(ANDROID_MODULE).toContain('sessionForCapabilityInspect(requireText(sessionAlias');
+    expect(ANDROID_MODULE).toContain('if (hintClean != pinned)');
+    expect(ANDROID_MODULE.indexOf('pinnedHomeserverOrigin(owner, origin)')).toBeGreaterThan(-1);
+    expect(ANDROID_MODULE.indexOf('pinnedHomeserverOrigin(owner, origin)')).toBeLessThan(
+      ANDROID_MODULE.indexOf('setRequestProperty("Cookie"'),
+    );
+    expect(ANDROID_MODULE).toContain('fun writePublic(');
+    expect(IOS_MODULE).toContain('func sessionForCapabilityInspect(');
+    expect(IOS_MODULE).toContain('func pinnedHomeserverOrigin(');
+    expect(IOS_MODULE).toContain('try await self.sessionForCapabilityInspect(');
+    expect(IOS_MODULE.indexOf('pinnedHomeserverOrigin(owner: owner, jsHint: origin)')).toBeGreaterThan(
+      -1,
+    );
+    expect(IOS_MODULE.indexOf('pinnedHomeserverOrigin(owner: owner, jsHint: origin)')).toBeLessThan(
+      IOS_MODULE.indexOf('forHTTPHeaderField: "Cookie"'),
+    );
+  });
 });

@@ -88,9 +88,9 @@ export interface MeshPeer {
 export type AuthStackParamList = {
   Welcome: undefined;
   /**
-   * Waiting for `hypercolor://ring-callback`.
-   * `ringAuthUrl` is the `pubkyring://paykit-connect…` link shown as QR + copy.
-   * URL, absolute `expiresAt`, and `generation` are one handoff; a restore
+   * Waiting for httprelay approval of the raw `pubkyauth://` URL.
+   * `ringAuthUrl` is that authorization URL shown as QR + copy.
+   * URL, absolute `expiresAt`, and `generation` are one flow; a restore
    * without that record is expired — never a fabricated TTL.
    */
   AwaitingRingAuth: { ringAuthUrl: string; expiresAt?: number; generation?: number };

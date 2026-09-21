@@ -2,8 +2,10 @@ import {
   HYPERCOLOR_WRITE_CAPABILITY,
   PAYKIT_MESSAGING_CAPABILITY,
   RING_GRANT_CAPABILITIES,
+  capabilitiesCoverRingGrant,
   capabilityCoversPaykitRw,
   formatAuthFlowCapabilities,
+  scopeCovers,
 } from '../link';
 
 describe('formatAuthFlowCapabilities', () => {
@@ -48,5 +50,20 @@ describe('formatAuthFlowCapabilities', () => {
     expect(() => formatAuthFlowCapabilities('/pub/paykit/:r')).toThrow('/pub/paykit/');
     expect(() => formatAuthFlowCapabilities('')).toThrow('at least one');
     expect(() => formatAuthFlowCapabilities('   ,  ')).toThrow('at least one');
+  });
+});
+
+describe('capabilitiesCoverRingGrant', () => {
+  it('accepts reordered RING_GRANT entries and a covering /pub/:rw directory', () => {
+    expect(
+      capabilitiesCoverRingGrant(`${HYPERCOLOR_WRITE_CAPABILITY},${PAYKIT_MESSAGING_CAPABILITY}`),
+    ).toBe(true);
+    expect(capabilitiesCoverRingGrant('/pub/:rw')).toBe(true);
+    expect(scopeCovers('/pub/', '/pub/paykit/')).toBe(true);
+  });
+
+  it('fails when /pub/hypercolor.app/v1/:rw is missing', () => {
+    expect(capabilitiesCoverRingGrant(PAYKIT_MESSAGING_CAPABILITY)).toBe(false);
+    expect(capabilitiesCoverRingGrant('/pub/paykit/:r,/pub/hypercolor.app/v1/:rw')).toBe(false);
   });
 });

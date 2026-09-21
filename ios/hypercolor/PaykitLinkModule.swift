@@ -3,6 +3,7 @@ import Foundation
 import os
 import React
 import Security
+import react_native_pubky
 
 private let paykitLinkLog = Logger(subsystem: "com.hypercolor", category: "PaykitLink")
 
@@ -690,6 +691,23 @@ class PaykitLinkModule: NSObject, RCTInvalidating {
                 method: "DELETE"
             )
             return NSNull()
+        }
+    }
+
+    @objc func sessionCapabilities(
+        _ sessionAlias: String,
+        resolver resolve: @escaping RCTPromiseResolveBlock,
+        rejecter reject: @escaping RCTPromiseRejectBlock
+    ) {
+        runAsync(resolve, reject) {
+            let session = try await self.sessionForCapabilityInspect(
+                try Self.requireText(sessionAlias, name: "sessionAlias")
+            )
+            let inspected = try await self.inspectSessionCapabilities(session: session)
+            return [
+                "capabilities": inspected.capabilities,
+                "origin": inspected.origin,
+            ]
         }
     }
 
@@ -1445,6 +1463,21 @@ class PaykitLinkModule: NSObject, RCTInvalidating {
         }
     }
 
+    /// F7 inspect-only: pending aliases may restore so `/session` GET can
+    /// run before persistThenAdopt. Does not write back a rotated bearer
+    /// and does not cache. putPublic/deletePublic stay on `session(_:)`,
+    /// which still refuses pending.
+    private func sessionForCapabilityInspect(_ alias: String) async throws -> ChatSession {
+        if let live = lock.withLock({ self.sessions[alias] }) {
+            return live
+        }
+        let bearer = try PaykitLinkStore.getString(account: PaykitLinkStore.sessionAccount(alias))
+        guard let bearer, !bearer.isEmpty else {
+            throw PaykitLinkBridgeError(code: "auth", message: "session alias not found")
+        }
+        return try await chatClient().restoreSession(exportedSession: bearer)
+    }
+
     private func session(_ alias: String) async throws -> ChatSession {
         let pendingInMemory = lock.withLock { pendingSessionAliases.contains(alias) }
         let live = lock.withLock { sessions[alias] }
@@ -1575,10 +1608,7 @@ class PaykitLinkModule: NSObject, RCTInvalidating {
     ) async throws {
         let owner = session.pubky()
         let path = try Self.ownerStoragePath(url: url, expectedOwner: owner)
-        var originClean = origin.trimmingCharacters(in: .whitespacesAndNewlines)
-        while originClean.hasSuffix("/") {
-            originClean.removeLast()
-        }
+        let originClean = try await Self.pinnedHomeserverOrigin(owner: owner, jsHint: origin)
         let exported = session.exportSession()
         let cookie = Self.homeserverSessionCookie(exported, owner: owner)
         guard let httpURL = URL(string: originClean + path + "?pubky-host=" + owner) else {
@@ -1643,6 +1673,150 @@ class PaykitLinkModule: NSObject, RCTInvalidating {
             throw PaykitLinkBridgeError(code: "validation", message: "url path must start with /pub/")
         }
         return path
+    }
+
+    private static let stagingHomeserverPubky =
+        "ufibwbmed6jeq9k4p583go95wofakh9fwpp4k734trq79pd9u1uy"
+    private static let stagingHomeserverOrigin = "https://homeserver.staging.pubky.app"
+
+    private static func unwrapPubkyCore(_ result: [String]) -> String? {
+        guard result.count >= 2, result[0] == "ok", !result[1].isEmpty else { return nil }
+        return result[1]
+    }
+
+    private static func normalizeHttpsOrigin(_ raw: String) throws -> String {
+        var trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        while trimmed.hasSuffix("/") {
+            trimmed.removeLast()
+        }
+        let withScheme = trimmed.contains("://") ? trimmed : "https://\(trimmed)"
+        guard let parsed = URL(string: withScheme),
+              parsed.scheme?.lowercased() == "https",
+              let host = parsed.host, !host.isEmpty
+        else {
+            throw PaykitLinkBridgeError(code: "validation", message: "validation failed")
+        }
+        if let port = parsed.port, port != 443 {
+            return "https://\(host):\(port)"
+        }
+        return "https://\(host)"
+    }
+
+    private static func originFromHomeserverHint(_ hint: String) async -> String? {
+        let trimmed = hint.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return nil }
+        if trimmed.lowercased().hasPrefix("https://") || trimmed.lowercased().hasPrefix("http://") {
+            return try? normalizeHttpsOrigin(trimmed)
+        }
+        let resolvedJson: String?
+        do {
+            resolvedJson = unwrapPubkyCore(try await react_native_pubky.resolveHttps(publicKey: trimmed))
+        } catch {
+            resolvedJson = nil
+        }
+        if let resolvedJson,
+           let data = resolvedJson.data(using: .utf8),
+           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let records = json["https_records"] as? [[String: Any]],
+           let rec = records.first,
+           let targetRaw = rec["target"] as? String
+        {
+            var target = targetRaw
+            while target.hasSuffix(".") { target.removeLast() }
+            if !target.isEmpty && target != "." {
+                let port = rec["port"] as? Int ?? 443
+                let portPart = (port != 0 && port != 443) ? ":\(port)" : ""
+                return "https://\(target)\(portPart)"
+            }
+        }
+        if trimmed == stagingHomeserverPubky {
+            return stagingHomeserverOrigin
+        }
+        return nil
+    }
+
+    /// F1: derive the HTTPS origin from the session owner's pkarr homeserver
+    /// before any Cookie header is set. JS origin is a hint only.
+    private static func pinnedHomeserverOrigin(owner: String, jsHint: String?) async throws -> String {
+        let hs: String?
+        do {
+            hs = unwrapPubkyCore(try await react_native_pubky.getHomeserver(pubky: owner))
+        } catch {
+            hs = nil
+        }
+        let derived: String?
+        if let hs {
+            derived = await originFromHomeserverHint(hs)
+        } else {
+            derived = nil
+        }
+        guard let pinned = derived else {
+            throw PaykitLinkBridgeError(code: "validation", message: "validation failed")
+        }
+        if let jsHint, !jsHint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            let hintClean = try normalizeHttpsOrigin(jsHint)
+            if hintClean != pinned {
+                throw PaykitLinkBridgeError(code: "validation", message: "validation failed")
+            }
+        }
+        return pinned
+    }
+
+    private func inspectSessionCapabilities(session: ChatSession) async throws -> (capabilities: String, origin: String) {
+        let owner = session.pubky()
+        let originClean = try await Self.pinnedHomeserverOrigin(owner: owner, jsHint: nil)
+        let exported = session.exportSession()
+        let cookie = Self.homeserverSessionCookie(exported, owner: owner)
+        guard let httpURL = URL(string: originClean + "/session?pubky-host=" + owner) else {
+            throw PaykitLinkBridgeError(code: "validation", message: "invalid homeserver origin")
+        }
+        var request = URLRequest(url: httpURL)
+        request.httpMethod = "GET"
+        request.httpShouldHandleCookies = false
+        request.setValue("\(owner)=\(cookie)", forHTTPHeaderField: "Cookie")
+        request.setValue(owner, forHTTPHeaderField: "pubky-host")
+        let config = URLSessionConfiguration.ephemeral
+        config.httpCookieStorage = nil
+        config.timeoutIntervalForRequest = 30
+        config.timeoutIntervalForResource = 30
+        do {
+            let session = URLSession(
+                configuration: config,
+                delegate: RejectHttpRedirects(),
+                delegateQueue: nil
+            )
+            let (data, response) = try await session.data(for: request)
+            guard let http = response as? HTTPURLResponse else {
+                throw PaykitLinkBridgeError(code: "network", message: "network error")
+            }
+            if http.statusCode == 401 || http.statusCode == 403 {
+                throw PaykitLinkBridgeError(code: "auth", message: "authentication failed")
+            }
+            if !(200...299).contains(http.statusCode) {
+                throw PaykitLinkBridgeError(code: "protocol", message: "protocol error")
+            }
+            let body = String(data: data, encoding: .utf8) ?? ""
+            return (Self.capabilitiesFromSessionJson(body), originClean)
+        } catch let bridge as PaykitLinkBridgeError {
+            throw bridge
+        } catch {
+            throw PaykitLinkBridgeError(code: "network", message: "network error")
+        }
+    }
+
+    private static func capabilitiesFromSessionJson(_ body: String) -> String {
+        guard let data = body.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else {
+            return ""
+        }
+        if let parts = json["capabilities"] as? [String] {
+            return parts.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }.joined(separator: ",")
+        }
+        if let raw = json["capabilities"] as? String {
+            return raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return ""
     }
 
     /// Paykit `exportSession()` is pubky-sdk `export_secret()`:

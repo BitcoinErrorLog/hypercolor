@@ -44,17 +44,60 @@ export const HYPERCOLOR_WRITE_CAPABILITY = '/pub/hypercolor.app/v1/:rw';
  * entries. `/pub/paykit/:rw` (or a directory prefix / `/`) is required.
  */
 const AUTH_FLOW_CAPABILITY_PATTERN = /^\/[^:]*:[rw]+$/;
-const PAYKIT_AUTH_SCOPE = '/pub/paykit/';
+
+export type ParsedCapability = { scope: string; actions: string };
+
+/** Split `<scope>:<actions>` on the last colon. Null when the shape is empty. */
+export function parseCapability(entry: string): ParsedCapability | null {
+  const trimmed = entry.trim();
+  const colon = trimmed.lastIndexOf(':');
+  if (colon <= 0) return null;
+  const scope = trimmed.slice(0, colon);
+  const actions = trimmed.slice(colon + 1);
+  if (!scope.startsWith('/') || actions.length === 0) return null;
+  return { scope, actions };
+}
+
+/**
+ * Directory-prefix coverage (Paykit FFI `scope_covers`): a grant covers a
+ * required scope when they are equal, or when the grant is a directory
+ * (`…/`) whose prefix is the required path.
+ */
+export function scopeCovers(grantScope: string, requiredScope: string): boolean {
+  if (grantScope === requiredScope) return true;
+  return grantScope.endsWith('/') && requiredScope.startsWith(grantScope);
+}
+
+/**
+ * True when `entry` covers `required` (`<scope>:<actions>`). Actions on the
+ * grant must include every action on the required capability.
+ */
+export function capabilityCoversGrant(entry: string, required: string): boolean {
+  const grant = parseCapability(entry);
+  const need = parseCapability(required);
+  if (!grant || !need) return false;
+  for (const action of need.actions) {
+    if (!grant.actions.includes(action)) return false;
+  }
+  return scopeCovers(grant.scope, need.scope);
+}
 
 /** True when one capability grants read+write over `/pub/paykit/`. */
 export function capabilityCoversPaykitRw(entry: string): boolean {
-  const colon = entry.lastIndexOf(':');
-  if (colon <= 0) return false;
-  const scope = entry.slice(0, colon);
-  const actions = entry.slice(colon + 1);
-  if (!actions.includes('r') || !actions.includes('w')) return false;
+  return capabilityCoversGrant(entry, PAYKIT_MESSAGING_CAPABILITY);
+}
+
+function splitCapabilityList(input: string | readonly string[]): string[] {
+  const rawParts: readonly string[] = typeof input === 'string' ? input.split(',') : input;
+  return rawParts.map(part => part.trim()).filter(part => part.length > 0);
+}
+
+/** True when the list covers both RING_GRANT scopes (prefix-on-directory). */
+export function capabilitiesCoverRingGrant(input: string | readonly string[]): boolean {
+  const parts = splitCapabilityList(input);
   return (
-    scope === PAYKIT_AUTH_SCOPE || (scope.endsWith('/') && PAYKIT_AUTH_SCOPE.startsWith(scope))
+    parts.some(part => capabilityCoversGrant(part, PAYKIT_MESSAGING_CAPABILITY)) &&
+    parts.some(part => capabilityCoversGrant(part, HYPERCOLOR_WRITE_CAPABILITY))
   );
 }
 
@@ -82,8 +125,8 @@ export function formatAuthFlowCapabilities(input: string | readonly string[]): s
 }
 
 /**
- * One Ring grant for DMs + owner writes. Requested by Welcome combined
- * Connect (`startAuthFlow` + paykit-connect QR) and Enable Messaging recovery.
+ * One Ring grant for DMs + owner writes. Requested by Welcome Connect
+ * (`startAuthFlow` + raw `pubkyauth://` URL) and Enable Messaging recovery.
  */
 export const RING_GRANT_CAPABILITIES = formatAuthFlowCapabilities([
   PAYKIT_MESSAGING_CAPABILITY,

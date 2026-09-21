@@ -11,6 +11,11 @@ import {
 import { StorageService } from '../StorageService';
 import { KeyStore } from '../KeyStore';
 import { parsePubkyOwner, resolveHomeserverOrigin } from '../homeserverOrigin';
+import {
+  rejectIfOwnerMismatch,
+  requireRingGrantCoverage,
+  ScopesDeclinedError,
+} from '../adoptSessionGates';
 import { RetryQueue } from '../RetryQueue';
 import { isConnectDelegationInFlight } from '../../ui/connectDelegationStart';
 import {
@@ -111,9 +116,10 @@ import {
  *
  * ## Product wiring (v1)
  *
- * - Welcome combined grant: `startAuthFlow` is minted with the paykit-connect
- *   QR; after one Ring sheet, `adoptApprovedSession` then UKD keys then
- *   `provisionReceiver`. `LinkService.enable()` remains recovery / old Ring.
+ * - Welcome Connect: `startAuthFlow` mints a raw `pubkyauth://` URL; after
+ *   Ring approval, F2/F7 gates then `adoptApprovedSession` then
+ *   `provisionReceiver`. `LinkService.enable()` is recovery for the same
+ *   grant.
  * - App startup / `AppState` `'active'` (App.tsx):
  *     `await LinkService.recoverPendingSends();`
  *     `await LinkService.drainRetries();`
@@ -423,7 +429,7 @@ export const LinkService = {
 
   /**
    * Publish the receiver marker for the already-adopted Connect session.
-   * Used after UKD keys are persisted, and as the Retry-publish CTA.
+   * Used after the homeserver session is persisted, and as the Retry-publish CTA.
    */
   async provisionReceiverAfterConnect(): Promise<{
     pubky: string;
@@ -646,11 +652,23 @@ export const LinkService = {
               }
               throw new Error('LinkService.enable: the messaging enable flow was cancelled');
             }
+            await rejectIfOwnerMismatch(sessionAlias, pubky);
+            const inspected = await requireRingGrantCoverage(sessionAlias);
             await persistThenAdopt(sessionAlias);
             KeyStore.setPubky(pubky);
+            KeyStore.setHomeserver(inspected.origin);
             session = { alias: sessionAlias, pubky };
             paintOwner(pubky);
-            return provisionReceiver(sessionAlias, pubky);
+            try {
+              return await provisionReceiver(sessionAlias, pubky);
+            } catch (err) {
+              if (isLinkNativeError(err) && err.code === 'auth') {
+                await LinkService.signOutSessionQuiet(sessionAlias);
+                KeyStore.deleteLinkSessionIfAlias(sessionAlias);
+                throw new ScopesDeclinedError();
+              }
+              throw err;
+            }
           } finally {
             release();
             await stopKeepalive();

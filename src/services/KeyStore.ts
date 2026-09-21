@@ -5,21 +5,23 @@ import { createMMKV, type MMKV } from 'react-native-mmkv';
 import { isValidPubky } from '../utils/pubkyId';
 
 /**
- * KeyStore — two-tier storage for delegated identity data.
+ * KeyStore — two-tier storage for the Paykit homeserver session alias and
+ * public identity metadata.
  *
- * Hypercolor never holds a root Ed25519 secret key.
- * All cryptographic material is delegated from pubky-ring via AppCert/UKD.
+ * Hypercolor never holds a root Ed25519 secret key. Write credentials are
+ * the scoped homeserver session created by stock Ring `pubkyauth://`
+ * approval; native owns the cookie bearer. JS persists only the opaque
+ * session alias plus the owner pubky.
  *
  * Sensitive (OS Keychain):
- *   - AppKey Ed25519 keypair (delegated signing key, not root)
- *   - X25519 inbox keypair (for SB2 DM decryption)
- *   - X25519 transport keypair (for Noise sessions)
- *   - AppCert (cert_body + sig proving delegation from root)
+ *   - Retired UKD AppKey / AppCert / inbox (wiped once on upgrade; still
+ *     enumerated on sign-out)
+ *   - X25519 transport keypair (Mesh only, locally minted after wipe)
  *
  * Encrypted MMKV (never opened without a 16-UTF-8-byte derived key):
  *   - pubky (root Ed25519 public key, z-base32)
  *   - homeserver URL
- *   - session_secret
+ *   - session_secret (retired)
  *   - link_session alias
  *
  * The MMKV encryption key is 96 bits, not 128. Nitro marshals
@@ -77,6 +79,8 @@ const MMKV_GENERATION_V2 = 'v2-hkdf';
 const ATTACHMENT_INDEX_PREFIX = 'attachment_key_services:';
 /** DEBUG-only MMKV slot when unsigned iOS sim keychain returns -34018. */
 const DEBUG_ATTACHMENT_PREFIX = 'debug.attachment:';
+const UKD_ORPHANS_WIPED_KEY = 'ukd_orphans_wiped_v1';
+const MESH_TRANSPORT_WIPED_KEY = 'mesh_transport_wiped_v1';
 const BASE64URL_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
 
 let _store: MMKV | null = null;
@@ -376,6 +380,8 @@ export async function initKeyStore(): Promise<void> {
       _store = instance;
       _initialized = true;
       _canaryOk = true;
+      await wipeUkdOrphansOnce(instance);
+      await wipeMeshTransportOnce(instance);
     })();
   }
   try {
@@ -594,10 +600,9 @@ export function deleteLinkSessionIfAlias(alias: string): boolean {
 // ─── Pending Ring handoff (OS Keychain — survives process death) ─────────────
 
 /**
- * Ephemeral X25519 secret used to decrypt `hypercolor://ring-callback`.
- * Must live in Keychain, not only a JS var: iOS may kill Hypercolor while
- * Ring is in the foreground. `expiresAt` is persisted so cold-start
- * redemption can still enforce the handoff TTL.
+ * Leftover fork-handoff Keychain record. Product auth no longer writes
+ * this; first-launch wipe and sign-out still delete it so an old SK
+ * cannot outlive the upgrade.
  */
 type PendingRingHandoffRecord = {
   ephemeralSkHex: string;
@@ -858,8 +863,31 @@ export async function clearAttachmentSecretsForOwner(ownerPubky: string): Promis
 
 export async function hasPersistedSession(): Promise<boolean> {
   if (!isInitialized()) return false;
-  const appKey = await getAppKeypair();
-  return appKey !== null && requireStore('hasPersistedSession').contains(PUBKY_KEY);
+  const read = readLinkSession();
+  if (!read.ok || !read.alias) return false;
+  return requireStore('hasPersistedSession').contains(PUBKY_KEY);
+}
+
+async function wipeUkdOrphansOnce(store: MMKV): Promise<void> {
+  if (store.getBoolean(UKD_ORPHANS_WIPED_KEY) === true) return;
+  await Promise.all([
+    deleteAppKeypair(),
+    Keychain.resetGenericPassword({ service: INBOX_KEY_SERVICE }),
+    Keychain.resetGenericPassword({ service: APP_CERT_SERVICE }),
+    Keychain.resetGenericPassword({ service: RING_PENDING_SERVICE }),
+  ]);
+  try {
+    deleteSessionSecret();
+  } catch {
+    // Store may not expose session_secret on a fresh file.
+  }
+  store.set(UKD_ORPHANS_WIPED_KEY, true);
+}
+
+async function wipeMeshTransportOnce(store: MMKV): Promise<void> {
+  if (store.getBoolean(MESH_TRANSPORT_WIPED_KEY) === true) return;
+  await Keychain.resetGenericPassword({ service: TRANSPORT_KEY_SERVICE });
+  store.set(MESH_TRANSPORT_WIPED_KEY, true);
 }
 
 /**

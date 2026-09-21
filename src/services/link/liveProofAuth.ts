@@ -11,9 +11,9 @@ import {
 /**
  * P6 product-path Ring auth: `startAuthFlow` / `awaitAuthApproval`
  * (`pubkyauth://` + HTTP relay), not `signupWithSecret`. After approval
- * AppCert must already be valid in KeyStore (UKD/identity grant only).
- * Owner writes use the Paykit session from this flow, not AppCert.
- * This row does not mint an AppCert and does not wipe the session.
+ * the link-session alias must restore and the owner must be stored.
+ * Owner writes use the Paykit session from this flow.
+ * This row does not wipe the session.
  */
 export async function runRingAuthLiveProof(
   _config: { homeserverPubky?: string } = {},
@@ -77,19 +77,24 @@ export async function runRingAuthLiveProof(
     }
 
     if (
-      !(await record('assert-appcert', async () => {
-        await pollUntil(
+      !(await record('assert-session-restore', async () => {
+        const pubky = await pollUntil(
           now,
           sleep,
           receiveTimeoutMs,
           pollIntervalMs,
-          () => keyStore.isAppCertValid(),
-          valid => valid,
-          'AppCert after Ring approval',
+          async () => {
+            const stored = keyStore.getPubky();
+            const alias = keyStore.getLinkSession();
+            if (!stored || stored.trim().length === 0 || !alias) return null;
+            await native.adoptAuthSession(alias);
+            return stored;
+          },
+          value => value != null && value.length > 0,
+          'link-session alias restores after Ring approval',
         );
-        const pubky = keyStore.getPubky();
-        if (!pubky || pubky.trim().length === 0) {
-          throw new Error('AppCert is valid but no pubky is stored');
+        if (!pubky) {
+          throw new Error('no pubky is stored after Ring approval');
         }
         return pubky;
       }))
@@ -99,7 +104,7 @@ export async function runRingAuthLiveProof(
   } finally {
     auth.flow?.cancel();
     await record('preserve-ring-session', async () => {
-      return 'session kept for owner writes; AppCert kept for UKD/identity';
+      return 'session kept for owner writes';
     });
   }
 

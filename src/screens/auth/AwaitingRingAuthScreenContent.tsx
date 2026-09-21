@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { SafeAreaView, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AuthQr } from '../../components/AuthQr';
@@ -6,29 +6,39 @@ import { COPY } from '../../copy/uxCopy';
 import { CustodyLine } from '../../ui/CustodyLine';
 import { color, space, typeRole } from '../../theme';
 import { Button, ErrorState, LoadingState, PageHeader } from '../../ui/primitives';
+import { copyText } from '../../utils/copyText';
 
-export type AwaitPhase = 'waiting' | 'expired' | 'denied' | 'offline';
+export type AwaitPhase = 'waiting' | 'expired' | 'denied' | 'offline' | 'confirm';
 
 export type AwaitingRingAuthScreenContentProps = {
   phase: AwaitPhase;
   ringAuthUrl: string;
+  confirmPubky?: string | null;
+  ringInstalled?: boolean;
   delegationBusy: boolean;
   onCancel: () => void;
   onOpenRing: () => void;
+  onInstallRing?: () => void;
   onGenerateNew: () => void;
   onTryAgain: () => void;
+  onConfirmIdentity?: () => void;
 };
 
 export function AwaitingRingAuthScreenContent({
   phase,
   ringAuthUrl,
+  confirmPubky,
+  ringInstalled = true,
   delegationBusy,
   onCancel,
   onOpenRing,
+  onInstallRing,
   onGenerateNew,
   onTryAgain,
+  onConfirmIdentity,
 }: AwaitingRingAuthScreenContentProps): React.ReactElement {
   const insets = useSafeAreaInsets();
+  const [copied, setCopied] = useState(false);
   const title =
     phase === 'expired'
       ? COPY.authorizationExpired
@@ -36,7 +46,9 @@ export function AwaitingRingAuthScreenContent({
         ? COPY.authorizationDeclined
         : phase === 'offline'
           ? COPY.sessionOffline
-          : COPY.waitingForRing;
+          : phase === 'confirm'
+            ? COPY.confirmThisIdentity
+            : COPY.waitingForRing;
   const body =
     phase === 'expired'
       ? COPY.welcomeExpiredBody
@@ -44,7 +56,9 @@ export function AwaitingRingAuthScreenContent({
         ? COPY.authorizationDeclinedBody
         : phase === 'offline'
           ? COPY.welcomeOffline
-          : COPY.waitingForRingBody;
+          : phase === 'confirm'
+            ? COPY.confirmThisIdentityBody
+            : COPY.waitingForRingBody;
 
   return (
     <SafeAreaView style={styles.container} testID="awaitingRingAuthScreen">
@@ -62,6 +76,10 @@ export function AwaitingRingAuthScreenContent({
         <View style={styles.content}>
           {phase === 'waiting' ? (
             <LoadingState label={COPY.waitingForRing} testID="awaitingRingAuthWaiting" />
+          ) : phase === 'confirm' ? (
+            <Text testID="awaitingRingAuthConfirmTitle" style={styles.title}>
+              {title}
+            </Text>
           ) : (
             <ErrorState title={title} body={body} testID="awaitingRingAuthError" />
           )}
@@ -72,12 +90,47 @@ export function AwaitingRingAuthScreenContent({
           ) : null}
           {phase === 'waiting' && ringAuthUrl ? (
             <View style={styles.urlBlock}>
-              <Text style={styles.sectionTitle}>Paykit-connect link</Text>
+              <Text style={styles.sectionTitle}>{COPY.authorizationUrlLabel}</Text>
               <AuthQr value={ringAuthUrl} accessibilityLabel={COPY.waitingForRingBody} />
               <Button
                 testID="awaitingRingAuthOpenRing"
                 label={COPY.openPubkyRing}
                 onPress={onOpenRing}
+              />
+              <Button
+                testID="awaitingRingAuthCopyAuthorization"
+                label={copied ? COPY.copied : COPY.copyAuthorizationUrl}
+                variant="secondary"
+                onPress={() => {
+                  copyText(ringAuthUrl);
+                  setCopied(true);
+                }}
+              />
+              {!ringInstalled && onInstallRing ? (
+                <Button
+                  testID="awaitingRingAuthInstallRing"
+                  label={COPY.installPubkyRing}
+                  variant="secondary"
+                  onPress={onInstallRing}
+                />
+              ) : null}
+            </View>
+          ) : null}
+          {phase === 'confirm' && confirmPubky ? (
+            <View style={styles.urlBlock}>
+              <Text testID="awaitingRingAuthConfirmPubky" selectable style={styles.pubky}>
+                {confirmPubky}
+              </Text>
+              <Button
+                testID="awaitingRingAuthCopyPubky"
+                label={COPY.copyPubky}
+                variant="secondary"
+                onPress={() => copyText(confirmPubky)}
+              />
+              <Button
+                testID="awaitingRingAuthConfirm"
+                label={COPY.confirmThisIdentity}
+                onPress={onConfirmIdentity}
               />
             </View>
           ) : null}
@@ -151,5 +204,10 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     letterSpacing: 0.8,
   },
-  hint: { fontSize: typeRole.caption.fontSize, color: color.textMuted, lineHeight: 20 },
+  pubky: {
+    fontSize: typeRole.callout.fontSize,
+    color: color.textPrimary,
+    fontFamily: 'Menlo',
+    textAlign: 'center',
+  },
 });

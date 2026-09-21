@@ -1,6 +1,6 @@
 const listeners = new Set<() => void>();
 
-/** Enable Messaging re-checks `getEnableStatus` when a ring-callback lands. */
+/** Enable Messaging re-checks `getEnableStatus` when the app becomes active. */
 export function subscribeEnableMessagingResume(listener: () => void): () => void {
   listeners.add(listener);
   return () => {

@@ -89,6 +89,10 @@ RCT_EXTERN_METHOD(deletePublic:(NSString *)sessionAlias
                   resolver:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject)
 
+RCT_EXTERN_METHOD(sessionCapabilities:(NSString *)sessionAlias
+                  resolver:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
+
 RCT_EXTERN_METHOD(initiateLink:(NSString *)sessionAlias
                   receiverAlias:(NSString *)receiverAlias
                   peerPubky:(NSString *)peerPubky

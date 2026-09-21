@@ -50,6 +50,7 @@ describe('PaykitLinkNative contract', () => {
       | 'cancelAuthFlow'
       | 'adoptAuthSession'
       | 'reconcileAdoptedSessions'
+      | 'sessionCapabilities'
     > = {
       signinWithSecret: async () => ({ sessionAlias: 'a', pubky: 'b' }),
       signupWithSecret: async () => ({ sessionAlias: 'a', pubky: 'b' }),
@@ -58,6 +59,7 @@ describe('PaykitLinkNative contract', () => {
       cancelAuthFlow: async () => undefined,
       adoptAuthSession: async () => undefined,
       reconcileAdoptedSessions: async () => undefined,
+      sessionCapabilities: async () => ({ capabilities: '', origin: 'https://example.invalid' }),
     };
     expect(typeof api.signinWithSecret).toBe('function');
     expect(typeof api.signupWithSecret).toBe('function');
@@ -66,6 +68,7 @@ describe('PaykitLinkNative contract', () => {
     expect(typeof api.cancelAuthFlow).toBe('function');
     expect(typeof api.adoptAuthSession).toBe('function');
     expect(typeof api.reconcileAdoptedSessions).toBe('function');
+    expect(typeof api.sessionCapabilities).toBe('function');
   });
 
   it('requires KeyStore to persist the alias before adoptAuthSession', () => {

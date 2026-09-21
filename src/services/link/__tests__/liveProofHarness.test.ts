@@ -1037,7 +1037,7 @@ describe('product live-proof step machines', () => {
         'start-auth-flow',
         'open-auth-url',
         'await-auth-approval',
-        'assert-appcert',
+        'assert-session-restore',
         'preserve-ring-session',
       ]),
     );

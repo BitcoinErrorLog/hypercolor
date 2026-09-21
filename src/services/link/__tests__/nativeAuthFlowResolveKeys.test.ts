@@ -16,6 +16,8 @@ describe('native auth-flow resolve key pin', () => {
     expect(ANDROID).toContain('fun awaitAuthApproval(flowId: String, promise: Promise)');
     expect(ANDROID).toContain('putString("sessionAlias", alias)');
     expect(ANDROID).toContain('putString("pubky", session.pubky())');
+    expect(ANDROID).toContain('putString("capabilities", inspected.first)');
+    expect(ANDROID).toContain('putString("origin", inspected.second)');
   });
 
   it('pins iOS startAuthFlow and awaitAuthApproval dictionary keys', () => {
@@ -25,6 +27,8 @@ describe('native auth-flow resolve key pin', () => {
     expect(IOS).toContain('@objc func awaitAuthApproval(');
     expect(IOS).toContain('"sessionAlias": alias');
     expect(IOS).toContain('"pubky": session.pubky()');
+    expect(IOS).toContain('"capabilities": inspected.capabilities');
+    expect(IOS).toContain('"origin": inspected.origin');
     expect(IOS).toContain('"already awaiting"');
     expect(ANDROID).toContain('already awaiting');
   });

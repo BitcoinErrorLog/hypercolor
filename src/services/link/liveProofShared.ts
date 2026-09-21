@@ -85,7 +85,7 @@ export type AuthLiveProofDeps = ProductLiveProofDeps & {
    */
   openAuthUrl?: (url: string) => Promise<void>;
   enable?: () => Promise<LinkEnableFlow>;
-  keyStore?: RingKeyStoreApi & Pick<typeof KeyStore, 'isAppCertValid'>;
+  keyStore?: RingKeyStoreApi;
 };
 
 export const DEFAULT_HANDSHAKE_TIMEOUT_MS = 60_000;

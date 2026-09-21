@@ -10,8 +10,8 @@ import {
   tryBeginConnectDelegation,
 } from '../../../ui/connectDelegationStart';
 
-const PAYKIT_CONNECT_URL =
-  'pubkyring://paykit-connect?deviceId=hypercolor-sim&callback=hypercolor%3A%2F%2Fring-callback&ephemeralPk=aabbcc&caps=%2Fpub%2Fpaykit%2F%3Arw%2C%2Fpub%2Fhypercolor.app%2Fv1%2F%3Arw';
+const PUBKYAUTH_URL =
+  'pubkyauth:///?caps=%2Fpub%2Fpaykit%2F%3Arw%2C%2Fpub%2Fhypercolor.app%2Fv1%2F%3Arw&secret=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&relay=https%3A%2F%2Fhttprelay.pubky.app%2Flink%2F';
 
 const mockNavigate = jest.fn();
 let mockFocusCallback: (() => void) | undefined;
@@ -125,10 +125,10 @@ describe('WelcomeScreen', () => {
     });
   });
 
-  it('navigates to AwaitingRingAuth with the paykit-connect URL and expiry', async () => {
+  it('navigates to AwaitingRingAuth with the pubkyauth URL and expiry', async () => {
     const expiresAt = Date.now() + 300_000;
     (PubkyRingAuthService.requestDelegation as jest.Mock).mockResolvedValue({
-      url: PAYKIT_CONNECT_URL,
+      url: PUBKYAUTH_URL,
       expiresAt,
       generation: 1,
     });
@@ -150,7 +150,7 @@ describe('WelcomeScreen', () => {
       .invocationCallOrder[0]!;
     expect(wipeOrder).toBeLessThan(requestOrder);
     expect(mockNavigate).toHaveBeenCalledWith('AwaitingRingAuth', {
-      ringAuthUrl: PAYKIT_CONNECT_URL,
+      ringAuthUrl: PUBKYAUTH_URL,
       expiresAt,
       generation: 1,
     });
@@ -179,7 +179,7 @@ describe('WelcomeScreen', () => {
 
     expect(PubkyRingAuthService.requestDelegation).toHaveBeenCalledTimes(1);
     await act(async () => {
-      resolveRequest({ url: PAYKIT_CONNECT_URL, expiresAt: Date.now() + 300_000 });
+      resolveRequest({ url: PUBKYAUTH_URL, expiresAt: Date.now() + 300_000 });
     });
     expect(mockNavigate).toHaveBeenCalledTimes(1);
     await act(async () => {
@@ -189,7 +189,7 @@ describe('WelcomeScreen', () => {
 
   it('creates a new request after returning from Awaiting Ring', async () => {
     (PubkyRingAuthService.requestDelegation as jest.Mock).mockResolvedValue({
-      url: PAYKIT_CONNECT_URL,
+      url: PUBKYAUTH_URL,
       expiresAt: Date.now() + 300_000,
     });
 

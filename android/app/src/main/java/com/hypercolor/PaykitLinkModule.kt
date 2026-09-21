@@ -29,6 +29,10 @@ import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
 import java.nio.charset.StandardCharsets
+import org.json.JSONArray
+import org.json.JSONObject
+import uniffi.pubkycore.getHomeserver as pubkyGetHomeserver
+import uniffi.pubkycore.resolveHttps as pubkyResolveHttps
 import java.security.KeyStore
 import java.security.MessageDigest
 import java.util.UUID
@@ -490,6 +494,18 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
                 "DELETE",
             )
             promise.resolve(null)
+        }
+    }
+
+    @ReactMethod
+    fun sessionCapabilities(sessionAlias: String, promise: Promise) {
+        launch(promise) {
+            val session = sessionForCapabilityInspect(requireText(sessionAlias, "sessionAlias"))
+            val inspected = inspectSessionCapabilities(session)
+            resolveMap(promise) {
+                putString("capabilities", inspected.first)
+                putString("origin", inspected.second)
+            }
         }
     }
 
@@ -1021,6 +1037,19 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
         }
     }
 
+    /**
+     * F7 inspect-only: pending aliases may be restored so `/session` GET
+     * can run before persistThenAdopt. Does not write back a rotated
+     * bearer and does not cache. putPublic/deletePublic stay on [session],
+     * which still refuses pending.
+     */
+    private suspend fun sessionForCapabilityInspect(alias: String): ChatSession {
+        sessions[alias]?.let { return it }
+        val bearer = store.getString(PaykitLinkStore.sessionKey(alias))
+            ?: throw PaykitLinkBridgeError("auth", "session alias not found")
+        return chatClient().restoreSession(bearer)
+    }
+
     private suspend fun session(alias: String): ChatSession {
         if (PaykitLinkSessionGuard.isPending(flows.isPending(alias), store.hasPendingMarker(alias))) {
             throw PaykitLinkBridgeError("unavailable", staticMessage("unavailable"))
@@ -1084,7 +1113,7 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
     ) {
         val owner = session.pubky()
         val path = ownerStoragePath(url, owner)
-        val originClean = origin.trim().trimEnd('/')
+        val originClean = pinnedHomeserverOrigin(owner, origin)
         val exported = session.exportSession()
         val cookie = homeserverSessionCookie(exported, owner)
         val target = URL("$originClean$path?pubky-host=$owner")
@@ -1144,6 +1173,145 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
             throw PaykitLinkBridgeError("validation", "url path must start with /pub/")
         }
         return path
+    }
+
+    companion object {
+        private const val STAGING_HOMESERVER_PUBKY =
+            "ufibwbmed6jeq9k4p583go95wofakh9fwpp4k734trq79pd9u1uy"
+        private const val STAGING_HOMESERVER_ORIGIN = "https://homeserver.staging.pubky.app"
+    }
+
+    private fun unwrapPubkyCore(result: List<String>): String? {
+        if (result.size >= 2 && result[0] == "ok" && result[1].isNotEmpty()) {
+            return result[1]
+        }
+        return null
+    }
+
+    private fun normalizeHttpsOrigin(raw: String): String {
+        val trimmed = raw.trim().trimEnd('/')
+        val parsed = try {
+            URL(if (trimmed.contains("://")) trimmed else "https://$trimmed")
+        } catch (_: Exception) {
+            throw PaykitLinkBridgeError("validation", staticMessage("validation"))
+        }
+        if (parsed.protocol != "https") {
+            throw PaykitLinkBridgeError("validation", staticMessage("validation"))
+        }
+        val host = parsed.host ?: throw PaykitLinkBridgeError("validation", staticMessage("validation"))
+        val port = if (parsed.port > 0 && parsed.port != 443) ":${parsed.port}" else ""
+        return "https://$host$port"
+    }
+
+    private fun originFromHomeserverHint(hint: String): String? {
+        val trimmed = hint.trim()
+        if (trimmed.isEmpty()) return null
+        if (trimmed.startsWith("https://", ignoreCase = true) ||
+            trimmed.startsWith("http://", ignoreCase = true)
+        ) {
+            return normalizeHttpsOrigin(trimmed)
+        }
+        val resolvedJson = try {
+            unwrapPubkyCore(pubkyResolveHttps(trimmed))
+        } catch (_: Exception) {
+            null
+        }
+        if (resolvedJson != null) {
+            try {
+                val json = JSONObject(resolvedJson)
+                val records = json.optJSONArray("https_records")
+                if (records != null && records.length() > 0) {
+                    val rec = records.getJSONObject(0)
+                    val target = rec.optString("target").trimEnd('.')
+                    if (target.isNotEmpty() && target != ".") {
+                        val port = rec.optInt("port", 443)
+                        val portPart = if (port != 0 && port != 443) ":$port" else ""
+                        return "https://$target$portPart"
+                    }
+                }
+            } catch (_: Exception) {
+                // Fall through to the staging pubkey constant.
+            }
+        }
+        if (trimmed == STAGING_HOMESERVER_PUBKY) {
+            return STAGING_HOMESERVER_ORIGIN
+        }
+        return null
+    }
+
+    /**
+     * F1: derive the HTTPS origin from the session owner's pkarr homeserver
+     * before any Cookie header is set. JS `homeserverOrigin` is a hint only;
+     * mismatch is validation and the cookie is never sent.
+     */
+    private fun pinnedHomeserverOrigin(owner: String, jsHint: String?): String {
+        val hs = try {
+            unwrapPubkyCore(pubkyGetHomeserver(owner))
+        } catch (_: Exception) {
+            null
+        }
+        val derived = if (hs != null) originFromHomeserverHint(hs) else null
+        val pinned = derived ?: throw PaykitLinkBridgeError("validation", staticMessage("validation"))
+        if (!jsHint.isNullOrBlank()) {
+            val hintClean = normalizeHttpsOrigin(jsHint)
+            if (hintClean != pinned) {
+                throw PaykitLinkBridgeError("validation", staticMessage("validation"))
+            }
+        }
+        return pinned
+    }
+
+    private fun inspectSessionCapabilities(session: ChatSession): Pair<String, String> {
+        val owner = session.pubky()
+        val originClean = pinnedHomeserverOrigin(owner, null)
+        val exported = session.exportSession()
+        val cookie = homeserverSessionCookie(exported, owner)
+        val target = URL("$originClean/session?pubky-host=$owner")
+        val conn = (target.openConnection() as HttpURLConnection).apply {
+            requestMethod = "GET"
+            setRequestProperty("Cookie", "$owner=$cookie")
+            setRequestProperty("pubky-host", owner)
+            connectTimeout = 30_000
+            readTimeout = 30_000
+            instanceFollowRedirects = false
+            doInput = true
+        }
+        try {
+            val code = conn.responseCode
+            if (code == 401 || code == 403) {
+                throw PaykitLinkBridgeError("auth", staticMessage("auth"))
+            }
+            if (code !in 200..299) {
+                throw PaykitLinkBridgeError("protocol", staticMessage("protocol"))
+            }
+            val body = conn.inputStream.bufferedReader(StandardCharsets.UTF_8).use { it.readText() }
+            return Pair(capabilitiesFromSessionJson(body), originClean)
+        } catch (error: PaykitLinkBridgeError) {
+            throw error
+        } catch (_: IOException) {
+            throw PaykitLinkBridgeError("network", staticMessage("network"))
+        } finally {
+            conn.disconnect()
+        }
+    }
+
+    private fun capabilitiesFromSessionJson(body: String): String {
+        val json = try {
+            JSONObject(body)
+        } catch (_: Exception) {
+            throw PaykitLinkBridgeError("protocol", staticMessage("protocol"))
+        }
+        val raw = json.opt("capabilities")
+        if (raw is JSONArray) {
+            val parts = ArrayList<String>()
+            for (i in 0 until raw.length()) {
+                val entry = raw.optString(i).trim()
+                if (entry.isNotEmpty()) parts.add(entry)
+            }
+            return parts.joinToString(",")
+        }
+        if (raw is String) return raw.trim()
+        return ""
     }
 
     /**

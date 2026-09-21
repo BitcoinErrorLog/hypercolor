@@ -1,5 +1,5 @@
 import React, { Suspense, useEffect, useCallback, useState } from 'react';
-import { View, StyleSheet, Alert, Linking, Text, TouchableOpacity } from 'react-native';
+import { View, StyleSheet, Linking, Text, TouchableOpacity } from 'react-native';
 import { NavigationContainer, type LinkingOptions } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../types';
@@ -12,24 +12,13 @@ import { MainTabs } from './MainTabs';
 import { useAuthStore } from '../stores/authStore';
 import ThreadScreen from '../screens/main/ThreadScreen';
 import ChannelScreen from '../screens/main/ChannelScreen';
-import { PubkyRingAuthService } from '../services/PubkyRingAuthService';
-import { PubkyService } from '../services/PubkyService';
-import { LinkService } from '../services/link/LinkService';
-import {
-  completeRingCallbackRequestId,
-  consumeRingCallbackRequestId,
-  ringCallbackRequestIdFromUrl,
-} from './ringCallbackDebounce';
+import { parsePublicChannelRef } from '../types/group';
 import {
   bindPendingPublicJoin,
   consumePendingPublicJoinRedirect,
   setPendingPublicJoin,
 } from '../services/group/GroupService';
-import { parsePublicChannelRef } from '../types/group';
-import { sanitizeError } from '../ui/sanitizedError';
 import { COPY } from '../copy/uxCopy';
-import { notifyEnableMessagingResume } from '../ui/enableMessagingResume';
-import { notifyConnectAuthFeedback } from '../ui/connectAuthFeedback';
 import { stackTransitionAnimation, useReduceMotion } from '../ui/reduceMotion';
 import { PUBLIC_CHANNELS_ROUTE } from '../ui/exposurePaths';
 import { color, space, typeRole, measure } from '../theme';
@@ -47,8 +36,9 @@ const EnableMessagingScreen = React.lazy(() => import('../screens/main/EnableMes
 
 /**
  * Deep link config for React Navigation.
- * `hypercolor://ring-callback` and __DEV__ `hypercolor://e2e/*` are handled in
- * `subscribe` / `getInitialURL` rather than mapped to a screen.
+ * __DEV__ `hypercolor://e2e/*` is handled in `subscribe` / `getInitialURL`
+ * rather than mapped to a screen. `hypercolor://join-public` is handled in
+ * `handleDeepLink`. Stock Ring never returns via `hypercolor://ring-callback`.
  */
 const linking: LinkingOptions<RootStackParamList> = {
   prefixes: ['hypercolor://'],
@@ -115,7 +105,7 @@ function LoadingFallback() {
 }
 
 export function RootNavigator() {
-  const { isAuthenticated, setAuthenticated, pubky } = useAuthStore();
+  const { isAuthenticated, pubky } = useAuthStore();
   const reduceMotion = useReduceMotion();
   const stackAnimation = (kind: 'slide_from_right' | 'slide_from_bottom') =>
     stackTransitionAnimation(reduceMotion, kind);
@@ -129,59 +119,9 @@ export function RootNavigator() {
         if (isAuthenticated && pubky && consumePendingPublicJoinRedirect(pubky)) {
           navigateRoot(PUBLIC_CHANNELS_ROUTE.name, PUBLIC_CHANNELS_ROUTE.params);
         }
-        return;
-      }
-      if (!url.startsWith('hypercolor://ring-callback')) return;
-      const requestId = ringCallbackRequestIdFromUrl(url);
-      if (requestId && !consumeRingCallbackRequestId(requestId)) return;
-
-      let callbackSucceeded = false;
-      try {
-        await PubkyService.awaitSignOutWipe();
-        const result = await PubkyRingAuthService.handleRingCallback(url);
-        setAuthenticated(result.pubky as import('../types').PubkyKey, result.homeserver);
-        if (result.kind === 'legacy') {
-          notifyEnableMessagingResume();
-        }
-        callbackSucceeded = true;
-      } catch (err) {
-        if (PubkyRingAuthService.isProvisionReceiverFailedError(err)) {
-          setAuthenticated(err.pubky as import('../types').PubkyKey, err.homeserver);
-          callbackSucceeded = true;
-          Alert.alert(COPY.couldNotPublishReceiver, COPY.couldNotPublishReceiver, [
-            { text: COPY.cancel, style: 'cancel' },
-            {
-              text: COPY.retryPublish,
-              onPress: () => {
-                void (async () => {
-                  try {
-                    await LinkService.provisionReceiverAfterConnect();
-                  } catch {
-                    Alert.alert(COPY.couldNotPublishReceiver, COPY.couldNotPublishReceiver);
-                  }
-                })();
-              },
-            },
-          ]);
-          return;
-        }
-        const sanitized = sanitizeError(err, COPY.couldNotCompleteAuthorization);
-        if (
-          PubkyRingAuthService.isExpiredDelegationError(err) ||
-          sanitized.category === 'expired'
-        ) {
-          notifyConnectAuthFeedback('expired');
-        } else if (sanitized.category === 'denied') {
-          notifyConnectAuthFeedback('denied');
-        } else if (sanitized.category === 'offline' || sanitized.category === 'network') {
-          notifyConnectAuthFeedback('offline');
-        }
-        Alert.alert(COPY.couldNotCompleteAuthorization, sanitized.message);
-      } finally {
-        if (requestId) completeRingCallbackRequestId(requestId, callbackSucceeded);
       }
     },
-    [isAuthenticated, pubky, setAuthenticated],
+    [isAuthenticated, pubky],
   );
 
   useEffect(() => {

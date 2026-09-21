@@ -41,8 +41,8 @@ jest.mock('react-native-mmkv', () => ({
       mockMmkvById.set(config.id, data);
     }
     return {
-      set: (key: string, value: string) => {
-        data!.set(key, value);
+      set: (key: string, value: string | boolean | number) => {
+        data!.set(key, String(value));
       },
       getString: (key: string) => {
         if (mockUndecryptableIds.has(config.id)) {
@@ -51,7 +51,13 @@ jest.mock('react-native-mmkv', () => ({
         if (mockVerifyFail.id === config.id && mockVerifyFail.key === key) {
           return undefined;
         }
-        return data!.get(key);
+        const value = data!.get(key);
+        return typeof value === 'string' ? value : undefined;
+      },
+      getBoolean: (key: string) => {
+        const value = data!.get(key);
+        if (value === undefined) return undefined;
+        return value === 'true';
       },
       contains: (key: string) => {
         if (mockUndecryptableIds.has(config.id)) return false;
@@ -279,13 +285,35 @@ describe('KeyStore session and Ring pending', () => {
     );
   });
 
-  it('reports a persisted Welcome session from AppKey + pubky', async () => {
-    const { initKeyStore, setAppKeypair, setPubky, hasPersistedSession } = await freshKeyStore();
+  it('reports a persisted session from a readable link-session alias and pubky', async () => {
+    const { initKeyStore, setAppKeypair, setLinkSession, setPubky, hasPersistedSession } =
+      await freshKeyStore();
     await initKeyStore();
     await expect(hasPersistedSession()).resolves.toBe(false);
     await setAppKeypair({ secretKey: 'sk', publicKey: 'pk' });
     setPubky('pubky-owner');
+    await expect(hasPersistedSession()).resolves.toBe(false);
+    setLinkSession('alias-a');
     await expect(hasPersistedSession()).resolves.toBe(true);
+  });
+
+  it('wipes leftover AppKey and transport on first launch without dropping a valid alias', async () => {
+    mockKeychainStore.set(
+      'hypercolor-app-key',
+      JSON.stringify({ secretKey: 'orphan-sk', publicKey: 'orphan-pk' }),
+    );
+    mockKeychainStore.set(
+      'hypercolor-transport-key',
+      JSON.stringify({ secretKey: 'transport-sk', publicKey: 'transport-pk' }),
+    );
+    const ks = await freshKeyStore();
+    await ks.initKeyStore();
+    ks.setLinkSession('alias-keep');
+    ks.setPubky('pubky-owner');
+    await expect(ks.getAppKeypair()).resolves.toBeNull();
+    await expect(ks.getTransportKeypair()).resolves.toBeNull();
+    await expect(ks.hasPersistedSession()).resolves.toBe(true);
+    expect(ks.getLinkSession()).toBe('alias-keep');
   });
 
   it('keeps the sign-out-incomplete owner across KeyStore.clearIfPubky', async () => {

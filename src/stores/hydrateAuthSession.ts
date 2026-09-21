@@ -37,8 +37,8 @@ export async function consumeInterruptedSignOutAtBoot(): Promise<InterruptedSign
 /**
  * After `KeyStore.initKeyStore()`, interrupted-sign-out consume, and
  * report-only boot reconcile, restore `isAuthenticated` from the persisted
- * Welcome identity (delegated AppKey + pubky). Does not create a Paykit
- * homeserver session — that comes from `LinkService.enable()`.
+ * link-session alias and pubky. Does not create a Paykit homeserver
+ * session — that comes from Connect / `LinkService.enable()`.
  *
  * App owns {@link consumeInterruptedSignOutAtBoot} (once per process,
  * before reconcile). This hydrate only refuses to paint when a marker

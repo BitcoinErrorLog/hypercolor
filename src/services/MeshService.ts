@@ -7,8 +7,7 @@ import {
   encrypt,
   decrypt,
   destroyManager,
-  deriveNoiseSeed,
-  deriveX25519ForDeviceEpoch,
+  x25519GenerateKeypair,
 } from '../utils/PubkyNoiseModule';
 import {
   MeshTransport,
@@ -92,8 +91,8 @@ let receivedSub: { remove: () => void } | null = null;
 
 export const MeshService = {
   /**
-   * Starts BLE advertising and scanning. Uses the TransportKeypair from
-   * pubky-ring handoff for Noise sessions (key separation per §4.7).
+   * Starts BLE advertising and scanning. Uses a locally minted x25519
+   * static persisted in KeyStore after the one-shot transport wipe.
    */
   async start(localPubky: PubkyKey): Promise<void> {
     if (!FeatureFlags.get('mesh_transport')) {
@@ -102,22 +101,15 @@ export const MeshService = {
     if (started) return;
     started = true;
 
-    const transportKeypair = await KeyStore.getTransportKeypair();
+    let transportKeypair = await KeyStore.getTransportKeypair();
     if (!transportKeypair) {
-      throw new Error(
-        'MeshService: no TransportKeypair in KeyStore. Authorize with pubky-ring first.',
-      );
+      transportKeypair = await x25519GenerateKeypair();
+      await KeyStore.setTransportKeypair(transportKeypair);
     }
 
     localPubkyHash = truncatedSha256Hex(localPubky);
-
-    // Derive noise seed from the transport secret key (not the AppKey —
-    // TransportKey is for Noise sessions per PUBKY_CRYPTO_SPEC §4.7)
-    const noiseSeed = await deriveNoiseSeed(transportKeypair.secretKey, localPubkyHash);
-    localNoiseSeedHex = noiseSeed;
-
-    const keypair = await deriveX25519ForDeviceEpoch(noiseSeed, localPubkyHash, 0);
-    localNoisePkHex = keypair.publicKey;
+    localNoiseSeedHex = transportKeypair.secretKey;
+    localNoisePkHex = transportKeypair.publicKey;
 
     discoveredSub = MeshTransport.addPeerDiscoveredListener(onPeerDiscovered);
     lostSub = MeshTransport.addPeerLostListener(onPeerLost);

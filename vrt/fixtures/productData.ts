@@ -215,7 +215,7 @@ export const REQUEST_PENDING = {
 };
 
 export const AUTH_URL =
-  'pubkyring://paykit-connect?deviceId=hypercolor-vrt&callback=hypercolor://ring-callback&ephemeralPk=00&caps=vrt';
+  'pubkyauth:///?caps=%2Fpub%2Fpaykit%2F%3Arw%2C%2Fpub%2Fhypercolor.app%2Fv1%2F%3Arw&secret=vrtsecretvrtsecretvrtsecretvrtse&relay=https%3A%2F%2Fhttprelay.pubky.app%2Flink%2F';
 
 export const ENABLE_AUTH_URL = 'pubkyauth://vrt-fixture-authorization';
 

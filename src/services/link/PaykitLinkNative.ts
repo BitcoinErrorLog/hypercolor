@@ -388,9 +388,10 @@ export interface PaykitLinkNativeApi {
   /**
    * Owner homeserver PUT using the Paykit ChatSession for `sessionAlias`
    * (same session as Encrypted Links / `publishReceiverMarker`).
-   * `homeserverOrigin` is the resolved HTTPS origin (no secret). Native
-   * sends the homeserver cookie secret extracted from
-   * `ChatSession.exportSession()` (`<pubkey>:<cookie_secret>`).
+   * `homeserverOrigin` is a JS hint. Native derives the HTTPS origin from
+   * the session owner's pkarr homeserver and hard-validates equality
+   * before setting Cookie. A mismatched hint is `validation` and never
+   * transmits the cookie.
    */
   putPublic(
     sessionAlias: string,
@@ -399,6 +400,12 @@ export interface PaykitLinkNativeApi {
     homeserverOrigin: string,
   ): Promise<void>;
   deletePublic(sessionAlias: string, url: string, homeserverOrigin: string): Promise<void>;
+  /**
+   * GET `{pinnedOrigin}/session` with the session cookie after F1 origin
+   * pin. Returns the homeserver capability list (comma-joined) and the
+   * native-derived origin. `auth` when the cookie is rejected.
+   */
+  sessionCapabilities(sessionAlias: string): Promise<{ capabilities: string; origin: string }>;
   /** Random 32-byte attachment key, base64url (no padding). */
   generateAttachmentKey(): Promise<string>;
   attachmentEncrypt(
@@ -670,6 +677,10 @@ export const PaykitLinkNative: PaykitLinkNativeApi = {
 
   deletePublic(sessionAlias: string, url: string, homeserverOrigin: string): Promise<void> {
     return invoke('deletePublic', sessionAlias, url, homeserverOrigin);
+  },
+
+  sessionCapabilities(sessionAlias: string): Promise<{ capabilities: string; origin: string }> {
+    return invoke('sessionCapabilities', sessionAlias);
   },
 
   generateAttachmentKey(): Promise<string> {

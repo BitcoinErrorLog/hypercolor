@@ -45,7 +45,7 @@ describe('AwaitingRingAuthScreenContent wiring', () => {
       tree.root.findByProps({ testID: 'awaitingRingAuthOpenRing' }).props.onPress();
     });
     expect(onOpenRing).toHaveBeenCalledTimes(1);
-    expect(tree.root.findAllByProps({ testID: 'awaitingRingAuthCopy' })).toHaveLength(0);
+    expect(tree.root.findByProps({ testID: 'awaitingRingAuthCopyAuthorization' })).toBeTruthy();
   });
 
   it('renders expired copy once and uses shared action buttons', () => {

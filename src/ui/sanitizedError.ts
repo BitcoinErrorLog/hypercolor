@@ -26,7 +26,8 @@ const BARE_HOST_PATTERN =
 const SENSITIVE_QUERY_PATTERN = /(?:\?|&|#)?(?:secret|token|session|code)=([^&\s#]+)/gi;
 const REQUEST_ID_PATTERN = /(?:request[_-]?id|req(?:uest)?id)[=:/\s]+([^\s&/"']+)/gi;
 const CAPABILITY_PATTERN = /\/pub\/[a-z0-9._-]+(?::[a-z]+)?/gi;
-const AUTH_PAYLOAD_PATTERN = /(?:ephemeralPk|caps|authorizationUrl|paykit-connect)[=:]\S+/gi;
+const AUTH_PAYLOAD_PATTERN =
+  /(?:ephemeralPk|caps|authorizationUrl|paykit-connect|pubkyauth)[=:]\S+/gi;
 
 function rawMessage(err: unknown): string {
   if (err instanceof Error && err.message.trim().length > 0) return err.message;
@@ -124,28 +125,6 @@ export function sanitizeError(
     return {
       category: 'unknown',
       message: COPY.signOutIncompleteTryAgain,
-      details: null,
-    };
-  }
-  if (
-    typeof err === 'object' &&
-    err !== null &&
-    (err as { name?: unknown }).name === 'CombinedFlowRestartRequiredError'
-  ) {
-    return {
-      category: 'invalid-callback',
-      message: COPY.connectScanAgain,
-      details: null,
-    };
-  }
-  if (
-    typeof err === 'object' &&
-    err !== null &&
-    (err as { name?: unknown }).name === 'UpdatePubkyRingError'
-  ) {
-    return {
-      category: 'invalid-callback',
-      message: COPY.updatePubkyRing,
       details: null,
     };
   }

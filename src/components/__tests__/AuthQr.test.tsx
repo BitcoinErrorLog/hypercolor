@@ -6,8 +6,8 @@ import { AuthQr, generateAuthQrDataUri } from '../AuthQr';
 const PUBKYAUTH_URL =
   'pubkyauth:///?caps=/pub/paykit/:rw,/pub/hypercolor.app/v1/:rw&secret=abc&relay=https://relay.example';
 
-const PAYKIT_CONNECT_URL =
-  'pubkyring://paykit-connect?deviceId=hypercolor-sim&callback=hypercolor%3A%2F%2Fring-callback&ephemeralPk=aabbcc&caps=%2Fpub%2Fpaykit%2F%3Arw%2C%2Fpub%2Fhypercolor.app%2Fv1%2F%3Arw';
+const PUBKYAUTH_URL_B =
+  'pubkyauth:///?caps=/pub/paykit/:rw,/pub/hypercolor.app/v1/:rw&secret=xyz&relay=https://httprelay.pubky.app/link/';
 
 async function render(element: React.ReactElement): Promise<ReactTestRenderer> {
   let tree!: ReactTestRenderer;
@@ -45,18 +45,18 @@ describe('AuthQr', () => {
     await unmount(tree);
   });
 
-  it('renders a QR image for a paykit-connect URL', async () => {
-    const tree = await render(<AuthQr value={PAYKIT_CONNECT_URL} />);
+  it('renders a QR image for a second pubkyauth URL', async () => {
+    const tree = await render(<AuthQr value={PUBKYAUTH_URL_B} />);
     expect(tree.root.findAllByProps({ testID: 'authQr' }).length).toBeGreaterThan(0);
     expect(imageUri(tree)).toMatch(/^data:image\/png;base64,/);
     await unmount(tree);
   });
 
-  it('generateAuthQrDataUri encodes pubkyauth and paykit-connect payloads', () => {
-    const paykitUri = generateAuthQrDataUri(PAYKIT_CONNECT_URL);
-    const pubkyauthUri = generateAuthQrDataUri(PUBKYAUTH_URL);
-    expect(paykitUri).toMatch(/^data:image\/png;base64,/);
-    expect(pubkyauthUri).toMatch(/^data:image\/png;base64,/);
-    expect(pubkyauthUri).not.toEqual(paykitUri);
+  it('generateAuthQrDataUri encodes distinct pubkyauth payloads', () => {
+    const uriA = generateAuthQrDataUri(PUBKYAUTH_URL);
+    const uriB = generateAuthQrDataUri(PUBKYAUTH_URL_B);
+    expect(uriA).toMatch(/^data:image\/png;base64,/);
+    expect(uriB).toMatch(/^data:image\/png;base64,/);
+    expect(uriA).not.toEqual(uriB);
   });
 });
