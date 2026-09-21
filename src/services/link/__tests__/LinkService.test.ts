@@ -447,6 +447,41 @@ function givenEstablishedLink(): void {
   mockedNative.restoreLink.mockResolvedValue({ linkId: 'handle-1' });
 }
 
+/**
+ * Sticky `reconnect_required` row with the same two-table property as
+ * {@link givenResponderHandshake}: a local retire deletes `links` and must
+ * not touch native outbox-clear / public-delete.
+ */
+function givenReconnectRequiredLink(overrides: Partial<LinkRecord> = {}): {
+  link: () => LinkRecord | null;
+} {
+  let link: LinkRecord | null = storedLink({
+    status: 'reconnect_required',
+    snapshot: 'est-dead',
+    remoteNoisePublicKey: PEER_NOISE,
+    lastSeenPeerMarkerPk: PEER_NOISE,
+    ...overrides,
+  });
+  mockedStorage.getLink.mockImplementation(async (owner, peer) =>
+    owner === OWNER && peer === PEER ? link : null,
+  );
+  mockedStorage.upsertLink.mockImplementation(async record => {
+    link = storedLink(record);
+  });
+  mockedStorage.deleteLink.mockImplementation(async (owner, peer) => {
+    if (owner === OWNER && peer === PEER) link = null;
+  });
+  mockedStorage.upsertArchivedLink.mockResolvedValue(undefined);
+  mockedStorage.deleteArchivedLink.mockResolvedValue(undefined);
+  return { link: () => link };
+}
+
+function assertNoRemoteLinkDeletes(): void {
+  expect(mockedNative.clearLinkOutbox).not.toHaveBeenCalled();
+  expect(mockedNative.deletePublic).not.toHaveBeenCalled();
+  expect(mockedNative.removeReceiverMarker).not.toHaveBeenCalled();
+}
+
 function deferred<T>(): {
   promise: Promise<T>;
   resolve: (value: T) => void;
@@ -3039,6 +3074,119 @@ describe('LinkService', () => {
       expect(mockedNative.initiateLink).not.toHaveBeenCalled();
     });
 
+    it('starts a fresh handshake when reconnect_required sees a rotated peer marker', async () => {
+      const state = givenReconnectRequiredLink();
+      const rotated = 'rotated-peer-pk';
+      mockedNative.clearLinkOutbox.mockClear();
+      mockedNative.deletePublic.mockClear();
+      mockedNative.removeReceiverMarker.mockClear();
+      mockedNative.getReceiverMarker.mockImplementation(async (who: string) => {
+        if (who === OWNER) return null;
+        return { noisePublicKey: rotated };
+      });
+      mockedNative.initiateLink.mockResolvedValue({ linkId: 'hs-rotated', snapshot: 'hs-rot-1' });
+      mockedNative.advanceHandshake.mockResolvedValue({
+        status: 'pending',
+        snapshot: 'hs-rot-2',
+      });
+
+      await expect(LinkService.ensureLinkWith(PEER)).resolves.toBe('handshaking-initiator');
+
+      expect(state.link()?.status).toBe('handshaking');
+      expect(state.link()?.remoteNoisePublicKey).toBe(rotated);
+      expect(mockedStorage.deleteLink).toHaveBeenCalledWith(OWNER, PEER);
+      expect(mockedStorage.upsertArchivedLink).toHaveBeenCalledWith(
+        expect.objectContaining({
+          status: 'reconnect_required',
+          remoteNoisePublicKey: PEER_NOISE,
+          snapshot: 'est-dead',
+        }),
+      );
+      expect(mockedNative.initiateLink).toHaveBeenCalledWith(
+        SESSION_ALIAS,
+        RECEIVER_ALIAS,
+        PEER,
+        rotated,
+        LINK_RECEIVER_PATH,
+        LINK_RECEIVER_PATH,
+      );
+      assertNoRemoteLinkDeletes();
+    });
+
+    it('keeps reconnect_required when the peer marker is unchanged', async () => {
+      givenReconnectRequiredLink();
+      mockedNative.clearLinkOutbox.mockClear();
+      mockedNative.deletePublic.mockClear();
+      mockedNative.removeReceiverMarker.mockClear();
+      mockedNative.initiateLink.mockResolvedValue({ linkId: 'should-not', snapshot: 'no' });
+
+      await expect(LinkService.ensureLinkWith(PEER)).resolves.toBe('reconnect_required');
+
+      expect(mockedNative.getReceiverMarker).toHaveBeenCalledWith(PEER, LINK_RECEIVER_PATH);
+      expect(mockedNative.initiateLink).not.toHaveBeenCalled();
+      expect(mockedNative.probeInboundLink).not.toHaveBeenCalled();
+      expect(mockedNative.restoreLink).not.toHaveBeenCalled();
+      expect(mockedNative.restoreHandshake).not.toHaveBeenCalled();
+      expect(mockedStorage.deleteLink).not.toHaveBeenCalled();
+      assertNoRemoteLinkDeletes();
+    });
+
+    it('keeps reconnect_required when the peer marker fetch fails', async () => {
+      givenReconnectRequiredLink();
+      mockedNative.clearLinkOutbox.mockClear();
+      mockedNative.deletePublic.mockClear();
+      mockedNative.removeReceiverMarker.mockClear();
+      mockedNative.getReceiverMarker.mockRejectedValue({
+        code: 'network',
+        message: 'homeserver unreachable',
+      });
+
+      await expect(LinkService.ensureLinkWith(PEER)).resolves.toBe('reconnect_required');
+
+      expect(mockedNative.getReceiverMarker).toHaveBeenCalledWith(PEER, LINK_RECEIVER_PATH);
+      expect(mockedNative.initiateLink).not.toHaveBeenCalled();
+      expect(mockedNative.probeInboundLink).not.toHaveBeenCalled();
+      expect(mockedStorage.deleteLink).not.toHaveBeenCalled();
+      assertNoRemoteLinkDeletes();
+    });
+
+    it('probes a rotated reconnect_required peer from inbox sync without initiating', async () => {
+      givenReconnectRequiredLink({ remoteNoisePublicKey: 'old-peer-pk' });
+      mockedNative.clearLinkOutbox.mockClear();
+      mockedNative.deletePublic.mockClear();
+      mockedNative.removeReceiverMarker.mockClear();
+      mockedNative.getReceiverMarker.mockImplementation(async (who: string) => {
+        if (who === OWNER) return null;
+        return { noisePublicKey: 'new-peer-pk' };
+      });
+      mockedNative.probeInboundLink.mockResolvedValue({ result: 'none' });
+
+      await expect(LinkService.syncInbox([PEER])).resolves.toEqual([]);
+
+      expect(mockedStorage.deleteLink).toHaveBeenCalledWith(OWNER, PEER);
+      expect(mockedNative.probeInboundLink).toHaveBeenCalled();
+      expect(mockedNative.initiateLink).not.toHaveBeenCalled();
+      assertNoRemoteLinkDeletes();
+    });
+
+    it('does not re-GET an unchanged reconnect_required marker within the refresh TTL', async () => {
+      givenReconnectRequiredLink();
+      await LinkService.syncInbox([PEER]);
+      const peerGetsAfterFirst = mockedNative.getReceiverMarker.mock.calls.filter(
+        call => call[0] === PEER,
+      ).length;
+      expect(peerGetsAfterFirst).toBeGreaterThan(0);
+      mockedNative.getReceiverMarker.mockClear();
+
+      await LinkService.syncInbox([PEER]);
+
+      expect(
+        mockedNative.getReceiverMarker.mock.calls.filter(call => call[0] === PEER),
+      ).toHaveLength(0);
+      expect(mockedNative.initiateLink).not.toHaveBeenCalled();
+      expect(mockedStorage.deleteLink).not.toHaveBeenCalled();
+    });
+
     it('treats a changed peer noise key as re-enrollment', async () => {
       mockedStorage.getLink
         .mockResolvedValueOnce(storedLink({ snapshot: 'hs-2', remoteNoisePublicKey: 'old-key' }))
@@ -4081,6 +4229,25 @@ describe('LinkService', () => {
       );
       return givenResponderHandshake();
     }
+
+    it('does not step reconnect_required rows on the periodic handshake tick', async () => {
+      mockedStorage.getDueHandshakingLinks.mockResolvedValue([]);
+      mockedStorage.getLink.mockResolvedValue(
+        storedLink({ status: 'reconnect_required', snapshot: 'est-dead' }),
+      );
+      mockedNative.getReceiverMarker.mockClear();
+      mockedNative.initiateLink.mockClear();
+      mockedNative.advanceHandshake.mockClear();
+
+      await LinkService.advancePendingLinks();
+
+      expect(mockedStorage.getDueHandshakingLinks).toHaveBeenCalled();
+      expect(mockedNative.initiateLink).not.toHaveBeenCalled();
+      expect(mockedNative.advanceHandshake).not.toHaveBeenCalled();
+      expect(
+        mockedNative.getReceiverMarker.mock.calls.filter(call => call[0] === PEER),
+      ).toHaveLength(0);
+    });
 
     it('completes a responder handshake on a later tick and delivers its queued sends', async () => {
       const state = givenQueuedResponderHandshake();

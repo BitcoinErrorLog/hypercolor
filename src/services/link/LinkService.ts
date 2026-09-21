@@ -2151,7 +2151,20 @@ async function ensureLinkLocked(
     abortIfOwnerChanged(expectedOwner);
   }
 
-  if (stored?.status === 'reconnect_required') return 'reconnect_required';
+  if (stored?.status === 'reconnect_required') {
+    const adopted = await maybeAdoptReconnectRequiredRotation(
+      stored,
+      ownerPubky,
+      peerPubky,
+      localPath,
+      expectedOwner,
+      intent,
+    );
+    if (!adopted) return 'reconnect_required';
+    stored = await StorageService.getLink(ownerPubky, peerPubky);
+    abortIfOwnerChanged(expectedOwner);
+    live = liveHandles.get(key);
+  }
 
   const competingGenerationCandidate =
     stored?.status === 'handshaking' && stored.role === 'initiator';
@@ -2501,6 +2514,51 @@ function peerMarkerRefreshDue(ownerPubky: PubkyKey, peerPubky: PubkyKey): boolea
 
 function markPeerMarkerRefreshed(ownerPubky: PubkyKey, peerPubky: PubkyKey): void {
   peerMarkerRefreshedAt.set(linkKey(ownerPubky, peerPubky), Date.now());
+}
+
+/**
+ * A sticky `reconnect_required` row must not skip a peer re-enrolment.
+ * Fetch the current marker; if the Noise pk rotated, retire the dead
+ * local record (no remote outbox delete) so `ensureLinkLocked` falls
+ * through to the ordinary fresh-start path. Unchanged, missing, or
+ * failed marker stays fail-closed `reconnect_required`.
+ *
+ * Background / queued callers respect {@link PEER_MARKER_REFRESH_TTL_MS}
+ * so a sticky row cannot storm homeserver GETs. User intent always GETs.
+ * The periodic handshake tick never sees these rows
+ * (`getDueHandshakingLinks` is `status = 'handshaking'` only).
+ */
+async function maybeAdoptReconnectRequiredRotation(
+  stored: LinkRecord,
+  ownerPubky: PubkyKey,
+  peerPubky: PubkyKey,
+  localPath: string,
+  expectedOwner: PubkyKey,
+  intent: LinkIntent,
+): Promise<boolean> {
+  abortIfOwnerChanged(expectedOwner);
+  if (!peerMarkerRefreshDue(ownerPubky, peerPubky) && intent !== 'user') {
+    return false;
+  }
+  markPeerMarkerRefreshed(ownerPubky, peerPubky);
+  let marker: ReceiverMarker | null;
+  try {
+    marker = await fetchPeerReceiverMarker(ownerPubky, peerPubky, localPath);
+    abortIfOwnerChanged(expectedOwner);
+  } catch (err) {
+    if (err instanceof LinkSendError && err.code === 'owner-changed') throw err;
+    return false;
+  }
+  if (!marker) return false;
+  const establishedPk = stored.remoteNoisePublicKey || '';
+  if (establishedPk === '' || marker.noisePublicKey === establishedPk) {
+    return false;
+  }
+  console.warn(
+    `[LinkService] reconnect-required-peer-rotated peer=${opaquePeerId(ownerPubky, peerPubky)} stored=${pkPrefix8(establishedPk)} fetched=${pkPrefix8(marker.noisePublicKey)}`,
+  );
+  await retireLocalLinkState(stored, expectedOwner);
+  return true;
 }
 
 /**

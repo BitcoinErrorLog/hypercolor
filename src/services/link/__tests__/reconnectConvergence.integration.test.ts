@@ -360,6 +360,99 @@ describe('real SQLite non-destructive link recovery', () => {
     saveLinkMessage.mockRestore();
   });
 
+  it('adopts a peer marker rotation from reconnect_required without remote deletes', async () => {
+    const previousFetch = global.fetch;
+    global.fetch = jest.fn().mockRejectedValue(new Error('offline')) as typeof fetch;
+    const rotated = 'noise-d-rotated';
+    await StorageService.upsertLink(record(C, D, 'reconnect_required'));
+    native.getReceiverMarker.mockImplementation(async (target: string) => ({
+      noisePublicKey: target === C ? C_NOISE : rotated,
+    }));
+    native.advanceHandshake.mockResolvedValue({ status: 'pending', snapshot: 'hs-rotated' });
+    native.initiateLink.mockClear();
+    native.probeInboundLink.mockClear();
+    native.clearLinkOutbox.mockClear();
+    native.deletePublic.mockClear();
+    native.removeReceiverMarker.mockClear();
+
+    try {
+      await expect(LinkService.ensureLinkWith(D)).resolves.toBe('handshaking-initiator');
+
+      const latest = await StorageService.getLink(C, D);
+      expect(latest?.status).toBe('handshaking');
+      expect(latest?.remoteNoisePublicKey).toBe(rotated);
+      const archived = await StorageService.getArchivedLink(C, D);
+      expect(archived?.remoteNoisePublicKey).toBe(D_NOISE);
+      expect(native.initiateLink).toHaveBeenCalledWith(
+        C_ALIAS,
+        `${C}-receiver`,
+        D,
+        rotated,
+        PATH,
+        PATH,
+      );
+      expect(native.clearLinkOutbox).not.toHaveBeenCalled();
+      expect(native.deletePublic).not.toHaveBeenCalled();
+      expect(native.removeReceiverMarker).not.toHaveBeenCalled();
+      expect(homeserver.clears).toHaveLength(0);
+      expect(homeserver.slots.get(`${C}:messages:1`)?.bytes).toBe('captured-slot-1');
+    } finally {
+      global.fetch = previousFetch;
+    }
+  });
+
+  it('keeps reconnect_required when the peer marker is unchanged', async () => {
+    const previousFetch = global.fetch;
+    global.fetch = jest.fn().mockRejectedValue(new Error('offline')) as typeof fetch;
+    await StorageService.upsertLink(record(C, D, 'reconnect_required'));
+    native.initiateLink.mockClear();
+    native.probeInboundLink.mockClear();
+    native.restoreLink.mockClear();
+    native.restoreHandshake.mockClear();
+    native.clearLinkOutbox.mockClear();
+
+    try {
+      await expect(LinkService.ensureLinkWith(D)).resolves.toBe('reconnect_required');
+
+      expect((await StorageService.getLink(C, D))?.status).toBe('reconnect_required');
+      expect(native.getReceiverMarker).toHaveBeenCalledWith(D, PATH);
+      expect(native.initiateLink).not.toHaveBeenCalled();
+      expect(native.probeInboundLink).not.toHaveBeenCalled();
+      expect(native.restoreLink).not.toHaveBeenCalled();
+      expect(native.restoreHandshake).not.toHaveBeenCalled();
+      expect(native.clearLinkOutbox).not.toHaveBeenCalled();
+      expect(homeserver.clears).toHaveLength(0);
+    } finally {
+      global.fetch = previousFetch;
+    }
+  });
+
+  it('keeps reconnect_required when the peer marker fetch fails', async () => {
+    const previousFetch = global.fetch;
+    global.fetch = jest.fn().mockRejectedValue(new Error('offline')) as typeof fetch;
+    await StorageService.upsertLink(record(C, D, 'reconnect_required'));
+    native.getReceiverMarker.mockRejectedValue({
+      code: 'network',
+      message: 'homeserver unreachable',
+    });
+    native.initiateLink.mockClear();
+    native.probeInboundLink.mockClear();
+    native.clearLinkOutbox.mockClear();
+
+    try {
+      await expect(LinkService.ensureLinkWith(D)).resolves.toBe('reconnect_required');
+
+      expect((await StorageService.getLink(C, D))?.status).toBe('reconnect_required');
+      expect(native.getReceiverMarker).toHaveBeenCalledWith(D, PATH);
+      expect(native.initiateLink).not.toHaveBeenCalled();
+      expect(native.probeInboundLink).not.toHaveBeenCalled();
+      expect(native.clearLinkOutbox).not.toHaveBeenCalled();
+      expect(homeserver.clears).toHaveLength(0);
+    } finally {
+      global.fetch = previousFetch;
+    }
+  });
+
   it('does not restart reconnect_required links during receiver takeover', async () => {
     await StorageService.upsertLink(record(C, D, 'reconnect_required'));
     await LinkService.takeoverReceiver();
