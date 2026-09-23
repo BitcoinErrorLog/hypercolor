@@ -52,7 +52,11 @@ describe('toLinkNativeError', () => {
       code: 'unavailable',
       message: 'unavailable',
     });
-    expect(toLinkNativeError(Object.assign(new Error('parked_result_conflict'), { name: 'parked_result_conflict' }))).toEqual({
+    expect(
+      toLinkNativeError(
+        Object.assign(new Error('parked_result_conflict'), { name: 'parked_result_conflict' }),
+      ),
+    ).toEqual({
       code: 'unavailable',
       message: 'unavailable',
     });
