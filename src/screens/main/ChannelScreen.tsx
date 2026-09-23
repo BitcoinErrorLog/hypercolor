@@ -50,6 +50,7 @@ import {
 import { ComposerActionMenu } from '../../components/ComposerActionMenu';
 import { EmojiAutocomplete, EmojiPickerSheet } from '../../components/EmojiPickerSheet';
 import { GifPickerSheet } from '../../components/GifPickerSheet';
+import { useGifSearchAvailable } from '../../services/gif/useGifSearchAvailable';
 import { formatDeliveryState } from '../../ui/messageStatus';
 import { TagChips, aggregateTags } from '../../ui/TagChips';
 import { TagPickerSheet } from '../../ui/TagPickerSheet';
@@ -564,6 +565,7 @@ export function ChannelScreenContent({
   const plusRef = useRef<View>(null);
   const menuWasOpen = useRef(false);
   const insets = useSafeAreaInsets();
+  const gifSearchAvailable = useGifSearchAvailable();
   const bottomInset = Math.max(insets.bottom, 0);
   const [keyboardVisible, setKeyboardVisible] = useState(false);
   const [androidKeyboardLift, setAndroidKeyboardLift] = useState(0);
@@ -1120,6 +1122,7 @@ export function ChannelScreenContent({
                     messagingEnabled: selfActive,
                     inboxClosed: false,
                     hasTipEndpoints: false,
+                    gifSearchAvailable,
                   })}
                   onSelect={onComposerAction}
                   onClose={onCloseActionMenu}
@@ -1204,11 +1207,13 @@ export function ChannelScreenContent({
                   onCloseEmojiPicker?.();
                 }}
               />
-              <GifPickerSheet
-                visible={gifPickerOpen}
-                onClose={() => onCloseGifPicker?.()}
-                onPick={hit => onSendGif?.(hit.id)}
-              />
+              {gifSearchAvailable ? (
+                <GifPickerSheet
+                  visible={gifPickerOpen}
+                  onClose={() => onCloseGifPicker?.()}
+                  onPick={hit => onSendGif?.(hit.id)}
+                />
+              ) : null}
             </>
           ) : null}
         </KeyboardAvoidingView>

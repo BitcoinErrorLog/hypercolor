@@ -41,6 +41,7 @@ import { TagPickerSheet } from '../../ui/TagPickerSheet';
 import { TagChips, aggregateTags } from '../../ui/TagChips';
 import type { ChatTagRow } from '../../services/StorageService';
 import { GifPickerSheet } from '../../components/GifPickerSheet';
+import { useGifSearchAvailable } from '../../services/gif/useGifSearchAvailable';
 import {
   PaymentRequestBubble,
   type PaymentReviewRequest,
@@ -733,6 +734,7 @@ export function ThreadScreenContent({
   const plusRef = useRef<View>(null);
   const menuWasOpen = useRef(false);
   const reduceMotion = useReduceMotion();
+  const gifSearchAvailable = useGifSearchAvailable();
   const insets = useSafeAreaInsets();
   const bottomInset = Math.max(insets.bottom, 0);
   const [keyboardVisible, setKeyboardVisible] = useState(false);
@@ -984,6 +986,7 @@ export function ThreadScreenContent({
     inboxClosed,
     standbyNewChat: standbyBlocksNewChat,
     hasTipEndpoints: tipEndpoints.some(row => row.validationStatus !== 'rejected'),
+    gifSearchAvailable,
   });
   const byteSize = draftEnvelopeByteSize(draft, { surface: 'dm' });
   const overCap = draftExceedsByteCap(draft, { surface: 'dm' });
@@ -1339,11 +1342,13 @@ export function ThreadScreenContent({
               onCloseEmojiPicker?.();
             }}
           />
-          <GifPickerSheet
-            visible={gifPickerOpen}
-            onClose={() => onCloseGifPicker?.()}
-            onPick={hit => onSendGif?.(hit.id)}
-          />
+          {gifSearchAvailable ? (
+            <GifPickerSheet
+              visible={gifPickerOpen}
+              onClose={() => onCloseGifPicker?.()}
+              onPick={hit => onSendGif?.(hit.id)}
+            />
+          ) : null}
           {tipPickerOpen ? (
             <TouchableOpacity
               accessibilityRole="button"

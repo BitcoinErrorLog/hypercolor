@@ -6,7 +6,12 @@ import {
   draftExceedsByteCap,
 } from '../composerActions';
 
-const OPEN = { messagingEnabled: true, inboxClosed: false, hasTipEndpoints: true };
+const OPEN = {
+  messagingEnabled: true,
+  inboxClosed: false,
+  hasTipEndpoints: true,
+  gifSearchAvailable: true,
+};
 
 describe('composerActionItems', () => {
   it('disables every action until messaging is enabled', () => {
@@ -52,6 +57,17 @@ describe('composerActionItems', () => {
     expect(topic.find(item => item.id === 'photo')?.reason).toBe(COPY.attachmentsPublicUnsupported);
     expect(topic.find(item => item.id === 'file')?.reason).toBe(COPY.attachmentsPublicUnsupported);
     expect(topic.find(item => item.id === 'request-payment')?.reason).toBe(COPY.paymentsDmOnly);
+  });
+
+  it('omits GIF unless search is configured', () => {
+    const hidden = composerActionItems('dm', {
+      messagingEnabled: true,
+      inboxClosed: false,
+      hasTipEndpoints: true,
+    });
+    expect(hidden.find(item => item.id === 'gif')).toBeUndefined();
+    const shown = composerActionItems('dm', { ...OPEN, gifSearchAvailable: true });
+    expect(shown.find(item => item.id === 'gif')?.disabled).toBe(false);
   });
 
   it('disables Send a tip when the peer has no destinations', () => {

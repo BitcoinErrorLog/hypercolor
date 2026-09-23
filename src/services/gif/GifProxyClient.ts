@@ -1,6 +1,7 @@
 import { ATTACHMENT_MAX_BYTES } from '../../flags/config';
 
 export const GIF_PROXY_ORIGIN = 'https://hypercolor.app';
+export const GIF_CONFIG_PATH = '/api/gif/config';
 export const GIF_SEARCH_PATH = '/api/gif/search';
 export const GIF_FETCH_PATH = '/api/gif/fetch';
 export const GIF_MAX_BYTES = ATTACHMENT_MAX_BYTES;
@@ -50,6 +51,21 @@ function parseHit(raw: unknown): GifProxyHit | null {
     preview: { url: preview.url, w: pw, h: ph },
     gif: { url: gif.url, w: gw, h: gh, bytes },
   };
+}
+
+export function gifConfigSaysAvailable(status: number, body: unknown): boolean {
+  if (status !== 200 || typeof body !== 'object' || body === null) return false;
+  return (body as { configured?: unknown }).configured === true;
+}
+
+export async function fetchGifConfig(fetchImpl: typeof fetch = fetch): Promise<boolean> {
+  try {
+    const res = await fetchImpl(`${GIF_PROXY_ORIGIN}${GIF_CONFIG_PATH}`);
+    const body = res.ok ? ((await res.json()) as unknown) : null;
+    return gifConfigSaysAvailable(res.status, body);
+  } catch {
+    return false;
+  }
 }
 
 export async function searchGifs(

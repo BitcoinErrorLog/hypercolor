@@ -26,6 +26,8 @@ export type ComposerGate = {
   inboxClosed: boolean;
   hasTipEndpoints: boolean;
   standbyNewChat?: boolean;
+  /** Omit the GIF row unless the server reports search is configured. */
+  gifSearchAvailable?: boolean;
 };
 
 export type DraftEnvelopeContext = {
@@ -138,7 +140,7 @@ export function composerActionItems(
   const payReason = paymentReason(surface, gate);
   const sendTipReason = tipReason(surface, gate);
   const listReason = paymentReason(surface, gate);
-  return [
+  const items: ComposerActionItem[] = [
     {
       id: 'photo',
       label: COPY.composerPhoto,
@@ -153,13 +155,17 @@ export function composerActionItems(
       disabled: photoReason !== null,
       reason: photoReason,
     },
-    {
+  ];
+  if (gate.gifSearchAvailable) {
+    items.push({
       id: 'gif',
       label: COPY.composerGif,
       icon: ACTION_ICONS.gif,
       disabled: photoReason !== null,
       reason: photoReason,
-    },
+    });
+  }
+  items.push(
     {
       id: 'request-payment',
       label: COPY.composerRequestPayment,
@@ -181,5 +187,6 @@ export function composerActionItems(
       disabled: listReason !== null,
       reason: listReason,
     },
-  ];
+  );
+  return items;
 }

@@ -1,4 +1,10 @@
-import { GIF_MAX_BYTES, fetchGifBytes, searchGifs } from '../GifProxyClient';
+import {
+  GIF_MAX_BYTES,
+  fetchGifBytes,
+  fetchGifConfig,
+  gifConfigSaysAvailable,
+  searchGifs,
+} from '../GifProxyClient';
 
 function jsonResponse(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), {
@@ -8,6 +14,21 @@ function jsonResponse(status: number, body: unknown): Response {
 }
 
 describe('GifProxyClient', () => {
+  it('treats only configured:true as GIF search available', async () => {
+    expect(gifConfigSaysAvailable(200, { configured: true })).toBe(true);
+    expect(gifConfigSaysAvailable(200, { configured: false })).toBe(false);
+    expect(gifConfigSaysAvailable(503, { configured: true })).toBe(false);
+    expect(gifConfigSaysAvailable(200, { configured: true, key: 'secret' })).toBe(true);
+    const available = await fetchGifConfig(async () => jsonResponse(200, { configured: true }));
+    expect(available).toBe(true);
+    const hidden = await fetchGifConfig(async () => jsonResponse(200, { configured: false }));
+    expect(hidden).toBe(false);
+    const down = await fetchGifConfig(async () => {
+      throw new Error('offline');
+    });
+    expect(down).toBe(false);
+  });
+
   it('maps 503 not configured', async () => {
     const result = await searchGifs('cat', 8, async () =>
       jsonResponse(503, { error: 'not configured' }),
