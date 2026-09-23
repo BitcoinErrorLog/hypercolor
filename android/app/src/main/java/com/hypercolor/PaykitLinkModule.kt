@@ -1288,8 +1288,8 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
             if (code !in 200..299) {
                 throw PaykitLinkBridgeError("protocol", staticMessage("protocol"))
             }
-            val body = conn.inputStream.bufferedReader(StandardCharsets.UTF_8).use { it.readText() }
-            return Pair(capabilitiesFromSessionJson(body), originClean)
+            val body = conn.inputStream.readBytes()
+            return Pair(capabilitiesFromSessionBody(body), originClean)
         } catch (error: PaykitLinkBridgeError) {
             throw error
         } catch (_: IOException) {
@@ -1297,6 +1297,41 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
         } finally {
             conn.disconnect()
         }
+    }
+
+    /**
+     * Staging `/session` is not JSON. It is a binary record whose capability
+     * entries are u8-length-prefixed ASCII `<scope>:<actions>` strings.
+     * A leading `{` is still accepted as the JSON object shape.
+     */
+    private fun capabilitiesFromSessionBody(body: ByteArray): String {
+        val trimmed = body.dropWhile { it == ' '.code.toByte() || it == '\n'.code.toByte() }
+        if (trimmed.firstOrNull() == '{'.code.toByte()) {
+            return capabilitiesFromSessionJson(body.toString(StandardCharsets.UTF_8))
+        }
+        val found = ArrayList<String>()
+        var i = 0
+        while (i < body.size) {
+            val len = body[i].toInt() and 0xFF
+            if (len in 8..180 && i + 1 + len <= body.size) {
+                val slice = body.copyOfRange(i + 1, i + 1 + len)
+                if (slice.all { it in 0x20..0x7e }) {
+                    val entry = slice.toString(StandardCharsets.US_ASCII)
+                    val colon = entry.lastIndexOf(':')
+                    val actions = if (colon > 0) entry.substring(colon + 1) else ""
+                    if (entry.startsWith("/pub/") && actions.isNotEmpty() && actions.all { it == 'r' || it == 'w' }) {
+                        found.add(entry)
+                        i += 1 + len
+                        continue
+                    }
+                }
+            }
+            i += 1
+        }
+        if (found.isEmpty()) {
+            throw PaykitLinkBridgeError("protocol", staticMessage("protocol"))
+        }
+        return found.joinToString(",")
     }
 
     private fun capabilitiesFromSessionJson(body: String): String {

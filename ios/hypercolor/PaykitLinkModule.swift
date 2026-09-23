@@ -1798,12 +1798,44 @@ class PaykitLinkModule: NSObject, RCTInvalidating {
                 throw PaykitLinkBridgeError(code: "protocol", message: "protocol error")
             }
             let body = String(data: data, encoding: .utf8) ?? ""
-            return (Self.capabilitiesFromSessionJson(body), originClean)
+            if body.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("{") {
+                return (Self.capabilitiesFromSessionJson(body), originClean)
+            }
+            return (try Self.capabilitiesFromLengthPrefixed(data), originClean)
         } catch let bridge as PaykitLinkBridgeError {
             throw bridge
         } catch {
             throw PaykitLinkBridgeError(code: "network", message: "network error")
         }
+    }
+
+    /// Staging `/session` stores capabilities as u8-length-prefixed ASCII
+    /// `<scope>:<actions>` strings inside a binary record.
+    private static func capabilitiesFromLengthPrefixed(_ data: Data) throws -> String {
+        var found: [String] = []
+        var i = 0
+        let bytes = [UInt8](data)
+        while i < bytes.count {
+            let len = Int(bytes[i])
+            if len >= 8 && len <= 180 && i + 1 + len <= bytes.count {
+                let slice = bytes[(i + 1)..<(i + 1 + len)]
+                if slice.allSatisfy({ $0 >= 0x20 && $0 <= 0x7e }),
+                   let entry = String(bytes: slice, encoding: .ascii),
+                   entry.hasPrefix("/pub/") {
+                    let actions = entry.split(separator: ":", omittingEmptySubsequences: false).last.map(String.init) ?? ""
+                    if !actions.isEmpty && actions.allSatisfy({ $0 == "r" || $0 == "w" }) {
+                        found.append(entry)
+                        i += 1 + len
+                        continue
+                    }
+                }
+            }
+            i += 1
+        }
+        if found.isEmpty {
+            throw PaykitLinkBridgeError(code: "protocol", message: "protocol error")
+        }
+        return found.joined(separator: ",")
     }
 
     private static func capabilitiesFromSessionJson(_ body: String) -> String {
