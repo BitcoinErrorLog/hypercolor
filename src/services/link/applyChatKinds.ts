@@ -153,9 +153,25 @@ export async function applyInboundDelete(input: {
     target.kind === CHAT_ATTACHMENT_KIND
       ? await StorageService.getAttachment(input.ownerPubky, input.senderPubky, target.eventId)
       : null;
+  const attachmentBinding =
+    target.kind === CHAT_ATTACHMENT_KIND
+      ? {
+          peerPubky: input.peerPubky,
+          conversationId:
+            attachment?.channelId ||
+            attachment?.conversationId ||
+            target.conversationId ||
+            buildDmConversationId(input.peerPubky),
+        }
+      : undefined;
   const attachmentKeyService =
     target.kind === CHAT_ATTACHMENT_KIND
-      ? KeyStore.attachmentKeyService(input.ownerPubky, input.senderPubky, target.eventId)
+      ? KeyStore.attachmentKeyService(
+          input.ownerPubky,
+          input.senderPubky,
+          target.eventId,
+          attachmentBinding,
+        )
       : undefined;
   const attachmentCachePaths = attachment ? cachePathsForAttachment(attachment) : [];
   const redacted = JSON.stringify({
@@ -195,6 +211,7 @@ export async function applyInboundDelete(input: {
         input.ownerPubky,
         input.senderPubky,
         target.eventId,
+        attachmentBinding,
       );
     } catch {
       keyDeleted = false;

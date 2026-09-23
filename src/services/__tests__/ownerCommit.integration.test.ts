@@ -185,7 +185,7 @@ import {
   PAYKIT_PAYMENT_REQUEST_KIND,
 } from '../../types/payment';
 
-const mockedNative = jest.mocked(PaykitLinkNative);
+const mockedNative = jest.mocked(PaykitLinkNative) as unknown as jest.Mocked<typeof PaykitLinkNative> & Record<'initiateLink' | 'probeInboundLink' | 'advanceHandshake' | 'restoreHandshake' | 'restoreLink' | 'clearLinkOutbox', jest.Mock>;
 const mockedKeyStore = jest.mocked(KeyStore);
 
 const NOW = 1_700_000_000_000;

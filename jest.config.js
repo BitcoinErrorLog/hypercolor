@@ -8,6 +8,7 @@ module.exports = {
   moduleNameMapper: {
     '^@expo/vector-icons/Ionicons$': '<rootDir>/test/mocks/Ionicons.js',
     '^expo-camera$': '<rootDir>/test/mocks/ExpoCamera.js',
+    'PaykitSdkNative$': '<rootDir>/src/services/link/__tests__/paykitSdkJestMock.ts',
   },
   clearMocks: true,
   // jest-expo default allow-list plus uuid@13 (pure ESM).

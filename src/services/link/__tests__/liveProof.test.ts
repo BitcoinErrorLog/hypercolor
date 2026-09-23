@@ -1,3 +1,5 @@
+import { PaykitSdkNative } from '../PaykitSdkNative';
+import { seedPaykitSdkJestMock } from './paykitSdkJestMock';
 import { v4 as uuidv4 } from 'uuid';
 import {
   runLinkLiveProof,
@@ -97,7 +99,18 @@ jest.mock('../LinkService', () => ({
   },
 }));
 
-const mockedNative = jest.mocked(PaykitLinkNative);
+const mockedNative = jest.mocked(PaykitLinkNative) as unknown as jest.Mocked<
+  typeof PaykitLinkNative
+> &
+  Record<
+    | 'initiateLink'
+    | 'probeInboundLink'
+    | 'advanceHandshake'
+    | 'restoreHandshake'
+    | 'restoreLink'
+    | 'clearLinkOutbox',
+    jest.Mock
+  >;
 const mockedLinkService = jest.mocked(LinkService);
 
 const CONFIG: LiveProofConfig = {
@@ -274,6 +287,7 @@ describe('parseNamedLiveProofRows', () => {
 describe('runLinkLiveProof', () => {
   beforeEach(async () => {
     jest.resetAllMocks();
+    seedPaykitSdkJestMock();
     jest.spyOn(console, 'log').mockImplementation(() => undefined);
     const db = openMemoryDb();
     setDbForTests(db);
@@ -391,14 +405,12 @@ describe('runLinkLiveProof', () => {
       'recv-a',
       LINK_RECEIVER_PATH,
     );
-    expect(mockedNative.initiateLink).toHaveBeenCalledWith(
-      'session-a',
-      'recv-a',
+    expect(PaykitSdkNative.ensureLinkWithPeer).toHaveBeenCalledWith(
+      PUBKY_A,
       PUBKY_B,
-      'noise-b',
-      LINK_RECEIVER_PATH,
       LINK_RECEIVER_PATH,
     );
+    expect(mockedNative.initiateLink).not.toHaveBeenCalled();
     expect(mockedNative.signOutSession).toHaveBeenCalledWith('session-a');
     expect(mockedNative.signOutSession).toHaveBeenCalledWith('session-b');
     expect(mockedLinkService.enable).not.toHaveBeenCalled();

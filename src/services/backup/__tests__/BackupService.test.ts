@@ -58,7 +58,7 @@ const OTHER = 'b'.repeat(52);
 const EVENT = '00000000-0000-4000-8000-000000000001';
 const RECOVERY = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
 
-const mockedNative = jest.mocked(PaykitLinkNative);
+const mockedNative = jest.mocked(PaykitLinkNative) as unknown as jest.Mocked<typeof PaykitLinkNative> & Record<'initiateLink' | 'probeInboundLink' | 'advanceHandshake' | 'restoreHandshake' | 'restoreLink' | 'clearLinkOutbox', jest.Mock>;
 const mockedPubky = jest.mocked(PubkyService);
 const mockedKeyStore = jest.mocked(KeyStore);
 

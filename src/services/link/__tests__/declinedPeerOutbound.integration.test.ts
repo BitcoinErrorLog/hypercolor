@@ -2,6 +2,8 @@
  * Real LinkService + real SQLite: decline is not a link deny.
  * Native Paykit I/O is mocked; StorageService and RetryQueue are not.
  */
+import { PaykitSdkNative } from '../PaykitSdkNative';
+import { seedPaykitSdkJestMock } from './paykitSdkJestMock';
 jest.mock('../../Telemetry', () => ({
   Telemetry: { record: jest.fn() },
 }));
@@ -103,7 +105,18 @@ import { CONTACTS_COPY } from '../../../ui/contacts/contactsCopy';
 import { wireSignOutMarkerMocks } from '../../__tests__/wireSignOutMarkerMocks';
 import { formatGroupFanoutAggregate } from '../../../ui/groupFanoutStatus';
 
-const mockedNative = jest.mocked(PaykitLinkNative);
+const mockedNative = jest.mocked(PaykitLinkNative) as unknown as jest.Mocked<
+  typeof PaykitLinkNative
+> &
+  Record<
+    | 'initiateLink'
+    | 'probeInboundLink'
+    | 'advanceHandshake'
+    | 'restoreHandshake'
+    | 'restoreLink'
+    | 'clearLinkOutbox',
+    jest.Mock
+  >;
 const mockedKeyStore = jest.mocked(KeyStore);
 
 const NOW = 1_700_000_000_000;
@@ -138,6 +151,7 @@ describe('declined peer outbound (real LinkService + storage)', () => {
   let db: ReturnType<typeof openMemoryDb> | null = null;
 
   beforeEach(async () => {
+    seedPaykitSdkJestMock();
     FollowsImportSettings.resetForTests();
     resetLinkServiceHarnessState();
     db = openMemoryDb();
@@ -191,7 +205,8 @@ describe('declined peer outbound (real LinkService + storage)', () => {
 
     const status = await LinkService.ensureLinkWith(PEER);
     expect(status).toBe('ready');
-    expect(mockedNative.restoreLink).toHaveBeenCalled();
+    expect(PaykitSdkNative.ensureLinkWithPeer).toHaveBeenCalled();
+    expect(mockedNative.restoreLink).not.toHaveBeenCalled();
     const request = await StorageService.getMessageRequest(OWNER, PEER);
     expect(request?.status).toBe('declined');
   });

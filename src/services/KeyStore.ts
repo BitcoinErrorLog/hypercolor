@@ -3,6 +3,12 @@ import { sha256 } from '@noble/hashes/sha2';
 import * as Keychain from 'react-native-keychain';
 import { createMMKV, type MMKV } from 'react-native-mmkv';
 import { isValidPubky } from '../utils/pubkyId';
+import {
+  attachmentKeyBinding,
+  type AttachmentKeyBinding,
+} from './attachments/attachmentKeyBinding';
+
+export { attachmentKeyBinding, type AttachmentKeyBinding };
 
 /**
  * KeyStore — two-tier storage for the Paykit homeserver session alias and
@@ -56,6 +62,7 @@ const KEYCHAIN_USERNAME = 'identity';
 const LEGACY_LINK_RECEIVER_SECRET_SERVICE = 'hypercolor-link-receiver-secret';
 const RING_PENDING_SERVICE = 'hypercolor-ring-pending';
 const ATTACHMENT_KEY_SERVICE_PREFIX = 'hypercolor-attachment-key';
+const SDK_LINKS_EPOCH_KEY = 'hypercolor.sdkLinksEpoch';
 
 // ─── MMKV metadata keys ───────────────────────────────────────────────────────
 
@@ -204,6 +211,7 @@ function isMigratableMmkvKey(key: string): boolean {
     key === HOMESERVER_KEY ||
     key === SESSION_SECRET_KEY ||
     key === LINK_SESSION_KEY ||
+    key === SDK_LINKS_EPOCH_KEY ||
     key.startsWith(ATTACHMENT_INDEX_PREFIX) ||
     key.startsWith(DEBUG_ATTACHMENT_PREFIX)
   );
@@ -703,7 +711,11 @@ export function attachmentKeyService(
   ownerPubky: string,
   senderPubky: string,
   eventId: string,
+  binding?: AttachmentKeyBinding,
 ): string {
+  if (binding?.peerPubky && binding.conversationId) {
+    return `${ATTACHMENT_KEY_SERVICE_PREFIX}:${ownerPubky}:${binding.peerPubky}:${binding.conversationId}:${senderPubky}:${eventId}`;
+  }
   return `${ATTACHMENT_KEY_SERVICE_PREFIX}:${ownerPubky}:${senderPubky}:${eventId}`;
 }
 
@@ -757,9 +769,10 @@ export async function setAttachmentSecret(
   senderPubky: string,
   eventId: string,
   material: AttachmentSecretMaterial,
+  binding?: AttachmentKeyBinding,
 ): Promise<void> {
   requireStore('setAttachmentSecret');
-  const service = attachmentKeyService(ownerPubky, senderPubky, eventId);
+  const service = attachmentKeyService(ownerPubky, senderPubky, eventId, binding);
   const payload = JSON.stringify(material);
   try {
     await Keychain.setGenericPassword(KEYCHAIN_USERNAME, payload, {
@@ -777,8 +790,9 @@ export async function getAttachmentSecret(
   ownerPubky: string,
   senderPubky: string,
   eventId: string,
+  binding?: AttachmentKeyBinding,
 ): Promise<AttachmentSecretMaterial | null> {
-  const service = attachmentKeyService(ownerPubky, senderPubky, eventId);
+  const service = attachmentKeyService(ownerPubky, senderPubky, eventId, binding);
   try {
     const result = await Keychain.getGenericPassword({ service });
     if (result !== false) {
@@ -818,11 +832,20 @@ export async function deleteAttachmentSecret(
   ownerPubky: string,
   senderPubky: string,
   eventId: string,
+  binding?: AttachmentKeyBinding,
 ): Promise<boolean> {
   return deleteAttachmentSecretByService(
     ownerPubky,
-    attachmentKeyService(ownerPubky, senderPubky, eventId),
+    attachmentKeyService(ownerPubky, senderPubky, eventId, binding),
   );
+}
+
+export function getSdkLinksEpoch(): string | null {
+  return requireStore('getSdkLinksEpoch').getString(SDK_LINKS_EPOCH_KEY) ?? null;
+}
+
+export function setSdkLinksEpoch(value: string): void {
+  requireStore('setSdkLinksEpoch').set(SDK_LINKS_EPOCH_KEY, value);
 }
 
 /**
@@ -1058,7 +1081,10 @@ export const KeyStore = {
   deleteAttachmentSecretByService,
   deleteAttachmentSecrets,
   clearAttachmentSecretsForOwner,
+  attachmentKeyBinding,
   attachmentKeyService,
+  getSdkLinksEpoch,
+  setSdkLinksEpoch,
   // AppCert
   setAppCert,
   getAppCert,

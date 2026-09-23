@@ -108,7 +108,18 @@ import {
 } from '../../../types/link';
 import { wireSignOutMarkerMocks } from '../../__tests__/wireSignOutMarkerMocks';
 
-const mockedNative = jest.mocked(PaykitLinkNative);
+const mockedNative = jest.mocked(PaykitLinkNative) as unknown as jest.Mocked<
+  typeof PaykitLinkNative
+> &
+  Record<
+    | 'initiateLink'
+    | 'probeInboundLink'
+    | 'advanceHandshake'
+    | 'restoreHandshake'
+    | 'restoreLink'
+    | 'clearLinkOutbox',
+    jest.Mock
+  >;
 const mockedKeyStore = jest.mocked(KeyStore);
 
 const NOW = 1_700_000_000_000;

@@ -90,6 +90,7 @@ describe('applyAttachmentInbound', () => {
       PEER,
       EVENT_ID,
       expect.objectContaining({ key: 'A'.repeat(43), nonce: 'B'.repeat(32) }),
+      { peerPubky: PEER, conversationId: buildDmConversationId(PEER) },
     );
     expect(mockedStorage.saveAttachment).toHaveBeenCalledWith(
       expect.objectContaining({

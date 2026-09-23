@@ -1,9 +1,9 @@
 {
   "artifact": "paykit-release.aar",
-  "sha256": "d1e63d0b02ed8bc89c6dca91df29bfd0b8f49d08e5c19814bb257874c1c06ef8",
+  "sha256": "cbe56b8df5fc33434d7a4053d9ee95be9aee82a9f5ec19b90a704d733acfcc49",
   "source": {
     "repository": "BitcoinErrorLog/paykit-rs-official",
-    "branch": "feat/chat-ffi",
-    "commit": "9b7de03df3843e536d676423f4398d05e4974cc8"
+    "branch": "feat/sdk-wasm",
+    "commit": "6fd816f5a63ba37bf71c570eaacda01071c64935"
   }
 }

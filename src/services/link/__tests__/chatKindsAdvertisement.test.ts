@@ -31,7 +31,18 @@ import { buildCapabilityDocument, capabilityPubkyUrl } from '../../../types/rece
 const OWNER = 'a'.repeat(52);
 const PEER = 'b'.repeat(52);
 const marker = { noisePublicKey: 'n'.repeat(52) };
-const mockedNative = jest.mocked(PaykitLinkNative);
+const mockedNative = jest.mocked(PaykitLinkNative) as unknown as jest.Mocked<
+  typeof PaykitLinkNative
+> &
+  Record<
+    | 'initiateLink'
+    | 'probeInboundLink'
+    | 'advanceHandshake'
+    | 'restoreHandshake'
+    | 'restoreLink'
+    | 'clearLinkOutbox',
+    jest.Mock
+  >;
 const mockedStorage = jest.mocked(StorageService);
 const response = (status: number, body?: string) => ({
   status,

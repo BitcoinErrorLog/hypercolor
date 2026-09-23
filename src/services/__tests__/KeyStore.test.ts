@@ -285,6 +285,30 @@ describe('KeyStore session and Ring pending', () => {
     );
   });
 
+  it('binds an attachment key to peer and conversation without dropping the sender', async () => {
+    mockKeychainStore.set(MMKV_KEY_SERVICE, SECRET_HEX);
+    const { initKeyStore, setAttachmentSecret, getAttachmentSecret, attachmentKeyService } =
+      await freshKeyStore();
+    await initKeyStore();
+    const binding = { peerPubky: 'peer-pubky', conversationId: 'dm:peer-pubky' };
+    await setAttachmentSecret(
+      'owner',
+      'sender',
+      'event-1',
+      { key: 'bound-key', nonce: 'bound-nonce', algorithm: 'XChaCha20Poly1305' },
+      binding,
+    );
+    expect(attachmentKeyService('owner', 'sender', 'event-1', binding)).toBe(
+      'hypercolor-attachment-key:owner:peer-pubky:dm:peer-pubky:sender:event-1',
+    );
+    await expect(getAttachmentSecret('owner', 'sender', 'event-1', binding)).resolves.toEqual({
+      key: 'bound-key',
+      nonce: 'bound-nonce',
+      algorithm: 'XChaCha20Poly1305',
+    });
+    await expect(getAttachmentSecret('owner', 'sender', 'event-1')).resolves.toBeNull();
+  });
+
   it('reports a persisted session from a readable link-session alias and pubky', async () => {
     const { initKeyStore, setAppKeypair, setLinkSession, setPubky, hasPersistedSession } =
       await freshKeyStore();

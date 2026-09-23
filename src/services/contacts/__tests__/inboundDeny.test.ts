@@ -1,3 +1,5 @@
+import { PaykitSdkNative } from '../../link/PaykitSdkNative';
+import { seedPaykitSdkJestMock } from '../../link/__tests__/paykitSdkJestMock';
 import {
   LinkService,
   LINK_GROUP_FANOUT_PAYLOAD_TYPE,
@@ -170,7 +172,18 @@ jest.mock('../../RetryQueue', () => ({
 
 jest.mock('uuid', () => ({ v4: jest.fn(() => '00000000-0000-4000-8000-0000000000aa') }));
 
-const mockedNative = jest.mocked(PaykitLinkNative);
+const mockedNative = jest.mocked(PaykitLinkNative) as unknown as jest.Mocked<
+  typeof PaykitLinkNative
+> &
+  Record<
+    | 'initiateLink'
+    | 'probeInboundLink'
+    | 'advanceHandshake'
+    | 'restoreHandshake'
+    | 'restoreLink'
+    | 'clearLinkOutbox',
+    jest.Mock
+  >;
 const mockedStorage = jest.mocked(StorageService);
 const mockedKeyStore = jest.mocked(KeyStore);
 const mockedRetryQueue = jest.mocked(RetryQueue);
@@ -213,6 +226,7 @@ function storedLink(): LinkRecord {
 describe('inbound deny is authoritative', () => {
   beforeEach(async () => {
     jest.resetAllMocks();
+    seedPaykitSdkJestMock();
     FollowsImportSettings.resetForTests();
     jest.spyOn(Date, 'now').mockReturnValue(NOW);
     mockedNative.isAvailable.mockReturnValue(true);
@@ -434,10 +448,11 @@ describe('inbound deny is authoritative', () => {
     expect(FollowsImportSettings.isBlocked(OWNER, PEER)).toBe(false);
     expect(request).toBeNull();
 
-    mockedNative.probeInboundLink.mockClear();
+    jest.mocked(PaykitSdkNative.ensureLinkWithPeer).mockClear();
     const received = await LinkService.syncInbox([PEER]);
     expect(received).toEqual([]);
-    expect(mockedNative.probeInboundLink).toHaveBeenCalled();
+    expect(PaykitSdkNative.ensureLinkWithPeer).toHaveBeenCalled();
+    expect(mockedNative.probeInboundLink).not.toHaveBeenCalled();
     expect(request?.status).toBe('pending');
   });
 
@@ -579,18 +594,26 @@ describe('inbound deny is authoritative', () => {
 
   it('stops remaining inbox probes when the owner switches mid-loop', async () => {
     const OWNER_B = 'gcumbhd7sqit6nn457jxmrwqx9pyymqwamnarekgo3xppqo6a19o';
-    mockedNative.probeInboundLink.mockImplementation(async () => {
+    jest.mocked(PaykitSdkNative.ensureLinkWithPeer).mockImplementation(async () => {
       mockedNative.signinWithSecret.mockResolvedValue({
         sessionAlias: 'session-b',
         pubky: OWNER_B,
       });
       mockedKeyStore.getPubky.mockReturnValue(OWNER_B);
       await LinkService.signinWithSecret('owner-b-secret');
-      return { result: 'established', linkId: 'inbound-switch', snapshot: 'est-in' };
+      return {
+        counterparty: PEER,
+        path: LINK_RECEIVER_PATH,
+        state: 'LINKED',
+        generation: '1',
+        role: 'INITIATOR',
+        leaseSkipped: false,
+      };
     });
 
     await LinkService.syncInbox([PEER, OTHER]);
 
-    expect(mockedNative.probeInboundLink).toHaveBeenCalledTimes(1);
+    expect(PaykitSdkNative.ensureLinkWithPeer).toHaveBeenCalledTimes(1);
+    expect(mockedNative.probeInboundLink).not.toHaveBeenCalled();
   });
 });

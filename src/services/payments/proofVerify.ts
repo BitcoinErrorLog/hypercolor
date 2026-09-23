@@ -27,10 +27,9 @@ export function extractBolt11Preimage(proof: Record<string, unknown>): string | 
 export async function bolt11PreimagePaymentHash(preimageHex: string): Promise<string | null> {
   if (!HEX64.test(preimageHex)) return null;
   const bytes = hexToBytes(preimageHex.toLowerCase());
-  const digest = await Crypto.digest(
-    Crypto.CryptoDigestAlgorithm.SHA256,
-    bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer,
-  );
+  // Android ExpoCrypto.digest takes a TypedArray. An ArrayBuffer
+  // becomes "[object ArrayBuffer]" and the Kotlin bridge rejects it.
+  const digest = await Crypto.digest(Crypto.CryptoDigestAlgorithm.SHA256, bytes);
   return bytesToHex(new Uint8Array(digest));
 }
 

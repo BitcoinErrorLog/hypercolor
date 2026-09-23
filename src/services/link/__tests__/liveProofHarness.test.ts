@@ -138,7 +138,18 @@ jest.mock('../PaykitLinkNative', () => ({
 import { KeyStore } from '../../KeyStore';
 import { PaykitLinkNative } from '../PaykitLinkNative';
 
-const mockedNative = jest.mocked(PaykitLinkNative);
+const mockedNative = jest.mocked(PaykitLinkNative) as unknown as jest.Mocked<
+  typeof PaykitLinkNative
+> &
+  Record<
+    | 'initiateLink'
+    | 'probeInboundLink'
+    | 'advanceHandshake'
+    | 'restoreHandshake'
+    | 'restoreLink'
+    | 'clearLinkOutbox',
+    jest.Mock
+  >;
 const mockedKeyStore = jest.mocked(KeyStore);
 
 const HS = 'ufibwbmed6jeq9k4p583go95wofakh9fwpp4k734trq79pd9u1uy';

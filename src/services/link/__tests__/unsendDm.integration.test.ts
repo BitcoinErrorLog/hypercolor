@@ -117,7 +117,18 @@ const SESSION_ALIAS = 'session-alias-1';
 const NOW = 1_700_000_000_000;
 
 const mockedKeyStore = jest.mocked(KeyStore);
-const mockedNative = jest.mocked(PaykitLinkNative);
+const mockedNative = jest.mocked(PaykitLinkNative) as unknown as jest.Mocked<
+  typeof PaykitLinkNative
+> &
+  Record<
+    | 'initiateLink'
+    | 'probeInboundLink'
+    | 'advanceHandshake'
+    | 'restoreHandshake'
+    | 'restoreLink'
+    | 'clearLinkOutbox',
+    jest.Mock
+  >;
 
 async function seedEstablishedLink(): Promise<void> {
   await StorageService.upsertLinkReceiver({
@@ -277,7 +288,10 @@ describe('unsendDm with real SQLite storage', () => {
     expect(await StorageService.getAttachment(OWNER, OWNER, EVENT_ID)).toEqual(
       expect.objectContaining({ resolveState: 'unavailable-from-backup', localCachePath: null }),
     );
-    expect(mockedKeyStore.deleteAttachmentSecret).toHaveBeenCalledWith(OWNER, OWNER, EVENT_ID);
+    expect(mockedKeyStore.deleteAttachmentSecret).toHaveBeenCalledWith(OWNER, OWNER, EVENT_ID, {
+      peerPubky: PEER,
+      conversationId: `dm:${PEER}`,
+    });
   });
 
   it('sweeps a key left after the tombstone commits and cleanup fails', async () => {
