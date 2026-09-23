@@ -1,3 +1,5 @@
+import { PaykitSdkNative, type SdkEnsureResult } from '../PaykitSdkNative';
+import { seedPaykitSdkJestMock } from './paykitSdkJestMock';
 import {
   LINK_INBOX_PEER_TIMEOUT_MS,
   LinkService,
@@ -161,7 +163,18 @@ jest.mock('../../RetryQueue', () => ({
 
 jest.mock('uuid', () => ({ v4: jest.fn(() => '00000000-0000-4000-8000-0000000000aa') }));
 
-const mockedNative = jest.mocked(PaykitLinkNative);
+const mockedNative = jest.mocked(PaykitLinkNative) as unknown as jest.Mocked<
+  typeof PaykitLinkNative
+> &
+  Record<
+    | 'initiateLink'
+    | 'probeInboundLink'
+    | 'advanceHandshake'
+    | 'restoreHandshake'
+    | 'restoreLink'
+    | 'clearLinkOutbox',
+    jest.Mock
+  >;
 const mockedStorage = jest.mocked(StorageService);
 const mockedKeyStore = jest.mocked(KeyStore);
 const mockedRetryQueue = jest.mocked(RetryQueue);
@@ -223,6 +236,7 @@ function pendingRequest(status: MessageRequest['status'] = 'pending'): MessageRe
 describe('LinkService message requests', () => {
   beforeEach(async () => {
     jest.resetAllMocks();
+    seedPaykitSdkJestMock();
     jest.spyOn(Date, 'now').mockReturnValue(NOW);
     FollowsImportSettings.resetForTests();
     mockedNative.isAvailable.mockReturnValue(true);
@@ -323,14 +337,12 @@ describe('LinkService message requests', () => {
       const done = LinkService.syncInbox([slowPeer, PEER]);
       await jest.advanceTimersByTimeAsync(LINK_INBOX_PEER_TIMEOUT_MS);
       await expect(done).resolves.toEqual([]);
-      expect(mockedNative.probeInboundLink).toHaveBeenCalledWith(
-        SESSION_ALIAS,
-        RECEIVER_ALIAS,
+      expect(PaykitSdkNative.ensureLinkWithPeer).toHaveBeenCalledWith(
+        OWNER,
         PEER,
-        PEER_NOISE,
-        LINK_RECEIVER_PATH,
         LINK_RECEIVER_PATH,
       );
+      expect(mockedNative.probeInboundLink).not.toHaveBeenCalled();
       expect(mockedStorage.upsertMessageRequest).toHaveBeenCalledWith(
         expect.objectContaining({
           ownerPubky: OWNER,
@@ -362,24 +374,32 @@ describe('LinkService message requests', () => {
     }
   });
 
-  it('does not adopt when deny flips between probe and persist', async () => {
+  it('does not adopt when deny flips during SDK ensure', async () => {
     let deny: 'clear' | 'denied' = 'clear';
     jest.spyOn(FollowsImportSettings, 'resolveDenyState').mockImplementation(async () => deny);
-    mockedNative.probeInboundLink.mockImplementation(async () => {
+    jest.mocked(PaykitSdkNative.ensureLinkWithPeer).mockImplementation(async () => {
       deny = 'denied';
-      return { result: 'pending', linkId: 'probed-denied', snapshot: 'snap' };
+      return {
+        counterparty: PEER,
+        path: LINK_RECEIVER_PATH,
+        state: 'LINKED',
+        generation: '1',
+        role: 'INITIATOR',
+        leaseSkipped: false,
+      };
     });
 
     await expect(LinkService.syncInbox([PEER])).resolves.toEqual([]);
 
     expect(mockedStorage.upsertLink).not.toHaveBeenCalled();
     expect(mockedStorage.upsertMessageRequest).not.toHaveBeenCalled();
-    expect(mockedNative.closeLink).toHaveBeenCalledWith('probed-denied');
+    expect(mockedNative.closeLink).not.toHaveBeenCalled();
+    expect(mockedNative.probeInboundLink).not.toHaveBeenCalled();
   });
 
   it('abandoned probe after queue reset cannot clobber a fresh adoption', async () => {
     jest.useFakeTimers();
-    const hung = deferred<{ result: 'pending'; linkId: string; snapshot: string }>();
+    const hung = deferred<SdkEnsureResult>();
     let probes = 0;
     let adoptedSnapshot: string | null = null;
     mockedStorage.getLink.mockImplementation(async () =>
@@ -403,10 +423,17 @@ describe('LinkService message requests', () => {
     mockedStorage.upsertLink.mockImplementation(async record => {
       adoptedSnapshot = (record as { snapshot: string }).snapshot;
     });
-    mockedNative.probeInboundLink.mockImplementation(() => {
+    jest.mocked(PaykitSdkNative.ensureLinkWithPeer).mockImplementation(() => {
       probes += 1;
       if (probes === 1) return hung.promise;
-      return Promise.resolve({ result: 'pending', linkId: 'fresh-handle', snapshot: 'fresh' });
+      return Promise.resolve({
+        counterparty: PEER,
+        path: LINK_RECEIVER_PATH,
+        state: 'LINKED',
+        generation: '2',
+        role: 'RESPONDER',
+        leaseSkipped: false,
+      });
     });
 
     try {
@@ -417,19 +444,25 @@ describe('LinkService message requests', () => {
       expect(linkQueueEntryCountForTests()).toBe(0);
 
       await LinkService.syncInbox([PEER]);
-      expect(adoptedSnapshot).toBe('fresh');
+      expect(adoptedSnapshot).toBe('sdk:2');
       const upserts = mockedStorage.upsertLink.mock.calls.length;
 
-      hung.resolve({ result: 'pending', linkId: 'stale-handle', snapshot: 'stale' });
+      hung.resolve({
+        counterparty: PEER,
+        path: LINK_RECEIVER_PATH,
+        state: 'LINKED',
+        generation: '1',
+        role: 'RESPONDER',
+        leaseSkipped: false,
+      });
       await Promise.resolve();
       await Promise.resolve();
       await Promise.resolve();
       await jest.advanceTimersByTimeAsync(0);
 
-      expect(adoptedSnapshot).toBe('fresh');
+      expect(adoptedSnapshot).toBe('sdk:2');
       expect(mockedStorage.upsertLink.mock.calls.length).toBe(upserts);
-      expect(mockedNative.closeLink).toHaveBeenCalledWith('stale-handle');
-      expect(mockedNative.closeLink).not.toHaveBeenCalledWith('fresh-handle');
+      expect(mockedNative.closeLink).not.toHaveBeenCalled();
     } finally {
       jest.useRealTimers();
     }
@@ -682,7 +715,8 @@ describe('LinkService message requests', () => {
 
     expect(mockedStorage.acceptDeclinedMessageRequest).toHaveBeenCalledWith(OWNER, PEER);
     expect(mockedStorage.upsertMessageRequest).not.toHaveBeenCalled();
-    expect(mockedNative.restoreLink).toHaveBeenCalled();
+    expect(PaykitSdkNative.ensureLinkWithPeer).toHaveBeenCalled();
+    expect(mockedNative.restoreLink).not.toHaveBeenCalled();
   });
 
   it('classifies a wiped established conversation as auto-accept, not a new request', async () => {

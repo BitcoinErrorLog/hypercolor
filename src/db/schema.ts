@@ -326,6 +326,16 @@ export const SCHEMA_V25_STATEMENTS: readonly string[] = [
   `ALTER TABLE link_stream_items ADD COLUMN processing_error_category TEXT`,
 ];
 
+/** Schema v26 — empty Paykit SDK blob table. The SDK is the only writer. */
+export const SCHEMA_V26_STATEMENTS: readonly string[] = [
+  `CREATE TABLE IF NOT EXISTS paykit_sdk_state (
+    owner_pubky TEXT PRIMARY KEY,
+    blob       BLOB NOT NULL,
+    revision   TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
+  )`,
+];
+
 /**
  * Schema v15 — move the handshake advance budget off the `links` row.
  *

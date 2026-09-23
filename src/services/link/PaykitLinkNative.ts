@@ -334,56 +334,8 @@ export interface PaykitLinkNativeApi {
   ): Promise<void>;
   getReceiverMarker(peerPubky: string, receiverPath: string): Promise<ReceiverMarker | null>;
   removeReceiverMarker(sessionAlias: string, receiverPath: string): Promise<void>;
-  initiateLink(
-    sessionAlias: string,
-    receiverAlias: string,
-    peerPubky: string,
-    peerNoisePublicKey: string,
-    localReceiverPath: string,
-    remoteReceiverPath: string,
-  ): Promise<LinkInitiateResult>;
-  /**
-   * Atomic inbound probe. `none` is NOT an error — nothing inbound, prior
-   * state must be left untouched.
-   */
-  probeInboundLink(
-    sessionAlias: string,
-    receiverAlias: string,
-    peerPubky: string,
-    peerNoisePublicKey: string,
-    localReceiverPath: string,
-    remoteReceiverPath: string,
-  ): Promise<LinkProbeResult>;
-  advanceHandshake(linkId: string): Promise<LinkAdvanceResult>;
-  restoreHandshake(
-    sessionAlias: string,
-    receiverAlias: string,
-    peerPubky: string,
-    peerNoisePublicKey: string,
-    localReceiverPath: string,
-    remoteReceiverPath: string,
-    snapshot: string,
-  ): Promise<LinkRestoreHandshakeResult>;
-  restoreLink(
-    sessionAlias: string,
-    receiverAlias: string,
-    peerPubky: string,
-    peerNoisePublicKey: string,
-    localReceiverPath: string,
-    remoteReceiverPath: string,
-    snapshot: string,
-  ): Promise<LinkRestoreResult>;
   sendPrivateMessageJson(linkId: string, rawJson: string): Promise<LinkSendResult>;
   receivePrivateMessages(linkId: string): Promise<LinkReceiveResult>;
-  /** Legacy boundary retained for compatibility; LinkService never calls it. */
-  clearLinkOutbox(
-    sessionAlias: string,
-    receiverAlias: string,
-    peerPubky: string,
-    peerNoisePublicKey: string,
-    localReceiverPath: string,
-    remoteReceiverPath: string,
-  ): Promise<number>;
   closeLink(linkId: string): Promise<void>;
   /**
    * Owner homeserver PUT using the Paykit ChatSession for `sessionAlias`
@@ -551,115 +503,12 @@ export const PaykitLinkNative: PaykitLinkNativeApi = {
     return invoke('removeReceiverMarker', sessionAlias, receiverPath);
   },
 
-  initiateLink(
-    sessionAlias: string,
-    receiverAlias: string,
-    peerPubky: string,
-    peerNoisePublicKey: string,
-    localReceiverPath: string,
-    remoteReceiverPath: string,
-  ): Promise<LinkInitiateResult> {
-    return invoke(
-      'initiateLink',
-      sessionAlias,
-      receiverAlias,
-      peerPubky,
-      peerNoisePublicKey,
-      localReceiverPath,
-      remoteReceiverPath,
-    );
-  },
-
-  probeInboundLink(
-    sessionAlias: string,
-    receiverAlias: string,
-    peerPubky: string,
-    peerNoisePublicKey: string,
-    localReceiverPath: string,
-    remoteReceiverPath: string,
-  ): Promise<LinkProbeResult> {
-    return invoke(
-      'probeInboundLink',
-      sessionAlias,
-      receiverAlias,
-      peerPubky,
-      peerNoisePublicKey,
-      localReceiverPath,
-      remoteReceiverPath,
-    );
-  },
-
-  advanceHandshake(linkId: string): Promise<LinkAdvanceResult> {
-    return invoke('advanceHandshake', linkId);
-  },
-
-  restoreHandshake(
-    sessionAlias: string,
-    receiverAlias: string,
-    peerPubky: string,
-    peerNoisePublicKey: string,
-    localReceiverPath: string,
-    remoteReceiverPath: string,
-    snapshot: string,
-  ): Promise<LinkRestoreHandshakeResult> {
-    return invoke(
-      'restoreHandshake',
-      sessionAlias,
-      receiverAlias,
-      peerPubky,
-      peerNoisePublicKey,
-      localReceiverPath,
-      remoteReceiverPath,
-      snapshot,
-    );
-  },
-
-  restoreLink(
-    sessionAlias: string,
-    receiverAlias: string,
-    peerPubky: string,
-    peerNoisePublicKey: string,
-    localReceiverPath: string,
-    remoteReceiverPath: string,
-    snapshot: string,
-  ): Promise<LinkRestoreResult> {
-    return invoke(
-      'restoreLink',
-      sessionAlias,
-      receiverAlias,
-      peerPubky,
-      peerNoisePublicKey,
-      localReceiverPath,
-      remoteReceiverPath,
-      snapshot,
-    );
-  },
-
   sendPrivateMessageJson(linkId: string, rawJson: string): Promise<LinkSendResult> {
     return invokeLinkOp(linkId, 'sendPrivateMessageJson', rawJson);
   },
 
   receivePrivateMessages(linkId: string): Promise<LinkReceiveResult> {
     return invokeLinkOp(linkId, 'receivePrivateMessages');
-  },
-
-  clearLinkOutbox(
-    sessionAlias: string,
-    receiverAlias: string,
-    peerPubky: string,
-    peerNoisePublicKey: string,
-    localReceiverPath: string,
-    remoteReceiverPath: string,
-  ): Promise<number> {
-    return invoke(
-      'clearLinkOutbox',
-      sessionAlias,
-      receiverAlias,
-      peerPubky,
-      peerNoisePublicKey,
-      localReceiverPath,
-      remoteReceiverPath,
-    );
   },
 
   closeLink(linkId: string): Promise<void> {

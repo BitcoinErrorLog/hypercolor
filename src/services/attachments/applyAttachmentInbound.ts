@@ -107,7 +107,10 @@ async function persistGroupAttachment(
     return;
   }
 
-  await storeSecrets(input.ownerPubky, input.senderPubky, envelope);
+  await storeSecrets(input.ownerPubky, input.senderPubky, envelope, {
+    peerPubky: input.senderPubky,
+    conversationId: channelId,
+  });
   const persistJson = JSON.stringify(redactAttachmentEnvelope(envelope));
   await StorageService.saveAttachment({
     ownerPubky: input.ownerPubky,
@@ -172,7 +175,10 @@ async function persistDmAttachment(
     return null;
   }
 
-  await storeSecrets(input.ownerPubky, input.senderPubky, envelope);
+  await storeSecrets(input.ownerPubky, input.senderPubky, envelope, {
+    peerPubky: input.peerPubky,
+    conversationId: buildDmConversationId(input.peerPubky),
+  });
   const persistJson = JSON.stringify(redactAttachmentEnvelope(envelope));
   await StorageService.saveAttachment({
     ownerPubky: input.ownerPubky,
@@ -215,16 +221,23 @@ async function storeSecrets(
   ownerPubky: PubkyKey,
   senderPubky: PubkyKey,
   envelope: ChatAttachmentEnvelope,
+  binding: { peerPubky: string; conversationId: string },
 ): Promise<void> {
   if (isAttachmentKeyPlaceholder(envelope.key)) return;
-  await KeyStore.setAttachmentSecret(ownerPubky, senderPubky, envelope.event_id, {
-    key: envelope.key,
-    nonce: envelope.nonce,
-    algorithm: envelope.algorithm,
-    ...(envelope.thumbnail && !isAttachmentKeyPlaceholder(envelope.thumbnail.key)
-      ? { thumbnail: { key: envelope.thumbnail.key, nonce: envelope.thumbnail.nonce } }
-      : {}),
-  });
+  await KeyStore.setAttachmentSecret(
+    ownerPubky,
+    senderPubky,
+    envelope.event_id,
+    {
+      key: envelope.key,
+      nonce: envelope.nonce,
+      algorithm: envelope.algorithm,
+      ...(envelope.thumbnail && !isAttachmentKeyPlaceholder(envelope.thumbnail.key)
+        ? { thumbnail: { key: envelope.thumbnail.key, nonce: envelope.thumbnail.nonce } }
+        : {}),
+    },
+    binding,
+  );
 }
 
 export function attachmentPreviewBody(

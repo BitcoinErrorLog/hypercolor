@@ -7,7 +7,7 @@ import com.facebook.react.uimanager.ViewManager
 
 class PaykitLinkPackage : ReactPackage {
     override fun createNativeModules(reactContext: ReactApplicationContext): List<NativeModule> {
-        return listOf(PaykitLinkModule(reactContext))
+        return listOf(PaykitLinkModule(reactContext), PaykitSdkModule(reactContext))
     }
 
     override fun createViewManagers(reactContext: ReactApplicationContext): List<ViewManager<*, *>> {

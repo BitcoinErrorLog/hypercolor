@@ -15,6 +15,7 @@ import {
 export async function reconstructAttachmentWireJson(
   redactedRawJson: string,
   keyRef: string,
+  binding?: { peerPubky: string; conversationId: string },
 ): Promise<string> {
   const parsed = parseAttachmentKeyRef(keyRef);
   if (!parsed) {
@@ -28,6 +29,7 @@ export async function reconstructAttachmentWireJson(
     parsed.ownerPubky,
     parsed.senderPubky,
     parsed.eventId,
+    binding,
   );
   if (!secret) {
     throw new AttachmentError('not-found', 'Attachment key material is not in KeyStore');

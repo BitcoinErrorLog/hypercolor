@@ -1,3 +1,4 @@
+import { seedPaykitSdkJestMock } from '../../link/__tests__/paykitSdkJestMock';
 jest.mock('uuid', () => ({ v4: jest.fn() }));
 
 jest.mock('expo-file-system/legacy', () => ({
@@ -112,7 +113,18 @@ const mockedFs = jest.requireMock('expo-file-system/legacy') as {
   makeDirectoryAsync: jest.Mock;
   deleteAsync: jest.Mock;
 };
-const mockedNative = jest.mocked(PaykitLinkNative);
+const mockedNative = jest.mocked(PaykitLinkNative) as unknown as jest.Mocked<
+  typeof PaykitLinkNative
+> &
+  Record<
+    | 'initiateLink'
+    | 'probeInboundLink'
+    | 'advanceHandshake'
+    | 'restoreHandshake'
+    | 'restoreLink'
+    | 'clearLinkOutbox',
+    jest.Mock
+  >;
 const mockedPubky = jest.mocked(PubkyService);
 const mockedKeyStore = jest.mocked(KeyStore);
 const mockedStorage = jest.mocked(StorageService);
@@ -127,6 +139,7 @@ function location(): string {
 describe('AttachmentService', () => {
   beforeEach(() => {
     jest.resetAllMocks();
+    seedPaykitSdkJestMock();
     jest.spyOn(Date, 'now').mockReturnValue(1_700_000_000_000);
     mockedUuid.mockReturnValueOnce(ATTACHMENT_ID).mockReturnValue(EVENT_ID);
     mockedKeyStore.getPubky.mockReturnValue(OWNER);
@@ -225,6 +238,7 @@ describe('AttachmentService', () => {
       OWNER,
       EVENT_ID,
       expect.objectContaining({ key: MAIN_KEY, nonce: MAIN_NONCE }),
+      { peerPubky: PEER, conversationId: `dm:${PEER}` },
     );
     expect(mockedStorage.saveAttachment).toHaveBeenCalledWith(
       expect.objectContaining({

@@ -5,9 +5,15 @@ import {
   isLinkNativeError,
   toLinkNativeError,
   type LinkNativeError,
-  type LinkProbeResult,
   type ReceiverMarker,
 } from './PaykitLinkNative';
+import {
+  PaykitSdkNative,
+  SdkOperationError,
+  isSdkOperationError,
+  type SdkEnsureResult,
+  type SdkLinkRole,
+} from './PaykitSdkNative';
 import { StorageService } from '../StorageService';
 import { KeyStore } from '../KeyStore';
 import { parsePubkyOwner, resolveHomeserverOrigin } from '../homeserverOrigin';
@@ -34,9 +40,9 @@ import {
   decodeLinkEnvelope,
   parseDmConversationId,
   type LinkMessage,
-  type LinkReceiver,
   type LinkReconnectErrorCategory,
   type LinkRecord,
+  type LinkRecordInput,
   type LinkRole,
   type LinkStatus,
   type LinkStreamItem,
@@ -299,10 +305,6 @@ type EnsureOutcome = LinkStatus | 'idle' | 'denied' | 'deny-unavailable' | 'stan
  *   clears, and is refused outright for an exhausted peer.
  */
 type LinkIntent = 'user' | 'queued' | 'background';
-
-function mayInitiate(intent: LinkIntent): boolean {
-  return intent !== 'background';
-}
 
 /** Same `ready` predicate the send path uses: live established handle or snapshot. */
 function isReadyLinkPredicate(record: LinkRecord, live: LiveHandle | undefined): boolean {
@@ -740,10 +742,7 @@ export const LinkService = {
       const record = await StorageService.getLink(owner, peerPubky);
       if (!record) return null;
       const live = liveHandles.get(linkKey(owner, peerPubky));
-      if (isReadyLinkPredicate(record, live)) {
-        if (blockedEstablishedRekeyOutcome(record) === 'error') return 'error';
-        return 'ready';
-      }
+      if (isReadyLinkPredicate(record, live)) return 'ready';
       if (record.status === 'reconnect_required') return 'reconnect_required';
       if (record.status === 'established') return 'restoring';
       return record.role === 'initiator' ? 'handshaking-initiator' : 'handshaking-responder';
@@ -774,7 +773,13 @@ export const LinkService = {
       const outcome = await ensureLinkLocked(peerPubky, 'user', false, ownerAtStart);
       abortIfOwnerChanged(ownerAtStart);
       assertLinkSendable(outcome, 'sendDm');
-      await promoteUserOutboundRequest(peerPubky, 'sendable', ownerAtStart);
+      if (
+        outcome === 'ready' ||
+        outcome === 'handshaking-initiator' ||
+        outcome === 'handshaking-responder'
+      ) {
+        await promoteUserOutboundRequest(peerPubky, 'sendable', ownerAtStart);
+      }
       abortIfOwnerChanged(ownerAtStart);
 
       const { envelope, json } = buildChatMessageEnvelope({
@@ -810,9 +815,10 @@ export const LinkService = {
           ? await StorageService.getAttachment(owner, owner, eventId)
           : null;
       const attachmentCachePaths = attachment ? cachePathsForAttachment(attachment) : [];
+      const attachmentBinding = bindingForStoredAttachment(peerPubky, owner, attachment);
       const attachmentKeyService =
         target.kind === CHAT_ATTACHMENT_KIND
-          ? KeyStore.attachmentKeyService(owner, owner, eventId)
+          ? KeyStore.attachmentKeyService(owner, owner, eventId, attachmentBinding)
           : undefined;
       const built = buildChatDeleteEnvelope({
         eventId: uuidv4(),
@@ -849,7 +855,7 @@ export const LinkService = {
       if (attachmentKeyService) {
         let deleted = false;
         try {
-          deleted = await KeyStore.deleteAttachmentSecret(owner, owner, eventId);
+          deleted = await KeyStore.deleteAttachmentSecret(owner, owner, eventId, attachmentBinding);
         } catch {
           deleted = false;
         }
@@ -913,7 +919,13 @@ export const LinkService = {
       const outcome = await ensureLinkLocked(input.peerPubky, 'user', false, ownerAtStart);
       abortIfOwnerChanged(ownerAtStart);
       assertLinkSendable(outcome, 'sendPreparedMessage');
-      await promoteUserOutboundRequest(input.peerPubky, 'sendable', ownerAtStart);
+      if (
+        outcome === 'ready' ||
+        outcome === 'handshaking-initiator' ||
+        outcome === 'handshaking-responder'
+      ) {
+        await promoteUserOutboundRequest(input.peerPubky, 'sendable', ownerAtStart);
+      }
       abortIfOwnerChanged(ownerAtStart);
       return dispatchPreparedDm({
         ownerPubky: ownerAtStart,
@@ -1021,16 +1033,16 @@ export const LinkService = {
     if (outcome !== 'ready') return 'queued';
     try {
       abortIfOwnerChanged(input.ownerPubky);
-      const handle = requireEstablishedHandle(input.ownerPubky, input.peerPubky);
       const wireJson = await wireJsonForNativeSend(
         input.kind,
         input.rawJson,
         input.ownerPubky,
         input.senderPubky,
         input.eventId,
+        input.peerPubky,
       );
       abortIfOwnerChanged(input.ownerPubky);
-      const { snapshot } = await PaykitLinkNative.sendPrivateMessageJson(handle, wireJson);
+      const { snapshot } = await sendOpaqueOnLink(input.ownerPubky, input.peerPubky, wireJson);
       abortIfOwnerChanged(input.ownerPubky);
       await StorageService.finalizeLinkSend({
         ownerPubky: input.ownerPubky,
@@ -1084,16 +1096,16 @@ export const LinkService = {
       if (outcome !== 'ready') return 'queued';
       try {
         abortIfOwnerChanged(input.ownerPubky);
-        const handle = requireEstablishedHandle(input.ownerPubky, input.peerPubky);
         const wireJson = await wireJsonForNativeSend(
           input.kind,
           input.rawJson,
           input.ownerPubky,
           input.senderPubky,
           input.eventId,
+          input.peerPubky,
         );
         abortIfOwnerChanged(input.ownerPubky);
-        const { snapshot } = await PaykitLinkNative.sendPrivateMessageJson(handle, wireJson);
+        const { snapshot } = await sendOpaqueOnLink(input.ownerPubky, input.peerPubky, wireJson);
         abortIfOwnerChanged(input.ownerPubky);
         await StorageService.finalizeGroupFanoutSend({
           ownerPubky: input.ownerPubky,
@@ -1434,7 +1446,10 @@ export const LinkService = {
     return withQueue(peerPubky, async () => {
       const ownerPubky = requireOwner();
       const stored = await StorageService.getLink(ownerPubky, peerPubky);
-      if (stored) await retireLocalLinkState(stored, ownerPubky);
+      if (stored) {
+        await failQueuedSendsForPeer(ownerPubky, peerPubky);
+        await retireLocalLinkState(stored, ownerPubky);
+      }
       await StorageService.deleteLinkStreamItemsForPeer(ownerPubky, peerPubky);
       await StorageService.deleteLinkMessagesForPeer(ownerPubky, peerPubky);
       await StorageService.deleteGroupDeferredForSender(ownerPubky, peerPubky);
@@ -1629,6 +1644,7 @@ async function sessionOrRestore(): Promise<SessionLookup> {
 }
 
 async function restoreFromKeyStore(): Promise<SessionLookup> {
+  await resetSdkLinksEpochIfNeeded(KeyStore.getPubky());
   const stored = KeyStore.getLinkSession();
   if (!stored) return null;
   try {
@@ -1647,6 +1663,32 @@ async function restoreFromKeyStore(): Promise<SessionLookup> {
     console.warn('[LinkService] Session restore failed transiently:', errorMessage(err));
     return { status: 'offline' };
   }
+}
+
+const SDK_LINKS_EPOCH = '1';
+
+async function resetSdkLinksEpochIfNeeded(owner: string | null): Promise<void> {
+  const readEpoch = KeyStore.getSdkLinksEpoch;
+  if (typeof readEpoch !== 'function') return;
+  let epoch: string | null;
+  try {
+    epoch = readEpoch();
+  } catch (err) {
+    if (typeof KeyStore.isKeyStoreNotReady === 'function' && KeyStore.isKeyStoreNotReady(err)) {
+      return;
+    }
+    throw err;
+  }
+  if (epoch === SDK_LINKS_EPOCH) return;
+  if (owner) {
+    await StorageService.clearAccountData(owner);
+    if (PaykitSdkNative.isAvailable()) {
+      await PaykitSdkNative.deleteOwnerState(owner);
+    }
+  } else {
+    await StorageService.wipeUnsignedSdkResidue();
+  }
+  KeyStore.setSdkLinksEpoch?.(SDK_LINKS_EPOCH);
 }
 
 function isActiveSession(lookup: SessionLookup): lookup is ActiveSession {
@@ -2154,6 +2196,8 @@ async function ensureLinkLocked(
   if (ownerPubky !== expectedOwner) {
     throw new LinkSendError('owner-changed', 'LinkService: owner changed during send');
   }
+  const queueGenAtStart = currentQueueGeneration(ownerPubky, peerPubky);
+  const queueReset = (): boolean => queueGenerationChanged(ownerPubky, peerPubky, queueGenAtStart);
   const deny = await FollowsImportSettings.resolveDenyState(ownerPubky, peerPubky);
   abortIfOwnerChanged(expectedOwner);
   if (deny === 'denied') return 'denied';
@@ -2163,1016 +2207,228 @@ async function ensureLinkLocked(
   if (!receiver) return 'needs-enable';
   if (!receiver.markerPublished && receiver.receiverRole !== 'standby') return 'needs-enable';
   const localPath = assertValidReceiverPath(coerceReceiverPath(receiver.receiverPath));
+  if (receiver.receiverRole === 'standby') {
+    const standbyRow = await StorageService.getLink(ownerPubky, peerPubky);
+    abortIfOwnerChanged(expectedOwner);
+    if (standbyRow?.status !== 'established') return 'standby-blocked';
+  }
+
+  void alreadyRecovered;
+  if (!PaykitSdkNative.isAvailable()) return 'native-missing';
 
   const key = linkKey(ownerPubky, peerPubky);
-  const expectedQueueGen = currentQueueGeneration(ownerPubky, peerPubky);
-  let live = liveHandles.get(key);
+  await PaykitSdkNative.bindOwner({
+    ownerPubky,
+    sessionAlias: activeSession.alias,
+    receiverAlias: receiver.receiverAlias,
+    receiverPath: localPath,
+  });
+  abortIfOwnerChanged(expectedOwner);
+  await syncOwnReceiverRole(ownerPubky);
+  abortIfOwnerChanged(expectedOwner);
+  try {
+    await fetchPeerReceiverMarker(ownerPubky, peerPubky, localPath);
+  } catch (err) {
+    if (err instanceof LinkSendError) throw err;
+    if (isLinkNativeError(err) && err.code === 'unavailable') return 'native-missing';
+  }
+  abortIfOwnerChanged(expectedOwner);
+
   let stored = await StorageService.getLink(ownerPubky, peerPubky);
   abortIfOwnerChanged(expectedOwner);
 
-  // Above the live-handle dispatch on purpose. A handshake in progress keeps a
-  // handle in memory for as long as the app stays foregrounded, and clearing
-  // below that branch made the documented recovery unreachable in exactly the
-  // case that needs it: the peer whose budget the handshake itself ran down.
-  if (intent === 'user') {
-    await StorageService.clearHandshakeBudget(ownerPubky, peerPubky);
-    establishedRekeyParkWindows.delete(key);
-    abortIfOwnerChanged(expectedOwner);
-  }
-
-  if (stored?.status === 'reconnect_required') {
-    const adopted = await maybeAdoptReconnectRequiredRotation(
-      stored,
+  try {
+    const observation = await PaykitSdkNative.observeEncryptedLinkRecoveryMarker(
       ownerPubky,
       peerPubky,
       localPath,
-      expectedOwner,
-      intent,
     );
-    if (!adopted) return 'reconnect_required';
-    stored = await StorageService.getLink(ownerPubky, peerPubky);
     abortIfOwnerChanged(expectedOwner);
-    live = liveHandles.get(key);
-  }
-
-  const competingGenerationCandidate =
-    stored?.status === 'handshaking' && stored.role === 'initiator';
-  if (
-    stored &&
-    !competingGenerationCandidate &&
-    (await shouldAgeOutNonReadyLink(stored, expectedOwner))
-  ) {
-    console.warn(
-      `[LinkService] handshake-stale-discard peer=${opaquePeerId(ownerPubky, peerPubky)} ageMs=${Date.now() - stored.updatedAt}`,
-    );
-    await retireLocalLinkState(stored, expectedOwner);
-    stored = null;
-    live = liveHandles.get(key);
-  }
-
-  if (live?.status === 'established' || stored?.status === 'established') {
-    if (stored?.status === 'established' && live?.status !== 'established') {
-      const restored = await restoreEstablished(
-        activeSession,
-        receiver,
-        stored,
-        intent,
-        alreadyRecovered,
-        expectedOwner,
-      );
-      abortIfOwnerChanged(expectedOwner);
-      if (restored !== 'ready' && restored !== 'reconnect_required') return restored;
-      if (restored === 'reconnect_required') return restored;
-      live = liveHandles.get(key);
-    }
-    if (stored?.status === 'established') {
-      const rekeyed = await maybeAdoptEstablishedRekey(
-        activeSession,
-        receiver,
-        stored,
-        ownerPubky,
-        peerPubky,
-        localPath,
-        expectedOwner,
-        expectedQueueGen,
-        intent,
-      );
-      abortIfOwnerChanged(expectedOwner);
-      if (rekeyed !== null) return rekeyed;
-      stored = await StorageService.getLink(ownerPubky, peerPubky);
-      abortIfOwnerChanged(expectedOwner);
-      const blocked = stored ? blockedEstablishedRekeyOutcome(stored) : null;
-      if (blocked) return blocked;
-    }
-    if (liveHandles.get(key)?.status === 'established') {
-      return 'ready';
-    }
-  }
-
-  const latestReceiver = await StorageService.getLinkReceiver(ownerPubky);
-  abortIfOwnerChanged(expectedOwner);
-  if (latestReceiver?.receiverRole === 'standby') return 'standby-blocked';
-
-  if (intent !== 'user' && (await isHandshakeBudgetExhausted(ownerPubky, peerPubky))) {
-    abortIfOwnerChanged(expectedOwner);
-    return 'idle';
-  }
-
-  await ensureOwnReceiverMarkerMatches(
-    activeSession,
-    receiver,
-    ownerPubky,
-    localPath,
-    expectedOwner,
-  );
-  abortIfOwnerChanged(expectedOwner);
-
-  let marker: ReceiverMarker | null | undefined;
-  try {
-    marker = await fetchPeerReceiverMarker(ownerPubky, peerPubky, localPath);
-    abortIfOwnerChanged(expectedOwner);
-    if (marker && stored) {
-      await StorageService.recordLastSeenPeerMarkerPk(ownerPubky, peerPubky, marker.noisePublicKey);
-      stored = { ...stored, lastSeenPeerMarkerPk: marker.noisePublicKey };
+    if (observation.state === 'RECOVERY_REQUIRED' || observation.state === 'UNKNOWN') {
+      if (queueReset()) return intent === 'background' ? 'idle' : 'handshaking-responder';
+      return rememberSdkRecovery(ownerPubky, peerPubky, localPath, stored, expectedOwner);
     }
   } catch (err) {
-    if (err instanceof LinkSendError && err.code === 'owner-changed') throw err;
-    marker = undefined;
+    if (isSdkOperationError(err) && err.code === 'recovery_required') {
+      return rememberSdkRecovery(ownerPubky, peerPubky, localPath, stored, expectedOwner);
+    }
+    if (!(isSdkOperationError(err) && (err.code === 'network' || err.code === 'protocol'))) {
+      throw err;
+    }
   }
 
-  // A responder that already wrote Noise msg2 must advance that same
-  // handshake to read initiator msg3. `probeInboundLink` is accept+one
-  // advance: calling it again starts a new XX, rewrites msg2, and the
-  // initiator (already established after the first msg2) never re-sends
-  // msg3. Inbox poll / open-thread sync then loop `result=pending`.
-  const responderHandshaking =
-    (live?.status === 'handshaking' && live.role === 'responder') ||
-    (stored?.status === 'handshaking' && stored.role === 'responder');
-
-  // Peer re-enrolled (new noise pk on receiver.json) while we still hold
-  // msg2: advance() only reads the msg3 slot. Wipe and accept the fresh
-  // msg1. Same-pk restarts stay on the pre-existing non-ready age-out
-  // ({@link HANDSHAKE_STALE_MS}) so a late msg3 is not wiped sooner.
-  if (
-    responderHandshaking &&
-    marker &&
-    stored?.remoteNoisePublicKey &&
-    marker.noisePublicKey !== stored.remoteNoisePublicKey
-  ) {
-    return restartResponderFromFreshMsg1(
-      activeSession,
-      receiver,
-      ownerPubky,
-      peerPubky,
-      stored,
-      marker,
-      localPath,
-      alreadyRecovered,
-      expectedOwner,
-      expectedQueueGen,
-    );
-  }
-
-  if (marker && !responderHandshaking) {
-    let inbound: Extract<LinkProbeResult, { result: 'pending' | 'established' }> | null;
+  let report: SdkEnsureResult | null = null;
+  for (let step = 0; step < HANDSHAKE_PENDING_ADVANCE_LIMIT; step += 1) {
+    abortIfOwnerChanged(expectedOwner);
     try {
-      inbound = await probeInbound(
-        activeSession,
-        receiver,
-        ownerPubky,
-        peerPubky,
-        marker,
-        localPath,
-      );
-      abortIfOwnerChanged(expectedOwner);
+      report = await PaykitSdkNative.ensureLinkWithPeer(ownerPubky, peerPubky, localPath);
     } catch (err) {
-      if (isLinkNativeError(err) && err.code === 'protocol') {
-        abortIfOwnerChanged(expectedOwner);
-        inbound = null;
-      } else {
-        throw err;
+      if (isSdkOperationError(err) && err.code === 'recovery_required') {
+        if (queueReset()) return intent === 'background' ? 'idle' : 'handshaking-responder';
+        return rememberSdkRecovery(ownerPubky, peerPubky, localPath, stored, expectedOwner);
       }
+      if (isSdkOperationError(err) && err.code === 'network') return 'idle';
+      if (isSdkOperationError(err) && err.code === 'unavailable') return 'native-missing';
+      if (isSdkOperationError(err) && err.code === 'auth') return 'needs-enable';
+      if (isSdkOperationError(err) && err.code === 'protocol') return 'error';
+      throw err;
     }
-    if (inbound !== null) {
-      stored = await StorageService.getLink(ownerPubky, peerPubky);
-      live = liveHandles.get(key);
-      abortIfOwnerChanged(expectedOwner);
-      if (queueGenerationChanged(ownerPubky, peerPubky, expectedQueueGen)) {
-        await closeQuietly(inbound.linkId);
-        return 'idle';
-      }
-      const canReplace = stored === null || stored.status !== 'established';
-      if (inbound === null) {
-        live = liveHandles.get(key);
-        stored = await StorageService.getLink(ownerPubky, peerPubky);
-        abortIfOwnerChanged(expectedOwner);
-      }
-      if (
-        inbound !== null &&
-        canReplace &&
-        (stored?.status === 'handshaking' || live?.status === 'handshaking')
-      ) {
-        if (stored) await wipeNonReadyHandshakeOnly(stored, expectedOwner);
-        else if (live) {
-          await closeQuietly(live.linkId);
-          liveHandles.delete(key);
-        }
-      }
-      if (inbound !== null && canReplace) {
-        abortIfOwnerChanged(expectedOwner);
-        if (queueGenerationChanged(ownerPubky, peerPubky, expectedQueueGen)) {
-          await closeQuietly(inbound.linkId);
-          return 'idle';
-        }
-        return adoptInboundHandshake(
-          ownerPubky,
-          peerPubky,
-          marker,
-          localPath,
-          inbound,
-          expectedOwner,
-          expectedQueueGen,
-        );
-      }
+    abortIfOwnerChanged(expectedOwner);
+    if (report.leaseSkipped) {
+      const live = liveHandles.get(key);
+      if (live?.status === 'established') return 'ready';
+      return intent === 'background' ? 'idle' : 'handshaking-responder';
+    }
+    const state = report.state ?? 'UNKNOWN';
+    if (
+      state === 'LINKED' ||
+      state === 'BLOCKED' ||
+      state === 'RECOVERY_REQUIRED' ||
+      state === 'UNKNOWN'
+    ) {
+      break;
     }
   }
 
-  live = liveHandles.get(key);
-  stored = await StorageService.getLink(ownerPubky, peerPubky);
+  if (!report || report.leaseSkipped) {
+    return intent === 'background' ? 'idle' : 'handshaking-responder';
+  }
+  if (queueReset()) return intent === 'background' ? 'idle' : 'handshaking-responder';
+  const denyAfter = await FollowsImportSettings.resolveDenyState(ownerPubky, peerPubky);
   abortIfOwnerChanged(expectedOwner);
+  if (queueReset()) return intent === 'background' ? 'idle' : 'handshaking-responder';
+  if (denyAfter === 'denied') return 'denied';
+  if (denyAfter === 'unavailable') return 'deny-unavailable';
+  const state = report.state ?? 'UNKNOWN';
+  if (state === 'RECOVERY_REQUIRED' || state === 'UNKNOWN') {
+    return rememberSdkRecovery(ownerPubky, peerPubky, localPath, stored, expectedOwner);
+  }
+  if (state === 'BLOCKED') return 'error';
 
-  if (live?.status === 'handshaking') {
-    return advanceLiveHandshake(
-      activeSession,
-      receiver,
+  const role = sdkHandshakeRole(report.role, stored);
+  const generation = report.generation ?? '0';
+  const snapshot = `sdk:${generation}`;
+  if (state === 'LINKED') {
+    liveHandles.set(key, { status: 'established', linkId: snapshot });
+    await StorageService.upsertLink({
       ownerPubky,
       peerPubky,
-      live,
-      intent,
-      alreadyRecovered,
-      expectedOwner,
-    );
-  }
-
-  if (stored?.status === 'handshaking') {
-    const restored = await restoreAndAdvanceHandshake(
-      activeSession,
-      receiver,
-      stored,
-      intent,
-      alreadyRecovered,
-      expectedOwner,
-    );
-    abortIfOwnerChanged(expectedOwner);
-    return restored;
-  }
-
-  if (marker === undefined) return 'idle';
-  if (marker === null) return mayInitiate(intent) ? 'not-enrolled' : 'idle';
-
-  if (!mayInitiate(intent)) return 'idle';
-
-  const initiateReceiver = await StorageService.getLinkReceiver(ownerPubky);
-  abortIfOwnerChanged(expectedOwner);
-  if (initiateReceiver?.receiverRole === 'standby') return 'standby-blocked';
-
-  abortIfOwnerChanged(expectedOwner);
-  return initiateHandshake(
-    activeSession,
-    receiver,
-    ownerPubky,
-    peerPubky,
-    marker,
-    localPath,
-    intent,
-    alreadyRecovered,
-    expectedOwner,
-  );
-}
-
-async function shouldAgeOutNonReadyLink(
-  stored: LinkRecord,
-  expectedOwner: PubkyKey,
-): Promise<boolean> {
-  abortIfOwnerChanged(expectedOwner);
-  const ageMs = Date.now() - stored.updatedAt;
-  if (!Number.isFinite(ageMs) || ageMs < HANDSHAKE_STALE_MS) return false;
-  if (stored.status === 'handshaking') {
-    const budget = await StorageService.getHandshakeBudget(stored.ownerPubky, stored.peerPubky);
-    abortIfOwnerChanged(expectedOwner);
-    if (budget && budget.exhaustedAt === null && budget.pendingAdvances > 0) return false;
-    return true;
-  }
-  if (stored.status !== 'established') return false;
-  const request = await StorageService.getMessageRequest(stored.ownerPubky, stored.peerPubky);
-  abortIfOwnerChanged(expectedOwner);
-  if (request?.status !== 'pending') return false;
-  const messages = await StorageService.countLinkMessagesForPeer(
-    stored.ownerPubky,
-    stored.peerPubky,
-  );
-  abortIfOwnerChanged(expectedOwner);
-  return messages === 0;
-}
-
-async function wipeNonReadyHandshakeOnly(
-  stored: LinkRecord,
-  expectedOwner: PubkyKey,
-): Promise<void> {
-  if (stored.status === 'established') return;
-  await retireLocalLinkState(stored, expectedOwner);
-}
-
-/**
- * Re-key compare key is the established link's remote static, not last GET.
- * Preferring `lastSeenPeerMarkerPk` skipped a live re-key once a GET of the
- * new pk was recorded, and probed the old DH slot when a later GET was stale.
- */
-function establishedRemotePk(stored: LinkRecord): string {
-  return stored.remoteNoisePublicKey || '';
-}
-
-function blockedEstablishedRekeyOutcome(
-  stored: LinkRecord,
-  markerPk?: string | null,
-): EnsureOutcome | null {
-  const establishedPk = establishedRemotePk(stored);
-  const seen = markerPk || stored.lastSeenPeerMarkerPk || '';
-  if (establishedPk === '' || seen === '' || establishedPk === seen) return null;
-  const key = linkKey(stored.ownerPubky, stored.peerPubky);
-  if (pendingEstablishedRekeys.has(key)) return null;
-  return 'error';
-}
-
-function establishedRekeyParkAllowed(ownerPubky: PubkyKey, peerPubky: PubkyKey): boolean {
-  const key = linkKey(ownerPubky, peerPubky);
-  const now = Date.now();
-  const held = establishedRekeyParkWindows.get(key);
-  if (!held || now - held.windowStart >= HANDSHAKE_STALE_MS) {
-    establishedRekeyParkWindows.set(key, { windowStart: now, parks: 0 });
-    return true;
-  }
-  return held.parks < ESTABLISHED_REKEY_PARK_LIMIT;
-}
-
-async function chargeEstablishedRekeyPark(
-  ownerPubky: PubkyKey,
-  peerPubky: PubkyKey,
-  expectedOwner: PubkyKey,
-): Promise<{ exhausted: boolean }> {
-  const key = linkKey(ownerPubky, peerPubky);
-  const now = Date.now();
-  const held = establishedRekeyParkWindows.get(key);
-  const window =
-    !held || now - held.windowStart >= HANDSHAKE_STALE_MS ? { windowStart: now, parks: 0 } : held;
-  window.parks += 1;
-  establishedRekeyParkWindows.set(key, window);
-  return chargeHandshakeBudget(
-    ownerPubky,
-    peerPubky,
-    { reason: 'established-rekey-park' },
-    expectedOwner,
-  );
-}
-
-async function dropParkedEstablishedRekey(
-  stored: LinkRecord,
-  pending: PendingEstablishedRekey,
-): Promise<EnsureOutcome | null> {
-  const key = linkKey(stored.ownerPubky, stored.peerPubky);
-  await closeQuietly(pending.handshakeLinkId);
-  pendingEstablishedRekeys.delete(key);
-  await StorageService.recordLastSeenPeerMarkerPk(
-    stored.ownerPubky,
-    stored.peerPubky,
-    pending.marker.noisePublicKey,
-  );
-  return blockedEstablishedRekeyOutcome(stored, pending.marker.noisePublicKey);
-}
-
-function pkPrefix8(pk: string | null | undefined): string {
-  const raw = (pk ?? '').replace(/^pubky/i, '');
-  return raw.length === 0 ? 'empty' : raw.slice(0, 8);
-}
-
-function peerMarkerRefreshDue(ownerPubky: PubkyKey, peerPubky: PubkyKey): boolean {
-  const last = peerMarkerRefreshedAt.get(linkKey(ownerPubky, peerPubky));
-  if (last === undefined) return true;
-  return Date.now() - last >= PEER_MARKER_REFRESH_TTL_MS;
-}
-
-function markPeerMarkerRefreshed(ownerPubky: PubkyKey, peerPubky: PubkyKey): void {
-  peerMarkerRefreshedAt.set(linkKey(ownerPubky, peerPubky), Date.now());
-}
-
-/**
- * A sticky `reconnect_required` row must not skip a peer re-enrolment.
- * Fetch the current marker; if the Noise pk rotated, retire the dead
- * local record (no remote outbox delete) so `ensureLinkLocked` falls
- * through to the ordinary fresh-start path. Unchanged, missing, or
- * failed marker stays fail-closed `reconnect_required`.
- *
- * Background / queued callers respect {@link PEER_MARKER_REFRESH_TTL_MS}
- * so a sticky row cannot storm homeserver GETs. User intent always GETs.
- * The periodic handshake tick never sees these rows
- * (`getDueHandshakingLinks` is `status = 'handshaking'` only).
- */
-async function maybeAdoptReconnectRequiredRotation(
-  stored: LinkRecord,
-  ownerPubky: PubkyKey,
-  peerPubky: PubkyKey,
-  localPath: string,
-  expectedOwner: PubkyKey,
-  intent: LinkIntent,
-): Promise<boolean> {
-  abortIfOwnerChanged(expectedOwner);
-  if (!peerMarkerRefreshDue(ownerPubky, peerPubky) && intent !== 'user') {
-    return false;
-  }
-  markPeerMarkerRefreshed(ownerPubky, peerPubky);
-  let marker: ReceiverMarker | null;
-  try {
-    marker = await fetchPeerReceiverMarker(ownerPubky, peerPubky, localPath);
-    abortIfOwnerChanged(expectedOwner);
-  } catch (err) {
-    if (err instanceof LinkSendError && err.code === 'owner-changed') throw err;
-    return false;
-  }
-  if (!marker) return false;
-  const establishedPk = stored.remoteNoisePublicKey || '';
-  if (establishedPk === '' || marker.noisePublicKey === establishedPk) {
-    return false;
-  }
-  console.warn(
-    `[LinkService] reconnect-required-peer-rotated peer=${opaquePeerId(ownerPubky, peerPubky)} stored=${pkPrefix8(establishedPk)} fetched=${pkPrefix8(marker.noisePublicKey)}`,
-  );
-  await retireLocalLinkState(stored, expectedOwner);
-  return true;
-}
-
-/**
- * Responder re-key (two-phase): keep the established handle until the new
- * handshake reaches `established` (msg3) or first successful inbound decrypt.
- */
-async function maybeAdoptEstablishedRekey(
-  activeSession: ActiveSession,
-  receiver: LinkReceiver,
-  stored: LinkRecord,
-  ownerPubky: PubkyKey,
-  peerPubky: PubkyKey,
-  localPath: string,
-  expectedOwner: PubkyKey,
-  expectedQueueGen: number,
-  intent: LinkIntent,
-): Promise<EnsureOutcome | null> {
-  const advanced = await advancePendingEstablishedRekey(
-    activeSession,
-    receiver,
-    stored,
-    ownerPubky,
-    peerPubky,
-    expectedOwner,
-    expectedQueueGen,
-    intent,
-  );
-  if (advanced !== undefined) return advanced;
-
-  if (!peerMarkerRefreshDue(ownerPubky, peerPubky) && intent !== 'user') {
-    return blockedEstablishedRekeyOutcome(stored);
-  }
-
-  if (!(await inboundStillAllowed(ownerPubky, peerPubky, expectedOwner))) return null;
-  abortIfOwnerChanged(expectedOwner);
-
-  markPeerMarkerRefreshed(ownerPubky, peerPubky);
-  let marker: ReceiverMarker | null | undefined;
-  try {
-    marker = await fetchPeerReceiverMarker(ownerPubky, peerPubky, localPath);
-    abortIfOwnerChanged(expectedOwner);
-  } catch (err) {
-    if (err instanceof LinkSendError && err.code === 'owner-changed') throw err;
-    return blockedEstablishedRekeyOutcome(stored);
-  }
-  if (!marker) return blockedEstablishedRekeyOutcome(stored);
-
-  const establishedPk = establishedRemotePk(stored);
-  console.warn(
-    `[LinkService] rekey-marker peer=${opaquePeerId(ownerPubky, peerPubky)} stored=${pkPrefix8(establishedPk)} lastSeen=${pkPrefix8(stored.lastSeenPeerMarkerPk)} fetched=${pkPrefix8(marker.noisePublicKey)}`,
-  );
-  await StorageService.recordLastSeenPeerMarkerPk(ownerPubky, peerPubky, marker.noisePublicKey);
-  stored = { ...stored, lastSeenPeerMarkerPk: marker.noisePublicKey };
-  if (establishedPk !== '' && marker.noisePublicKey === establishedPk) {
-    return null;
-  }
-
-  if (intent !== 'user') {
-    const budget = await StorageService.getHandshakeBudget(ownerPubky, peerPubky);
-    abortIfOwnerChanged(expectedOwner);
-    if (budget && budget.nextAdvanceAt > Date.now()) {
-      return blockedEstablishedRekeyOutcome(stored, marker.noisePublicKey);
-    }
-    if (budget && budget.exhaustedAt !== null) {
-      return blockedEstablishedRekeyOutcome(stored, marker.noisePublicKey);
-    }
-  }
-
-  if (intent !== 'user' && !establishedRekeyParkAllowed(ownerPubky, peerPubky)) {
-    return blockedEstablishedRekeyOutcome(stored, marker.noisePublicKey);
-  }
-
-  if (!(await inboundStillAllowed(ownerPubky, peerPubky, expectedOwner))) return null;
-  abortIfOwnerChanged(expectedOwner);
-
-  let inbound: Extract<LinkProbeResult, { result: 'pending' | 'established' }> | null;
-  try {
-    inbound = await probeInbound(activeSession, receiver, ownerPubky, peerPubky, marker, localPath);
-    abortIfOwnerChanged(expectedOwner);
-  } catch (err) {
-    if (isLinkNativeError(err) && err.code === 'protocol') {
-      return blockedEstablishedRekeyOutcome(stored, marker.noisePublicKey);
-    }
-    throw err;
-  }
-  if (inbound !== null) {
-    if (queueGenerationChanged(ownerPubky, peerPubky, expectedQueueGen)) {
-      await closeQuietly(inbound.linkId);
-      return blockedEstablishedRekeyOutcome(stored, marker.noisePublicKey);
-    }
-    if (!(await inboundStillAllowed(ownerPubky, peerPubky, expectedOwner))) {
-      await closeQuietly(inbound.linkId);
-      return blockedEstablishedRekeyOutcome(stored, marker.noisePublicKey);
-    }
-    abortIfOwnerChanged(expectedOwner);
-
-    if (inbound.result === 'established') {
-      return commitEstablishedRekey(
-        activeSession,
-        receiver,
-        stored,
-        ownerPubky,
-        peerPubky,
-        marker,
-        localPath,
-        inbound,
-        expectedOwner,
-        expectedQueueGen,
-      );
-    }
-
-    const parkCharge = await chargeEstablishedRekeyPark(ownerPubky, peerPubky, expectedOwner);
-    abortIfOwnerChanged(expectedOwner);
-    if (parkCharge.exhausted) {
-      await closeQuietly(inbound.linkId);
-      return blockedEstablishedRekeyOutcome(stored, marker.noisePublicKey);
-    }
-
-    pendingEstablishedRekeys.set(linkKey(ownerPubky, peerPubky), {
-      handshakeLinkId: inbound.linkId,
-      snapshot: inbound.snapshot,
-      marker,
-      localPath,
-      startedAt: Date.now(),
-      role: 'responder',
-    });
-    const stepped = await advancePendingEstablishedRekey(
-      activeSession,
-      receiver,
-      stored,
-      ownerPubky,
-      peerPubky,
-      expectedOwner,
-      expectedQueueGen,
-      intent,
-    );
-    if (stepped !== undefined) return stepped;
-    return 'handshaking-responder';
-  }
-
-  return blockedEstablishedRekeyOutcome(stored, marker.noisePublicKey);
-}
-
-async function advancePendingEstablishedRekey(
-  activeSession: ActiveSession,
-  receiver: LinkReceiver,
-  stored: LinkRecord,
-  ownerPubky: PubkyKey,
-  peerPubky: PubkyKey,
-  expectedOwner: PubkyKey,
-  expectedQueueGen: number,
-  intent: LinkIntent,
-): Promise<EnsureOutcome | null | undefined> {
-  const key = linkKey(ownerPubky, peerPubky);
-  const pending = pendingEstablishedRekeys.get(key);
-  if (!pending) return undefined;
-
-  if (Date.now() - pending.startedAt >= HANDSHAKE_STALE_MS) {
-    return dropParkedEstablishedRekey(stored, pending);
-  }
-  if (queueGenerationChanged(ownerPubky, peerPubky, expectedQueueGen)) {
-    return dropParkedEstablishedRekey(stored, pending);
-  }
-  if (!(await inboundStillAllowed(ownerPubky, peerPubky, expectedOwner))) {
-    return dropParkedEstablishedRekey(stored, pending);
-  }
-  abortIfOwnerChanged(expectedOwner);
-
-  if (intent !== 'user') {
-    const held = await StorageService.getHandshakeBudget(ownerPubky, peerPubky);
-    abortIfOwnerChanged(expectedOwner);
-    if (held && held.nextAdvanceAt > Date.now()) {
-      return roleStatus(pending.role);
-    }
-  }
-
-  try {
-    const result = await PaykitLinkNative.advanceHandshake(pending.handshakeLinkId);
-    abortIfOwnerChanged(expectedOwner);
-    if (result.status === 'established') {
-      pendingEstablishedRekeys.delete(key);
-      return commitEstablishedRekey(
-        activeSession,
-        receiver,
-        stored,
-        ownerPubky,
-        peerPubky,
-        pending.marker,
-        pending.localPath,
-        { result: 'established', linkId: pending.handshakeLinkId, snapshot: result.snapshot },
-        expectedOwner,
-        expectedQueueGen,
-      );
-    }
-    const budget = await chargeHandshakeBudget(
-      ownerPubky,
-      peerPubky,
-      {
-        reason: 'pending-advance',
-        intent,
-      },
-      expectedOwner,
-    );
-    abortIfOwnerChanged(expectedOwner);
-    if (budget.exhausted) {
-      return dropParkedEstablishedRekey(stored, pending);
-    }
-    pending.snapshot = result.snapshot;
-    pendingEstablishedRekeys.set(key, pending);
-    return roleStatus(pending.role);
-  } catch (err) {
-    if (err instanceof LinkSendError && err.code === 'owner-changed') throw err;
-    return dropParkedEstablishedRekey(stored, pending);
-  }
-}
-
-async function drainEstablishedBestEffort(
-  ownerPubky: PubkyKey,
-  peerPubky: PubkyKey,
-  expectedQueueGen: number,
-): Promise<void> {
-  try {
-    await persistInboundWithoutRouting(ownerPubky, peerPubky, expectedQueueGen);
-  } catch {
-    // Best-effort drain; close still proceeds.
-  }
-}
-
-async function commitEstablishedRekey(
-  _activeSession: ActiveSession,
-  _receiver: LinkReceiver,
-  stored: LinkRecord,
-  ownerPubky: PubkyKey,
-  peerPubky: PubkyKey,
-  marker: ReceiverMarker,
-  localPath: string,
-  inbound: Extract<LinkProbeResult, { result: 'established' }>,
-  expectedOwner: PubkyKey,
-  expectedQueueGen: number,
-): Promise<EnsureOutcome> {
-  abortIfOwnerChanged(expectedOwner);
-  await drainEstablishedBestEffort(ownerPubky, peerPubky, expectedQueueGen);
-  abortIfOwnerChanged(expectedOwner);
-  const latest = (await StorageService.getLink(ownerPubky, peerPubky)) ?? stored;
-  await StorageService.upsertArchivedLink(latest);
-  const key = linkKey(ownerPubky, peerPubky);
-  const live = liveHandles.get(key);
-  if (live && live.linkId !== inbound.linkId) {
-    await closeQuietly(live.linkId);
-    liveHandles.delete(key);
-  }
-  pendingEstablishedRekeys.delete(key);
-  abortIfOwnerChanged(expectedOwner);
-  if (queueGenerationChanged(ownerPubky, peerPubky, expectedQueueGen)) {
-    await closeQuietly(inbound.linkId);
-    return 'idle';
-  }
-  return adoptInboundHandshake(
-    ownerPubky,
-    peerPubky,
-    marker,
-    localPath,
-    inbound,
-    expectedOwner,
-    expectedQueueGen,
-  );
-}
-
-async function restoreEstablished(
-  activeSession: ActiveSession,
-  receiver: LinkReceiver,
-  stored: LinkRecord,
-  intent: LinkIntent,
-  alreadyRecovered: boolean,
-  expectedOwner: PubkyKey,
-): Promise<EnsureOutcome> {
-  const localPath = coerceReceiverPath(stored.localReceiverPath);
-  const remotePath = coerceReceiverPath(stored.remoteReceiverPath);
-  try {
-    abortIfOwnerChanged(expectedOwner);
-    const { linkId } = await PaykitLinkNative.restoreLink(
-      activeSession.alias,
-      receiver.receiverAlias,
-      stored.peerPubky,
-      stored.remoteNoisePublicKey,
-      localPath,
-      remotePath,
-      stored.snapshot,
-    );
-    abortIfOwnerChanged(expectedOwner);
-    liveHandles.set(linkKey(stored.ownerPubky, stored.peerPubky), {
+      role,
       status: 'established',
-      linkId,
+      snapshot,
+      remoteNoisePublicKey: stored?.remoteNoisePublicKey ?? '',
+      localReceiverPath: localPath,
+      remoteReceiverPath: localPath,
+      consecutiveFailures: 0,
+      ...(stored?.chatKindsV !== undefined ? { chatKindsV: stored.chatKindsV } : {}),
     });
-    await StorageService.resetLinkConsecutiveFailures(stored.ownerPubky, stored.peerPubky);
+    abortIfOwnerChanged(expectedOwner);
     return 'ready';
-  } catch (err) {
-    if (err instanceof LinkSendError && err.code === 'owner-changed') throw err;
-    return handleLinkFailure(err, stored, intent, alreadyRecovered, expectedOwner);
   }
-}
 
-async function restoreAndAdvanceHandshake(
-  activeSession: ActiveSession,
-  receiver: LinkReceiver,
-  stored: LinkRecord,
-  intent: LinkIntent,
-  alreadyRecovered: boolean,
-  expectedOwner: PubkyKey,
-): Promise<EnsureOutcome> {
-  const localPath = coerceReceiverPath(stored.localReceiverPath);
-  const remotePath = coerceReceiverPath(stored.remoteReceiverPath);
-  try {
-    abortIfOwnerChanged(expectedOwner);
-    const restored = await PaykitLinkNative.restoreHandshake(
-      activeSession.alias,
-      receiver.receiverAlias,
-      stored.peerPubky,
-      stored.remoteNoisePublicKey,
-      localPath,
-      remotePath,
-      stored.snapshot,
-    );
-    abortIfOwnerChanged(expectedOwner);
-    liveHandles.set(linkKey(stored.ownerPubky, stored.peerPubky), {
-      status: 'handshaking',
-      linkId: restored.linkId,
-      role: stored.role,
-    });
-    if (restored.status === 'established') {
-      // Awaited inside the try on purpose: a bare `return` of the promise
-      // would settle outside this frame and skip the catch below, so a failed
-      // transport restore would escape `ensureLinkLocked` as a raw native
-      // error instead of being classified.
-      return await completeEstablished(
-        activeSession,
-        receiver,
-        stored.ownerPubky,
-        stored.peerPubky,
-        stored.role,
-        stored.snapshot,
-        stored.remoteNoisePublicKey,
-        localPath,
-        remotePath,
-        restored.linkId,
-        expectedOwner,
-      );
-    }
-    return advanceLiveHandshake(
-      activeSession,
-      receiver,
-      stored.ownerPubky,
-      stored.peerPubky,
-      { status: 'handshaking', linkId: restored.linkId, role: stored.role },
-      intent,
-      alreadyRecovered,
-      expectedOwner,
-    );
-  } catch (err) {
-    if (err instanceof LinkSendError && err.code === 'owner-changed') throw err;
-    const current = await StorageService.getLink(stored.ownerPubky, stored.peerPubky);
-    return handleLinkFailure(err, current ?? stored, intent, alreadyRecovered, expectedOwner);
-  }
-}
-
-async function advanceLiveHandshake(
-  activeSession: ActiveSession,
-  receiver: LinkReceiver,
-  ownerPubky: PubkyKey,
-  peerPubky: PubkyKey,
-  live: Extract<LiveHandle, { status: 'handshaking' }>,
-  intent: LinkIntent,
-  alreadyRecovered: boolean,
-  expectedOwner: PubkyKey,
-): Promise<EnsureOutcome> {
-  const stored = await StorageService.getLink(ownerPubky, peerPubky);
-  abortIfOwnerChanged(expectedOwner);
-  try {
-    abortIfOwnerChanged(expectedOwner);
-    const result = await PaykitLinkNative.advanceHandshake(live.linkId);
-    abortIfOwnerChanged(expectedOwner);
-    if (result.status === 'established') {
-      const remoteKey = stored?.remoteNoisePublicKey ?? '';
-      const localPath = coerceReceiverPath(stored?.localReceiverPath ?? receiver.receiverPath);
-      const remotePath = coerceReceiverPath(stored?.remoteReceiverPath ?? LINK_RECEIVER_PATH);
-      // Awaited inside the try: see `restoreAndAdvanceHandshake`. Without it
-      // the catch below never sees a failed `restoreLink`, which is the one
-      // case where the row read above is already stale.
-      return await completeEstablished(
-        activeSession,
-        receiver,
-        ownerPubky,
-        peerPubky,
-        live.role,
-        result.snapshot,
-        remoteKey,
-        localPath,
-        remotePath,
-        live.linkId,
-        expectedOwner,
-      );
-    }
-
-    // `pending` is a real Noise XX step, not a failure — but it is also the
-    // shape of a peer that answered once and went silent, so it has to cost
-    // something. What it costs is decided in one place: see the charge policy on
-    // `chargeHandshakeBudget`. Charged BEFORE persisting the snapshot: a crash
-    // between the two loses a handshake step, never a charge.
-    const budget = await chargeHandshakeBudget(
-      ownerPubky,
-      peerPubky,
-      {
-        reason: 'pending-advance',
-        intent,
-      },
-      expectedOwner,
-    );
-    abortIfOwnerChanged(expectedOwner);
-    await StorageService.updateLinkSnapshot(ownerPubky, peerPubky, result.snapshot, 'handshaking');
-    abortIfOwnerChanged(expectedOwner);
-
-    if (budget.exhausted) {
-      return abandonUnestablishedLink(
-        stored ?? fallbackLinkRecord(ownerPubky, peerPubky, receiver, live.role),
-        expectedOwner,
-      );
-    }
-
-    if (live.role === 'initiator') {
-      const recovered = await maybeRecoverInitiatorMarkerRotation(
-        activeSession,
-        receiver,
-        ownerPubky,
-        peerPubky,
-        live,
-        stored,
-        result.snapshot,
-        alreadyRecovered,
-        intent,
-        expectedOwner,
-      );
-      if (recovered !== null) return recovered;
-    }
-
-    return roleStatus(live.role);
-  } catch (err) {
-    if (err instanceof LinkSendError && err.code === 'owner-changed') throw err;
-    // Re-read: `completeEstablished` persists `established` before restoring
-    // the transport handle, so the row read above can be stale by exactly one
-    // transition. Charging handshake failures against a row that is already
-    // established would wipe a live link.
-    const current = await StorageService.getLink(ownerPubky, peerPubky);
-    const fallback = current ?? fallbackLinkRecord(ownerPubky, peerPubky, receiver, live.role);
-    return handleLinkFailure(err, fallback, intent, alreadyRecovered, expectedOwner);
-  }
-}
-
-function fallbackLinkRecord(
-  ownerPubky: PubkyKey,
-  peerPubky: PubkyKey,
-  receiver: LinkReceiver,
-  role: LinkRole,
-): LinkRecord {
-  return {
+  liveHandles.set(key, { status: 'handshaking', linkId: snapshot, role });
+  await StorageService.upsertLink({
     ownerPubky,
     peerPubky,
     role,
     status: 'handshaking',
-    snapshot: '',
-    remoteNoisePublicKey: '',
-    localReceiverPath: receiver.receiverPath,
-    remoteReceiverPath: LINK_RECEIVER_PATH,
-    consecutiveFailures: 0,
-    lastSeenPeerMarkerPk: null,
-    createdAt: Date.now(),
-    updatedAt: Date.now(),
-  };
-}
-
-/**
- * Why a handshake step is being charged. The whole charge policy lives in
- * {@link chargeHandshakeBudget} so the two call sites cannot drift apart.
- */
-type HandshakeCharge =
-  /** An advance that returned `pending`: throttled, see below. */
-  | { reason: 'pending-advance'; intent: LinkIntent }
-  /** A wipe of a still-unestablished handshake: never throttled, see below. */
-  | { reason: 'unestablished-wipe' }
-  /** A new parked established re-key: never throttled, counted in the park window. */
-  | { reason: 'established-rekey-park' };
-
-/**
- * Charges one unproductive handshake step against this peer and returns the
- * resulting budget.
- *
- * Lives in `link_handshake_budgets`, NOT on the link row, because every caller
- * that could charge it (`pending` advance, protocol wipe, failure-limit wipe)
- * is followed by a path that deletes the link row. A counter on the row was
- * reset by the very failure that should have charged it, which let a peer cycle
- * message 1 → pending → malformed message 3 → wipe → re-adoption for a fresh
- * budget every 30–60s. Safe to read-modify-write: all link work for a peer runs
- * inside `withQueue(peer)`.
- *
- * Charge policy — the budget bounds UNATTENDED, REPEATED work, because that is
- * the only cost a peer who never completes can impose:
- *
- * - A `pending` advance charges at most once per backoff window. Charging
- *   closes the window, so the first step in a window costs one unit and every
- *   later step by any caller in that window is free. Without this the cost
- *   scaled with how many callers happened to step the handshake — the tick, a
- *   queued-delivery retry, a thread open and an inbox sync all land inside the
- *   same 30s window — so a handshake converging normally consumed half the
- *   allowance, and one with a queued send ran itself to exhaustion. The rate a
- *   hostile peer can farm is unchanged: the tick only steps links whose window
- *   has elapsed, so it still costs exactly one unit per due step, ten steps
- *   across roughly two hours.
- * - A `user` intent never charges. It has already cleared the budget by the
- *   time it gets here (see {@link ensureLinkLocked}), and a deliberate action
- *   is attended by definition.
- * - A wipe of a still-unestablished handshake always charges, window or not.
- *   That one is peer-triggerable on demand — a malformed message 3 forces it —
- *   so throttling it would hand back the free re-adoption cycle the durable
- *   budget exists to close.
- */
-async function chargeHandshakeBudget(
-  ownerPubky: PubkyKey,
-  peerPubky: PubkyKey,
-  charge: HandshakeCharge,
-  expectedOwner: PubkyKey,
-): Promise<{ advances: number; exhausted: boolean }> {
-  const current = await StorageService.getHandshakeBudget(ownerPubky, peerPubky);
-  abortIfOwnerChanged(expectedOwner);
-  const held = {
-    advances: current?.pendingAdvances ?? 0,
-    exhausted: current ? current.exhaustedAt !== null : false,
-  };
-  if (charge.reason === 'pending-advance') {
-    if (charge.intent === 'user') return held;
-    if (current && current.nextAdvanceAt > Date.now()) return held;
-  }
-  const advances = held.advances + 1;
-  const exhausted = advances >= HANDSHAKE_PENDING_ADVANCE_LIMIT;
-  abortIfOwnerChanged(expectedOwner);
-  await StorageService.upsertHandshakeBudget({
-    ownerPubky,
-    peerPubky,
-    pendingAdvances: advances,
-    nextAdvanceAt: RetryQueue.nextAttemptAt(advances),
-    exhaustedAt: exhausted ? (current?.exhaustedAt ?? Date.now()) : null,
+    snapshot,
+    remoteNoisePublicKey: stored?.remoteNoisePublicKey ?? '',
+    localReceiverPath: localPath,
+    remoteReceiverPath: localPath,
+    consecutiveFailures: stored?.consecutiveFailures ?? 0,
+    ...(stored?.chatKindsV !== undefined ? { chatKindsV: stored.chatKindsV } : {}),
   });
-  return { advances, exhausted };
+  abortIfOwnerChanged(expectedOwner);
+  if (intent === 'background') return 'idle';
+  return role === 'initiator' ? 'handshaking-initiator' : 'handshaking-responder';
 }
 
-async function isHandshakeBudgetExhausted(
+function sdkHandshakeRole(role: SdkLinkRole | undefined, stored: LinkRecord | null): LinkRole {
+  if (role === 'INITIATOR') return 'initiator';
+  if (role === 'RESPONDER') return 'responder';
+  return stored?.role ?? 'responder';
+}
+
+async function rememberSdkRecovery(
   ownerPubky: PubkyKey,
   peerPubky: PubkyKey,
-): Promise<boolean> {
-  const budget = await StorageService.getHandshakeBudget(ownerPubky, peerPubky);
-  return !!budget && budget.exhaustedAt !== null;
-}
-
-/**
- * A handshake the counterparty never finished. Drops the link row and its
- * outbox so the periodic stepper stops paying for it, then tells the truth on
- * the conversation: every queued send to this peer becomes `failed`, the same
- * state a permanently dropped retry produces and the same one ThreadScreen
- * already renders. Without this the send sits in `sending` forever while a
- * timer spins behind it.
- *
- * The budget row deliberately outlives this: it carries `exhausted_at`, which
- * is what stops the peer from buying more periodic work by rewriting message 1.
- */
-async function abandonUnestablishedLink(
-  stored: LinkRecord,
+  localPath: string,
+  stored: LinkRecord | null,
   expectedOwner: PubkyKey,
 ): Promise<EnsureOutcome> {
   abortIfOwnerChanged(expectedOwner);
-  console.warn(
-    `[LinkService] handshake-abandoned peer=${opaquePeerId(stored.ownerPubky, stored.peerPubky)} after ` +
-      `${HANDSHAKE_PENDING_ADVANCE_LIMIT} steps`,
+  const row =
+    stored ??
+    ({
+      ownerPubky,
+      peerPubky,
+      role: 'responder' as const,
+      status: 'handshaking' as const,
+      snapshot: 'sdk:0',
+      remoteNoisePublicKey: '',
+      localReceiverPath: localPath,
+      remoteReceiverPath: localPath,
+      consecutiveFailures: 0,
+    } satisfies LinkRecordInput);
+  if (!stored) {
+    await StorageService.upsertLink(row);
+    abortIfOwnerChanged(expectedOwner);
+  }
+  const current = stored ?? (await StorageService.getLink(ownerPubky, peerPubky));
+  if (current) await markReconnectRequired(current, expectedOwner, 'application');
+  return 'reconnect_required';
+}
+
+async function sendOpaqueOnLink(
+  ownerPubky: PubkyKey,
+  peerPubky: PubkyKey,
+  rawJson: string,
+): Promise<{ snapshot: string }> {
+  const path = LINK_RECEIVER_PATH;
+  let queueId: string | null = null;
+  try {
+    const enqueued = await PaykitSdkNative.enqueueOpaquePrivateApplicationMessageJson(
+      ownerPubky,
+      peerPubky,
+      path,
+      rawJson,
+    );
+    queueId = enqueued.queueId;
+  } catch (err) {
+    if (!(isSdkOperationError(err) && err.code === 'protocol')) throw err;
+  }
+  const processed = await PaykitSdkNative.processOutboundPrivateMessages(
+    ownerPubky,
+    peerPubky,
+    path,
   );
-  await failQueuedSendsForPeer(stored.ownerPubky, stored.peerPubky);
-  abortIfOwnerChanged(expectedOwner);
-  await retireLocalLinkState(stored, expectedOwner);
-  return 'error';
+  const failed = queueId
+    ? processed.failed.find(item => item.queueId === queueId)
+    : processed.failed[0];
+  if (failed) {
+    if (failed.category === 'recovery_required' || failed.category === 'RecoveryRequired') {
+      throw new SdkOperationError('recovery_required', 'recovery required');
+    }
+    throw createLinkNativeError('network', 'network error');
+  }
+  return { snapshot: `sdk:${queueId ?? processed.sent[0] ?? 'sent'}` };
+}
+
+async function receiveSdkMessages(
+  ownerPubky: PubkyKey,
+  peerPubky: PubkyKey,
+): Promise<{ messages: Array<{ kind: string; rawJson: string }>; snapshot: string }> {
+  const path = LINK_RECEIVER_PATH;
+  const received = await PaykitSdkNative.receivePrivateMessages(ownerPubky, peerPubky, path);
+  const items =
+    received.streamItemIds.length > 0
+      ? await PaykitSdkNative.privateStreamItems(ownerPubky, received.streamItemIds)
+      : [];
+  return {
+    messages: items.map(item => ({ kind: item.kind, rawJson: item.rawJson })),
+    snapshot: `sdk:${received.receiveBatchId}`,
+  };
 }
 
 async function failQueuedSendsForPeer(ownerPubky: PubkyKey, peerPubky: PubkyKey): Promise<void> {
@@ -3203,538 +2459,6 @@ async function failQueuedSendsForPeer(ownerPubky: PubkyKey, peerPubky: PubkyKey)
       queueId: item.id,
     });
   }
-}
-
-async function completeEstablished(
-  activeSession: ActiveSession,
-  receiver: LinkReceiver,
-  ownerPubky: PubkyKey,
-  peerPubky: PubkyKey,
-  role: LinkRole,
-  snapshot: string,
-  remoteNoisePublicKey: string,
-  localPath: string,
-  remotePath: string,
-  handshakeLinkId: string,
-  expectedOwner: PubkyKey,
-): Promise<LinkStatus> {
-  abortIfOwnerChanged(expectedOwner);
-  // A completed Noise XX handshake is proof of a real counterparty, so it is
-  // the one non-user event that forgives everything charged against this peer.
-  await StorageService.clearHandshakeBudget(ownerPubky, peerPubky);
-  abortIfOwnerChanged(expectedOwner);
-  await StorageService.upsertLink({
-    ownerPubky,
-    peerPubky,
-    role,
-    status: 'established',
-    snapshot,
-    remoteNoisePublicKey,
-    localReceiverPath: localPath,
-    remoteReceiverPath: remotePath,
-    consecutiveFailures: 0,
-  });
-  abortIfOwnerChanged(expectedOwner);
-  await closeQuietly(handshakeLinkId);
-  const key = linkKey(ownerPubky, peerPubky);
-  try {
-    abortIfOwnerChanged(expectedOwner);
-    const { linkId } = await PaykitLinkNative.restoreLink(
-      activeSession.alias,
-      receiver.receiverAlias,
-      peerPubky,
-      remoteNoisePublicKey,
-      localPath,
-      remotePath,
-      snapshot,
-    );
-    abortIfOwnerChanged(expectedOwner);
-    liveHandles.set(key, { status: 'established', linkId });
-  } catch (err) {
-    if (err instanceof LinkSendError && err.code === 'owner-changed') throw err;
-    liveHandles.delete(key);
-    throw err;
-  }
-  // Do not delete the remote outbox here. That primitive deletes every slot on our
-  // write path, including unconsumed msg3 (Noise XX: initiator is Complete
-  // the instant msg3 is PUT; the responder still has to read it) and any
-  // unread transport slots. There is no protocol ack that msg1 was consumed,
-  // so a slot-scoped delete is also unsafe until paykit grows one. Orphan
-  // msg1 stays as garbage; see docs/DECISIONS.md (P1-1 backlog).
-  return 'ready';
-}
-
-/**
- * Orphan-marker case (J3/J5/J19): a session that published `receiver.json`
- * then signed out leaves that pk live. Standby siblings never published, so
- * their local receiver secret ≠ the published pk. A peer answering XX msg1
- * derives the inbound slot from the published key; this device never sees
- * msg2. Initiator recovery (C) re-GETs the *peer* marker and cannot unstick
- * our own marker. Recovery is explicit takeover: publish this device's pk,
- * wipe unestablished handshakes + outbox slots, then re-initiate.
- */
-async function initiateHandshake(
-  activeSession: ActiveSession,
-  receiver: LinkReceiver,
-  ownerPubky: PubkyKey,
-  peerPubky: PubkyKey,
-  marker: ReceiverMarker,
-  localPath: string,
-  intent: LinkIntent,
-  alreadyRecovered: boolean,
-  expectedOwner: PubkyKey,
-): Promise<EnsureOutcome> {
-  abortIfOwnerChanged(expectedOwner);
-  if (receiver.receiverRole === 'standby') return 'standby-blocked';
-  const remotePath = LINK_RECEIVER_PATH;
-  const initiated = await PaykitLinkNative.initiateLink(
-    activeSession.alias,
-    receiver.receiverAlias,
-    peerPubky,
-    marker.noisePublicKey,
-    localPath,
-    remotePath,
-  );
-  abortIfOwnerChanged(expectedOwner);
-  await StorageService.upsertLink({
-    ownerPubky,
-    peerPubky,
-    role: 'initiator',
-    status: 'handshaking',
-    snapshot: initiated.snapshot,
-    remoteNoisePublicKey: marker.noisePublicKey,
-    localReceiverPath: localPath,
-    remoteReceiverPath: remotePath,
-    consecutiveFailures: 0,
-    lastSeenPeerMarkerPk: marker.noisePublicKey,
-  });
-  liveHandles.set(linkKey(ownerPubky, peerPubky), {
-    status: 'handshaking',
-    linkId: initiated.linkId,
-    role: 'initiator',
-  });
-  // Reaching this function already proves the caller allowed initiation.
-  return advanceLiveHandshake(
-    activeSession,
-    receiver,
-    ownerPubky,
-    peerPubky,
-    { status: 'handshaking', linkId: initiated.linkId, role: 'initiator' },
-    intent,
-    alreadyRecovered,
-    expectedOwner,
-  );
-}
-
-/**
- * GET-only. Never PUTs. Fetch failure is not absence. Foreign pk → standby.
- */
-async function ensureOwnReceiverMarkerMatches(
-  _activeSession: ActiveSession,
-  _receiver: LinkReceiver,
-  ownerPubky: PubkyKey,
-  _localPath: string,
-  expectedOwner: PubkyKey,
-): Promise<void> {
-  if (ownMarkerSyncIsFresh(ownerPubky)) return;
-  abortIfOwnerChanged(expectedOwner);
-  await syncOwnReceiverRole(ownerPubky);
-  abortIfOwnerChanged(expectedOwner);
-  markOwnMarkerSynced(ownerPubky);
-}
-
-/**
- * Atomic inbound probe. `none` is not an error and leaves prior state
- * untouched (the reference discards failed / empty probes).
- */
-async function probeInbound(
-  activeSession: ActiveSession,
-  receiver: LinkReceiver,
-  ownerPubky: PubkyKey,
-  peerPubky: PubkyKey,
-  marker: ReceiverMarker,
-  localPath: string,
-): Promise<Extract<LinkProbeResult, { result: 'pending' | 'established' }> | null> {
-  try {
-    const startedAt = Date.now();
-    console.warn(
-      `[LinkService] inbound-probe begin peer=${opaquePeerId(ownerPubky, peerPubky)} probePk=${pkPrefix8(marker.noisePublicKey)} slotFrom=fetched-marker`,
-    );
-    const probed = await PaykitLinkNative.probeInboundLink(
-      activeSession.alias,
-      receiver.receiverAlias,
-      peerPubky,
-      marker.noisePublicKey,
-      localPath,
-      LINK_RECEIVER_PATH,
-    );
-    const durationMs = Date.now() - startedAt;
-    if (probed.result === 'none') {
-      console.warn(
-        `[LinkService] inbound-probe result=none durationMs=${durationMs} peer=${opaquePeerId(ownerPubky, peerPubky)}`,
-      );
-      return null;
-    }
-    console.warn(
-      `[LinkService] inbound-probe result=${probed.result} durationMs=${durationMs} peer=${opaquePeerId(ownerPubky, peerPubky)}`,
-    );
-    return probed;
-  } catch (err) {
-    console.warn(
-      `[LinkService] inbound-probe-failed peer=${opaquePeerId(ownerPubky, peerPubky)}:`,
-      errorMessage(err),
-    );
-    if (isLinkNativeError(err) && err.code === 'protocol') throw err;
-    return null;
-  }
-}
-
-async function adoptInboundHandshake(
-  ownerPubky: PubkyKey,
-  peerPubky: PubkyKey,
-  marker: ReceiverMarker,
-  localPath: string,
-  inbound: Extract<LinkProbeResult, { result: 'pending' | 'established' }>,
-  expectedOwner: PubkyKey,
-  expectedQueueGen: number,
-): Promise<EnsureOutcome> {
-  abortIfOwnerChanged(expectedOwner);
-  if (queueGenerationChanged(ownerPubky, peerPubky, expectedQueueGen)) {
-    await closeQuietly(inbound.linkId);
-    return 'idle';
-  }
-  if (!(await inboundStillAllowed(ownerPubky, peerPubky, expectedOwner))) {
-    await closeQuietly(inbound.linkId);
-    return 'denied';
-  }
-  const remotePath = LINK_RECEIVER_PATH;
-  const key = linkKey(ownerPubky, peerPubky);
-  if (queueGenerationChanged(ownerPubky, peerPubky, expectedQueueGen)) {
-    await closeQuietly(inbound.linkId);
-    return 'idle';
-  }
-  const existing = liveHandles.get(key);
-  if (existing && existing.linkId !== inbound.linkId) {
-    await closeQuietly(existing.linkId);
-  }
-  if (inbound.result === 'established') {
-    await StorageService.clearHandshakeBudget(ownerPubky, peerPubky);
-    abortIfOwnerChanged(expectedOwner);
-    if (queueGenerationChanged(ownerPubky, peerPubky, expectedQueueGen)) {
-      await closeQuietly(inbound.linkId);
-      return 'idle';
-    }
-    await StorageService.upsertLink({
-      ownerPubky,
-      peerPubky,
-      role: 'responder',
-      status: 'established',
-      snapshot: inbound.snapshot,
-      remoteNoisePublicKey: marker.noisePublicKey,
-      localReceiverPath: localPath,
-      remoteReceiverPath: remotePath,
-      consecutiveFailures: 0,
-      lastSeenPeerMarkerPk: marker.noisePublicKey,
-    });
-    liveHandles.set(key, { status: 'established', linkId: inbound.linkId });
-    return 'ready';
-  }
-
-  if (queueGenerationChanged(ownerPubky, peerPubky, expectedQueueGen)) {
-    await closeQuietly(inbound.linkId);
-    return 'idle';
-  }
-  await StorageService.upsertLink({
-    ownerPubky,
-    peerPubky,
-    role: 'responder',
-    status: 'handshaking',
-    snapshot: inbound.snapshot,
-    remoteNoisePublicKey: marker.noisePublicKey,
-    localReceiverPath: localPath,
-    remoteReceiverPath: remotePath,
-    consecutiveFailures: 0,
-    lastSeenPeerMarkerPk: marker.noisePublicKey,
-  });
-  liveHandles.set(key, { status: 'handshaking', linkId: inbound.linkId, role: 'responder' });
-  return 'handshaking-responder';
-}
-
-/**
- * The {@link LinkIntent} is the CALLER's policy, threaded through unchanged. It
- * is not a detail of how the failure is classified: recovery from a wedged link
- * ends in {@link initiateHandshake}, which writes Noise message 1 to a
- * peer-visible location. A background tick and an inbox sync must never reach
- * that, however the failure arrived.
- */
-async function handleLinkFailure(
-  err: unknown,
-  stored: LinkRecord,
-  intent: LinkIntent,
-  alreadyRecovered: boolean,
-  expectedOwner: PubkyKey,
-): Promise<EnsureOutcome> {
-  if (err instanceof LinkSendError && err.code === 'owner-changed') throw err;
-  if (isLinkNativeError(err) && err.code === 'unavailable') return 'native-missing';
-  if (isLinkNativeError(err) && err.code === 'auth') {
-    KeyStore.deleteLinkSession();
-    session = null;
-    return 'needs-enable';
-  }
-  abortIfOwnerChanged(expectedOwner);
-  const established = stored.status === 'established';
-  if (established) {
-    await markReconnectRequired(stored, expectedOwner, reconnectCategory(err));
-    await failQueuedSendsForPeer(stored.ownerPubky, stored.peerPubky);
-    return 'reconnect_required';
-  }
-  if (isLinkNativeError(err) && err.code === 'network') {
-    const failures = await StorageService.incrementLinkConsecutiveFailures(
-      stored.ownerPubky,
-      stored.peerPubky,
-    );
-    if (failures >= HANDSHAKE_FAILURE_LIMIT) {
-      return recoverWedgedLink(stored, intent, alreadyRecovered, err, expectedOwner);
-    }
-    return roleStatus(stored.role);
-  }
-  if (isLinkNativeError(err) && err.code === 'protocol') {
-    return recoverWedgedLink(stored, intent, alreadyRecovered, err, expectedOwner);
-  }
-
-  const failures = await StorageService.incrementLinkConsecutiveFailures(
-    stored.ownerPubky,
-    stored.peerPubky,
-  );
-  if (failures >= HANDSHAKE_FAILURE_LIMIT) {
-    return recoverWedgedLink(stored, intent, alreadyRecovered, err, expectedOwner);
-  }
-  console.warn(
-    `[LinkService] handshake-step-failed peer=${opaquePeerId(stored.ownerPubky, stored.peerPubky)}:`,
-    errorMessage(err),
-  );
-  return roleStatus(stored.role);
-}
-
-/**
- * Protocol/decrypt error, or N consecutive handshake (not established-network)
- * failures: retire the local link state and restart a fresh handshake. If the
- * peer marker's noise key changed, this is re-enrollment.
- *
- * Restarting is gated on the caller's {@link LinkIntent}. When the caller
- * forbids initiating (periodic tick, inbox sync) local retirement still happens and
- * this returns `idle` or `error` — the row and its dead outbox are gone, so the
- * peer's own message 1 can be adopted on the next sync, and the user's next
- * send or thread open initiates. Nothing is left wedged; only the timer is
- * silent.
- *
- * Wiping an unestablished handshake also charges the durable abuse budget. The
- * wipe is peer-triggerable — a malformed Noise message 3 produces `protocol` on
- * demand — so without a charge the cycle wipe → re-adopt → wipe would be free
- * and the budget would never decay. An established link is never charged: its
- * failures are transport problems, not an unfinished handshake.
- */
-async function recoverWedgedLink(
-  stored: LinkRecord,
-  intent: LinkIntent,
-  alreadyRecovered: boolean,
-  cause: unknown,
-  expectedOwner: PubkyKey,
-): Promise<EnsureOutcome> {
-  abortIfOwnerChanged(expectedOwner);
-  const protocol = isLinkNativeError(cause) && cause.code === 'protocol';
-  if (protocol) {
-    try {
-      const marker = await fetchPeerReceiverMarker(
-        stored.ownerPubky,
-        stored.peerPubky,
-        LINK_RECEIVER_PATH,
-      );
-      abortIfOwnerChanged(expectedOwner);
-      if (
-        marker &&
-        stored.remoteNoisePublicKey &&
-        marker.noisePublicKey !== stored.remoteNoisePublicKey
-      ) {
-        console.warn(
-          `[LinkService] peer-re-enrolled peer=${opaquePeerId(stored.ownerPubky, stored.peerPubky)}; restarting handshake`,
-        );
-      }
-    } catch (err) {
-      if (err instanceof LinkSendError && err.code === 'owner-changed') throw err;
-      // Marker fetch failing does not block the wipe — the handshake is wedged.
-    }
-  }
-
-  if (stored.status !== 'established') {
-    const budget = await chargeHandshakeBudget(
-      stored.ownerPubky,
-      stored.peerPubky,
-      {
-        reason: 'unestablished-wipe',
-      },
-      expectedOwner,
-    );
-    if (budget.exhausted) return abandonUnestablishedLink(stored, expectedOwner);
-  }
-
-  await retireLocalLinkState(stored, expectedOwner);
-
-  if (alreadyRecovered) return 'error';
-  return ensureLinkLocked(stored.peerPubky, intent, true, expectedOwner);
-}
-
-/**
- * C: re-GET the *peer's* receiver.json after N polls / T seconds and
- * restart if that pk rotated. Does not help the orphan-marker case — a
- * standby initiator's own published (or leftover) marker is what the peer
- * answered, and takeover is the recovery.
- */
-async function maybeRecoverInitiatorMarkerRotation(
-  activeSession: ActiveSession,
-  receiver: LinkReceiver,
-  ownerPubky: PubkyKey,
-  peerPubky: PubkyKey,
-  live: Extract<LiveHandle, { status: 'handshaking' }>,
-  stored: LinkRecord | null,
-  snapshot: string,
-  alreadyRecovered: boolean,
-  intent: LinkIntent,
-  expectedOwner: PubkyKey,
-): Promise<EnsureOutcome | null> {
-  abortIfOwnerChanged(expectedOwner);
-  const key = linkKey(ownerPubky, peerPubky);
-  const watch = handshakeWatch.get(key);
-  const now = Date.now();
-  if (!watch || watch.snapshot !== snapshot) {
-    handshakeWatch.set(key, { polls: 1, firstAt: now, snapshot });
-  } else {
-    handshakeWatch.set(key, { polls: watch.polls + 1, firstAt: watch.firstAt, snapshot });
-  }
-  const current = handshakeWatch.get(key)!;
-  const due =
-    current.polls >= MARKER_RECOVERY_POLL_LIMIT ||
-    now - current.firstAt >= MARKER_RECOVERY_TIMEOUT_MS;
-  if (!due) return null;
-
-  let marker: ReceiverMarker | null;
-  try {
-    marker = await fetchPeerReceiverMarker(ownerPubky, peerPubky, LINK_RECEIVER_PATH);
-    abortIfOwnerChanged(expectedOwner);
-  } catch (err) {
-    if (err instanceof LinkSendError && err.code === 'owner-changed') throw err;
-    return null;
-  }
-  const recorded = stored?.remoteNoisePublicKey ?? stored?.lastSeenPeerMarkerPk ?? '';
-  if (!marker || !recorded || marker.noisePublicKey === recorded) {
-    handshakeWatch.set(key, { polls: 0, firstAt: now, snapshot });
-    return null;
-  }
-
-  const row = stored ?? fallbackLinkRecord(ownerPubky, peerPubky, receiver, live.role);
-  const budget = await chargeHandshakeBudget(
-    ownerPubky,
-    peerPubky,
-    { reason: 'unestablished-wipe' },
-    expectedOwner,
-  );
-  if (budget.exhausted) return abandonUnestablishedLink(row, expectedOwner);
-
-  await retireLocalLinkState(row, expectedOwner);
-  handshakeWatch.delete(key);
-  if (alreadyRecovered) return 'error';
-  if (!mayInitiate(intent)) return 'idle';
-  return initiateHandshake(
-    activeSession,
-    receiver,
-    ownerPubky,
-    peerPubky,
-    marker,
-    coerceReceiverPath(receiver.receiverPath),
-    intent,
-    true,
-    expectedOwner,
-  );
-}
-
-/**
- * Wipe a pending responder handshake and accept the current msg1. Charges
- * `unestablished-wipe` (never throttled) so a flapping marker cannot loop
- * for free. Completing XX later still clears the budget.
- */
-async function restartResponderFromFreshMsg1(
-  activeSession: ActiveSession,
-  receiver: LinkReceiver,
-  ownerPubky: PubkyKey,
-  peerPubky: PubkyKey,
-  stored: LinkRecord,
-  marker: ReceiverMarker | null | undefined,
-  localPath: string,
-  alreadyRecovered: boolean,
-  expectedOwner: PubkyKey,
-  expectedQueueGen: number,
-): Promise<EnsureOutcome> {
-  abortIfOwnerChanged(expectedOwner);
-  const budget = await chargeHandshakeBudget(
-    ownerPubky,
-    peerPubky,
-    { reason: 'unestablished-wipe' },
-    expectedOwner,
-  );
-  if (budget.exhausted) return abandonUnestablishedLink(stored, expectedOwner);
-
-  await retireLocalLinkState(stored, expectedOwner);
-  abortIfOwnerChanged(expectedOwner);
-  if (alreadyRecovered) return 'error';
-
-  let nextMarker = marker && marker.noisePublicKey ? marker : null;
-  if (!nextMarker) {
-    try {
-      nextMarker = await fetchPeerReceiverMarker(ownerPubky, peerPubky, localPath);
-      abortIfOwnerChanged(expectedOwner);
-    } catch (err) {
-      if (err instanceof LinkSendError && err.code === 'owner-changed') throw err;
-      return 'idle';
-    }
-  }
-  if (!nextMarker) return 'idle';
-
-  let inbound: Extract<LinkProbeResult, { result: 'pending' | 'established' }> | null;
-  try {
-    inbound = await probeInbound(
-      activeSession,
-      receiver,
-      ownerPubky,
-      peerPubky,
-      nextMarker,
-      localPath,
-    );
-    abortIfOwnerChanged(expectedOwner);
-  } catch (err) {
-    if (isLinkNativeError(err) && err.code === 'protocol') {
-      abortIfOwnerChanged(expectedOwner);
-      return 'idle';
-    }
-    throw err;
-  }
-  if (inbound === null) {
-    await failQueuedSendsForPeer(ownerPubky, peerPubky);
-    abortIfOwnerChanged(expectedOwner);
-    return 'idle';
-  }
-  if (queueGenerationChanged(ownerPubky, peerPubky, expectedQueueGen)) {
-    await closeQuietly(inbound.linkId);
-    return 'idle';
-  }
-  return adoptInboundHandshake(
-    ownerPubky,
-    peerPubky,
-    nextMarker,
-    localPath,
-    inbound,
-    expectedOwner,
-    expectedQueueGen,
-  );
 }
 
 async function retireLocalLinkState(stored: LinkRecord, expectedOwner: PubkyKey): Promise<void> {
@@ -3803,8 +2527,7 @@ async function persistInboundWithoutRouting(
 ): Promise<void> {
   if (queueGenerationChanged(ownerPubky, peerPubky, expectedQueueGen)) return;
   if (!(await inboundStillAllowed(ownerPubky, peerPubky, ownerPubky))) return;
-  const handle = requireEstablishedHandle(ownerPubky, peerPubky);
-  const { messages, snapshot } = await PaykitLinkNative.receivePrivateMessages(handle);
+  const { messages, snapshot } = await receiveSdkMessages(ownerPubky, peerPubky);
   if (messages.length === 0) return;
   const arrivedAt = Date.now();
   const streamItems = await prepareInboundStreamItems(ownerPubky, peerPubky, messages, arrivedAt);
@@ -4046,8 +2769,7 @@ async function syncPeerLocked(peerPubky: PubkyKey, ownerPubky: PubkyKey): Promis
     if (outcome !== 'ready') return routeUnprocessedStreamItems(ownerPubky, peerPubky, peerTrust);
 
     const swept = await routeUnprocessedStreamItems(ownerPubky, peerPubky, peerTrust);
-    const handle = requireEstablishedHandle(ownerPubky, peerPubky);
-    const { messages, snapshot } = await PaykitLinkNative.receivePrivateMessages(handle);
+    const { messages, snapshot } = await receiveSdkMessages(ownerPubky, peerPubky);
 
     if (messages.length === 0) return swept;
 
@@ -4060,20 +2782,12 @@ async function syncPeerLocked(peerPubky: PubkyKey, ownerPubky: PubkyKey): Promis
     await StorageService.updateLinkSnapshot(ownerPubky, peerPubky, snapshot, 'established');
     return [...swept, ...routed];
   } catch (err) {
-    const stored = await StorageService.getLink(ownerPubky, peerPubky);
-    if (stored?.status === 'established' && isLinkNativeError(err)) {
-      await markReconnectRequired(stored, ownerPubky, reconnectCategory(err));
+    if (isSdkOperationError(err) && err.code === 'recovery_required') {
+      const stored = await StorageService.getLink(ownerPubky, peerPubky);
+      if (stored) await markReconnectRequired(stored, ownerPubky, 'application');
     }
     throw err;
   }
-}
-
-function reconnectCategory(err: unknown): LinkReconnectErrorCategory {
-  if (isLinkNativeError(err) && (err.code === 'network' || err.code === 'protocol')) {
-    return err.code;
-  }
-  if (isLinkNativeError(err)) return 'application';
-  return 'unknown';
 }
 
 async function markReconnectRequired(
@@ -4365,16 +3079,16 @@ async function deliverQueuedPayload(
     }
 
     try {
-      const handle = requireEstablishedHandle(payload.ownerPubky, payload.peerPubky);
       const wireJson = await wireJsonForNativeSend(
         payload.kind,
         payload.rawJson,
         payload.ownerPubky,
         payload.senderPubky,
         payload.eventId,
+        payload.peerPubky,
       );
       abortIfOwnerChanged(payload.ownerPubky);
-      const { snapshot } = await PaykitLinkNative.sendPrivateMessageJson(handle, wireJson);
+      const { snapshot } = await sendOpaqueOnLink(payload.ownerPubky, payload.peerPubky, wireJson);
       abortIfOwnerChanged(payload.ownerPubky);
       if (payload.type === LINK_GROUP_FANOUT_PAYLOAD_TYPE) {
         await StorageService.finalizeGroupFanoutSend({
@@ -4549,14 +3263,23 @@ async function prepareInboundStreamItems(
         }
         continue;
       }
-      await KeyStore.setAttachmentSecret(ownerPubky, peerPubky, envelope.event_id, {
-        key: envelope.key,
-        nonce: envelope.nonce,
-        algorithm: envelope.algorithm,
-        ...(envelope.thumbnail
-          ? { thumbnail: { key: envelope.thumbnail.key, nonce: envelope.thumbnail.nonce } }
-          : {}),
-      });
+      await KeyStore.setAttachmentSecret(
+        ownerPubky,
+        peerPubky,
+        envelope.event_id,
+        {
+          key: envelope.key,
+          nonce: envelope.nonce,
+          algorithm: envelope.algorithm,
+          ...(envelope.thumbnail
+            ? { thumbnail: { key: envelope.thumbnail.key, nonce: envelope.thumbnail.nonce } }
+            : {}),
+        },
+        {
+          peerPubky,
+          conversationId: envelope.channel_id ?? buildDmConversationId(peerPubky),
+        },
+      );
       out.push({
         id: uuidv4(),
         ownerPubky,
@@ -4579,17 +3302,34 @@ async function prepareInboundStreamItems(
   return out;
 }
 
+function bindingForStoredAttachment(
+  peerPubky: PubkyKey,
+  senderPubky: PubkyKey,
+  attachment: { conversationId?: string | null; channelId?: string | null } | null,
+): { peerPubky: string; conversationId: string } {
+  if (attachment?.channelId) {
+    return { peerPubky: senderPubky, conversationId: attachment.channelId };
+  }
+  return {
+    peerPubky,
+    conversationId: attachment?.conversationId || buildDmConversationId(peerPubky),
+  };
+}
+
 async function wireJsonForNativeSend(
   kind: string,
   persistedRawJson: string,
   ownerPubky: PubkyKey,
   senderPubky: PubkyKey,
   eventId: string,
+  peerPubky: PubkyKey,
 ): Promise<string> {
   if (kind !== CHAT_ATTACHMENT_KIND) return persistedRawJson;
+  const row = await StorageService.getAttachment(ownerPubky, senderPubky, eventId);
   return reconstructAttachmentWireJson(
     persistedRawJson,
     attachmentKeyRef(ownerPubky, senderPubky, eventId),
+    bindingForStoredAttachment(peerPubky, senderPubky, row),
   );
 }
 
@@ -4748,15 +3488,15 @@ async function dispatchPersistedControlPam(
     return;
   }
   try {
-    const handle = requireEstablishedHandle(ownerPubky, peerPubky);
     const wireJson = await wireJsonForNativeSend(
       kind,
       rawJson,
       ownerPubky,
       ownerPubky,
       item.messageId,
+      peerPubky,
     );
-    const { snapshot } = await PaykitLinkNative.sendPrivateMessageJson(handle, wireJson);
+    const { snapshot } = await sendOpaqueOnLink(ownerPubky, peerPubky, wireJson);
     abortIfOwnerChanged(ownerPubky);
     await StorageService.finalizeControlSend({
       ownerPubky,
@@ -4850,16 +3590,16 @@ async function dispatchPreparedDm(input: {
   if (input.outcome !== 'ready') return message;
 
   try {
-    const handle = requireEstablishedHandle(input.ownerPubky, input.peerPubky);
     const wireJson = await wireJsonForNativeSend(
       input.kind,
       persistJson,
       input.ownerPubky,
       input.ownerPubky,
       input.eventId,
+      input.peerPubky,
     );
     abortIfOwnerChanged(input.ownerPubky);
-    const { snapshot } = await PaykitLinkNative.sendPrivateMessageJson(handle, wireJson);
+    const { snapshot } = await sendOpaqueOnLink(input.ownerPubky, input.peerPubky, wireJson);
     abortIfOwnerChanged(input.ownerPubky);
     await StorageService.finalizeLinkSend({
       ownerPubky: input.ownerPubky,
@@ -4945,10 +3685,6 @@ function parseRetryPayload(payload: string): AnyLinkRetryPayload | null {
 
 // ─── Shared internals ─────────────────────────────────────────────────────────
 
-function roleStatus(role: LinkRole): LinkStatus {
-  return role === 'initiator' ? 'handshaking-initiator' : 'handshaking-responder';
-}
-
 function requireOwner(): PubkyKey {
   const owner = session?.pubky ?? KeyStore.getPubky();
   if (!owner) throw new Error('LinkService: no local pubky');
@@ -4960,17 +3696,6 @@ function requireSessionAlias(): string {
   const stored = KeyStore.getLinkSession();
   if (stored) return stored;
   throw createLinkNativeError('auth', 'Enable encrypted messaging to write to your homeserver.');
-}
-
-function requireEstablishedHandle(ownerPubky: PubkyKey, peerPubky: PubkyKey): string {
-  const live = liveHandles.get(linkKey(ownerPubky, peerPubky));
-  if (!live || live.status !== 'established') {
-    throw createLinkNativeError(
-      'network',
-      `LinkService: missing established link handle peer=${opaquePeerId(ownerPubky, peerPubky)}`,
-    );
-  }
-  return live.linkId;
 }
 
 function isCurrentOwner(ownerPubky: PubkyKey): boolean {
@@ -4997,6 +3722,7 @@ function errorMessage(err: unknown): string {
 }
 
 async function closeQuietly(linkId: string): Promise<void> {
+  if (linkId.startsWith('sdk:')) return;
   try {
     await PaykitLinkNative.closeLink(linkId);
   } catch (err) {
@@ -5023,7 +3749,10 @@ async function holdControlPam(
   reason: unknown,
 ): Promise<void> {
   const detail = typeof reason === 'string' ? reason : errorMessage(reason);
-  console.warn(`[LinkService] Control PAM send deferred for ${peerPubky}:`, detail);
+  console.warn(
+    `[LinkService] Control PAM send deferred peer=${opaquePeerId(ownerPubky, peerPubky)}:`,
+    detail,
+  );
   if (isLinkNativeError(reason) && reason.code === 'protocol') {
     await dropLiveHandleQuietly(ownerPubky, peerPubky);
   }

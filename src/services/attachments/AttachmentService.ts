@@ -35,6 +35,7 @@ import {
   parseDmConversationId,
   type LinkDeliveryState,
 } from '../../types/link';
+import { attachmentKeyBinding } from './attachmentKeyBinding';
 import { KeyStore } from '../KeyStore';
 import { StorageService } from '../StorageService';
 import { PubkyService } from '../PubkyService';
@@ -116,12 +117,21 @@ export const AttachmentService = {
       : null;
 
     // Custody: KeyStore first, then any JSON that might be persisted.
-    await KeyStore.setAttachmentSecret(owner, owner, eventId, {
-      key,
-      nonce: sealed.nonceB64,
-      algorithm: sealed.algorithm || ATTACHMENT_ALGORITHM,
-      ...(thumbnail ? { thumbnail: { key: thumbnail.key, nonce: thumbnail.nonce } } : {}),
-    });
+    const boundPeer = target.type === 'conversation' ? target.peerPubky : owner;
+    const boundConversation =
+      target.type === 'conversation' ? buildDmConversationId(target.peerPubky) : target.channelId;
+    await KeyStore.setAttachmentSecret(
+      owner,
+      owner,
+      eventId,
+      {
+        key,
+        nonce: sealed.nonceB64,
+        algorithm: sealed.algorithm || ATTACHMENT_ALGORITHM,
+        ...(thumbnail ? { thumbnail: { key: thumbnail.key, nonce: thumbnail.nonce } } : {}),
+      },
+      { peerPubky: boundPeer, conversationId: boundConversation },
+    );
 
     const built = buildAttachmentEnvelope({
       eventId,
@@ -241,7 +251,12 @@ export const AttachmentService = {
       );
     }
 
-    const secret = await KeyStore.getAttachmentSecret(ownerPubky, senderPubky, eventId);
+    const secret = await KeyStore.getAttachmentSecret(
+      ownerPubky,
+      senderPubky,
+      eventId,
+      attachmentKeyBinding(row),
+    );
     if (!secret) {
       throw new AttachmentError('not-found', 'Attachment key material is not in KeyStore');
     }
@@ -302,7 +317,12 @@ export const AttachmentService = {
   ): Promise<string | null> {
     const row = await StorageService.getAttachment(ownerPubky, senderPubky, eventId);
     if (!row?.thumbnailLocation) return null;
-    const secret = await KeyStore.getAttachmentSecret(ownerPubky, senderPubky, eventId);
+    const secret = await KeyStore.getAttachmentSecret(
+      ownerPubky,
+      senderPubky,
+      eventId,
+      attachmentKeyBinding(row),
+    );
     if (!secret?.thumbnail) return null;
     const ciphertext = await PubkyService.get(row.thumbnailLocation);
     if (!ciphertext) return null;

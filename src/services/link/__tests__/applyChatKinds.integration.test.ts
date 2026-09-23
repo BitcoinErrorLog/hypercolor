@@ -608,7 +608,10 @@ describe('applyChatKinds integration', () => {
     });
 
     expect(result).toBe('applied');
-    expect(jest.mocked(KeyStore.deleteAttachmentSecret)).toHaveBeenCalledWith(OWNER, PEER, TARGET);
+    expect(jest.mocked(KeyStore.deleteAttachmentSecret)).toHaveBeenCalledWith(OWNER, PEER, TARGET, {
+      peerPubky: PEER,
+      conversationId: buildDmConversationId(PEER),
+    });
     expect(deleteCacheFiles).toHaveBeenCalledWith([`cache:${TARGET}`]);
     expect((await StorageService.getLinkMessageByEventId(OWNER, PEER, TARGET))?.deleted).toBe(true);
     expect(

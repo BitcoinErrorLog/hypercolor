@@ -14,6 +14,7 @@ import {
   writeFileFromStandardBase64,
 } from '../attachments/fileIo';
 import { PubkyService } from '../PubkyService';
+import { attachmentKeyBinding } from '../attachments/attachmentKeyBinding';
 import { KeyStore } from '../KeyStore';
 import { StorageService } from '../StorageService';
 import { PaykitLinkNative } from './PaykitLinkNative';
@@ -265,7 +266,12 @@ export async function runAttachmentLiveProof(
         if (!ciphertext) throw new Error('ciphertext missing at sender location');
         const row = await storage.getAttachment(pubkyB, pubkyA, sentEventId);
         if (!row) throw new Error('B attachment row missing for AAD check');
-        const secret = await KeyStore.getAttachmentSecret(pubkyB, pubkyA, sentEventId);
+        const secret = await KeyStore.getAttachmentSecret(
+          pubkyB,
+          pubkyA,
+          sentEventId,
+          attachmentKeyBinding(row),
+        );
         if (!secret) throw new Error('attachment key missing in KeyStore for AAD check');
         try {
           await PaykitLinkNative.attachmentDecrypt(

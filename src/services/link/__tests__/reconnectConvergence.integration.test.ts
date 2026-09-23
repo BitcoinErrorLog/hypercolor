@@ -82,6 +82,8 @@ import {
   stopLinkRetryDrain,
 } from '../LinkService';
 import { PaykitLinkNative } from '../PaykitLinkNative';
+import { PaykitSdkNative } from '../PaykitSdkNative';
+import { seedPaykitSdkJestMock } from './paykitSdkJestMock';
 
 const C = 'a'.repeat(52);
 const D = 'z'.repeat(52);
@@ -131,7 +133,16 @@ class SharedHomeserver {
   }
 }
 
-const native = jest.mocked(PaykitLinkNative);
+const native = jest.mocked(PaykitLinkNative) as unknown as jest.Mocked<typeof PaykitLinkNative> &
+  Record<
+    | 'initiateLink'
+    | 'probeInboundLink'
+    | 'advanceHandshake'
+    | 'restoreHandshake'
+    | 'restoreLink'
+    | 'clearLinkOutbox',
+    jest.Mock
+  >;
 const keyStore = jest.mocked(KeyStore);
 
 function record(owner: string, peer: string, status: LinkRecord['status']): LinkRecord {
@@ -159,6 +170,7 @@ describe('real SQLite non-destructive link recovery', () => {
   let receiveFailure: unknown = null;
 
   beforeEach(async () => {
+    seedPaykitSdkJestMock();
     owner = C;
     peer = D;
     restoreFailure = false;
@@ -249,7 +261,12 @@ describe('real SQLite non-destructive link recovery', () => {
   it('marks captured-shape restore failure without deleting slots', async () => {
     await StorageService.upsertLink(record(C, D, 'established'));
     const oldSlot = homeserver.slots.get(`${C}:messages:1`)?.bytes;
-    restoreFailure = true;
+    jest.mocked(PaykitSdkNative.observeEncryptedLinkRecoveryMarker).mockResolvedValue({
+      state: 'RECOVERY_REQUIRED',
+      remoteMarkerChanged: false,
+      localAttemptId: null,
+      remoteAttemptId: null,
+    });
     await expect(LinkService.syncInbox([D])).resolves.toEqual([]);
     expect((await StorageService.getLink(C, D))?.status).toBe('reconnect_required');
     expect(homeserver.clears).toHaveLength(0);
@@ -260,7 +277,12 @@ describe('real SQLite non-destructive link recovery', () => {
 
   it('keeps reconnect_required sticky during background and queued recovery', async () => {
     await StorageService.upsertLink(record(C, D, 'established'));
-    restoreFailure = true;
+    jest.mocked(PaykitSdkNative.observeEncryptedLinkRecoveryMarker).mockResolvedValue({
+      state: 'RECOVERY_REQUIRED',
+      remoteMarkerChanged: false,
+      localAttemptId: null,
+      remoteAttemptId: null,
+    });
     await expect(LinkService.syncInbox([D])).resolves.toEqual([]);
     expect((await StorageService.getLink(C, D))?.status).toBe('reconnect_required');
 
@@ -360,15 +382,10 @@ describe('real SQLite non-destructive link recovery', () => {
     saveLinkMessage.mockRestore();
   });
 
-  it('adopts a peer marker rotation from reconnect_required without remote deletes', async () => {
+  it('links from reconnect_required without rotating receiver noise or deleting remote slots', async () => {
     const previousFetch = global.fetch;
     global.fetch = jest.fn().mockRejectedValue(new Error('offline')) as typeof fetch;
-    const rotated = 'noise-d-rotated';
     await StorageService.upsertLink(record(C, D, 'reconnect_required'));
-    native.getReceiverMarker.mockImplementation(async (target: string) => ({
-      noisePublicKey: target === C ? C_NOISE : rotated,
-    }));
-    native.advanceHandshake.mockResolvedValue({ status: 'pending', snapshot: 'hs-rotated' });
     native.initiateLink.mockClear();
     native.probeInboundLink.mockClear();
     native.clearLinkOutbox.mockClear();
@@ -376,21 +393,13 @@ describe('real SQLite non-destructive link recovery', () => {
     native.removeReceiverMarker.mockClear();
 
     try {
-      await expect(LinkService.ensureLinkWith(D)).resolves.toBe('handshaking-initiator');
+      await expect(LinkService.ensureLinkWith(D)).resolves.toBe('ready');
 
       const latest = await StorageService.getLink(C, D);
-      expect(latest?.status).toBe('handshaking');
-      expect(latest?.remoteNoisePublicKey).toBe(rotated);
-      const archived = await StorageService.getArchivedLink(C, D);
-      expect(archived?.remoteNoisePublicKey).toBe(D_NOISE);
-      expect(native.initiateLink).toHaveBeenCalledWith(
-        C_ALIAS,
-        `${C}-receiver`,
-        D,
-        rotated,
-        PATH,
-        PATH,
-      );
+      expect(latest?.status).toBe('established');
+      expect(latest?.snapshot).toBe('sdk:1');
+      expect(latest?.remoteNoisePublicKey).toBe(D_NOISE);
+      expect(native.initiateLink).not.toHaveBeenCalled();
       expect(native.clearLinkOutbox).not.toHaveBeenCalled();
       expect(native.deletePublic).not.toHaveBeenCalled();
       expect(native.removeReceiverMarker).not.toHaveBeenCalled();
@@ -401,25 +410,25 @@ describe('real SQLite non-destructive link recovery', () => {
     }
   });
 
-  it('keeps reconnect_required when the peer marker is unchanged', async () => {
+  it('keeps reconnect_required when the SDK reports recovery and does not delete remote slots', async () => {
     const previousFetch = global.fetch;
     global.fetch = jest.fn().mockRejectedValue(new Error('offline')) as typeof fetch;
     await StorageService.upsertLink(record(C, D, 'reconnect_required'));
+    jest.mocked(PaykitSdkNative.observeEncryptedLinkRecoveryMarker).mockResolvedValue({
+      state: 'RECOVERY_REQUIRED',
+      remoteMarkerChanged: false,
+      localAttemptId: null,
+      remoteAttemptId: null,
+    });
     native.initiateLink.mockClear();
-    native.probeInboundLink.mockClear();
-    native.restoreLink.mockClear();
-    native.restoreHandshake.mockClear();
     native.clearLinkOutbox.mockClear();
 
     try {
       await expect(LinkService.ensureLinkWith(D)).resolves.toBe('reconnect_required');
 
       expect((await StorageService.getLink(C, D))?.status).toBe('reconnect_required');
-      expect(native.getReceiverMarker).toHaveBeenCalledWith(D, PATH);
+      expect(PaykitSdkNative.ensureLinkWithPeer).not.toHaveBeenCalled();
       expect(native.initiateLink).not.toHaveBeenCalled();
-      expect(native.probeInboundLink).not.toHaveBeenCalled();
-      expect(native.restoreLink).not.toHaveBeenCalled();
-      expect(native.restoreHandshake).not.toHaveBeenCalled();
       expect(native.clearLinkOutbox).not.toHaveBeenCalled();
       expect(homeserver.clears).toHaveLength(0);
     } finally {
@@ -427,7 +436,7 @@ describe('real SQLite non-destructive link recovery', () => {
     }
   });
 
-  it('keeps reconnect_required when the peer marker fetch fails', async () => {
+  it('establishes when the peer marker fetch fails and the SDK reports LINKED', async () => {
     const previousFetch = global.fetch;
     global.fetch = jest.fn().mockRejectedValue(new Error('offline')) as typeof fetch;
     await StorageService.upsertLink(record(C, D, 'reconnect_required'));
@@ -440,9 +449,11 @@ describe('real SQLite non-destructive link recovery', () => {
     native.clearLinkOutbox.mockClear();
 
     try {
-      await expect(LinkService.ensureLinkWith(D)).resolves.toBe('reconnect_required');
+      await expect(LinkService.ensureLinkWith(D)).resolves.toBe('ready');
 
-      expect((await StorageService.getLink(C, D))?.status).toBe('reconnect_required');
+      const latest = await StorageService.getLink(C, D);
+      expect(latest?.status).toBe('established');
+      expect(latest?.snapshot).toBe('sdk:1');
       expect(native.getReceiverMarker).toHaveBeenCalledWith(D, PATH);
       expect(native.initiateLink).not.toHaveBeenCalled();
       expect(native.probeInboundLink).not.toHaveBeenCalled();

@@ -1,5 +1,6 @@
 import { v4 as uuidv4 } from 'uuid';
 import { type PaykitLinkNativeApi } from './PaykitLinkNative';
+import { PaykitSdkNative } from './PaykitSdkNative';
 import {
   CHAT_MESSAGE_KIND,
   LINK_RECEIVER_PATH,
@@ -148,16 +149,8 @@ export async function runLinkLiveProof(
 
     if (
       !(await record('initiate-a', async () => {
-        const initiated = await native.initiateLink(
-          requirePartyField(partyA.sessionAlias, 'A.sessionAlias'),
-          requirePartyField(partyA.receiverAlias, 'A.receiverAlias'),
-          requirePartyField(partyB.pubky, 'B.pubky'),
-          requirePartyField(partyB.noisePublicKey, 'B.noisePublicKey'),
-          LINK_RECEIVER_PATH,
-          LINK_RECEIVER_PATH,
-        );
-        partyA.handshakeLinkId = initiated.linkId;
-        return initiated.linkId;
+        await ensureProofLink(partyA, partyB);
+        return partyA.establishedLinkId ?? 'linking';
       }))
     ) {
       return failed();
@@ -165,15 +158,7 @@ export async function runLinkLiveProof(
 
     if (
       !(await record('establish', async () => {
-        return establishBoth(
-          native,
-          partyA,
-          partyB,
-          now,
-          sleep,
-          handshakeTimeoutMs,
-          pollIntervalMs,
-        );
+        return establishBoth(partyA, partyB, now, sleep, handshakeTimeoutMs, pollIntervalMs);
       }))
     ) {
       return failed();
@@ -187,10 +172,7 @@ export async function runLinkLiveProof(
 
     if (
       !(await record('send-a', async () => {
-        await native.sendPrivateMessageJson(
-          requirePartyField(partyA.establishedLinkId, 'A.establishedLinkId'),
-          outboundA.json,
-        );
+        await sendOpaqueProof(partyA, partyB, outboundA.json);
         return outboundA.envelope.event_id;
       }))
     ) {
@@ -200,8 +182,8 @@ export async function runLinkLiveProof(
     if (
       !(await record('receive-b', async () => {
         return receiveExpected(
-          native,
           partyB,
+          partyA,
           outboundA.envelope.event_id,
           outboundA.envelope.body,
           now,
@@ -222,10 +204,7 @@ export async function runLinkLiveProof(
 
     if (
       !(await record('send-b', async () => {
-        await native.sendPrivateMessageJson(
-          requirePartyField(partyB.establishedLinkId, 'B.establishedLinkId'),
-          outboundB.json,
-        );
+        await sendOpaqueProof(partyB, partyA, outboundB.json);
         return outboundB.envelope.event_id;
       }))
     ) {
@@ -235,8 +214,8 @@ export async function runLinkLiveProof(
     if (
       !(await record('receive-a', async () => {
         return receiveExpected(
-          native,
           partyA,
+          partyB,
           outboundB.envelope.event_id,
           outboundB.envelope.body,
           now,
@@ -262,10 +241,7 @@ export async function runLinkLiveProof(
     if (
       !(await record('send-payment-request-a', async () => {
         await persistOutboundRequest(pubkyA, pubkyB, requestOne.envelope, now());
-        await native.sendPrivateMessageJson(
-          requirePartyField(partyA.establishedLinkId, 'A.establishedLinkId'),
-          requestOne.json,
-        );
+        await sendOpaqueProof(partyA, partyB, requestOne.json);
         return requestOne.envelope.payment_request_id;
       }))
     ) {
@@ -276,8 +252,8 @@ export async function runLinkLiveProof(
       !(await record('receive-payment-request-b', async () => {
         paintOwner(pubkyB);
         const raw = await receivePaymentJson(
-          native,
           partyB,
+          partyA,
           PAYKIT_PAYMENT_REQUEST_KIND,
           requestOne.envelope.event_id,
           now,
@@ -320,10 +296,7 @@ export async function runLinkLiveProof(
           expectedStatusesForAction('accept'),
           { status: 'accepted' },
         );
-        await native.sendPrivateMessageJson(
-          requirePartyField(partyB.establishedLinkId, 'B.establishedLinkId'),
-          acceptance.json,
-        );
+        await sendOpaqueProof(partyB, partyA, acceptance.json);
         return acceptance.envelope.event_id;
       }))
     ) {
@@ -334,8 +307,8 @@ export async function runLinkLiveProof(
       !(await record('receive-payment-acceptance-a', async () => {
         paintOwner(pubkyA);
         const raw = await receivePaymentJson(
-          native,
           partyA,
+          partyB,
           PAYKIT_PAYMENT_ACCEPTANCE_KIND,
           acceptance.envelope.event_id,
           now,
@@ -381,10 +354,7 @@ export async function runLinkLiveProof(
           expectedStatusesForAction('proof'),
           { status: 'proof_received', proofJson: JSON.stringify(proof.envelope.proof) },
         );
-        await native.sendPrivateMessageJson(
-          requirePartyField(partyB.establishedLinkId, 'B.establishedLinkId'),
-          proof.json,
-        );
+        await sendOpaqueProof(partyB, partyA, proof.json);
         return proof.envelope.event_id;
       }))
     ) {
@@ -395,8 +365,8 @@ export async function runLinkLiveProof(
       !(await record('receive-payment-proof-a', async () => {
         paintOwner(pubkyA);
         const raw = await receivePaymentJson(
-          native,
           partyA,
+          partyB,
           PAYKIT_PAYMENT_PROOF_KIND,
           proof.envelope.event_id,
           now,
@@ -435,10 +405,7 @@ export async function runLinkLiveProof(
     if (
       !(await record('send-payment-request-2-a', async () => {
         await persistOutboundRequest(pubkyA, pubkyB, requestTwo.envelope, now());
-        await native.sendPrivateMessageJson(
-          requirePartyField(partyA.establishedLinkId, 'A.establishedLinkId'),
-          requestTwo.json,
-        );
+        await sendOpaqueProof(partyA, partyB, requestTwo.json);
         return requestTwo.envelope.payment_request_id;
       }))
     ) {
@@ -449,8 +416,8 @@ export async function runLinkLiveProof(
       !(await record('receive-payment-request-2-b', async () => {
         paintOwner(pubkyB);
         const raw = await receivePaymentJson(
-          native,
           partyB,
+          partyA,
           PAYKIT_PAYMENT_REQUEST_KIND,
           requestTwo.envelope.event_id,
           now,
@@ -494,10 +461,7 @@ export async function runLinkLiveProof(
           expectedStatusesForAction('reject'),
           { status: 'rejected', reason: 'liveproof-reject' },
         );
-        await native.sendPrivateMessageJson(
-          requirePartyField(partyB.establishedLinkId, 'B.establishedLinkId'),
-          rejection.json,
-        );
+        await sendOpaqueProof(partyB, partyA, rejection.json);
         return rejection.envelope.event_id;
       }))
     ) {
@@ -508,8 +472,8 @@ export async function runLinkLiveProof(
       !(await record('receive-payment-rejection-a', async () => {
         paintOwner(pubkyA);
         const raw = await receivePaymentJson(
-          native,
           partyA,
+          partyB,
           PAYKIT_PAYMENT_REJECTION_KIND,
           rejection.envelope.event_id,
           now,
@@ -609,8 +573,8 @@ async function assertRequestStatus(
 }
 
 async function receivePaymentJson(
-  native: PaykitLinkNativeApi,
   party: ProofParty,
+  peer: ProofParty,
   kind: string,
   eventId: string,
   now: () => number,
@@ -621,10 +585,8 @@ async function receivePaymentJson(
   const deadline = now() + timeoutMs;
   const seen: string[] = [];
   while (now() < deadline) {
-    const received = await native.receivePrivateMessages(
-      requirePartyField(party.establishedLinkId, `${party.label}.establishedLinkId`),
-    );
-    for (const item of received.messages) {
+    const received = await intakeProofMessages(party, peer);
+    for (const item of received) {
       const decoded = decodePaymentEnvelope(item.rawJson);
       if (decoded === null || !('event_id' in decoded)) {
         seen.push(item.kind ?? 'undecodable');
@@ -659,8 +621,71 @@ async function provisionNativeParty(
   });
 }
 
+async function bindProofParty(party: ProofParty): Promise<void> {
+  await PaykitSdkNative.bindOwner({
+    ownerPubky: requirePartyField(party.pubky, `${party.label}.pubky`),
+    sessionAlias: requirePartyField(party.sessionAlias, `${party.label}.sessionAlias`),
+    receiverAlias: requirePartyField(party.receiverAlias, `${party.label}.receiverAlias`),
+    receiverPath: LINK_RECEIVER_PATH,
+  });
+}
+
+async function ensureProofLink(owner: ProofParty, peer: ProofParty): Promise<void> {
+  if (owner.establishedLinkId) return;
+  await bindProofParty(owner);
+  const ownerPubky = requirePartyField(owner.pubky, `${owner.label}.pubky`);
+  const peerPubky = requirePartyField(peer.pubky, `${peer.label}.pubky`);
+  await PaykitSdkNative.observeEncryptedLinkRecoveryMarker(
+    ownerPubky,
+    peerPubky,
+    LINK_RECEIVER_PATH,
+  );
+  const ensured = await PaykitSdkNative.ensureLinkWithPeer(
+    ownerPubky,
+    peerPubky,
+    LINK_RECEIVER_PATH,
+  );
+  if (ensured.state === 'LINKED') {
+    owner.establishedLinkId = `sdk:${ensured.generation ?? '1'}`;
+    owner.handshakeLinkId = owner.establishedLinkId;
+  }
+}
+
+async function sendOpaqueProof(from: ProofParty, to: ProofParty, rawJson: string): Promise<void> {
+  const ownerPubky = requirePartyField(from.pubky, `${from.label}.pubky`);
+  const peerPubky = requirePartyField(to.pubky, `${to.label}.pubky`);
+  await PaykitSdkNative.enqueueOpaquePrivateApplicationMessageJson(
+    ownerPubky,
+    peerPubky,
+    LINK_RECEIVER_PATH,
+    rawJson,
+  );
+  const processed = await PaykitSdkNative.processOutboundPrivateMessages(
+    ownerPubky,
+    peerPubky,
+    LINK_RECEIVER_PATH,
+  );
+  if (processed.failed.length > 0) {
+    throw new Error(`outbound failed: ${processed.failed.map(item => item.category).join(',')}`);
+  }
+}
+
+async function intakeProofMessages(
+  party: ProofParty,
+  peer: ProofParty,
+): Promise<{ kind: string | null; rawJson: string }[]> {
+  const ownerPubky = requirePartyField(party.pubky, `${party.label}.pubky`);
+  const peerPubky = requirePartyField(peer.pubky, `${peer.label}.pubky`);
+  const intake = await PaykitSdkNative.receivePrivateMessages(
+    ownerPubky,
+    peerPubky,
+    LINK_RECEIVER_PATH,
+  );
+  const items = await PaykitSdkNative.privateStreamItems(ownerPubky, intake.streamItemIds);
+  return items.map(item => ({ kind: item.kind, rawJson: item.rawJson }));
+}
+
 async function establishBoth(
-  native: PaykitLinkNativeApi,
   partyA: ProofParty,
   partyB: ProofParty,
   now: () => number,
@@ -670,36 +695,8 @@ async function establishBoth(
 ): Promise<string> {
   const deadline = now() + timeoutMs;
   while (now() < deadline) {
-    if (partyA.establishedLinkId === null && partyA.handshakeLinkId !== null) {
-      const advanced = await native.advanceHandshake(partyA.handshakeLinkId);
-      if (advanced.status === 'established') {
-        partyA.establishedLinkId = partyA.handshakeLinkId;
-      }
-    }
-
-    if (partyB.establishedLinkId === null) {
-      if (partyB.handshakeLinkId !== null) {
-        const advanced = await native.advanceHandshake(partyB.handshakeLinkId);
-        if (advanced.status === 'established') {
-          partyB.establishedLinkId = partyB.handshakeLinkId;
-        }
-      } else {
-        const probed = await native.probeInboundLink(
-          requirePartyField(partyB.sessionAlias, 'B.sessionAlias'),
-          requirePartyField(partyB.receiverAlias, 'B.receiverAlias'),
-          requirePartyField(partyA.pubky, 'A.pubky'),
-          requirePartyField(partyA.noisePublicKey, 'A.noisePublicKey'),
-          LINK_RECEIVER_PATH,
-          LINK_RECEIVER_PATH,
-        );
-        if (probed.result === 'pending') {
-          partyB.handshakeLinkId = probed.linkId;
-        } else if (probed.result === 'established') {
-          partyB.establishedLinkId = probed.linkId;
-        }
-      }
-    }
-
+    await ensureProofLink(partyA, partyB);
+    await ensureProofLink(partyB, partyA);
     if (partyA.establishedLinkId !== null && partyB.establishedLinkId !== null) {
       return `A=${partyA.establishedLinkId} B=${partyB.establishedLinkId}`;
     }
@@ -711,8 +708,8 @@ async function establishBoth(
 }
 
 async function receiveExpected(
-  native: PaykitLinkNativeApi,
   party: ProofParty,
+  peer: ProofParty,
   eventId: string,
   body: string,
   now: () => number,
@@ -723,10 +720,8 @@ async function receiveExpected(
   const deadline = now() + timeoutMs;
   const seen: string[] = [];
   while (now() < deadline) {
-    const received = await native.receivePrivateMessages(
-      requirePartyField(party.establishedLinkId, `${party.label}.establishedLinkId`),
-    );
-    for (const item of received.messages) {
+    const received = await intakeProofMessages(party, peer);
+    for (const item of received) {
       const decoded = decodeLinkEnvelope(item.rawJson);
       if (decoded === null) {
         seen.push(item.kind ?? 'undecodable');

@@ -2077,6 +2077,7 @@ export const StorageService = {
       db.executeSync('DELETE FROM link_read_cursors WHERE owner_pubky = ?', [ownerPubky]);
       db.executeSync('DELETE FROM links WHERE owner_pubky = ?', [ownerPubky]);
       db.executeSync('DELETE FROM links_archive WHERE owner_pubky = ?', [ownerPubky]);
+      db.executeSync('DELETE FROM paykit_sdk_state WHERE owner_pubky = ?', [ownerPubky]);
       db.executeSync('DELETE FROM link_handshake_budgets WHERE owner_pubky = ?', [ownerPubky]);
       db.executeSync('DELETE FROM link_receivers WHERE owner_pubky = ?', [ownerPubky]);
       db.executeSync('DELETE FROM message_requests WHERE owner_pubky = ?', [ownerPubky]);
@@ -2093,6 +2094,39 @@ export const StorageService = {
       ]);
       db.executeSync('DELETE FROM chat_pending_tombstones WHERE owner_pubky = ?', [ownerPubky]);
       db.executeSync('DELETE FROM chat_pending_tags WHERE owner_pubky = ?', [ownerPubky]);
+    });
+  },
+
+  async wipeUnsignedSdkResidue(): Promise<void> {
+    const db = await getDb();
+    const tables = [
+      'paykit_sdk_state',
+      'links',
+      'links_archive',
+      'link_messages',
+      'link_stream_items',
+      'link_handshake_budgets',
+      'link_receivers',
+      'link_read_cursors',
+      'delivery_queue',
+      'attachments',
+      'message_requests',
+      'group_messages',
+      'group_members',
+      'group_channels',
+      'group_fanout_outcomes',
+      'group_deferred_events',
+      'group_seen_events',
+      'chat_pending_tombstones',
+      'chat_pending_tags',
+      'chat_tags',
+      'chat_pins',
+      'chat_group_invites',
+    ];
+    transact(db, () => {
+      for (const table of tables) {
+        db.executeSync(`DELETE FROM ${table}`);
+      }
     });
   },
 

@@ -1,3 +1,4 @@
+import { seedPaykitSdkJestMock } from './paykitSdkJestMock';
 import { LinkService } from '../LinkService';
 import { PaykitLinkNative } from '../PaykitLinkNative';
 import { StorageService } from '../../StorageService';
@@ -219,7 +220,18 @@ jest.mock('../../RetryQueue', () => ({
 
 jest.mock('uuid', () => ({ v4: jest.fn(() => 'unused-stream-id') }));
 
-const mockedNative = jest.mocked(PaykitLinkNative);
+const mockedNative = jest.mocked(PaykitLinkNative) as unknown as jest.Mocked<
+  typeof PaykitLinkNative
+> &
+  Record<
+    | 'initiateLink'
+    | 'probeInboundLink'
+    | 'advanceHandshake'
+    | 'restoreHandshake'
+    | 'restoreLink'
+    | 'clearLinkOutbox',
+    jest.Mock
+  >;
 const mockedStorage = jest.mocked(StorageService);
 const mockedKeyStore = jest.mocked(KeyStore);
 const mockedRetryQueue = jest.mocked(RetryQueue);
@@ -533,6 +545,7 @@ function wireInMemoryStorage(): void {
 describe('group accept gate', () => {
   beforeEach(async () => {
     jest.resetAllMocks();
+    seedPaykitSdkJestMock();
     jest.spyOn(Date, 'now').mockReturnValue(NOW);
     FollowsImportSettings.resetForTests();
     streamItemSeq = 0;
