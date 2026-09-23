@@ -1181,8 +1181,12 @@ class PaykitLinkModule(reactContext: ReactApplicationContext) : ReactContextBase
         private const val STAGING_HOMESERVER_ORIGIN = "https://homeserver.staging.pubky.app"
     }
 
+    /**
+     * pubkycore's list is `[tag, value]`. Live success is `"false"` (not an
+     * error). The JS client accepts every tag other than `"error"`.
+     */
     private fun unwrapPubkyCore(result: List<String>): String? {
-        if (result.size >= 2 && result[0] == "ok" && result[1].isNotEmpty()) {
+        if (result.size >= 2 && result[0] != "error" && result[1].isNotEmpty()) {
             return result[1]
         }
         return null

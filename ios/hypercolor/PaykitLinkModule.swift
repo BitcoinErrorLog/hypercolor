@@ -1679,8 +1679,10 @@ class PaykitLinkModule: NSObject, RCTInvalidating {
         "ufibwbmed6jeq9k4p583go95wofakh9fwpp4k734trq79pd9u1uy"
     private static let stagingHomeserverOrigin = "https://homeserver.staging.pubky.app"
 
+    /// pubkycore's list is `[tag, value]`. Live success is `"false"` (not an
+    /// error). The JS client accepts every tag other than `"error"`.
     private static func unwrapPubkyCore(_ result: [String]) -> String? {
-        guard result.count >= 2, result[0] == "ok", !result[1].isEmpty else { return nil }
+        guard result.count >= 2, result[0] != "error", !result[1].isEmpty else { return nil }
         return result[1]
     }
 

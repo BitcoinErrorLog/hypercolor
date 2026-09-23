@@ -40,6 +40,8 @@ describe('native auth-flow source pin', () => {
   });
 
   it('pins F1 origin before Cookie and F7 pending inspect', () => {
+    expect(ANDROID_MODULE).toContain('result[0] != "error"');
+    expect(IOS_MODULE).toContain('result[0] != "error"');
     expect(ANDROID_MODULE).toContain('fun pinnedHomeserverOrigin(');
     expect(ANDROID_MODULE).toContain('fun sessionForCapabilityInspect(');
     expect(ANDROID_MODULE).toContain('sessionForCapabilityInspect(requireText(sessionAlias');
