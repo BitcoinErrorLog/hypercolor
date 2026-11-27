@@ -9,17 +9,23 @@ export const GIF_MAX_BYTES = ATTACHMENT_MAX_BYTES;
 export type GifProxyHit = {
   id: string;
   preview: { url: string; w: number; h: number };
-  gif: { url: string; w: number; h: number; bytes: number };
+  gif: { url: string; w: number; h: number; bytes?: number };
 };
 
 export type GifSearchResult =
   | { ok: true; results: GifProxyHit[] }
   | { ok: false; reason: 'not-configured' | 'error'; message: string };
 
-function isProxyUrl(url: string): boolean {
+function isProxyFetchUrl(url: string): boolean {
   try {
     const parsed = new URL(url);
-    return parsed.origin === GIF_PROXY_ORIGIN && parsed.protocol === 'https:';
+    if (parsed.origin !== GIF_PROXY_ORIGIN || parsed.protocol !== 'https:') return false;
+    if (parsed.pathname !== GIF_FETCH_PATH) return false;
+    const id = parsed.searchParams.get('id');
+    const token = parsed.searchParams.get('token');
+    if (!id || !/^[A-Za-z0-9_-]{1,64}$/.test(id)) return false;
+    if (!token || token.length > 2048) return false;
+    return true;
   } catch {
     return false;
   }
@@ -32,24 +38,28 @@ function asPositiveInt(value: unknown): number | null {
 function parseHit(raw: unknown): GifProxyHit | null {
   if (typeof raw !== 'object' || raw === null) return null;
   const row = raw as Record<string, unknown>;
-  if (typeof row.id !== 'string' || row.id.length === 0 || row.id.length > 128) return null;
+  if (typeof row.id !== 'string' || row.id.length === 0 || row.id.length > 64) return null;
   if (!/^[A-Za-z0-9_-]+$/.test(row.id)) return null;
   const preview = row.preview as Record<string, unknown> | undefined;
   const gif = row.gif as Record<string, unknown> | undefined;
   if (!preview || !gif) return null;
   if (typeof preview.url !== 'string' || typeof gif.url !== 'string') return null;
-  if (!isProxyUrl(preview.url) || !isProxyUrl(gif.url)) return null;
+  if (!isProxyFetchUrl(preview.url) || !isProxyFetchUrl(gif.url)) return null;
   const pw = asPositiveInt(preview.w);
   const ph = asPositiveInt(preview.h);
   const gw = asPositiveInt(gif.w);
   const gh = asPositiveInt(gif.h);
-  const bytes = asPositiveInt(gif.bytes);
-  if (!pw || !ph || !gw || !gh || !bytes) return null;
-  if (bytes > GIF_MAX_BYTES) return null;
+  if (!pw || !ph || !gw || !gh) return null;
+  let bytes: number | undefined;
+  if (gif.bytes !== undefined) {
+    const parsedBytes = asPositiveInt(gif.bytes);
+    if (!parsedBytes || parsedBytes > GIF_MAX_BYTES) return null;
+    bytes = parsedBytes;
+  }
   return {
     id: row.id,
     preview: { url: preview.url, w: pw, h: ph },
-    gif: { url: gif.url, w: gw, h: gh, bytes },
+    gif: { url: gif.url, w: gw, h: gh, ...(bytes !== undefined ? { bytes } : {}) },
   };
 }
 
@@ -79,8 +89,12 @@ export async function searchGifs(
   const url = `${GIF_PROXY_ORIGIN}${GIF_SEARCH_PATH}?q=${encodeURIComponent(query)}&limit=${capped}`;
   try {
     const res = await fetchImpl(url);
-    if (res.status === 503)
+    if (res.status === 503) {
       return { ok: false, reason: 'not-configured', message: 'not configured' };
+    }
+    if (res.status === 429) {
+      return { ok: false, reason: 'error', message: 'rate limited' };
+    }
     if (!res.ok) return { ok: false, reason: 'error', message: `search failed (${res.status})` };
     const json: unknown = await res.json();
     if (typeof json !== 'object' || json === null) {
@@ -173,19 +187,32 @@ async function readBoundedBody(
   return out;
 }
 
+function resolveFetchUrl(target: string | GifProxyHit): string | null {
+  if (typeof target !== 'string') {
+    return isProxyFetchUrl(target.gif.url) ? target.gif.url : null;
+  }
+  if (target.startsWith('https://')) {
+    return isProxyFetchUrl(target) ? target : null;
+  }
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(target)) return null;
+  return `${GIF_PROXY_ORIGIN}${GIF_FETCH_PATH}?id=${encodeURIComponent(target)}`;
+}
+
 export async function fetchGifBytes(
-  id: string,
+  target: string | GifProxyHit,
   fetchImpl: typeof fetch = fetch,
 ): Promise<GifFetchResult> {
-  if (!/^[A-Za-z0-9_-]+$/.test(id)) {
-    return { ok: false, reason: 'error', message: 'invalid gif id' };
+  const url = resolveFetchUrl(target);
+  if (!url) {
+    return { ok: false, reason: 'error', message: 'invalid gif reference' };
   }
-  const url = `${GIF_PROXY_ORIGIN}${GIF_FETCH_PATH}?id=${encodeURIComponent(id)}`;
   try {
     const res = await fetchImpl(url);
-    if (res.status === 503)
+    if (res.status === 503) {
       return { ok: false, reason: 'not-configured', message: 'not configured' };
+    }
     if (res.status === 413) return { ok: false, reason: 'too-large', message: 'gif exceeds 8 MiB' };
+    if (res.status === 429) return { ok: false, reason: 'error', message: 'rate limited' };
     if (!res.ok) return { ok: false, reason: 'error', message: `fetch failed (${res.status})` };
     const buffer = await readBoundedBody(res, GIF_MAX_BYTES);
     if (buffer === 'too-large') {
@@ -197,7 +224,7 @@ export async function fetchGifBytes(
     if (!isGifMagic(buffer)) {
       return { ok: false, reason: 'error', message: 'response is not a GIF' };
     }
-    const contentType = res.headers.get('content-type')?.split(';')[0]?.trim() ?? '';
+    const contentType = res.headers.get('content-type')?.split(';')[0]?.trim().toLowerCase() ?? '';
     if (contentType !== 'image/gif') {
       return { ok: false, reason: 'error', message: 'response is not a GIF' };
     }

@@ -6,6 +6,11 @@ import {
   searchGifs,
 } from '../GifProxyClient';
 
+const SAMPLE_PREVIEW_URL =
+  'https://hypercolor.app/api/gif/fetch?id=ok1&kind=preview&token=eyJ2IjoxfQ.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+const SAMPLE_GIF_URL =
+  'https://hypercolor.app/api/gif/fetch?id=ok1&kind=gif&token=eyJ2IjoxfQ.bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+
 function jsonResponse(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), {
     status,
@@ -29,32 +34,56 @@ describe('GifProxyClient', () => {
     expect(down).toBe(false);
   });
 
-  it('maps 503 not configured', async () => {
-    const result = await searchGifs('cat', 8, async () =>
-      jsonResponse(503, { error: 'not configured' }),
+  it('maps 503 not configured, 429 rate limited, and 502 upstream errors distinctly', async () => {
+    const unconfigured = await searchGifs('cat', 8, async () =>
+      jsonResponse(503, { error: 'not configured', code: 'not-configured' }),
     );
-    expect(result).toEqual({ ok: false, reason: 'not-configured', message: 'not configured' });
+    expect(unconfigured).toEqual({
+      ok: false,
+      reason: 'not-configured',
+      message: 'not configured',
+    });
+
+    const limited = await searchGifs('cat', 8, async () =>
+      jsonResponse(429, { error: 'Too many requests' }),
+    );
+    expect(limited).toEqual({ ok: false, reason: 'error', message: 'rate limited' });
+
+    const upstream = await searchGifs('cat', 8, async () =>
+      jsonResponse(502, { error: 'GIF search temporarily unavailable.' }),
+    );
+    expect(upstream).toEqual({ ok: false, reason: 'error', message: 'search failed (502)' });
   });
 
-  it('drops non-proxy preview urls and oversized advertised gifs', async () => {
+  it('parses unified proxy search results with signed fetch tokens and drops invalid or oversized hits', async () => {
     const result = await searchGifs('cat', 8, async () =>
       jsonResponse(200, {
         results: [
           {
             id: 'ok1',
-            preview: { url: 'https://hypercolor.app/api/gif/p', w: 10, h: 10 },
-            gif: { url: 'https://hypercolor.app/api/gif/g', w: 10, h: 10, bytes: 12 },
+            preview: { url: SAMPLE_PREVIEW_URL, w: 50, h: 40 },
+            gif: { url: SAMPLE_GIF_URL, w: 100, h: 80, bytes: 2048 },
+          },
+          {
+            id: 'okNoBytes',
+            preview: { url: SAMPLE_PREVIEW_URL, w: 50, h: 40 },
+            gif: { url: SAMPLE_GIF_URL, w: 100, h: 80 },
+          },
+          {
+            id: 'unsigned',
+            preview: { url: 'https://hypercolor.app/api/gif/fetch?id=unsigned', w: 10, h: 10 },
+            gif: { url: 'https://hypercolor.app/api/gif/fetch?id=unsigned', w: 10, h: 10, bytes: 12 },
           },
           {
             id: 'evil',
-            preview: { url: 'https://evil.test/x.gif', w: 10, h: 10 },
-            gif: { url: 'https://hypercolor.app/api/gif/g', w: 10, h: 10, bytes: 12 },
+            preview: { url: 'https://evil.test/api/gif/fetch?id=evil&token=abc', w: 10, h: 10 },
+            gif: { url: SAMPLE_GIF_URL, w: 10, h: 10, bytes: 12 },
           },
           {
             id: 'huge',
-            preview: { url: 'https://hypercolor.app/api/gif/p', w: 10, h: 10 },
+            preview: { url: SAMPLE_PREVIEW_URL, w: 10, h: 10 },
             gif: {
-              url: 'https://hypercolor.app/api/gif/g',
+              url: SAMPLE_GIF_URL,
               w: 10,
               h: 10,
               bytes: GIF_MAX_BYTES + 1,
@@ -64,18 +93,50 @@ describe('GifProxyClient', () => {
       }),
     );
     expect(result.ok).toBe(true);
-    if (result.ok) expect(result.results.map(hit => hit.id)).toEqual(['ok1']);
+    if (result.ok) {
+      expect(result.results.map(hit => hit.id)).toEqual(['ok1', 'okNoBytes']);
+      const requestedUrls: string[] = [];
+      const gif89a = new Uint8Array([0x47, 0x49, 0x46, 0x38, 0x39, 0x61]);
+      const fetched = await fetchGifBytes(result.results[0], async input => {
+        requestedUrls.push(String(input));
+        return new Response(gif89a, {
+          status: 200,
+          headers: {
+            'content-type': 'image/gif',
+            'content-length': String(gif89a.byteLength),
+          },
+        });
+      });
+      expect(requestedUrls).toEqual([SAMPLE_GIF_URL]);
+      expect(fetched).toEqual({ ok: true, bytes: gif89a, contentType: 'image/gif' });
+    }
   });
 
-  it('rejects fetch bodies over 8 MiB and non-GIF magic', async () => {
+  it('rejects off-origin fetch URLs and maps 413, 429, 502, and non-GIF magic', async () => {
+    const offOrigin = await fetchGifBytes('https://evil.test/api/gif/fetch?id=abc&token=x');
+    expect(offOrigin.ok).toBe(false);
+
     const tooBig = await fetchGifBytes(
-      'abc',
+      SAMPLE_GIF_URL,
       async () => new Response(new Uint8Array(6), { status: 413 }),
     );
     expect(tooBig.ok).toBe(false);
     if (!tooBig.ok) expect(tooBig.reason).toBe('too-large');
+
+    const limited = await fetchGifBytes(
+      SAMPLE_GIF_URL,
+      async () => jsonResponse(429, { error: 'rate limited' }),
+    );
+    expect(limited).toEqual({ ok: false, reason: 'error', message: 'rate limited' });
+
+    const upstream = await fetchGifBytes(
+      SAMPLE_GIF_URL,
+      async () => jsonResponse(502, { error: 'upstream error' }),
+    );
+    expect(upstream).toEqual({ ok: false, reason: 'error', message: 'fetch failed (502)' });
+
     const notGif = await fetchGifBytes(
-      'abc',
+      SAMPLE_GIF_URL,
       async () =>
         new Response(new Uint8Array([0x00, 0x01, 0x02, 0x03, 0x04, 0x05]), {
           status: 200,

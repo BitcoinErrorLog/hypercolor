@@ -41,6 +41,7 @@ import { TagPickerSheet } from '../../ui/TagPickerSheet';
 import { TagChips, aggregateTags } from '../../ui/TagChips';
 import type { ChatTagRow } from '../../services/StorageService';
 import { GifPickerSheet } from '../../components/GifPickerSheet';
+import type { GifProxyHit } from '../../services/gif/GifProxyClient';
 import { useGifSearchAvailable } from '../../services/gif/useGifSearchAvailable';
 import {
   PaymentRequestBubble,
@@ -207,17 +208,34 @@ export default function ThreadScreen({ route }: Props) {
     useCallback(() => {
       let stopped = false;
       let timer: ReturnType<typeof setInterval> | null = null;
+      let syncInFlight = false;
+      let syncQueued = false;
       const syncOpenThread = async () => {
         if (stopped || AppState.currentState !== 'active') return;
-        console.log('[ThreadScreen] open-thread-poll sync');
-        if (LinkService.hasSession()) {
-          try {
-            await LinkService.syncInbox([participantPubky]);
-          } catch {
-            // Inbox drain is best-effort; local history still renders.
+        if (syncInFlight) {
+          syncQueued = true;
+          return;
+        }
+        syncInFlight = true;
+        try {
+          console.log('[ThreadScreen] open-thread-poll sync');
+          if (LinkService.hasSession()) {
+            try {
+              await LinkService.syncInbox([participantPubky]);
+            } catch {
+              // Inbox drain is best-effort; local history still renders.
+            }
+          }
+          if (!stopped && AppState.currentState === 'active') await reloadEncrypted();
+        } finally {
+          syncInFlight = false;
+          if (syncQueued && !stopped && AppState.currentState === 'active') {
+            syncQueued = false;
+            void syncOpenThread();
+          } else {
+            syncQueued = false;
           }
         }
-        if (!stopped && AppState.currentState === 'active') await reloadEncrypted();
       };
       const stopPoll = () => {
         if (timer) {
@@ -707,7 +725,7 @@ export function ThreadScreenContent({
   onOpenEmojiPicker?: () => void;
   onCloseEmojiPicker?: () => void;
   onCloseGifPicker?: () => void;
-  onSendGif?: (gifId: string) => void;
+  onSendGif?: (gif: GifProxyHit | string) => void;
   linkStatus: LinkStatus | null;
   refreshing?: boolean;
   onRefresh?: () => void;
@@ -1346,7 +1364,7 @@ export function ThreadScreenContent({
             <GifPickerSheet
               visible={gifPickerOpen}
               onClose={() => onCloseGifPicker?.()}
-              onPick={hit => onSendGif?.(hit.id)}
+              onPick={hit => onSendGif?.(hit)}
             />
           ) : null}
           {tipPickerOpen ? (
