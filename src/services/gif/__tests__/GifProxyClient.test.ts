@@ -72,7 +72,12 @@ describe('GifProxyClient', () => {
           {
             id: 'unsigned',
             preview: { url: 'https://hypercolor.app/api/gif/fetch?id=unsigned', w: 10, h: 10 },
-            gif: { url: 'https://hypercolor.app/api/gif/fetch?id=unsigned', w: 10, h: 10, bytes: 12 },
+            gif: {
+              url: 'https://hypercolor.app/api/gif/fetch?id=unsigned',
+              w: 10,
+              h: 10,
+              bytes: 12,
+            },
           },
           {
             id: 'evil',
@@ -95,9 +100,11 @@ describe('GifProxyClient', () => {
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.results.map(hit => hit.id)).toEqual(['ok1', 'okNoBytes']);
+      const firstHit = result.results[0];
+      expect(firstHit).toBeDefined();
       const requestedUrls: string[] = [];
       const gif89a = new Uint8Array([0x47, 0x49, 0x46, 0x38, 0x39, 0x61]);
-      const fetched = await fetchGifBytes(result.results[0], async input => {
+      const fetched = await fetchGifBytes(firstHit!, async input => {
         requestedUrls.push(String(input));
         return new Response(gif89a, {
           status: 200,
@@ -112,7 +119,13 @@ describe('GifProxyClient', () => {
     }
   });
 
-  it('rejects off-origin fetch URLs and maps 413, 429, 502, and non-GIF magic', async () => {
+  it('rejects off-origin and unsigned references and maps 413, 429, 502, and non-GIF magic', async () => {
+    const bareId = await fetchGifBytes('abc');
+    expect(bareId.ok).toBe(false);
+
+    const unsignedUrl = await fetchGifBytes('https://hypercolor.app/api/gif/fetch?id=abc');
+    expect(unsignedUrl.ok).toBe(false);
+
     const offOrigin = await fetchGifBytes('https://evil.test/api/gif/fetch?id=abc&token=x');
     expect(offOrigin.ok).toBe(false);
 
@@ -123,15 +136,13 @@ describe('GifProxyClient', () => {
     expect(tooBig.ok).toBe(false);
     if (!tooBig.ok) expect(tooBig.reason).toBe('too-large');
 
-    const limited = await fetchGifBytes(
-      SAMPLE_GIF_URL,
-      async () => jsonResponse(429, { error: 'rate limited' }),
+    const limited = await fetchGifBytes(SAMPLE_GIF_URL, async () =>
+      jsonResponse(429, { error: 'rate limited' }),
     );
     expect(limited).toEqual({ ok: false, reason: 'error', message: 'rate limited' });
 
-    const upstream = await fetchGifBytes(
-      SAMPLE_GIF_URL,
-      async () => jsonResponse(502, { error: 'upstream error' }),
+    const upstream = await fetchGifBytes(SAMPLE_GIF_URL, async () =>
+      jsonResponse(502, { error: 'upstream error' }),
     );
     expect(upstream).toEqual({ ok: false, reason: 'error', message: 'fetch failed (502)' });
 
@@ -165,7 +176,7 @@ describe('GifProxyClient', () => {
         throw new Error('must not buffer after oversized Content-Length');
       },
     } as unknown as Response;
-    const result = await fetchGifBytes('abc', async () => stub);
+    const result = await fetchGifBytes(SAMPLE_GIF_URL, async () => stub);
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.reason).toBe('too-large');
     expect(read).toBe(false);
@@ -186,7 +197,7 @@ describe('GifProxyClient', () => {
       },
     });
     const result = await fetchGifBytes(
-      'abc',
+      SAMPLE_GIF_URL,
       async () =>
         new Response(stream, {
           status: 200,
@@ -209,7 +220,7 @@ describe('GifProxyClient', () => {
         return new Uint8Array(GIF_MAX_BYTES + 1).buffer;
       },
     } as unknown as Response;
-    const result = await fetchGifBytes('abc', async () => stub);
+    const result = await fetchGifBytes(SAMPLE_GIF_URL, async () => stub);
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.reason).toBe('error');
@@ -234,14 +245,14 @@ describe('GifProxyClient', () => {
         return gif89a.buffer;
       },
     } as unknown as Response;
-    const result = await fetchGifBytes('abc', async () => stub);
+    const result = await fetchGifBytes(SAMPLE_GIF_URL, async () => stub);
     expect(buffered).toBe(true);
     expect(result).toEqual({ ok: true, bytes: gif89a, contentType: 'image/gif' });
   });
 
   it('rejects a GIF prefix that is not 87a or 89a and a non-gif content-type', async () => {
     const badVersion = await fetchGifBytes(
-      'abc',
+      SAMPLE_GIF_URL,
       async () =>
         new Response(new Uint8Array([0x47, 0x49, 0x46, 0x00, 0x00, 0x00]), {
           status: 200,
@@ -251,7 +262,7 @@ describe('GifProxyClient', () => {
     expect(badVersion.ok).toBe(false);
     const gif89a = new Uint8Array([0x47, 0x49, 0x46, 0x38, 0x39, 0x61]);
     const wrongType = await fetchGifBytes(
-      'abc',
+      SAMPLE_GIF_URL,
       async () =>
         new Response(gif89a, {
           status: 200,

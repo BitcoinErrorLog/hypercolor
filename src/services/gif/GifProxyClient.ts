@@ -191,11 +191,7 @@ function resolveFetchUrl(target: string | GifProxyHit): string | null {
   if (typeof target !== 'string') {
     return isProxyFetchUrl(target.gif.url) ? target.gif.url : null;
   }
-  if (target.startsWith('https://')) {
-    return isProxyFetchUrl(target) ? target : null;
-  }
-  if (!/^[A-Za-z0-9_-]{1,64}$/.test(target)) return null;
-  return `${GIF_PROXY_ORIGIN}${GIF_FETCH_PATH}?id=${encodeURIComponent(target)}`;
+  return isProxyFetchUrl(target) ? target : null;
 }
 
 export async function fetchGifBytes(
