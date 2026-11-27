@@ -50,6 +50,7 @@ import {
 import { ComposerActionMenu } from '../../components/ComposerActionMenu';
 import { EmojiAutocomplete, EmojiPickerSheet } from '../../components/EmojiPickerSheet';
 import { GifPickerSheet } from '../../components/GifPickerSheet';
+import type { GifProxyHit } from '../../services/gif/GifProxyClient';
 import { useGifSearchAvailable } from '../../services/gif/useGifSearchAvailable';
 import { formatDeliveryState } from '../../ui/messageStatus';
 import { TagChips, aggregateTags } from '../../ui/TagChips';
@@ -530,7 +531,7 @@ export function ChannelScreenContent({
   onOpenEmojiPicker?: () => void;
   onCloseEmojiPicker?: () => void;
   onCloseGifPicker?: () => void;
-  onSendGif?: (gifId: string) => void;
+  onSendGif?: (gif: GifProxyHit | string) => void;
   onReply: (message: GroupMessage) => void;
   onClearReply: () => void;
   onToggleMembers: () => void;
@@ -1211,7 +1212,7 @@ export function ChannelScreenContent({
                 <GifPickerSheet
                   visible={gifPickerOpen}
                   onClose={() => onCloseGifPicker?.()}
-                  onPick={hit => onSendGif?.(hit.id)}
+                  onPick={hit => onSendGif?.(hit)}
                 />
               ) : null}
             </>

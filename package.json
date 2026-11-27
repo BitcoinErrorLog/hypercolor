@@ -16,7 +16,6 @@
     "test:e2e": "maestro test .maestro/p7-product.yaml",
     "vrt:catalog": "E2E_VRT=1 tsx vrt/runCatalog.ts",
     "icons:generate": "node scripts/generate-app-icons.mjs",
-    "prepare": "husky",
     "vrt:integrity": "tsx vrt/integrityGate.ts vrt/baselines/ios vrt/output/report/marker-ledger-ios.json vrt/output/report/integrity-ios.json",
     "vrt:capture:android": "bash scripts/vrt-capture-android.sh",
     "vrt:capture:ios": "bash scripts/vrt-capture-ios.sh"
@@ -86,7 +85,6 @@
     "eslint-plugin-react": "^7.37.5",
     "eslint-plugin-react-hooks": "^7.0.1",
     "eslint-plugin-react-native": "^5.0.0",
-    "husky": "^9.1.7",
     "jest": "~29.7.0",
     "jest-expo": "~54.0.0",
     "lint-staged": "^16.2.7",

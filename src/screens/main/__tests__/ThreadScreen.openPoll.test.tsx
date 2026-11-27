@@ -200,4 +200,44 @@ describe('open thread inbox poll', () => {
     });
     expect((LinkService.syncInbox as jest.Mock).mock.calls.length).toBeGreaterThan(afterMount);
   });
+
+  it('guards syncOpenThread against overlapping in-flight syncs and drains one queued pass', async () => {
+    let releaseFirst: (() => void) | null = null;
+    const firstSync = new Promise<never[]>(resolve => {
+      releaseFirst = () => resolve([]);
+    });
+    const syncMock = LinkService.syncInbox as jest.Mock;
+    syncMock.mockImplementationOnce(() => firstSync).mockResolvedValue([]);
+
+    let tree: ReturnType<typeof create>;
+    await act(async () => {
+      tree = create(
+        <ThreadScreen
+          navigation={{} as never}
+          route={{ key: 't', name: 'Thread', params: { participantPubky: PEER } } as never}
+        />,
+      );
+    });
+    expect(syncMock).toHaveBeenCalledTimes(1);
+
+    // Three overlapping interval ticks while the first sync is still in flight must not spawn concurrent syncs.
+    await act(async () => {
+      jest.advanceTimersByTime(THREAD_INBOX_POLL_MS * 3);
+      await Promise.resolve();
+    });
+    expect(syncMock).toHaveBeenCalledTimes(1);
+
+    // Releasing the first sync drains exactly one queued follow-up pass.
+    await act(async () => {
+      releaseFirst?.();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(syncMock).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      tree!.unmount();
+    });
+  });
 });

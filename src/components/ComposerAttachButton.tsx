@@ -11,7 +11,7 @@ import {
   sweepStaleGifStaging,
   writeFileFromStandardBase64,
 } from '../services/attachments/fileIo';
-import { fetchGifBytes } from '../services/gif/GifProxyClient';
+import { fetchGifBytes, type GifProxyHit } from '../services/gif/GifProxyClient';
 import { AttachmentError } from '../types/attachment';
 import { COPY } from '../copy/uxCopy';
 
@@ -79,10 +79,10 @@ export async function pickAndSendFile(target: AttachmentSendTarget): Promise<Com
 
 export async function sendGifAttachment(
   target: AttachmentSendTarget,
-  gifId: string,
+  gif: string | GifProxyHit,
 ): Promise<ComposerAttachResult> {
   await sweepStaleGifStaging();
-  const fetched = await fetchGifBytes(gifId);
+  const fetched = await fetchGifBytes(gif);
   if (!fetched.ok) {
     if (fetched.reason === 'not-configured') {
       return { ok: false, notice: { message: COPY.gifNotConfigured } };
