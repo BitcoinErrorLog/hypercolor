@@ -30,14 +30,11 @@ Success `200` JSON:
 }
 ```
 
-`preview.url` and `gif.url` are **proxy URLs** (same origin), never a raw
-Tenor CDN URL. `bytes` is the advertised GIF size; the client still enforces
-the 8 MiB attachment cap on the fetched body.
+`preview.url` and `gif.url` are **signed proxy URLs** on `https://hypercolor.app/api/gif/fetch?id=<id>&kind=<preview|gif>&token=<hmac-token>`, never raw Tenor CDN URLs. `bytes` is optional when upstream omits size; the client and server both enforce the 8 MiB attachment cap on the fetched body.
 
-## Fetch — `GET /api/gif/fetch?id=`
+## Fetch: `GET /api/gif/fetch?id=<id>&kind=<gif|preview>&token=<token>`
 
-Returns the GIF **bytes** with `Content-Type: image/gif` (or the sniffed type).
-Rejects ids that were not produced by search. Body larger than 8 MiB → `413`.
+Statelessly verifies the short-TTL HMAC-SHA256 `token` bound to `id`, `kind`, and the allowlisted Tenor URL (`403` when missing, invalid, or expired). Returns GIF bytes with `Content-Type: image/gif`, `Content-Length`, and `X-Content-Type-Options: nosniff`. Body larger than 8 MiB returns `413`; upstream rate limits return `429`; upstream failures return `502`. Clients send `redirect: 'error'` and never follow off-origin redirects.
 
 ## Not configured — `503`
 

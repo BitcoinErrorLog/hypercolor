@@ -70,7 +70,8 @@ export function gifConfigSaysAvailable(status: number, body: unknown): boolean {
 
 export async function fetchGifConfig(fetchImpl: typeof fetch = fetch): Promise<boolean> {
   try {
-    const res = await fetchImpl(`${GIF_PROXY_ORIGIN}${GIF_CONFIG_PATH}`);
+    const res = await fetchImpl(`${GIF_PROXY_ORIGIN}${GIF_CONFIG_PATH}`, { redirect: 'error' });
+    if (res.status >= 300 && res.status < 400) return false;
     const body = res.ok ? ((await res.json()) as unknown) : null;
     return gifConfigSaysAvailable(res.status, body);
   } catch {
@@ -88,7 +89,10 @@ export async function searchGifs(
   const capped = Math.min(24, Math.max(1, Math.floor(limit)));
   const url = `${GIF_PROXY_ORIGIN}${GIF_SEARCH_PATH}?q=${encodeURIComponent(query)}&limit=${capped}`;
   try {
-    const res = await fetchImpl(url);
+    const res = await fetchImpl(url, { redirect: 'error' });
+    if (res.status >= 300 && res.status < 400) {
+      return { ok: false, reason: 'error', message: 'unexpected redirect' };
+    }
     if (res.status === 503) {
       return { ok: false, reason: 'not-configured', message: 'not configured' };
     }
@@ -159,9 +163,11 @@ async function readBoundedBody(
   if (declared !== null && declared > maxBytes) return 'too-large';
   const reader = res.body?.getReader();
   if (!reader) {
-    // Stock RN fetch has no ReadableStream reader. Refuse unknown-size bodies
-    // so arrayBuffer() cannot allocate past the cap.
+    // Stock RN fetch has no ReadableStream reader. Refuse unknown-size or
+    // compressed bodies where Content-Length does not bound decoded size.
     if (declared === null) return 'unbounded';
+    const encoding = res.headers.get('content-encoding')?.trim().toLowerCase() ?? '';
+    if (encoding && encoding !== 'identity') return 'unbounded';
     const buffer = new Uint8Array(await res.arrayBuffer());
     return buffer.byteLength > maxBytes ? 'too-large' : buffer;
   }
@@ -203,7 +209,10 @@ export async function fetchGifBytes(
     return { ok: false, reason: 'error', message: 'invalid gif reference' };
   }
   try {
-    const res = await fetchImpl(url);
+    const res = await fetchImpl(url, { redirect: 'error' });
+    if (res.status >= 300 && res.status < 400) {
+      return { ok: false, reason: 'error', message: 'unexpected redirect' };
+    }
     if (res.status === 503) {
       return { ok: false, reason: 'not-configured', message: 'not configured' };
     }

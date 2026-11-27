@@ -271,4 +271,44 @@ describe('GifProxyClient', () => {
     );
     expect(wrongType.ok).toBe(false);
   });
+
+  it('passes redirect:error and rejects redirect responses and compressed non-streaming bodies', async () => {
+    const inits: Array<RequestInit | undefined> = [];
+    const redirected = await fetchGifBytes(SAMPLE_GIF_URL, async (_input, init) => {
+      inits.push(init);
+      return new Response(null, {
+        status: 302,
+        headers: { location: 'https://evil.test/x.gif' },
+      });
+    });
+    expect(inits).toEqual([{ redirect: 'error' }]);
+    expect(redirected).toEqual({
+      ok: false,
+      reason: 'error',
+      message: 'unexpected redirect',
+    });
+
+    let buffered = false;
+    const compressedStub = {
+      status: 200,
+      ok: true,
+      headers: new Headers({
+        'content-type': 'image/gif',
+        'content-length': '64',
+        'content-encoding': 'gzip',
+      }),
+      body: null,
+      arrayBuffer: async () => {
+        buffered = true;
+        return new Uint8Array(GIF_MAX_BYTES + 1).buffer;
+      },
+    } as unknown as Response;
+    const compressed = await fetchGifBytes(SAMPLE_GIF_URL, async () => compressedStub);
+    expect(compressed).toEqual({
+      ok: false,
+      reason: 'error',
+      message: 'missing content-length',
+    });
+    expect(buffered).toBe(false);
+  });
 });
